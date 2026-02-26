@@ -2,7 +2,9 @@
 
 ## 1. 设计哲学
 
-open-xquant 是一个 **Agent-First** 的开源量化交易框架。底层是严谨的量化金融引擎，由 Universe（标的池）决定每个时间截面上参与计算的 symbol 集合，再经 Indicator → Signal → Rule 三阶段模型生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义**（名称、参数、语义），每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务。
+open-xquant 是一个 **Agent-First** 的开源量化交易框架。引擎（SDK + Tool 定义）是地基，Skill 才是 Agent-First 的交付面——用户感知到的 Agent 体验，由 Skill 层交付。
+
+底层是严谨的量化金融引擎，由 Universe（标的池）决定每个时间截面上参与计算的 symbol 集合，再经 Indicator → Signal → Rule 三阶段模型生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义**（名称、参数、语义），每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务。
 
 **三种使用角色与入口**：
 
