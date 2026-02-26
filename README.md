@@ -4,6 +4,8 @@
 
 覆盖数据、因子、信号、回测、模拟交易、实盘交易全流程。
 
+[English](#english) | [中文](#为什么需要-open-xquant)
+
 ---
 
 ## 为什么需要 open-xquant？
@@ -87,6 +89,104 @@ open-xquant 正处于早期设计阶段。我们正在：
 - 构建确定性执行引擎的原型
 
 欢迎关注项目进展，参与讨论。
+
+## License
+
+[MIT](LICENSE)
+
+---
+
+<a id="english"></a>
+
+# open-xquant
+
+**Agent First Quantitative Trading Framework**
+
+End-to-end coverage: data, factors, signals, backtesting, paper trading, and live trading.
+
+---
+
+## Why open-xquant?
+
+### The Problem with Traditional Quant Frameworks
+
+Existing backtesting frameworks (Backtrader, vnpy, Zipline, etc.) are designed for **programmers**. They assume users can write every line of code precisely, manage state and data flow manually, and navigate complex API documentation to find the right calls.
+
+This was fine in the past — humans were the only ones writing code.
+
+### A New Contradiction in the AI Era
+
+Large Language Models (LLMs) are reshaping software development. More and more people are building quantitative strategies through AI programming (Vibe Coding). But this introduces a fundamental contradiction:
+
+**AI is great at understanding intent and generating code — but it hallucinates.**
+
+Current mainstream AI is based on the Transformer architecture, where generation is inherently probabilistic. The same prompt can produce subtly different code on two runs. This uncertainty is acceptable in most software domains, but in financial trading it's fatal:
+
+> **Not reproducible = not trustworthy = not tradable**
+
+A backtest result that cannot be exactly reproduced has zero decision-making value.
+
+### Root Cause
+
+The problem isn't that AI isn't smart enough — it's that **existing frameworks were never designed with AI as a user**. When AI is forced to use frameworks built for humans:
+
+- **Too many degrees of freedom** → AI may choose different implementation paths each time
+- **Implicit conventions** → AI cannot reliably follow rules not explicitly stated in code
+- **Complex state management** → AI easily introduces inconsistencies across multi-step operations
+
+## The open-xquant Approach
+
+open-xquant adopts an **Agent First** design philosophy — the framework's primary user is an AI Agent, not a human programmer.
+
+This doesn't mean humans can't use it. It means:
+
+### 1. Declarative First, Not Imperative
+
+Users (or AI) describe **"what to do"**; the framework handles **"how to do it"**. Fewer divergent implementation paths, less uncertainty at the source.
+
+### 2. Deterministic Execution Guarantee
+
+Same input must produce same output. Reproducibility of backtest results is enforced at the framework level, not dependent on the discipline of the user — human or AI.
+
+### 3. Constraints as Freedom
+
+Carefully designed constraints narrow AI's choice space. When there's only one correct way to do something, hallucination has nowhere to go.
+
+### 4. End-to-End Integration
+
+From data acquisition to live trading — unified data models and execution engine. Eliminates inconsistencies at process boundaries, exactly where AI is most prone to errors.
+
+## Design Goals
+
+```
+Data → Factors → Signals → Backtest → Paper Trading → Live Trading
+ ↑                                                        |
+ └──────────── Unified Data Model & Execution Semantics ──┘
+```
+
+| Goal | Description |
+|------|-------------|
+| **Reproducibility** | Same strategy + same data = same result, no exceptions |
+| **AI-Friendly** | Minimize AI error surface, maximize AI productivity |
+| **Human-Auditable** | AI-generated strategies that humans can fully understand and verify |
+| **Full Pipeline** | One framework from research to trading |
+| **Progressive** | From single-factor backtest to multi-strategy live trading, adopt incrementally |
+
+## Who Is This For?
+
+- **Quant learners in the AI era**: Learn quantitative investing through Vibe Coding — no need to be a senior programmer
+- **Quant strategy researchers**: Focus on strategy logic, not framework mechanics
+- **AI application developers**: Build LLM-powered automated trading agents
+
+## Project Status
+
+open-xquant is in early design phase. We are currently:
+
+- Defining core data models and interface specifications
+- Designing the declarative strategy description language
+- Building a prototype of the deterministic execution engine
+
+Follow along and join the discussion.
 
 ## License
 
