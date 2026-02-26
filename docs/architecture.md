@@ -2,7 +2,7 @@
 
 ## 1. 设计哲学
 
-open-xquant 是一个 **Agent-First** 的开源量化交易框架。底层是严谨的量化金融引擎，采用 Indicator → Signal → Rule 三阶段模型；每个功能模块暴露为 MCP tool，AI Agent 可直接调用；每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务；同时提供 Python SDK，开发者也可以直接 import 使用。
+open-xquant 是一个 **Agent-First** 的开源量化交易框架。底层是严谨的量化金融引擎，由 Universe（标的池）决定每个时间截面上参与计算的 symbol 集合，再经 Indicator → Signal → Rule 三阶段模型生成交易决策；每个功能模块暴露为 MCP tool，AI Agent 可直接调用；每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务；同时提供 Python SDK，开发者也可以直接 import 使用。
 
 **四大设计原则**：
 
@@ -73,6 +73,12 @@ open-xquant/
 │       │   ├── exchanges.py        # 交易所配置
 │       │   └── executor.py         # 执行接口（抽象，可对接券商 API）
 │       │
+│       ├── universe/               # Universe 构建
+│       │   ├── base.py             # UniverseProvider Protocol
+│       │   ├── static.py           # 静态标的池（手动指定）
+│       │   ├── index.py            # 指数成分股（Point-in-Time）
+│       │   └── filter.py           # 条件过滤（因子筛选、流动性门槛）
+│       │
 │       ├── data/                   # 数据层
 │       │   ├── providers.py        # Provider 协议定义
 │       │   ├── market.py           # 行情数据 provider
@@ -94,6 +100,7 @@ open-xquant/
 │       ├── backtest_tools.py       # 回测工具
 │       ├── optimize_tools.py       # 优化工具
 │       ├── analysis_tools.py       # 分析工具
+│       ├── universe_tools.py       # Universe 工具
 │       ├── trade_tools.py          # 交易工具
 │       └── observe_tools.py        # 监控工具
 │
@@ -112,7 +119,9 @@ open-xquant/
 │   ├── mean_reversion.py           # 均值回归
 │   └── multi_strategy.py           # 多策略编排
 │
-├── tests/
+├── tests/                         # 测试（镜像 src/oxq/ 结构）
+│   ├── universe/                  # Universe 测试
+│   └── ...
 ├── docs/
 ├── pyproject.toml
 ├── LICENSE                         # MIT
@@ -124,22 +133,22 @@ open-xquant/
 ## 3. 分层架构
 
 ```
-┌─────────────────────────────────────────────────┐
-│              Skill Layer (skill.md)              │  ← Agent 工作流指导
-│  strategy-builder / backtest-runner / tuner ...  │
-├─────────────────────────────────────────────────┤
-│              MCP Tool Layer                      │  ← Agent 调用接口
-│  strategy.* / backtest.* / optimize.* / trade.*  │
-├─────────────────────────────────────────────────┤
-│              Python SDK Layer                    │  ← 开发者 import 使用
-│  oxq.core / oxq.backtest / oxq.optimize / ...   │
-├─────────────────────────────────────────────────┤
-│              Engine Layer                        │  ← 纯计算，无 I/O
-│  Strategy compile → Indicator → Signal → Rule   │
-├─────────────────────────────────────────────────┤
-│              Provider Layer                      │  ← 数据注入（Protocol）
-│  MarketData / Factor / SignalHistory / Portfolio │
-└─────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────┐
+│              Skill Layer (skill.md)                   │  ← Agent 工作流指导
+│  strategy-builder / backtest-runner / tuner ...       │
+├──────────────────────────────────────────────────────┤
+│              MCP Tool Layer                           │  ← Agent 调用接口
+│  universe.* / strategy.* / backtest.* / optimize.*   │
+├──────────────────────────────────────────────────────┤
+│              Python SDK Layer                         │  ← 开发者 import 使用
+│  oxq.universe / oxq.core / oxq.backtest / ...        │
+├──────────────────────────────────────────────────────┤
+│              Engine Layer                             │  ← 纯计算，无 I/O
+│  Universe resolve → Indicator → Signal → Rule        │
+├──────────────────────────────────────────────────────┤
+│              Provider Layer                           │  ← 数据注入（Protocol）
+│  Universe / MarketData / Factor / Portfolio           │
+└──────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -154,6 +163,9 @@ open-xquant/
 
 ```python
 strategy = Strategy("momentum_rotation")
+
+# 0. Universe：确定参与计算的标的池
+strategy.set_universe(IndexUniverse("000300.SS"))  # 沪深300成分股（Point-in-Time）
 
 # 1. 指标层：路径无关的纯计算
 strategy.add_indicator("sma_fast", SMA, params={"period": 10})
@@ -185,13 +197,14 @@ result = compiled.run(context, providers)
 
 ```
 → strategy.create(name="momentum_rotation")
+→ universe.set(strategy="momentum_rotation", type="index", code="000300.SS")  # 沪深300成分股
 → strategy.add_indicator(strategy="momentum_rotation", name="sma_fast", type="SMA", params={"period": 10})
 → strategy.add_indicator(strategy="momentum_rotation", name="sma_slow", type="SMA", params={"period": 50})
 → strategy.add_signal(strategy="momentum_rotation", name="golden_cross", type="Crossover",
     inputs={"fast": "@ind:sma_fast", "slow": "@ind:sma_slow"})
 → strategy.add_rule(strategy="momentum_rotation", name="enter_long", type="EntryRule",
     inputs={"signal": "@sig:golden_cross"}, params={"order_type": "market"})
-→ backtest.run(strategy="momentum_rotation", symbols=["510300.SS"], start="2020-01-01", end="2024-12-31")
+→ backtest.run(strategy="momentum_rotation", start="2020-01-01", end="2024-12-31")
 ```
 
 ### 4.2 单一宽表数据模型
@@ -222,6 +235,8 @@ Indicator、Signal、Rule 三层共享同一个 pandas DataFrame `mktdata`，各
 
 **设计动机**：单一宽表避免了层间数据传递的复杂性。Signal 无需知道 Indicator 的输出格式，只需按列名引用；Rule 同理。这也天然适合 AI Agent——所有中间结果在同一张表上可见可查。
 
+> **Universe 与宽表的关系**：宽表中包含哪些 symbol，由 Universe 在每个时间截面上动态决定。Universe 变化时（如指数成分股调整），宽表随之增减 symbol 维度，确保后续三阶段计算不会引入 survivorship bias。
+
 > **与 Binding 系统的关系**：`@ind:sma_fast` 等引用语法是 SDK 层的声明式抽象，编译后解析为对 mktdata 列名的直接引用。宽表是底层运行时模型，Binding 是上层定义时模型。
 
 ### 4.3 执行模型
@@ -232,6 +247,12 @@ Indicator、Signal、Rule 三层共享同一个 pandas DataFrame `mktdata`，各
 
 ```
 ┌─────────────────────────────────────────────────────┐
+│  Phase 0: Universe Resolution                        │
+│  确定当前时间截面参与计算的 symbol 集合                │
+│  输入: UniverseProvider + as_of_date                 │
+│  输出: list[str] (symbols)                           │
+│  示例: 沪深300成分股(PIT), 流动性过滤, 静态列表        │
+├─────────────────────────────────────────────────────┤
 │  Phase 1: Indicator                                  │
 │  对全 universe 计算指标/因子                          │
 │  输入: mktdata (per symbol)                          │
@@ -252,7 +273,7 @@ Indicator、Signal、Rule 三层共享同一个 pandas DataFrame `mktdata`，各
 └─────────────────────────────────────────────────────┘
 ```
 
-外层循环按 phase 推进（`for phase in [indicator, signal, rule]`），每层输入全 universe 的数据。当 universe 只有一个 symbol 时，执行流程退化为逐 symbol 模式，完全兼容单标的策略。
+外层循环按 phase 推进（`for phase in [universe, indicator, signal, rule]`）。Phase 0 先从 UniverseProvider 获取当前时间截面的 symbol 列表，后续各层输入该 universe 的数据。回测中 universe 可能随再平衡日变化（如指数成分股季度调整），引擎在每个再平衡日重新执行 Phase 0。当 universe 只有一个 symbol 时，执行流程退化为逐 symbol 模式，完全兼容单标的策略。
 
 #### 向量化与逐 bar 状态机
 
@@ -267,6 +288,10 @@ Indicator、Signal、Rule 三层共享同一个 pandas DataFrame `mktdata`，各
 **向量化阶段**（Indicator / Signal）：
 
 ```python
+# Phase 0：从 UniverseProvider 获取当前 universe
+universe = universe_provider.get_universe(as_of_date=context.as_of_date)
+# universe = ["600519.SS", "000858.SZ", ...]  随时间变化
+
 # Indicator：per symbol，一次调用处理全部历史
 for symbol in universe:
     result = indicator.compute(mktdata[symbol], **params)
@@ -338,6 +363,13 @@ class Order:                              # 订单
     filled_shares: Optional[int]
 
 @dataclass(frozen=True)
+class UniverseSnapshot:                   # 某时间截面的标的池快照
+    as_of_date: str                       # 截面日期
+    symbols: tuple[str, ...]              # 当前成分（不可变）
+    source: str                           # 来源标识（"static", "000300.SS", "filter:liquidity"）
+    metadata: Dict[str, Any]              # 附加信息（权重、行业等）
+
+@dataclass(frozen=True)
 class ParamDistribution:                  # 参数分布（用于参数优化）
     component: str                        # "sma_fast" (indicator name)
     param: str                            # "period"
@@ -362,30 +394,37 @@ Binding 系统提供声明式的组件间引用语法，编译时解析为具体
 @step:<alias>    → 引用管道步骤输出
 @prev:<kind>     → 引用历史信号
 @provider:<name> → 引用外部 provider
+@universe        → 当前 universe 快照（UniverseSnapshot）
 @portfolio       → 当前组合状态
 @orderbook       → 当前订单簿
 ```
 
-### 4.6 三接口架构：策略与执行分离
+### 4.6 四接口架构：策略与执行分离
 
-策略层（Indicator → Signal → Rule）只负责"在什么条件下下什么单"，通过三个可替换 Protocol 与执行环境解耦：
+策略层（Indicator → Signal → Rule）只负责"在什么条件下下什么单"，通过四个可替换 Protocol 与执行环境解耦：
 
 ```
 策略定义层（Indicator → Signal → Rule）
          │
          │  不关心下面是回测还是实盘
          │
-    ┌────▼────────────────────────────────────┐
-    │           三个可替换 Protocol             │
-    │                                          │
-    │  1. MarketDataProvider ── 数据从哪来？   │
-    │  2. OrderRouter        ── 订单往哪送？   │
-    │  3. FillReceiver       ── 成交怎么回来？ │
-    └──────────────────────────────────────────┘
+    ┌────▼──────────────────────────────────────────┐
+    │           四个可替换 Protocol                   │
+    │                                                │
+    │  1. UniverseProvider   ── 哪些标的参与计算？   │
+    │  2. MarketDataProvider ── 数据从哪来？         │
+    │  3. OrderRouter        ── 订单往哪送？         │
+    │  4. FillReceiver       ── 成交怎么回来？       │
+    └────────────────────────────────────────────────┘
 ```
 
 ```python
 from typing import Protocol
+
+class UniverseProvider(Protocol):
+    """标的池接口：确定每个时间截面参与计算的 symbol 集合"""
+    def get_universe(self, as_of_date: str) -> UniverseSnapshot: ...
+    def get_history(self, start: str, end: str) -> list[UniverseSnapshot]: ...
 
 class MarketDataProvider(Protocol):
     """行情接口：策略获取行情数据的唯一入口"""
@@ -406,36 +445,39 @@ class FillReceiver(Protocol):
 
 三种运行模式通过注入不同实现切换，策略代码零修改：
 
-| 模式 | MarketDataProvider | OrderRouter | FillReceiver |
-|---|---|---|---|
-| **回测** | `HistoricalData` — 加载历史 OHLCV | `SimOrderBook` — 模拟订单簿 | `SimFillEngine` — 理想撮合 |
-| **Paper Trade** | `RealtimeData` — 实时行情 | `SimOrderBook` — 模拟订单簿 | `SimFillEngine` — 模拟撮合（含延迟、部分成交） |
-| **实盘** | `RealtimeData` — 实时行情 | `BrokerRouter` — 券商 API | `BrokerFill` — 实际成交回报 |
+| 模式 | UniverseProvider | MarketDataProvider | OrderRouter | FillReceiver |
+|---|---|---|---|---|
+| **回测** | `IndexUniverse` — PIT 成分股 | `HistoricalData` — 加载历史 OHLCV | `SimOrderBook` — 模拟订单簿 | `SimFillEngine` — 理想撮合 |
+| **Paper Trade** | `IndexUniverse` — 最新成分股 | `RealtimeData` — 实时行情 | `SimOrderBook` — 模拟订单簿 | `SimFillEngine` — 模拟撮合（含延迟、部分成交） |
+| **实盘** | `IndexUniverse` — 最新成分股 | `RealtimeData` — 实时行情 | `BrokerRouter` — 券商 API | `BrokerFill` — 实际成交回报 |
 
 ```python
 # 回测模式
 engine.run(strategy, providers={
-    "market": HistoricalData(symbols, start="2020-01-01", end="2024-12-31"),
-    "order":  SimOrderBook(),
-    "fill":   SimFillEngine(slippage=FixedSlippage(bps=5)),
+    "universe": IndexUniverse("000300.SS", point_in_time=True),
+    "market":   HistoricalData(start="2020-01-01", end="2024-12-31"),
+    "order":    SimOrderBook(),
+    "fill":     SimFillEngine(slippage=FixedSlippage(bps=5)),
 })
 
 # Paper trade：仅替换行情源，撮合引擎增加模拟延迟
 engine.run(strategy, providers={
-    "market": RealtimeData(symbols, source="websocket"),
-    "order":  SimOrderBook(),
-    "fill":   SimFillEngine(slippage=FixedSlippage(bps=5), latency_ms=100, partial_fill=True),
+    "universe": IndexUniverse("000300.SS"),
+    "market":   RealtimeData(source="websocket"),
+    "order":    SimOrderBook(),
+    "fill":     SimFillEngine(slippage=FixedSlippage(bps=5), latency_ms=100, partial_fill=True),
 })
 
-# 实盘：三个接口全部替换
+# 实盘：四个接口全部替换
 engine.run(strategy, providers={
-    "market": RealtimeData(symbols, source="websocket"),
-    "order":  BrokerRouter(broker="interactive_brokers"),
-    "fill":   BrokerFill(broker="interactive_brokers"),
+    "universe": IndexUniverse("000300.SS"),
+    "market":   RealtimeData(source="websocket"),
+    "order":    BrokerRouter(broker="interactive_brokers"),
+    "fill":     BrokerFill(broker="interactive_brokers"),
 })
 ```
 
-> **当前阶段**：Phase 1 只实现 `HistoricalData` + `SimOrderBook` + `SimFillEngine`（回测）。Paper trade 和实盘的实现留给后续 Phase，但三个 Protocol 从第一天就定义好，确保架构不需要重构。
+> **当前阶段**：Phase 1 只实现 `StaticUniverse` + `HistoricalData` + `SimOrderBook` + `SimFillEngine`（回测）。`IndexUniverse`（Point-in-Time）和 `FilterUniverse` 留给 Phase 2。Paper trade 和实盘的实现留给后续 Phase，但四个 Protocol 从第一天就定义好，确保架构不需要重构。
 
 ---
 
@@ -692,7 +734,7 @@ class AuditRecord:
 - 多交易所支持：SSE, SZSE, NYSE, NASDAQ, HKEX
 - 券商 API 抽象：定义 Executor Protocol，社区可实现各券商适配器
 
-策略定义与执行环境的分离详见 [4.6 三接口架构](#46-三接口架构策略与执行分离)。
+策略定义与执行环境的分离详见 [4.6 四接口架构](#46-四接口架构策略与执行分离)。
 
 ### 5.11 数据层 (oxq.data)
 
@@ -705,6 +747,53 @@ class AuditRecord:
 3. **频率打平**：低频 factor（季度财报、月度宏观）通过 forward-fill 对齐到日频宽表；事件型数据（新闻）需先聚合到日频再注入
 4. **全局数据广播**：无 symbol 维度的数据（宏观指标）广播到全 universe 的每个 symbol，在宽表中作为同名列存在，Signal 层可自然地将其用作全局条件
 
+### 5.12 Universe 构建 (oxq.universe)
+
+Universe 决定"每个时间截面上，哪些 symbol 参与计算"。缺少显式 Universe 管理会导致 survivorship bias——用当前成分股回测历史数据，高估策略收益。
+
+**UniverseProvider Protocol**：
+
+```python
+class UniverseProvider(Protocol):
+    """标的池接口：确定参与计算的 symbol 集合"""
+    def get_universe(self, as_of_date: str) -> UniverseSnapshot: ...
+    def get_history(self, start: str, end: str) -> list[UniverseSnapshot]: ...
+```
+
+**三种内置实现**：
+
+| 实现 | 说明 | 适用场景 |
+|------|------|----------|
+| `StaticUniverse` | 固定 symbol 列表，不随时间变化 | 单标的策略、手动指定标的池 |
+| `IndexUniverse` | 指数成分股，支持 Point-in-Time 历史成分查询 | 沪深300轮动、行业指数策略 |
+| `FilterUniverse` | 基于因子条件动态过滤（流动性、市值、ST 排除等） | 全市场因子策略 |
+
+```python
+# 静态列表
+universe = StaticUniverse(["600519.SS", "000858.SZ", "000333.SZ"])
+
+# 指数成分股（Point-in-Time，回测安全）
+universe = IndexUniverse("000300.SS", point_in_time=True)
+
+# 条件过滤：排除 ST、日均成交额 > 1000 万
+universe = FilterUniverse(
+    base=IndexUniverse("000985.SS"),  # 中证全指作为基础池
+    filters=[
+        ExcludeST(),
+        MinTurnover(threshold=10_000_000),
+    ]
+)
+```
+
+**MCP tool 调用**：
+```
+→ universe.set(strategy="momentum", type="index", code="000300.SS")
+→ universe.inspect(strategy="momentum", as_of_date="2023-06-30")  # 查看某日成分
+→ universe.history(strategy="momentum", start="2020-01-01", end="2024-12-31")  # 成分变动历史
+```
+
+> **Point-in-Time 的重要性**：回测中使用当天实际生效的成分股（而非最新成分股）是消除 survivorship bias 的关键。`IndexUniverse` 的 `point_in_time=True` 确保在 2020 年的回测日使用 2020 年的成分股数据，而非 2024 年的。
+
 ---
 
 ## 6. MCP Tools
@@ -713,6 +802,10 @@ class AuditRecord:
 
 | 工具组 | 工具名 | 说明 |
 |--------|--------|------|
+| **universe** | `universe.set` | 设置策略的 Universe（静态列表/指数/过滤条件） |
+| | `universe.list_indexes` | 列出可用的指数代码 |
+| | `universe.inspect` | 查看某日的 Universe 成分快照 |
+| | `universe.history` | 查看 Universe 成分变动历史 |
 | **strategy** | `strategy.create` | 创建策略 |
 | | `strategy.add_indicator` | 添加指标 |
 | | `strategy.add_signal` | 添加信号 |
@@ -766,6 +859,7 @@ class AuditRecord:
 # mcp_server/server.py
 from mcp.server import Server
 from oxq.core import Strategy, Registry
+from oxq.universe import UniverseProvider
 from oxq.backtest import BacktestEngine
 from oxq.optimize import ParamSet, WalkForward
 
@@ -774,6 +868,7 @@ server = Server("open-xquant")
 # 会话状态管理（MCP server 维护策略/数据的生命周期）
 class SessionState:
     strategies: Dict[str, Strategy]
+    universes: Dict[str, UniverseProvider]   # 每个策略对应的 Universe
     datasets: Dict[str, DataFrame]
     backtests: Dict[str, BacktestResult]
     paramsets: Dict[str, ParamSet]
@@ -784,9 +879,9 @@ async def strategy_create(name: str, description: str = "") -> dict:
     ...
 
 @server.tool()
-async def backtest_run(strategy: str, symbols: list[str],
+async def backtest_run(strategy: str,
                        start: str, end: str, initial_capital: float = 1_000_000) -> dict:
-    """运行回测"""
+    """运行回测（symbols 从策略关联的 universe 获取）"""
     ...
 ```
 
@@ -802,13 +897,16 @@ async def backtest_run(strategy: str, symbols: list[str],
 ---
 name: strategy-builder
 description: 指导 Agent 构建量化交易策略
-tools_required: [strategy.*, data.*]
+tools_required: [universe.*, strategy.*, data.*]
 ---
 
 ## 工作流
 
 1. 理解用户意图：什么市场？什么风格（趋势/动量/均值回归）？
-2. 选择标的：调用 data.list_symbols 查看可用标的
+2. 设定 Universe：
+   a. universe.list_indexes 查看可用指数
+   b. universe.set 设定标的池（指数成分/静态列表/条件过滤）
+   c. universe.inspect 确认成分合理
 3. 加载数据：调用 data.load_symbols 加载行情
 4. 探索数据：调用 data.inspect 了解数据特征
 5. 构建策略：
@@ -885,21 +983,23 @@ tools_required: [optimize.*, analysis.*]
 
 ### Phase 1: 核心引擎 + 基础 MCP (MVP)
 - `oxq.core`: Strategy, Engine, Registry, 基础类型
+- `oxq.universe`: UniverseProvider Protocol, StaticUniverse
 - `oxq.indicators`: 5 个内置指标 (SMA, EMA, RSI, MACD, BBands)
 - `oxq.signals`: 3 个信号 (Crossover, Threshold, Comparison)
 - `oxq.rules`: EntryRule, ExitRule, 基础 sizing
 - `oxq.portfolio`: Portfolio, Position
 - `oxq.backtest`: 基础回测引擎 + analytics
-- `mcp_server`: strategy.* + backtest.* tools
+- `mcp_server`: universe.* + strategy.* + backtest.* tools
 - `skills/`: strategy-builder.md, backtest-runner.md
 - **目标**: Agent 可以构建简单策略并回测
 
-### Phase 2: 参数优化 + 统计检验
+### Phase 2: 参数优化 + 统计检验 + Universe 扩展
+- `oxq.universe`: IndexUniverse（Point-in-Time）, FilterUniverse
 - `oxq.optimize`: ParamSet, GridSearch, WalkForward
 - `oxq.optimize.validation`: DeflatedSharpe, ProfitHurdle
 - `mcp_server`: optimize.* + analysis.* tools
 - `skills/`: parameter-tuner.md, performance-reviewer.md
-- **目标**: Agent 可以优化参数并验证统计显著性
+- **目标**: Agent 可以优化参数并验证统计显著性，Universe 支持指数成分和动态过滤
 
 ### Phase 3: 交易执行 + 可观测性
 - `oxq.trade`: 完整订单簿 + 费率 + 滑点 + executor protocol
