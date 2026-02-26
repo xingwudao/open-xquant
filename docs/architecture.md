@@ -747,6 +747,7 @@ class AuditRecord:
 3. **可组合**：tools 之间通过 ID 引用关联（strategy_id, backtest_id, paramset_id）
 4. **错误友好**：返回清晰的错误信息 + 建议的修复动作
 5. **渐进披露**：简单场景用少量参数，复杂场景可展开全部参数
+6. **Thin Wrapper**：MCP Tool 必须是 SDK 的薄封装，不得包含业务逻辑。每个 tool 函数体只做三件事：参数解析 → 调用 `oxq` SDK → 格式化返回。所有计算、状态管理、规则执行等逻辑必须实现在 `src/oxq/` 中，MCP 层只负责协议适配
 
 ### 6.3 Server 架构
 
