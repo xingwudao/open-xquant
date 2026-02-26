@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "open-xquant"
+version = "0.1.0"
+description = "Agent First quantitative trading framework"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+authors = [
+    { name = "open-xquant contributors" },
+]
+keywords = ["quant", "trading", "backtest", "agent", "mcp"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Office/Business :: Financial :: Investment",
+]
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.26",
+]
+
+[project.optional-dependencies]
+mcp = [
+    "mcp",
+]
+talib = [
+    "TA-Lib",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+    "ruff",
+    "mypy",
+    "pandas-stubs",
+]
+docs = [
+    "mkdocs-material",
+]
+
+[project.urls]
+Homepage = "https://github.com/open-xquant/open-xquant"
+Repository = "https://github.com/open-xquant/open-xquant"
+Issues = "https://github.com/open-xquant/open-xquant/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/oxq"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v"
