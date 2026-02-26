@@ -2,7 +2,13 @@
 
 ## 1. 设计哲学
 
-open-xquant 是一个 **Agent-First** 的开源量化交易框架。底层是严谨的量化金融引擎，由 Universe（标的池）决定每个时间截面上参与计算的 symbol 集合，再经 Indicator → Signal → Rule 三阶段模型生成交易决策；每个功能模块暴露为 MCP tool，AI Agent 可直接调用；每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务；同时提供 Python SDK，开发者也可以直接 import 使用。
+open-xquant 是一个 **Agent-First** 的开源量化交易框架。底层是严谨的量化金融引擎，由 Universe（标的池）决定每个时间截面上参与计算的 symbol 集合，再经 Indicator → Signal → Rule 三阶段模型生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义**（名称、参数、语义），每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务。
+
+**三种使用角色与入口**：
+
+- **Coding Agent / 开发者** → `import oxq`（主要方式），直接调用 SDK 和 Tool 函数
+- **非 Coding AI 客户端**（Claude Desktop、Windsurf 等）→ 通过 MCP Server 调用（可选分发层）
+- **平台方** → 基于 SDK + Tool 定义自建接口（REST API、gRPC 等）
 
 **四大设计原则**：
 
@@ -85,24 +91,27 @@ open-xquant/
 │       │   ├── factors.py          # 因子数据 provider
 │       │   └── loaders.py          # 数据加载工具（CSV, parquet, API）
 │       │
-│       └── observe/                # 可观测性
-│           ├── tracer.py           # 执行追踪（每步输入/输出记录）
-│           ├── logger.py           # 结构化日志
-│           ├── events.py           # 事件总线（策略事件、交易事件）
-│           └── audit.py            # 审计追踪（可复现性保证）
+│       ├── observe/                # 可观测性
+│       │   ├── tracer.py           # 执行追踪（每步输入/输出记录）
+│       │   ├── logger.py           # 结构化日志
+│       │   ├── events.py           # 事件总线（策略事件、交易事件）
+│       │   └── audit.py            # 审计追踪（可复现性保证）
+│       │
+│       └── tools/                  # 协议无关的 Tool 定义（核心资产）
+│           ├── __init__.py         # Tool 注册中心
+│           ├── strategy_tools.py   # 策略管理 tool（名称、参数、描述、调用逻辑）
+│           ├── data_tools.py       # 数据查询 tool
+│           ├── backtest_tools.py   # 回测 tool
+│           ├── optimize_tools.py   # 优化 tool
+│           ├── analysis_tools.py   # 分析 tool
+│           ├── universe_tools.py   # Universe tool
+│           ├── trade_tools.py      # 交易 tool
+│           └── observe_tools.py    # 监控 tool
 │
-├── mcp_server/                     # MCP 协议服务器
+├── mcp_server/                     # MCP 协议适配层（可选分发渠道）
 │   ├── __init__.py
-│   ├── server.py                   # MCP server 入口
-│   └── tools/                      # MCP tool 定义
-│       ├── strategy_tools.py       # 策略管理工具
-│       ├── data_tools.py           # 数据查询工具
-│       ├── backtest_tools.py       # 回测工具
-│       ├── optimize_tools.py       # 优化工具
-│       ├── analysis_tools.py       # 分析工具
-│       ├── universe_tools.py       # Universe 工具
-│       ├── trade_tools.py          # 交易工具
-│       └── observe_tools.py        # 监控工具
+│   ├── server.py                   # MCP server 入口（从 oxq.tools 导入）
+│   └── adapters.py                 # MCP 协议适配（参数映射、会话管理）
 │
 ├── skills/                         # Agent Skill 定义
 │   ├── strategy-builder.md         # 构建交易策略
@@ -137,11 +146,14 @@ open-xquant/
 │              Skill Layer (skill.md)                   │  ← Agent 工作流指导
 │  strategy-builder / backtest-runner / tuner ...       │
 ├──────────────────────────────────────────────────────┤
-│              MCP Tool Layer                           │  ← Agent 调用接口
-│  universe.* / strategy.* / backtest.* / optimize.*   │
-├──────────────────────────────────────────────────────┤
-│              Python SDK Layer                         │  ← 开发者 import 使用
-│  oxq.universe / oxq.core / oxq.backtest / ...        │
+│              SDK + Tool Layer                         │  ← 核心资产
+│  oxq.universe / oxq.core / oxq.backtest / ...        │  Python SDK
+│  oxq.tools (协议无关的 Tool 定义)                     │  Tool 定义
+│          ┆                                            │
+│     ┌────┴──────────────────────┐                    │
+│     │ MCP Server (可选分发层)    │  ← 非 Coding AI    │
+│     │ mcp_server/               │    客户端适配       │
+│     └───────────────────────────┘                    │
 ├──────────────────────────────────────────────────────┤
 │              Engine Layer                             │  ← 纯计算，无 I/O
 │  Universe resolve → Indicator → Signal → Rule        │
@@ -193,7 +205,9 @@ compiled = strategy.compile(registry)
 result = compiled.run(context, providers)
 ```
 
-**等价的 MCP tool 调用（Agent 方式）**：
+**等价的 Tool 调用（AI Agent 方式）**：
+
+Tool 定义在 `oxq.tools` 中，协议无关——Coding Agent 直接 `import` 调用，MCP 客户端通过 MCP 协议调用，平台方也可通过 REST/gRPC 等任意方式触发。
 
 ```
 → strategy.create(name="momentum_rotation")
@@ -533,7 +547,7 @@ class TalibSMA:
 | 成交量 | OBV, VWAP | 量价指标 |
 | 自定义 | Formula | 用户自定义公式 |
 
-**Agent 体验**：Agent 不需要知道具体实现，只需说"给这个策略加一个 20 日 RSI 指标"，MCP tool 处理其余一切。
+**Agent 体验**：Agent 不需要知道具体实现，只需说"给这个策略加一个 20 日 RSI 指标"，Tool 处理其余一切。
 
 **Indicator 返回值的两条路径**：
 
@@ -658,7 +672,7 @@ profit_hurdle = profit_hurdle_test(results, num_trials=len(paramset))
 haircut_sr = haircut_sharpe(results, method="holm")
 ```
 
-**MCP tool 调用**：
+**Tool 调用**：
 ```
 → optimize.define_paramset(strategy="momentum", distributions=[...], constraints=[...])
 → optimize.run_walk_forward(strategy="momentum", paramset="sma_tuning", train="2Y", test="6M")
@@ -720,7 +734,7 @@ class AuditRecord:
     result_hash: str         # 结果哈希（验证确定性）
 ```
 
-**MCP tool**：
+**Tool 调用**：
 ```
 → observe.get_trace(run_id="run_20240101")        # 查看执行追踪
 → observe.replay(run_id="run_20240101")            # 重放某次执行
@@ -785,7 +799,7 @@ universe = FilterUniverse(
 )
 ```
 
-**MCP tool 调用**：
+**Tool 调用**：
 ```
 → universe.set(strategy="momentum", type="index", code="000300.SS")
 → universe.inspect(strategy="momentum", as_of_date="2023-06-30")  # 查看某日成分
@@ -796,9 +810,13 @@ universe = FilterUniverse(
 
 ---
 
-## 6. MCP Tools
+## 6. Tool 定义与分发
 
-### 6.1 工具清单
+### 6.1 Tool 定义（oxq.tools）
+
+Tool 定义是框架的核心资产之一，与传输协议无关。每个 Tool 包含：名称、参数 schema、语义描述、调用逻辑。Tool 定义在 `src/oxq/tools/` 中实现，可通过多种方式触发：Coding Agent 直接 `import` 调用、MCP 客户端通过 MCP 协议调用、平台方通过 REST/gRPC 等自建接口调用。
+
+**工具清单**：
 
 | 工具组 | 工具名 | 说明 |
 |--------|--------|------|
@@ -844,52 +862,48 @@ universe = FilterUniverse(
 | | `orchestrator.set_constraints` | 设置全局约束 |
 | | `orchestrator.run` | 运行编排 |
 
-### 6.2 设计原则
+**设计原则**：
 
 1. **原子性**：每个 tool 做一件事，返回结构化 JSON
 2. **幂等性**：相同输入产生相同输出（除 execute 外）
 3. **可组合**：tools 之间通过 ID 引用关联（strategy_id, backtest_id, paramset_id）
 4. **错误友好**：返回清晰的错误信息 + 建议的修复动作
 5. **渐进披露**：简单场景用少量参数，复杂场景可展开全部参数
-6. **Thin Wrapper**：MCP Tool 必须是 SDK 的薄封装，不得包含业务逻辑。每个 tool 函数体只做三件事：参数解析 → 调用 `oxq` SDK → 格式化返回。所有计算、状态管理、规则执行等逻辑必须实现在 `src/oxq/` 中，MCP 层只负责协议适配
+6. **Thin Wrapper**：Tool 是 SDK 的薄封装，不得包含业务逻辑。每个 tool 函数体只做三件事：参数解析 → 调用 `oxq` SDK → 格式化返回。所有计算、状态管理、规则执行等逻辑必须实现在 `src/oxq/` 中，Tool 层只负责接口适配
 
-### 6.3 Server 架构
+### 6.2 MCP Server（可选分发层）
+
+MCP Server 是 `oxq.tools` 的 MCP 协议适配，用于支持不能执行代码的 AI 客户端（Claude Desktop、Windsurf 等）。MCP Server 本身不包含业务逻辑，只做三件事：MCP 协议适配、会话状态管理、从 `oxq.tools` 导入 Tool 定义。
+
+> **注意**：Coding Agent（如 Claude Code、Cursor）直接 `import oxq` 即可，不需要 MCP Server。MCP 的价值是**分发渠道**——让本地 SDK 能被非 Coding AI 客户端开箱即用。
 
 ```python
-# mcp_server/server.py
+# mcp_server/server.py — 薄适配层，从 oxq.tools 导入
 from mcp.server import Server
-from oxq.core import Strategy, Registry
-from oxq.universe import UniverseProvider
-from oxq.backtest import BacktestEngine
-from oxq.optimize import ParamSet, WalkForward
+from oxq.tools import registry as tool_registry
 
 server = Server("open-xquant")
 
-# 会话状态管理（MCP server 维护策略/数据的生命周期）
+# 会话状态管理（MCP server 维护跨 tool 调用的生命周期）
 class SessionState:
     strategies: Dict[str, Strategy]
-    universes: Dict[str, UniverseProvider]   # 每个策略对应的 Universe
+    universes: Dict[str, UniverseProvider]
     datasets: Dict[str, DataFrame]
     backtests: Dict[str, BacktestResult]
     paramsets: Dict[str, ParamSet]
 
-@server.tool()
-async def strategy_create(name: str, description: str = "") -> dict:
-    """创建新策略"""
-    ...
-
-@server.tool()
-async def backtest_run(strategy: str,
-                       start: str, end: str, initial_capital: float = 1_000_000) -> dict:
-    """运行回测（symbols 从策略关联的 universe 获取）"""
-    ...
+# 自动从 oxq.tools 注册所有 tool 到 MCP server
+for tool_def in tool_registry.all_tools():
+    server.tool()(tool_def.as_mcp_handler(session_state))
 ```
 
 ---
 
 ## 7. Agent Skills
 
-每个 skill.md 描述一个完整的 Agent 工作流，指导 AI Agent 如何组合 MCP tools 完成任务。
+每个 skill.md 描述一个完整的 Agent 工作流，指导 AI Agent 如何组合 tools 完成任务。
+
+> **Tool 引用是协议无关的**：skill 中引用的 tool 名称（如 `universe.*`、`strategy.*`）是 `oxq.tools` 中定义的协议无关 Tool。Coding Agent 通过 `import oxq.tools` 调用等价函数，MCP 客户端通过 MCP 协议调用——Tool 名称和语义完全一致，仅传输方式不同。
 
 ### 7.1 strategy-builder.md
 
@@ -971,7 +985,7 @@ tools_required: [optimize.*, analysis.*]
 | 时间序列 | pandas DataFrame/Series | Indicator Protocol 标准输入输出类型 |
 | 核心依赖 | pandas, numpy | 向量化计算基础设施 |
 | 可选依赖 | scipy (optimize), ta-lib (指标加速) | 仅在特定模块引入 |
-| MCP SDK | mcp (Python) | 官方 Python SDK |
+| 可选依赖 | mcp (Python) | MCP Server 分发时需要，官方 Python SDK |
 | 配置格式 | YAML + JSON Schema | Agent 友好（结构化），人也可读 |
 | 构建工具 | hatch / uv | 现代 Python 项目管理 |
 | 测试 | pytest | 标准选择 |
@@ -981,7 +995,7 @@ tools_required: [optimize.*, analysis.*]
 
 ## 9. 实现路线
 
-### Phase 1: 核心引擎 + 基础 MCP (MVP)
+### Phase 1: 核心引擎 + SDK (MVP)
 - `oxq.core`: Strategy, Engine, Registry, 基础类型
 - `oxq.universe`: UniverseProvider Protocol, StaticUniverse
 - `oxq.indicators`: 5 个内置指标 (SMA, EMA, RSI, MACD, BBands)
@@ -989,22 +1003,23 @@ tools_required: [optimize.*, analysis.*]
 - `oxq.rules`: EntryRule, ExitRule, 基础 sizing
 - `oxq.portfolio`: Portfolio, Position
 - `oxq.backtest`: 基础回测引擎 + analytics
-- `mcp_server`: universe.* + strategy.* + backtest.* tools
+- `oxq.tools`: universe.* + strategy.* + backtest.* tool 定义（核心交付物）
 - `skills/`: strategy-builder.md, backtest-runner.md
-- **目标**: Agent 可以构建简单策略并回测
+- **目标**: Coding Agent / 开发者可以通过 SDK 构建简单策略并回测
 
-### Phase 2: 参数优化 + 统计检验 + Universe 扩展
+### Phase 2: 参数优化 + 统计检验 + Universe 扩展 + MCP 分发
 - `oxq.universe`: IndexUniverse（Point-in-Time）, FilterUniverse
 - `oxq.optimize`: ParamSet, GridSearch, WalkForward
 - `oxq.optimize.validation`: DeflatedSharpe, ProfitHurdle
-- `mcp_server`: optimize.* + analysis.* tools
+- `oxq.tools`: optimize.* + analysis.* tool 定义
+- `mcp_server`: MCP 协议适配层（从 oxq.tools 导入，支持非 Coding AI 客户端）
 - `skills/`: parameter-tuner.md, performance-reviewer.md
-- **目标**: Agent 可以优化参数并验证统计显著性，Universe 支持指数成分和动态过滤
+- **目标**: Agent 可以优化参数并验证统计显著性，Universe 支持指数成分和动态过滤，MCP 客户端可通过 MCP Server 使用全部功能
 
 ### Phase 3: 交易执行 + 可观测性
 - `oxq.trade`: 完整订单簿 + 费率 + 滑点 + executor protocol
 - `oxq.observe`: Tracer, AuditLog, EventBus
-- `mcp_server`: trade.* + observe.* tools
+- `oxq.tools`: trade.* + observe.* tool 定义
 - `skills/`: trade-executor.md, strategy-monitor.md
 - **目标**: 端到端全链路，从构建到执行到监控
 
@@ -1012,6 +1027,7 @@ tools_required: [optimize.*, analysis.*]
 - `oxq.orchestrator`: 多策略编排 + 资金分配
 - 高级规则: 追踪止损、风险平价、因子风控
 - 更多指标/信号
+- `oxq.tools`: orchestrator.* tool 定义
 - `skills/`: risk-analyzer.md
 - **目标**: 机构级多策略管理能力
 
@@ -1019,7 +1035,7 @@ tools_required: [optimize.*, analysis.*]
 
 ## 10. 验证方案
 
-### 冒烟测试
+### 冒烟测试（SDK 主路径）
 ```bash
 # 安装
 pip install -e ".[dev]"
@@ -1027,20 +1043,34 @@ pip install -e ".[dev]"
 # 单元测试
 pytest tests/ -v
 
+# SDK 集成测试：直接 import oxq 构建策略 → 回测 → 查看结果
+python examples/ma_crossover.py
+```
+
+### MCP Server 补充测试（可选分发路径）
+```bash
+# 需要安装 MCP 依赖
+pip install -e ".[mcp]"
+
 # MCP server 启动
 python -m mcp_server.server
 
-# 集成测试：Agent 通过 MCP 构建策略 → 回测 → 查看结果
-python examples/ma_crossover.py
+# 验证 MCP 协议适配正确
 ```
 
 ### Agent 端到端测试
 ```
+主路径（Coding Agent）：
+1. Coding Agent 直接 import oxq
+2. 用户: "帮我构建一个 A 股 ETF 动量轮动策略，回测 2020-2024 年"
+3. Agent 调用 strategy-builder skill，通过 SDK 依次调用 oxq.tools
+4. 验证：策略创建成功 → 回测完成 → 绩效报告生成
+
+补充路径（MCP 客户端）：
 1. 启动 MCP server
-2. Claude 连接 MCP server
-3. 用户: "帮我构建一个 A 股 ETF 动量轮动策略，回测 2020-2024 年"
-4. Agent 调用 strategy-builder skill，依次调用 MCP tools
-5. 验证：策略创建成功 → 回测完成 → 绩效报告生成
+2. Claude Desktop 等非 Coding 客户端连接 MCP server
+3. 同样的用户请求，通过 MCP 协议调用相同的 Tool
+4. 验证：结果与 SDK 直接调用一致
 ```
 
 ### 可复现性测试
