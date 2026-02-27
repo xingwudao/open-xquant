@@ -85,3 +85,55 @@ class YFinanceDownloader:
         dest_dir: Path | None = None,
     ) -> dict[str, Path]:
         return {s: self.download(s, start, end, dest_dir) for s in symbols}
+
+
+class AkShareDownloader:
+    """Download A-share market data via akshare."""
+
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        akshare = globals().get("akshare") or importlib.import_module("akshare")
+
+        data_dir = resolve_data_dir(dest_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        df = akshare.stock_zh_a_hist(
+            symbol=symbol,
+            start_date=start,
+            end_date=end,
+            adjust="qfq",
+        )
+        if df.empty:
+            msg = f"No data returned for '{symbol}' ({start} to {end})."
+            raise DownloadError(msg)
+
+        df = df.rename(columns={
+            "日期": "date",
+            "开盘": "open",
+            "最高": "high",
+            "最低": "low",
+            "收盘": "close",
+            "成交量": "volume",
+        })
+        df["date"] = pd.to_datetime(df["date"])
+        df = df.set_index("date")
+        df = df[["open", "high", "low", "close", "volume"]]
+        df["volume"] = df["volume"].astype("int64")
+
+        path = data_dir / f"{symbol}.parquet"
+        df.to_parquet(path)
+        return path
+
+    def download_many(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> dict[str, Path]:
+        return {s: self.download(s, start, end, dest_dir) for s in symbols}
