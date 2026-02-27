@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -77,6 +78,17 @@ def _load_symbols(
 
 def register(mcp: FastMCP) -> None:
     """Register data tools on the MCP server instance."""
+
+    @mcp.tool(
+        name="get_current_date",
+        description=(
+            "Get today's date. Call this FIRST when the user mentions "
+            "relative dates like 'last 6 months', 'recent year', etc."
+        ),
+    )
+    def get_current_date() -> dict[str, str]:
+        today = date.today()
+        return {"today": today.isoformat(), "weekday": today.strftime("%A")}
 
     @mcp.tool(name="data_load_symbols", description="Download market data for given symbols")
     def data_load_symbols(
