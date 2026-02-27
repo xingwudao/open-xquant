@@ -44,7 +44,7 @@ class Downloader(Protocol):
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     """Normalize raw API DataFrame to standard schema."""
     df = df.rename(columns=str.lower)
-    df.index.name = "date"
+    df = df.rename_axis("date")
     cols = ["open", "high", "low", "close", "volume"]
     df = df[cols]
     df["volume"] = df["volume"].astype("int64")
