@@ -32,6 +32,12 @@ dependencies = [
 mcp = [
     "mcp",
 ]
+yfinance = [
+    "yfinance>=0.2",
+]
+akshare = [
+    "akshare>=1.10",
+]
 talib = [
     "TA-Lib",
 ]
