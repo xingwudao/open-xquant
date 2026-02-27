@@ -45,6 +45,7 @@ agent = [
     "streamlit>=1.30",
     "openai>=1.0",
     "mcp>=1.0",
+    "nest-asyncio>=1.5",
 ]
 dev = [
     "pytest>=8.0",

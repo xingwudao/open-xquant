@@ -7,10 +7,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+import nest_asyncio
 import streamlit as st
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from openai import OpenAI
+
+nest_asyncio.apply()
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 SKILLS_DIR = PROJECT_ROOT / "skills"
@@ -226,11 +229,9 @@ if prompt := st.chat_input("Type a message..."):
 
     with st.spinner("Thinking..."):
         try:
-            loop = asyncio.new_event_loop()
-            new_messages = loop.run_until_complete(
+            new_messages = asyncio.run(
                 run_agent_turn(api_messages, openai_client, model)
             )
-            loop.close()
         except Exception as e:  # noqa: BLE001
             st.error(f"Error: {e}")
             st.stop()
