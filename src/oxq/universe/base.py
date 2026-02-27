@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
+
+import pandas as pd
 
 
 @dataclass(frozen=True)
@@ -20,3 +22,10 @@ class UniverseSnapshot:
     symbols: tuple[str, ...]
     source: str
     metadata: dict[str, Any]
+
+
+@runtime_checkable
+class UniverseProvider(Protocol):
+    """Interface for universe resolution."""
+
+    def resolve(self, mktdata: dict[str, pd.DataFrame] | None = None) -> UniverseSnapshot: ...

@@ -1,4 +1,6 @@
-from oxq.universe.base import Filter, UniverseSnapshot
+import pandas as pd
+
+from oxq.universe.base import Filter, UniverseProvider, UniverseSnapshot
 
 
 def test_filter_is_frozen() -> None:
@@ -17,3 +19,12 @@ def test_universe_snapshot_is_frozen() -> None:
     assert snap.symbols == ("AAPL", "GOOG")
     assert snap.source == "static"
     assert snap.metadata == {}
+
+
+def test_universe_provider_is_runtime_checkable() -> None:
+    class FakeUniverse:
+        def resolve(self, mktdata: dict[str, pd.DataFrame] | None = None) -> UniverseSnapshot:
+            return UniverseSnapshot(symbols=(), source="fake", metadata={})
+
+    provider = FakeUniverse()
+    assert isinstance(provider, UniverseProvider)
