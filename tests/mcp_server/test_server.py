@@ -1,24 +1,23 @@
-# tests/mcp_server/test_server.py
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
 from pathlib import Path
 
 import pytest
-
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
-SERVER_PATH = str(Path(__file__).resolve().parents[2] / "mcp_server" / "server.py")
+PROJECT_ROOT = str(Path(__file__).resolve().parents[2])
 
 
 @pytest.fixture()
 def server_params() -> StdioServerParameters:
     return StdioServerParameters(
         command=sys.executable,
-        args=[SERVER_PATH],
-        cwd=str(Path(__file__).resolve().parents[2]),
+        args=["-m", "mcp_server.server"],
+        cwd=PROJECT_ROOT,
     )
 
 
@@ -40,8 +39,6 @@ def test_server_lists_data_tools(server_params: StdioServerParameters) -> None:
 async def _call_list_symbols(
     server_params: StdioServerParameters, data_dir: str,
 ) -> dict:
-    import json
-
     async with stdio_client(server_params) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
