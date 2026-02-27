@@ -27,8 +27,8 @@ tools_required: [data_load_symbols, data_list_symbols, data_inspect]
 
 ### 3. 下载数据
 
-- 美股 → source 使用 "yfinance"
-- A股 → source 使用 "akshare"，symbol 使用纯数字代码（如 "600519"）
+- 优先使用 source "yfinance"（美股和 A 股均支持，A 股 symbol 带交易所后缀如 "600519.SS"）
+- 如果 yfinance 下载失败，再尝试 source "akshare"（仅 A 股，symbol 使用纯数字代码如 "600519"）
 - 调用 data_load_symbols 下载
 - 报告下载结果（条数、时间范围）
 

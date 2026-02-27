@@ -18,7 +18,7 @@ open-xquant is an Agent First quantitative trading framework. See `README.md` fo
 - `src/oxq/` — main Python package (pip install open-xquant)
 - `mcp_server/` — MCP protocol server exposing oxq as tools
 - `skills/` — Agent skill definitions (markdown)
-- `examples/` — example strategies
+- `examples/` — example strategies, demo apps, tutorials
 - `tests/` — mirrors src/oxq/ structure
 - `docs/` — documentation
 
@@ -53,3 +53,4 @@ mypy src/
 - Follow ruff defaults (E, F, I, N, W, UP rules)
 - Prefer Protocol over ABC for interfaces
 - Keep Indicator/Signal compute functions pure (no side effects)
+- **Do not add new top-level directories** — this is an open-source project; keep the root structure stable. New apps, demos, and tutorials go under `examples/`.

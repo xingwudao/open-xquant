@@ -25,115 +25,25 @@ open-xquant 是一个 **Agent-First** 的开源量化交易框架。引擎（SDK
 
 ```
 open-xquant/
-├── src/
-│   └── oxq/                        # 主 Python 包（pip install open-xquant）
-│       ├── __init__.py
-│       ├── core/                    # 核心引擎
-│       │   ├── types.py            # 基础数据类型
-│       │   ├── strategy.py         # 策略定义与编译
-│       │   ├── engine.py           # 策略执行引擎
-│       │   ├── registry.py         # 组件注册中心
-│       │   └── errors.py           # 异常体系
-│       │
-│       ├── indicators/             # 技术指标库
-│       │   ├── base.py             # Indicator 基类
-│       │   ├── builtin.py          # 内置指标 (SMA, EMA, RSI, MACD, BBands...)
-│       │   └── custom.py           # 自定义指标支持
-│       │
-│       ├── signals/                # 信号生成器
-│       │   ├── base.py             # Signal 基类
-│       │   ├── crossover.py        # 交叉信号 (sigCrossover)
-│       │   ├── threshold.py        # 阈值信号 (sigThreshold)
-│       │   ├── comparison.py       # 比较信号 (sigComparison)
-│       │   ├── formula.py          # 公式信号 (sigFormula)
-│       │   └── composite.py        # 组合信号
-│       │
-│       ├── rules/                  # 交易规则
-│       │   ├── base.py             # Rule 基类
-│       │   ├── entry.py            # 入场规则
-│       │   ├── exit.py             # 出场规则（止损/止盈/追踪止损）
-│       │   ├── sizing.py           # 仓位管理（osMaxPos, 等权, 风险平价...）
-│       │   ├── risk.py             # 风控规则（泡沫控制、因子风控）
-│       │   └── rebalance.py        # 再平衡规则
-│       │
-│       ├── portfolio/              # 组合管理
-│       │   ├── types.py            # Position, Portfolio, OrderBook
-│       │   ├── portfolio.py        # 组合状态管理
-│       │   ├── orderbook.py        # 订单簿（订单生命周期管理）
-│       │   └── accounting.py       # 交易记账
-│       │
-│       ├── backtest/               # 回测引擎
-│       │   ├── engine.py           # 事件驱动回测引擎
-│       │   ├── simulator.py        # 模拟撮合
-│       │   └── analytics.py        # 绩效分析（Sharpe, MaxDD, Calmar...）
-│       │
-│       ├── optimize/               # 参数优化
-│       │   ├── paramset.py         # 参数集定义（分布 + 约束）
-│       │   ├── search.py           # 搜索策略（grid, random, bayesian）
-│       │   ├── walk_forward.py     # 滚动前推分析
-│       │   └── validation.py       # 统计检验（Deflated Sharpe, Profit Hurdle）
-│       │
-│       ├── trade/                  # 交易执行
-│       │   ├── types.py            # Order, TradingCost, OrderPlan
-│       │   ├── generator.py        # 订单生成（权重 → 订单）
-│       │   ├── fees.py             # 费率计算
-│       │   ├── slippage.py         # 滑点模型
-│       │   ├── exchanges.py        # 交易所配置
-│       │   └── executor.py         # 执行接口（抽象，可对接券商 API）
-│       │
-│       ├── universe/               # Universe 构建
-│       │   ├── base.py             # UniverseProvider Protocol
-│       │   ├── static.py           # 静态标的池（手动指定）
-│       │   ├── index.py            # 指数成分股（Point-in-Time）
-│       │   └── filter.py           # 条件过滤（因子筛选、流动性门槛）
-│       │
-│       ├── data/                   # 数据层
-│       │   ├── providers.py        # Provider 协议定义
-│       │   ├── market.py           # 行情数据 provider
-│       │   ├── factors.py          # 因子数据 provider
-│       │   └── loaders.py          # 数据加载工具（CSV, parquet, API）
-│       │
-│       ├── observe/                # 可观测性
-│       │   ├── tracer.py           # 执行追踪（每步输入/输出记录）
-│       │   ├── logger.py           # 结构化日志
-│       │   ├── events.py           # 事件总线（策略事件、交易事件）
-│       │   └── audit.py            # 审计追踪（可复现性保证）
-│       │
-│       └── tools/                  # 协议无关的 Tool 定义（核心资产）
-│           ├── __init__.py         # Tool 注册中心
-│           ├── strategy_tools.py   # 策略管理 tool（名称、参数、描述、调用逻辑）
-│           ├── data_tools.py       # 数据查询 tool
-│           ├── backtest_tools.py   # 回测 tool
-│           ├── optimize_tools.py   # 优化 tool
-│           ├── analysis_tools.py   # 分析 tool
-│           ├── universe_tools.py   # Universe tool
-│           ├── trade_tools.py      # 交易 tool
-│           └── observe_tools.py    # 监控 tool
+├── src/oxq/                        # 主 Python 包（pip install open-xquant）
+│   ├── core/                       # 核心引擎（类型、策略定义、执行引擎、注册中心、异常）
+│   ├── indicators/                 # 技术指标库（SMA, EMA, RSI, MACD, BBands...）
+│   ├── signals/                    # 信号生成器（交叉、阈值、比较、公式、组合）
+│   ├── rules/                      # 交易规则（入场、出场、仓位管理、风控、再平衡）
+│   ├── portfolio/                  # 组合管理（持仓、订单簿、记账）
+│   ├── backtest/                   # 回测引擎（事件驱动、模拟撮合、绩效分析）
+│   ├── optimize/                   # 参数优化（网格/随机/贝叶斯搜索、滚动前推、统计检验）
+│   ├── trade/                      # 交易执行（订单生成、费率、滑点、交易所配置）
+│   ├── universe/                   # Universe 构建（静态池、指数成分、条件过滤）
+│   ├── data/                       # 数据层（Provider 协议、行情/因子数据、数据加载）
+│   ├── observe/                    # 可观测性（追踪、日志、事件总线、审计）
+│   └── tools/                      # 协议无关的 Tool 定义（核心资产）
 │
 ├── mcp_server/                     # MCP 协议适配层（可选分发渠道）
-│   ├── __init__.py
-│   ├── server.py                   # MCP server 入口（从 oxq.tools 导入）
-│   └── adapters.py                 # MCP 协议适配（参数映射、会话管理）
-│
-├── skills/                         # Agent Skill 定义
-│   ├── strategy-builder.md         # 构建交易策略
-│   ├── backtest-runner.md          # 运行回测
-│   ├── parameter-tuner.md          # 参数优化
-│   ├── risk-analyzer.md            # 风险分析
-│   ├── performance-reviewer.md     # 绩效评估
-│   ├── trade-executor.md           # 交易执行
-│   └── strategy-monitor.md         # 策略监控
-│
-├── examples/                       # 示例策略
-│   ├── ma_crossover.py             # 均线交叉
-│   ├── momentum_rotation.py        # 动量轮动
-│   ├── mean_reversion.py           # 均值回归
-│   └── multi_strategy.py           # 多策略编排
-│
-├── tests/                         # 测试（镜像 src/oxq/ 结构）
-│   ├── universe/                  # Universe 测试
-│   └── ...
-├── docs/
+├── skills/                         # Agent Skill 定义（markdown）
+├── examples/                       # 示例策略、demo 应用、教程
+├── tests/                          # 测试（镜像 src/oxq/ 结构）
+├── docs/                           # 文档
 ├── pyproject.toml
 ├── LICENSE                         # MIT
 └── README.md

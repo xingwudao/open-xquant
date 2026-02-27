@@ -16,7 +16,7 @@ from openai import OpenAI
 
 nest_asyncio.apply()
 
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SKILLS_DIR = PROJECT_ROOT / "skills"
 MAX_TOOL_ROUNDS = 15
 
