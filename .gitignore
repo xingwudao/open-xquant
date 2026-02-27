@@ -34,3 +34,6 @@ Thumbs.db
 *.parquet
 *.h5
 *.hdf5
+
+# claude
+docs/plans/

@@ -1,10 +1,10 @@
 def test_data_public_api() -> None:
     from oxq.data import (
-        MarketDataProvider,
-        LocalMarketDataProvider,
-        Downloader,
-        YFinanceDownloader,
         AkShareDownloader,
+        Downloader,
+        LocalMarketDataProvider,
+        MarketDataProvider,
+        YFinanceDownloader,
         resolve_data_dir,
     )
     assert MarketDataProvider is not None
@@ -16,7 +16,7 @@ def test_data_public_api() -> None:
 
 
 def test_core_errors_public_api() -> None:
-    from oxq.core import OxqError, SymbolNotFoundError, DownloadError
+    from oxq.core import DownloadError, OxqError, SymbolNotFoundError
     assert OxqError is not None
     assert SymbolNotFoundError is not None
     assert DownloadError is not None

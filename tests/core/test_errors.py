@@ -1,17 +1,17 @@
 from oxq.core.errors import DownloadError, OxqError, SymbolNotFoundError
 
 
-def test_oxq_error_is_exception():
+def test_oxq_error_is_exception() -> None:
     assert issubclass(OxqError, Exception)
 
 
-def test_symbol_not_found_error_is_oxq_error():
+def test_symbol_not_found_error_is_oxq_error() -> None:
     err = SymbolNotFoundError("AAPL")
     assert isinstance(err, OxqError)
     assert "AAPL" in str(err)
 
 
-def test_download_error_is_oxq_error():
+def test_download_error_is_oxq_error() -> None:
     err = DownloadError("timeout")
     assert isinstance(err, OxqError)
     assert "timeout" in str(err)

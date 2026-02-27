@@ -11,6 +11,6 @@ class FakeProvider:
         return pd.Series()
 
 
-def test_fake_provider_satisfies_protocol():
+def test_fake_provider_satisfies_protocol() -> None:
     provider: MarketDataProvider = FakeProvider()
     assert isinstance(provider, MarketDataProvider)
