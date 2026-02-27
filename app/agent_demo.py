@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -28,9 +29,9 @@ with st.sidebar:
     st.title("open-xquant Agent")
     st.markdown("---")
 
-    base_url = st.text_input("API Base URL", value="https://api.openai.com/v1")
+    base_url = st.text_input("API Base URL", value="https://api.deepseek.com/v1")
     api_key = st.text_input("API Key", type="password")
-    model = st.text_input("Model", value="gpt-4o")
+    model = st.text_input("Model", value="deepseek-chat")
 
     st.markdown("---")
 
@@ -107,13 +108,15 @@ def render_message(msg: dict[str, Any]) -> None:
                 st.success(f"Tool result: {msg['content']}")
 
 
-async def run_agent_turn(
+async def stream_agent_turn(
     messages: list[dict[str, Any]],
     openai_client: OpenAI,
     model_name: str,
 ) -> list[dict[str, Any]]:
-    """Execute one full agent turn with tool calling loop.
+    """Execute one full agent turn with streaming and real-time UI updates.
 
+    Renders messages in Streamlit as they arrive (text token-by-token,
+    tool calls and results as they complete).
     Returns a list of new message dicts to append to history.
     """
     server_params = get_server_params()
@@ -128,65 +131,141 @@ async def run_agent_turn(
             current_messages = list(messages)
 
             for _round in range(MAX_TOOL_ROUNDS):
-                response = openai_client.chat.completions.create(
+                # Stream LLM response
+                stream = openai_client.chat.completions.create(
                     model=model_name,
                     messages=current_messages,
                     tools=openai_tools if openai_tools else None,
+                    stream=True,
                 )
-                choice = response.choices[0]
-                msg = choice.message
 
-                if msg.tool_calls:
-                    # Add assistant message with tool calls
-                    assistant_msg: dict[str, Any] = {
-                        "role": "assistant",
-                        "content": msg.content or "",
-                        "tool_calls": [
+                content_parts: list[str] = []
+                tool_calls_acc: dict[int, dict[str, str]] = {}
+
+                with st.chat_message("assistant"):
+                    text_placeholder = st.empty()
+
+                    for chunk in stream:
+                        delta = chunk.choices[0].delta
+
+                        # Stream text content token-by-token
+                        if delta.content:
+                            content_parts.append(delta.content)
+                            text_placeholder.markdown(
+                                "".join(content_parts) + "▌"
+                            )
+
+                        # Accumulate tool call deltas
+                        if delta.tool_calls:
+                            for tc_delta in delta.tool_calls:
+                                idx = tc_delta.index
+                                if idx not in tool_calls_acc:
+                                    tool_calls_acc[idx] = {
+                                        "id": "",
+                                        "name": "",
+                                        "arguments": "",
+                                    }
+                                if tc_delta.id:
+                                    tool_calls_acc[idx]["id"] = tc_delta.id
+                                if tc_delta.function:
+                                    if tc_delta.function.name:
+                                        tool_calls_acc[idx][
+                                            "name"
+                                        ] += tc_delta.function.name
+                                    if tc_delta.function.arguments:
+                                        tool_calls_acc[idx][
+                                            "arguments"
+                                        ] += tc_delta.function.arguments
+
+                    full_content = "".join(content_parts)
+
+                    if tool_calls_acc:
+                        # Finalize or clear text placeholder
+                        if full_content:
+                            text_placeholder.markdown(full_content)
+                        else:
+                            text_placeholder.empty()
+
+                        # Build tool_calls list
+                        tool_calls = [
                             {
-                                "id": tc.id,
+                                "id": tool_calls_acc[idx]["id"],
                                 "type": "function",
                                 "function": {
-                                    "name": tc.function.name,
-                                    "arguments": tc.function.arguments,
+                                    "name": tool_calls_acc[idx]["name"],
+                                    "arguments": tool_calls_acc[idx]["arguments"],
                                 },
                             }
-                            for tc in msg.tool_calls
-                        ],
-                    }
-                    new_messages.append(assistant_msg)
-                    current_messages.append(assistant_msg)
+                            for idx in sorted(tool_calls_acc)
+                        ]
 
-                    # Execute each tool call via MCP
-                    for tc in msg.tool_calls:
-                        tool_name = tc.function.name
+                        # Display tool calls
+                        for tc in tool_calls:
+                            st.info(
+                                f"Tool call: **{tc['function']['name']}**\n"
+                                f"```json\n{tc['function']['arguments']}\n```"
+                            )
+
+                        # Store assistant message
+                        assistant_msg: dict[str, Any] = {
+                            "role": "assistant",
+                            "content": full_content,
+                            "tool_calls": tool_calls,
+                        }
+                        new_messages.append(assistant_msg)
+                        current_messages.append(assistant_msg)
+
+                    else:
+                        # Final text response — remove cursor
+                        text_placeholder.markdown(full_content)
+                        new_messages.append(
+                            {"role": "assistant", "content": full_content}
+                        )
+                        break
+
+                # Execute tool calls via MCP (outside the chat bubble above)
+                if tool_calls_acc:
+                    for tc in tool_calls:
+                        tool_name = tc["function"]["name"]
                         try:
-                            tool_args = json.loads(tc.function.arguments)
+                            tool_args = json.loads(tc["function"]["arguments"])
                         except json.JSONDecodeError:
                             tool_args = {}
 
-                        try:
-                            result = await session.call_tool(tool_name, tool_args)
-                            tool_content = result.content[0].text if result.content else "{}"
-                        except Exception as e:  # noqa: BLE001
-                            tool_content = json.dumps({"error": str(e)})
+                        with st.chat_message("assistant"):
+                            with st.spinner(f"Running {tool_name}..."):
+                                try:
+                                    result = await session.call_tool(
+                                        tool_name, tool_args
+                                    )
+                                    tool_content = (
+                                        result.content[0].text
+                                        if result.content
+                                        else "{}"
+                                    )
+                                except Exception as e:  # noqa: BLE001
+                                    tool_content = json.dumps({"error": str(e)})
+
+                            try:
+                                parsed = json.loads(tool_content)
+                                st.success(
+                                    f"Tool result:\n```json\n"
+                                    f"{json.dumps(parsed, indent=2, ensure_ascii=False)}"
+                                    f"\n```"
+                                )
+                            except json.JSONDecodeError:
+                                st.success(f"Tool result: {tool_content}")
 
                         tool_msg = {
                             "role": "tool",
-                            "tool_call_id": tc.id,
+                            "tool_call_id": tc["id"],
                             "content": tool_content,
                         }
                         new_messages.append(tool_msg)
                         current_messages.append(tool_msg)
-                else:
-                    # Final response (no more tool calls)
-                    new_messages.append(
-                        {
-                            "role": "assistant",
-                            "content": msg.content or "",
-                        }
-                    )
-                    break
             else:
+                with st.chat_message("assistant"):
+                    st.warning("Reached maximum tool-call rounds. Stopping.")
                 new_messages.append(
                     {
                         "role": "assistant",
@@ -220,28 +299,25 @@ if prompt := st.chat_input("Type a message..."):
 
     # Build messages for API call
     api_messages: list[dict[str, Any]] = []
+    system_parts = [f"Today's date is {date.today().isoformat()}."]
     if skill_content:
-        api_messages.append({"role": "system", "content": skill_content})
+        system_parts.append(skill_content)
+    api_messages.append({"role": "system", "content": "\n\n".join(system_parts)})
     api_messages.extend(st.session_state.messages)
 
-    # Run agent turn
+    # Stream agent turn (renders in real-time)
     openai_client = OpenAI(base_url=base_url, api_key=api_key)
 
-    with st.spinner("Thinking..."):
-        try:
-            new_messages = asyncio.run(
-                run_agent_turn(api_messages, openai_client, model)
-            )
-        except BaseException as e:  # noqa: BLE001
-            # Unwrap anyio TaskGroup / ExceptionGroup to show the real error
-            root = e
-            while hasattr(root, "exceptions") and root.exceptions:
-                root = root.exceptions[0]
-            st.error(f"Error: {root}")
-            st.stop()
-
-    # Display and store new messages
-    for _msg in new_messages:
-        render_message(_msg)
+    try:
+        new_messages = asyncio.run(
+            stream_agent_turn(api_messages, openai_client, model)
+        )
+    except BaseException as e:  # noqa: BLE001
+        # Unwrap anyio TaskGroup / ExceptionGroup to show the real error
+        root = e
+        while hasattr(root, "exceptions") and root.exceptions:
+            root = root.exceptions[0]
+        st.error(f"Error: {root}")
+        st.stop()
 
     st.session_state.messages.extend(new_messages)
