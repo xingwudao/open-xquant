@@ -1,13 +1,12 @@
-# mcp_server/tools/data_tools.py
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from mcp.server.fastmcp import FastMCP
 
-from oxq.core.errors import DownloadError
-from oxq.data.loaders import resolve_data_dir
+from oxq.data.loaders import Downloader, resolve_data_dir
 
 
 def _list_symbols(data_dir: str | None = None) -> dict[str, Any]:
@@ -32,7 +31,7 @@ def _inspect(symbol: str, data_dir: str | None = None) -> dict[str, Any]:
         "columns": list(df.columns),
         "date_range": [str(df.index[0].date()), str(df.index[-1].date())],
         "missing_values": int(df.isna().sum().sum()),
-        "sample_head": df.head(3).to_dict(orient="index"),
+        "sample_head": df.head(3).reset_index().astype(str).to_dict(orient="records"),
     }
 
 
@@ -46,6 +45,7 @@ def _load_symbols(
     """Download symbols from an external source."""
     dest = Path(data_dir) if data_dir else None
 
+    dl: Downloader
     if source == "yfinance":
         from oxq.data import YFinanceDownloader
         dl = YFinanceDownloader()
@@ -62,7 +62,7 @@ def _load_symbols(
             dl.download(sym, start, end, dest_dir=dest)
             df = pd.read_parquet(resolve_data_dir(dest) / f"{sym}.parquet")
             rows[sym] = len(df)
-        except (DownloadError, Exception) as e:
+        except Exception as e:
             errors[sym] = str(e)
 
     result: dict[str, Any] = {
@@ -75,7 +75,7 @@ def _load_symbols(
     return result
 
 
-def register(mcp: Any) -> None:
+def register(mcp: FastMCP) -> None:
     """Register data tools on the MCP server instance."""
 
     @mcp.tool(name="data.load_symbols", description="Download market data for given symbols")
