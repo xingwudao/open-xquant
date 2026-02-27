@@ -1,6 +1,11 @@
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
-from oxq.data.loaders import resolve_data_dir
+import pandas as pd
+import pytest
+
+from oxq.core.errors import DownloadError
+from oxq.data.loaders import Downloader, YFinanceDownloader, resolve_data_dir
 
 
 def test_resolve_with_explicit_dir(tmp_path: Path) -> None:
@@ -24,3 +29,73 @@ def test_explicit_dir_overrides_env(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("OXQ_DATA_DIR", str(tmp_path / "env"))
     result = resolve_data_dir(tmp_path / "explicit")
     assert result == tmp_path / "explicit"
+
+
+def test_yfinance_downloader_satisfies_protocol() -> None:
+    downloader: Downloader = YFinanceDownloader()
+    assert isinstance(downloader, Downloader)
+
+
+def test_yfinance_download_saves_parquet(tmp_path) -> None:
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0, 101.0],
+            "High": [105.0, 106.0],
+            "Low": [99.0, 100.0],
+            "Close": [104.0, 105.0],
+            "Volume": [1000, 1100],
+        },
+        index=pd.DatetimeIndex(
+            ["2024-01-02", "2024-01-03"], name="Date"
+        ),
+    )
+    with patch("oxq.data.loaders.yfinance", create=True) as mock_yf:
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_df
+        mock_yf.Ticker.return_value = mock_ticker
+
+        downloader = YFinanceDownloader()
+        path = downloader.download("AAPL", "2024-01-02", "2024-01-03", dest_dir=tmp_path)
+
+    assert path == tmp_path / "AAPL.parquet"
+    assert path.exists()
+    result = pd.read_parquet(path)
+    assert list(result.columns) == ["open", "high", "low", "close", "volume"]
+    assert result.index.name == "date"
+    assert len(result) == 2
+
+
+def test_yfinance_download_many(tmp_path) -> None:
+    mock_df = pd.DataFrame(
+        {
+            "Open": [100.0],
+            "High": [105.0],
+            "Low": [99.0],
+            "Close": [104.0],
+            "Volume": [1000],
+        },
+        index=pd.DatetimeIndex(["2024-01-02"], name="Date"),
+    )
+    with patch("oxq.data.loaders.yfinance", create=True) as mock_yf:
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = mock_df
+        mock_yf.Ticker.return_value = mock_ticker
+
+        downloader = YFinanceDownloader()
+        paths = downloader.download_many(
+            ["AAPL", "MSFT"], "2024-01-02", "2024-01-03", dest_dir=tmp_path
+        )
+
+    assert set(paths.keys()) == {"AAPL", "MSFT"}
+    assert all(p.exists() for p in paths.values())
+
+
+def test_yfinance_download_empty_raises(tmp_path) -> None:
+    with patch("oxq.data.loaders.yfinance", create=True) as mock_yf:
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = pd.DataFrame()
+        mock_yf.Ticker.return_value = mock_ticker
+
+        downloader = YFinanceDownloader()
+        with pytest.raises(DownloadError, match="AAPL"):
+            downloader.download("AAPL", "2024-01-02", "2024-01-03", dest_dir=tmp_path)

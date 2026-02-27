@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import importlib
 import os
 from pathlib import Path
+from typing import Protocol, runtime_checkable
+
+import pandas as pd
+
+from oxq.core.errors import DownloadError
 
 
 def resolve_data_dir(dest_dir: Path | None = None) -> Path:
@@ -12,3 +18,70 @@ def resolve_data_dir(dest_dir: Path | None = None) -> Path:
     if env:
         return Path(env) / "market"
     return Path.home() / ".oxq" / "data" / "market"
+
+
+@runtime_checkable
+class Downloader(Protocol):
+    """Data download protocol: fetch from external source and persist."""
+
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path: ...
+
+    def download_many(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> dict[str, Path]: ...
+
+
+def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
+    """Normalize raw API DataFrame to standard schema."""
+    df = df.rename(columns=str.lower)
+    df.index.name = "date"
+    cols = ["open", "high", "low", "close", "volume"]
+    df = df[cols]
+    df["volume"] = df["volume"].astype("int64")
+    return df
+
+
+class YFinanceDownloader:
+    """Download market data via yfinance. Covers US and global equities."""
+
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        yfinance = globals().get("yfinance") or importlib.import_module("yfinance")
+
+        data_dir = resolve_data_dir(dest_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        ticker = yfinance.Ticker(symbol)
+        df = ticker.history(start=start, end=end)
+        if df.empty:
+            msg = f"No data returned for '{symbol}' ({start} to {end})."
+            raise DownloadError(msg)
+
+        df = _normalize_df(df)
+        path = data_dir / f"{symbol}.parquet"
+        df.to_parquet(path)
+        return path
+
+    def download_many(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> dict[str, Path]:
+        return {s: self.download(s, start, end, dest_dir) for s in symbols}
