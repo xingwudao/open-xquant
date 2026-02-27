@@ -80,6 +80,50 @@ open-xquant 采用 **Agent First** 的设计哲学——框架的首要使用者
 - **量化策略研究者**：专注于策略逻辑本身，而非框架的使用方式
 - **AI 应用开发者**：构建基于 LLM 的自动化量化交易 Agent
 
+## 通过示例学习
+
+`examples/` 目录提供了由浅入深的学习路径，帮助你快速上手 open-xquant。
+
+### 推荐学习顺序
+
+**第一步：模块教程（`examples/tutorials/`）**
+
+交互式 Jupyter Notebook，逐步讲解各核心模块的用法：
+
+| Notebook | 内容 |
+|----------|------|
+| `data_module.ipynb` | 数据下载与读取——学习如何使用 YFinance/AkShare 下载美股和 A 股行情数据，并通过 `LocalMarketDataProvider` 统一读取 |
+| `universe_module.ipynb` | 标的池构建——学习如何使用 `StaticUniverse` 定义固定标的池，以及使用 `FilterUniverse` 基于量价规则动态筛选 |
+
+```bash
+# 启动 Jupyter 运行教程
+pip install open-xquant[yfinance,akshare]
+jupyter notebook examples/tutorials/
+```
+
+**第二步：策略示例（`examples/strategies/`）**
+
+完整的策略代码示例，展示 Indicator → Signal → Rule 三阶段模型的实际应用：
+
+| 文件 | 策略类型 |
+|------|----------|
+| `ma_crossover.py` | 均线交叉策略 |
+| `momentum_rotation.py` | 动量轮动策略 |
+| `mean_reversion.py` | 均值回归策略 |
+| `multi_strategy.py` | 多策略组合 |
+
+**第三步：Agent 应用（`examples/app/`）**
+
+| 文件 | 说明 |
+|------|------|
+| `agent_demo.py` | 基于 Streamlit 的 AI Agent 演示，通过 MCP 协议调用 open-xquant 工具，体验 Agent First 的交互方式 |
+
+```bash
+# 运行 Agent Demo
+pip install streamlit openai mcp nest_asyncio
+streamlit run examples/app/agent_demo.py
+```
+
 ## 项目状态
 
 open-xquant 正处于早期设计阶段。我们正在：
@@ -177,6 +221,50 @@ Data → Factors → Signals → Backtest → Paper Trading → Live Trading
 - **Quant learners in the AI era**: Learn quantitative investing through Vibe Coding — no need to be a senior programmer
 - **Quant strategy researchers**: Focus on strategy logic, not framework mechanics
 - **AI application developers**: Build LLM-powered automated trading agents
+
+## Learn by Examples
+
+The `examples/` directory provides a progressive learning path to help you get started with open-xquant.
+
+### Recommended Learning Order
+
+**Step 1: Module Tutorials (`examples/tutorials/`)**
+
+Interactive Jupyter Notebooks that walk you through each core module:
+
+| Notebook | Content |
+|----------|---------|
+| `data_module.ipynb` | Data download & reading — learn to fetch US and China A-share market data via YFinance/AkShare, and read it through `LocalMarketDataProvider` |
+| `universe_module.ipynb` | Universe construction — learn to define a fixed symbol pool with `StaticUniverse` and dynamically filter with `FilterUniverse` based on price/volume rules |
+
+```bash
+# Launch Jupyter to run tutorials
+pip install open-xquant[yfinance,akshare]
+jupyter notebook examples/tutorials/
+```
+
+**Step 2: Strategy Examples (`examples/strategies/`)**
+
+Complete strategy code demonstrating the Indicator → Signal → Rule three-phase model:
+
+| File | Strategy Type |
+|------|---------------|
+| `ma_crossover.py` | Moving Average Crossover |
+| `momentum_rotation.py` | Momentum Rotation |
+| `mean_reversion.py` | Mean Reversion |
+| `multi_strategy.py` | Multi-Strategy Portfolio |
+
+**Step 3: Agent Application (`examples/app/`)**
+
+| File | Description |
+|------|-------------|
+| `agent_demo.py` | Streamlit-based AI Agent demo that calls open-xquant tools via MCP protocol — experience the Agent First interaction model |
+
+```bash
+# Run the Agent Demo
+pip install streamlit openai mcp nest_asyncio
+streamlit run examples/app/agent_demo.py
+```
 
 ## Project Status
 
