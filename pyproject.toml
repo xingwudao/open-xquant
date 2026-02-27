@@ -41,12 +41,18 @@ akshare = [
 talib = [
     "TA-Lib",
 ]
+agent = [
+    "streamlit>=1.30",
+    "openai>=1.0",
+    "mcp>=1.0",
+]
 dev = [
     "pytest>=8.0",
     "pytest-cov",
     "ruff",
     "mypy",
     "pandas-stubs",
+    "mcp>=1.0",
 ]
 docs = [
     "mkdocs-material",
