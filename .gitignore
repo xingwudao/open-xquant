@@ -33,3 +33,4 @@ Thumbs.db
 # Project specific
 *.h5
 *.hdf5
+docs/plans/
