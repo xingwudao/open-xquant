@@ -64,21 +64,32 @@ def get_server_params() -> StdioServerParameters:
     )
 
 
-def mcp_tools_to_openai(mcp_tools: list[Any]) -> list[dict[str, Any]]:
-    """Convert MCP tool definitions to OpenAI function calling format."""
+def _sanitize_name(name: str) -> str:
+    """Replace chars not allowed by OpenAI function naming (^[a-zA-Z0-9_-]+$)."""
+    return name.replace(".", "_")
+
+
+def mcp_tools_to_openai(mcp_tools: list[Any]) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    """Convert MCP tool definitions to OpenAI function calling format.
+
+    Returns (openai_tools, name_map) where name_map maps sanitized names back to MCP names.
+    """
     result = []
+    name_map: dict[str, str] = {}
     for tool in mcp_tools:
+        safe_name = _sanitize_name(tool.name)
+        name_map[safe_name] = tool.name
         result.append(
             {
                 "type": "function",
                 "function": {
-                    "name": tool.name,
+                    "name": safe_name,
                     "description": tool.description or "",
                     "parameters": tool.inputSchema,
                 },
             }
         )
-    return result
+    return result, name_map
 
 
 def render_message(msg: dict[str, Any]) -> None:
@@ -123,7 +134,7 @@ async def run_agent_turn(
         async with ClientSession(read, write) as session:
             await session.initialize()
             tools_result = await session.list_tools()
-            openai_tools = mcp_tools_to_openai(tools_result.tools)
+            openai_tools, name_map = mcp_tools_to_openai(tools_result.tools)
 
             current_messages = list(messages)
 
@@ -158,7 +169,8 @@ async def run_agent_turn(
 
                     # Execute each tool call via MCP
                     for tc in msg.tool_calls:
-                        tool_name = tc.function.name
+                        # Map sanitized name back to MCP tool name
+                        tool_name = name_map.get(tc.function.name, tc.function.name)
                         try:
                             tool_args = json.loads(tc.function.arguments)
                         except json.JSONDecodeError:
