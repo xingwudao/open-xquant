@@ -232,8 +232,12 @@ if prompt := st.chat_input("Type a message..."):
             new_messages = asyncio.run(
                 run_agent_turn(api_messages, openai_client, model)
             )
-        except Exception as e:  # noqa: BLE001
-            st.error(f"Error: {e}")
+        except BaseException as e:  # noqa: BLE001
+            # Unwrap anyio TaskGroup / ExceptionGroup to show the real error
+            root = e
+            while hasattr(root, "exceptions") and root.exceptions:
+                root = root.exceptions[0]
+            st.error(f"Error: {root}")
             st.stop()
 
     # Display and store new messages
