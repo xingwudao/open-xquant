@@ -38,9 +38,9 @@ def sample_data_dir(tmp_path: Path) -> Path:
 def test_register_adds_three_tools(mcp_app: FastMCP) -> None:
     assert mcp_app._tool_manager is not None
     tool_names = list(mcp_app._tool_manager._tools.keys())
-    assert "data.load_symbols" in tool_names
-    assert "data.list_symbols" in tool_names
-    assert "data.inspect" in tool_names
+    assert "data_load_symbols" in tool_names
+    assert "data_list_symbols" in tool_names
+    assert "data_inspect" in tool_names
 
 
 def test_list_symbols(sample_data_dir: Path) -> None:

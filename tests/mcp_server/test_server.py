@@ -31,9 +31,9 @@ async def _list_tools(server_params: StdioServerParameters) -> list[str]:
 
 def test_server_lists_data_tools(server_params: StdioServerParameters) -> None:
     tool_names = asyncio.run(_list_tools(server_params))
-    assert "data.load_symbols" in tool_names
-    assert "data.list_symbols" in tool_names
-    assert "data.inspect" in tool_names
+    assert "data_load_symbols" in tool_names
+    assert "data_list_symbols" in tool_names
+    assert "data_inspect" in tool_names
 
 
 async def _call_list_symbols(
@@ -43,7 +43,7 @@ async def _call_list_symbols(
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(
-                "data.list_symbols", {"data_dir": data_dir},
+                "data_list_symbols", {"data_dir": data_dir},
             )
             return json.loads(result.content[0].text)
 

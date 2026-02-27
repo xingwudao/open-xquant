@@ -23,7 +23,7 @@ def _inspect(symbol: str, data_dir: str | None = None) -> dict[str, Any]:
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     parquet_path = path / f"{symbol}.parquet"
     if not parquet_path.exists():
-        return {"symbol": symbol, "error": f"No data for '{symbol}'. Run data.load_symbols first."}
+        return {"symbol": symbol, "error": f"No data for '{symbol}'. Run data_load_symbols first."}
     df = pd.read_parquet(parquet_path)
     return {
         "symbol": symbol,
@@ -78,7 +78,7 @@ def _load_symbols(
 def register(mcp: FastMCP) -> None:
     """Register data tools on the MCP server instance."""
 
-    @mcp.tool(name="data.load_symbols", description="Download market data for given symbols")
+    @mcp.tool(name="data_load_symbols", description="Download market data for given symbols")
     def data_load_symbols(
         symbols: list[str],
         start: str,
@@ -88,10 +88,10 @@ def register(mcp: FastMCP) -> None:
     ) -> dict[str, Any]:
         return _load_symbols(symbols, start, end, source, data_dir)
 
-    @mcp.tool(name="data.list_symbols", description="List locally available market data symbols")
+    @mcp.tool(name="data_list_symbols", description="List locally available market data symbols")
     def data_list_symbols(data_dir: str | None = None) -> dict[str, Any]:
         return _list_symbols(data_dir)
 
-    @mcp.tool(name="data.inspect", description="Inspect data summary for a symbol (rows, date range, missing values)")
+    @mcp.tool(name="data_inspect", description="Inspect data summary for a symbol (rows, date range, missing values)")
     def data_inspect(symbol: str, data_dir: str | None = None) -> dict[str, Any]:
         return _inspect(symbol, data_dir)

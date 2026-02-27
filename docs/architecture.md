@@ -212,15 +212,15 @@ result = compiled.run(context, providers)
 Tool 定义在 `oxq.tools` 中，协议无关——Coding Agent 直接 `import` 调用，MCP 客户端通过 MCP 协议调用，平台方也可通过 REST/gRPC 等任意方式触发。
 
 ```
-→ strategy.create(name="momentum_rotation")
-→ universe.set(strategy="momentum_rotation", type="index", code="000300.SS")  # 沪深300成分股
-→ strategy.add_indicator(strategy="momentum_rotation", name="sma_fast", type="SMA", params={"period": 10})
-→ strategy.add_indicator(strategy="momentum_rotation", name="sma_slow", type="SMA", params={"period": 50})
-→ strategy.add_signal(strategy="momentum_rotation", name="golden_cross", type="Crossover",
+→ strategy_create(name="momentum_rotation")
+→ universe_set(strategy="momentum_rotation", type="index", code="000300.SS")  # 沪深300成分股
+→ strategy_add_indicator(strategy="momentum_rotation", name="sma_fast", type="SMA", params={"period": 10})
+→ strategy_add_indicator(strategy="momentum_rotation", name="sma_slow", type="SMA", params={"period": 50})
+→ strategy_add_signal(strategy="momentum_rotation", name="golden_cross", type="Crossover",
     inputs={"fast": "@ind:sma_fast", "slow": "@ind:sma_slow"})
-→ strategy.add_rule(strategy="momentum_rotation", name="enter_long", type="EntryRule",
+→ strategy_add_rule(strategy="momentum_rotation", name="enter_long", type="EntryRule",
     inputs={"signal": "@sig:golden_cross"}, params={"order_type": "market"})
-→ backtest.run(strategy="momentum_rotation", start="2020-01-01", end="2024-12-31")
+→ backtest_run(strategy="momentum_rotation", start="2020-01-01", end="2024-12-31")
 ```
 
 ### 4.2 单一宽表数据模型
@@ -676,10 +676,10 @@ haircut_sr = haircut_sharpe(results, method="holm")
 
 **Tool 调用**：
 ```
-→ optimize.define_paramset(strategy="momentum", distributions=[...], constraints=[...])
-→ optimize.run_walk_forward(strategy="momentum", paramset="sma_tuning", train="2Y", test="6M")
-→ analysis.deflated_sharpe(results_id="wfa_001")
-→ analysis.profit_hurdle(results_id="wfa_001")
+→ optimize_define_paramset(strategy="momentum", distributions=[...], constraints=[...])
+→ optimize_run_walk_forward(strategy="momentum", paramset="sma_tuning", train="2Y", test="6M")
+→ analysis_deflated_sharpe(results_id="wfa_001")
+→ analysis_profit_hurdle(results_id="wfa_001")
 ```
 
 ### 5.7 统计检验 (oxq.optimize.validation)
@@ -738,9 +738,9 @@ class AuditRecord:
 
 **Tool 调用**：
 ```
-→ observe.get_trace(run_id="run_20240101")        # 查看执行追踪
-→ observe.replay(run_id="run_20240101")            # 重放某次执行
-→ observe.compare_runs(run_ids=["run_a", "run_b"]) # 对比两次执行
+→ observe_get_trace(run_id="run_20240101")        # 查看执行追踪
+→ observe_replay(run_id="run_20240101")            # 重放某次执行
+→ observe_compare_runs(run_ids=["run_a", "run_b"]) # 对比两次执行
 ```
 
 ### 5.10 交易执行 (oxq.trade)
@@ -803,9 +803,9 @@ universe = FilterUniverse(
 
 **Tool 调用**：
 ```
-→ universe.set(strategy="momentum", type="index", code="000300.SS")
-→ universe.inspect(strategy="momentum", as_of_date="2023-06-30")  # 查看某日成分
-→ universe.history(strategy="momentum", start="2020-01-01", end="2024-12-31")  # 成分变动历史
+→ universe_set(strategy="momentum", type="index", code="000300.SS")
+→ universe_inspect(strategy="momentum", as_of_date="2023-06-30")  # 查看某日成分
+→ universe_history(strategy="momentum", start="2020-01-01", end="2024-12-31")  # 成分变动历史
 ```
 
 > **Point-in-Time 的重要性**：回测中使用当天实际生效的成分股（而非最新成分股）是消除 survivorship bias 的关键。`IndexUniverse` 的 `point_in_time=True` 确保在 2020 年的回测日使用 2020 年的成分股数据，而非 2024 年的。
@@ -818,51 +818,53 @@ universe = FilterUniverse(
 
 Tool 定义是框架的核心资产之一，与传输协议无关。每个 Tool 包含：名称、参数 schema、语义描述、调用逻辑。Tool 定义在 `src/oxq/tools/` 中实现，可通过多种方式触发：Coding Agent 直接 `import` 调用、MCP 客户端通过 MCP 协议调用、平台方通过 REST/gRPC 等自建接口调用。
 
+**命名规范**：Tool 名称统一使用 snake_case（如 `strategy_create`），不使用点号分隔。这确保与 OpenAI function calling 等 LLM API 的命名约束（`^[a-zA-Z0-9_-]+$`）兼容。
+
 **工具清单**：
 
 | 工具组 | 工具名 | 说明 |
 |--------|--------|------|
-| **universe** | `universe.set` | 设置策略的 Universe（静态列表/指数/过滤条件） |
-| | `universe.list_indexes` | 列出可用的指数代码 |
-| | `universe.inspect` | 查看某日的 Universe 成分快照 |
-| | `universe.history` | 查看 Universe 成分变动历史 |
-| **strategy** | `strategy.create` | 创建策略 |
-| | `strategy.add_indicator` | 添加指标 |
-| | `strategy.add_signal` | 添加信号 |
-| | `strategy.add_rule` | 添加规则 |
-| | `strategy.list` | 列出所有策略 |
-| | `strategy.inspect` | 查看策略详情 |
-| | `strategy.validate` | 验证策略配置 |
-| | `strategy.export` | 导出策略为 YAML/JSON |
-| | `strategy.import` | 导入策略配置 |
-| **data** | `data.load_symbols` | 加载标的行情数据 |
-| | `data.list_symbols` | 列出可用标的 |
-| | `data.inspect` | 查看数据摘要（时间范围、缺失值等） |
-| | `data.query` | 查询特定数据（价格、因子等） |
-| **backtest** | `backtest.run` | 运行回测 |
-| | `backtest.results` | 获取回测结果 |
-| | `backtest.compare` | 对比多个回测 |
-| | `backtest.trade_list` | 查看交易记录 |
-| **optimize** | `optimize.define_paramset` | 定义参数搜索空间 |
-| | `optimize.run_search` | 运行参数搜索 |
-| | `optimize.run_walk_forward` | 运行前推分析 |
-| | `optimize.results` | 获取优化结果 |
-| **analysis** | `analysis.performance` | 绩效指标（Sharpe, MaxDD, Calmar...） |
-| | `analysis.deflated_sharpe` | Deflated Sharpe Ratio |
-| | `analysis.profit_hurdle` | 利润门槛检验 |
-| | `analysis.drawdown` | 回撤分析 |
-| | `analysis.trade_stats` | 交易统计（胜率、盈亏比...） |
-| **trade** | `trade.generate_orders` | 生成订单计划 |
-| | `trade.estimate_costs` | 估算交易成本 |
-| | `trade.execute` | 执行订单（需确认） |
-| | `trade.status` | 查询订单状态 |
-| **observe** | `observe.trace` | 查看执行追踪 |
-| | `observe.audit_log` | 查看审计日志 |
-| | `observe.replay` | 重放历史执行 |
-| **orchestrator** | `orchestrator.create` | 创建多策略编排 |
-| | `orchestrator.add_strategy` | 添加子策略 |
-| | `orchestrator.set_constraints` | 设置全局约束 |
-| | `orchestrator.run` | 运行编排 |
+| **universe** | `universe_set` | 设置策略的 Universe（静态列表/指数/过滤条件） |
+| | `universe_list_indexes` | 列出可用的指数代码 |
+| | `universe_inspect` | 查看某日的 Universe 成分快照 |
+| | `universe_history` | 查看 Universe 成分变动历史 |
+| **strategy** | `strategy_create` | 创建策略 |
+| | `strategy_add_indicator` | 添加指标 |
+| | `strategy_add_signal` | 添加信号 |
+| | `strategy_add_rule` | 添加规则 |
+| | `strategy_list` | 列出所有策略 |
+| | `strategy_inspect` | 查看策略详情 |
+| | `strategy_validate` | 验证策略配置 |
+| | `strategy_export` | 导出策略为 YAML/JSON |
+| | `strategy_import` | 导入策略配置 |
+| **data** | `data_load_symbols` | 加载标的行情数据 |
+| | `data_list_symbols` | 列出可用标的 |
+| | `data_inspect` | 查看数据摘要（时间范围、缺失值等） |
+| | `data_query` | 查询特定数据（价格、因子等） |
+| **backtest** | `backtest_run` | 运行回测 |
+| | `backtest_results` | 获取回测结果 |
+| | `backtest_compare` | 对比多个回测 |
+| | `backtest_trade_list` | 查看交易记录 |
+| **optimize** | `optimize_define_paramset` | 定义参数搜索空间 |
+| | `optimize_run_search` | 运行参数搜索 |
+| | `optimize_run_walk_forward` | 运行前推分析 |
+| | `optimize_results` | 获取优化结果 |
+| **analysis** | `analysis_performance` | 绩效指标（Sharpe, MaxDD, Calmar...） |
+| | `analysis_deflated_sharpe` | Deflated Sharpe Ratio |
+| | `analysis_profit_hurdle` | 利润门槛检验 |
+| | `analysis_drawdown` | 回撤分析 |
+| | `analysis_trade_stats` | 交易统计（胜率、盈亏比...） |
+| **trade** | `trade_generate_orders` | 生成订单计划 |
+| | `trade_estimate_costs` | 估算交易成本 |
+| | `trade_execute` | 执行订单（需确认） |
+| | `trade_status` | 查询订单状态 |
+| **observe** | `observe_trace` | 查看执行追踪 |
+| | `observe_audit_log` | 查看审计日志 |
+| | `observe_replay` | 重放历史执行 |
+| **orchestrator** | `orchestrator_create` | 创建多策略编排 |
+| | `orchestrator_add_strategy` | 添加子策略 |
+| | `orchestrator_set_constraints` | 设置全局约束 |
+| | `orchestrator_run` | 运行编排 |
 
 **设计原则**：
 
@@ -905,7 +907,7 @@ for tool_def in tool_registry.all_tools():
 
 每个 skill.md 描述一个完整的 Agent 工作流，指导 AI Agent 如何组合 tools 完成任务。
 
-> **Tool 引用是协议无关的**：skill 中引用的 tool 名称（如 `universe.*`、`strategy.*`）是 `oxq.tools` 中定义的协议无关 Tool。Coding Agent 通过 `import oxq.tools` 调用等价函数，MCP 客户端通过 MCP 协议调用——Tool 名称和语义完全一致，仅传输方式不同。
+> **Tool 引用是协议无关的**：skill 中引用的 tool 名称（如 `universe_*`、`strategy_*`）是 `oxq.tools` 中定义的协议无关 Tool。Coding Agent 通过 `import oxq.tools` 调用等价函数，MCP 客户端通过 MCP 协议调用——Tool 名称和语义完全一致，仅传输方式不同。
 
 ### 7.1 strategy-builder.md
 
@@ -920,18 +922,18 @@ tools_required: [universe.*, strategy.*, data.*]
 
 1. 理解用户意图：什么市场？什么风格（趋势/动量/均值回归）？
 2. 设定 Universe：
-   a. universe.list_indexes 查看可用指数
-   b. universe.set 设定标的池（指数成分/静态列表/条件过滤）
-   c. universe.inspect 确认成分合理
-3. 加载数据：调用 data.load_symbols 加载行情
-4. 探索数据：调用 data.inspect 了解数据特征
+   a. universe_list_indexes 查看可用指数
+   b. universe_set 设定标的池（指数成分/静态列表/条件过滤）
+   c. universe_inspect 确认成分合理
+3. 加载数据：调用 data_load_symbols 加载行情
+4. 探索数据：调用 data_inspect 了解数据特征
 5. 构建策略：
-   a. strategy.create 创建策略
-   b. strategy.add_indicator 添加指标（根据风格选择）
-   c. strategy.add_signal 添加信号
-   d. strategy.add_rule 添加规则（入场 + 出场 + 风控）
-6. 验证：strategy.validate 检查配置完整性
-7. 快速回测：backtest.run 跑一个初始回测看结果是否合理
+   a. strategy_create 创建策略
+   b. strategy_add_indicator 添加指标（根据风格选择）
+   c. strategy_add_signal 添加信号
+   d. strategy_add_rule 添加规则（入场 + 出场 + 风控）
+6. 验证：strategy_validate 检查配置完整性
+7. 快速回测：backtest_run 跑一个初始回测看结果是否合理
 
 ## 决策指南
 - 趋势策略 → SMA/EMA + Crossover signal
@@ -951,11 +953,11 @@ tools_required: [optimize.*, analysis.*]
 
 ## 工作流
 
-1. 定义参数空间：optimize.define_paramset
-2. 运行前推分析：optimize.run_walk_forward（优先于 grid_search）
+1. 定义参数空间：optimize_define_paramset
+2. 运行前推分析：optimize_run_walk_forward（优先于 grid_search）
 3. 统计检验：
-   a. analysis.deflated_sharpe → SR 是否统计显著？
-   b. analysis.profit_hurdle → 收益是否超过随机？
+   a. analysis_deflated_sharpe → SR 是否统计显著？
+   b. analysis_profit_hurdle → 收益是否超过随机？
 4. 如果不显著 → 建议简化策略（减少参数）或增加数据
 5. 如果显著 → 输出最优参数 + 样本外表现
 
@@ -1005,7 +1007,7 @@ tools_required: [optimize.*, analysis.*]
 - `oxq.rules`: EntryRule, ExitRule, 基础 sizing
 - `oxq.portfolio`: Portfolio, Position
 - `oxq.backtest`: 基础回测引擎 + analytics
-- `oxq.tools`: universe.* + strategy.* + backtest.* tool 定义（核心交付物）
+- `oxq.tools`: universe_* + strategy_* + backtest_* tool 定义（核心交付物）
 - `skills/`: strategy-builder.md, backtest-runner.md
 - **目标**: Coding Agent / 开发者可以通过 SDK 构建简单策略并回测
 
@@ -1013,7 +1015,7 @@ tools_required: [optimize.*, analysis.*]
 - `oxq.universe`: IndexUniverse（Point-in-Time）, FilterUniverse
 - `oxq.optimize`: ParamSet, GridSearch, WalkForward
 - `oxq.optimize.validation`: DeflatedSharpe, ProfitHurdle
-- `oxq.tools`: optimize.* + analysis.* tool 定义
+- `oxq.tools`: optimize_* + analysis_* tool 定义
 - `mcp_server`: MCP 协议适配层（从 oxq.tools 导入，支持非 Coding AI 客户端）
 - `skills/`: parameter-tuner.md, performance-reviewer.md
 - **目标**: Agent 可以优化参数并验证统计显著性，Universe 支持指数成分和动态过滤，MCP 客户端可通过 MCP Server 使用全部功能
@@ -1021,7 +1023,7 @@ tools_required: [optimize.*, analysis.*]
 ### Phase 3: 交易执行 + 可观测性
 - `oxq.trade`: 完整订单簿 + 费率 + 滑点 + executor protocol
 - `oxq.observe`: Tracer, AuditLog, EventBus
-- `oxq.tools`: trade.* + observe.* tool 定义
+- `oxq.tools`: trade_* + observe_* tool 定义
 - `skills/`: trade-executor.md, strategy-monitor.md
 - **目标**: 端到端全链路，从构建到执行到监控
 
@@ -1029,7 +1031,7 @@ tools_required: [optimize.*, analysis.*]
 - `oxq.orchestrator`: 多策略编排 + 资金分配
 - 高级规则: 追踪止损、风险平价、因子风控
 - 更多指标/信号
-- `oxq.tools`: orchestrator.* tool 定义
+- `oxq.tools`: orchestrator_* tool 定义
 - `skills/`: risk-analyzer.md
 - **目标**: 机构级多策略管理能力
 
@@ -1078,7 +1080,7 @@ python -m mcp_server.server
 ### 可复现性测试
 ```
 1. 运行策略，记录 trace_id + result_hash
-2. 使用 observe.replay(trace_id) 重放
+2. 使用 observe_replay(trace_id) 重放
 3. 验证 result_hash 完全一致
 ```
 

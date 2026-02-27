@@ -43,19 +43,19 @@ Streamlit 作为 MCP Client，通过 stdio transport 启动 MCP Server 子进程
 
 ## MCP Tools
 
-### data.load_symbols
+### data_load_symbols
 
 - **输入**: `symbols` (list[str]), `start` (str), `end` (str), `source` ("yfinance"|"akshare")
 - **行为**: 调用 Downloader 下载数据
 - **返回**: `{ symbols: [...], rows: {AAPL: 251, ...}, path: "~/.oxq/data/market/" }`
 
-### data.list_symbols
+### data_list_symbols
 
 - **输入**: 无（或 `data_dir` 可选）
 - **行为**: 扫描本地 Parquet 文件，列出已有标的
 - **返回**: `{ symbols: ["AAPL", "600519", ...], count: 2 }`
 
-### data.inspect
+### data_inspect
 
 - **输入**: `symbol` (str)
 - **行为**: 读取 Parquet，返回数据摘要
@@ -72,7 +72,7 @@ Streamlit 作为 MCP Client，通过 stdio transport 启动 MCP Server 子进程
 
 ### 错误处理
 
-- `SymbolNotFoundError` → MCP error response + 提示 "Run data.load_symbols first"
+- `SymbolNotFoundError` → MCP error response + 提示 "Run data_load_symbols first"
 - `DownloadError` → MCP error response + 原始错误信息
 - 未知异常 → 统一包装为 MCP internal error
 
@@ -121,15 +121,15 @@ Streamlit 作为 MCP Client，通过 stdio transport 启动 MCP Server 子进程
 ---
 name: data-explorer
 description: 指导 Agent 探索和准备市场数据
-tools_required: [data.load_symbols, data.list_symbols, data.inspect]
+tools_required: [data_load_symbols, data_list_symbols, data_inspect]
 ---
 
 ## 工作流
 
 1. 了解用户需求（市场、标的、时间范围）
-2. 检查本地数据（data.list_symbols）
-3. 下载数据（data.load_symbols，根据市场选择 source）
-4. 数据质量检查（data.inspect）
+2. 检查本地数据（data_list_symbols）
+3. 下载数据（data_load_symbols，根据市场选择 source）
+4. 数据质量检查（data_inspect）
 
 ## 错误处理
 
