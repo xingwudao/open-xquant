@@ -30,6 +30,9 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# Worktrees
+.worktrees/
+
 # Project specific
 *.h5
 *.hdf5
