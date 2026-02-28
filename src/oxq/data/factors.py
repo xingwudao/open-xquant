@@ -39,22 +39,33 @@ def _fetch_world_bank(
     countries: list[str],
     start_year: int,
     end_year: int,
+    timeout: int = 60,
+    retries: int = 3,
 ) -> list[dict[str, Any]]:
     """Fetch data from World Bank API v2. Returns raw JSON records."""
+    import time
+
     country_str = ";".join(countries)
     url = (
         f"https://api.worldbank.org/v2/country/{country_str}"
         f"/indicator/{indicator_code}"
         f"?date={start_year}:{end_year}&format=json&per_page=10000"
     )
-    with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
-        body = json.loads(resp.read().decode())
-
-    # World Bank returns [metadata, data] — data is the second element
-    if not isinstance(body, list) or len(body) < 2 or body[1] is None:
-        return []
-    result: list[dict[str, Any]] = body[1]
-    return result
+    last_exc: Exception | None = None
+    for attempt in range(retries):
+        try:
+            with urllib.request.urlopen(url, timeout=timeout) as resp:  # noqa: S310
+                body = json.loads(resp.read().decode())
+            # World Bank returns [metadata, data] — data is the second element
+            if not isinstance(body, list) or len(body) < 2 or body[1] is None:
+                return []
+            result: list[dict[str, Any]] = body[1]
+            return result
+        except (TimeoutError, OSError) as exc:
+            last_exc = exc
+            if attempt < retries - 1:
+                time.sleep(2 * (attempt + 1))
+    raise last_exc  # type: ignore[misc]
 
 
 def _records_to_dataframe(records: list[dict[str, Any]]) -> pd.DataFrame:
