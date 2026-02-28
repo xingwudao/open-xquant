@@ -1,3 +1,4 @@
+from oxq.data.factors import WorldBankDownloader, read_factor, resolve_factor_dir
 from oxq.data.loaders import (
     AkShareDownloader,
     Downloader,
@@ -12,6 +13,9 @@ __all__ = [
     "Downloader",
     "LocalMarketDataProvider",
     "MarketDataProvider",
+    "WorldBankDownloader",
     "YFinanceDownloader",
+    "read_factor",
     "resolve_data_dir",
+    "resolve_factor_dir",
 ]

@@ -1,4 +1,4 @@
-"""Data tools — list, inspect, and load market data."""
+"""Data tools — list, inspect, and load market/factor data."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from typing import Any
 
 import pandas as pd
 
+from oxq.data.factors import INDICATOR_MAP, resolve_factor_dir
 from oxq.data.loaders import Downloader, resolve_data_dir
 from oxq.tools.registry import registry
 
@@ -89,3 +90,80 @@ def load_symbols(
     if errors:
         result["errors"] = errors
     return result
+
+
+# ---------------------------------------------------------------------------
+# Factor tools
+# ---------------------------------------------------------------------------
+
+
+@registry.tool(
+    name="factor_download",
+    description="Download a macro indicator (gdp, gdp_per_capita, gdp_growth, cpi) from World Bank",
+)
+def factor_download(
+    indicator: str,
+    countries: list[str],
+    start_year: int = 2000,
+    end_year: int = 2024,
+    data_dir: str | None = None,
+) -> dict[str, Any]:
+    """Download a macro indicator from World Bank and save locally."""
+    from oxq.data.factors import WorldBankDownloader
+
+    dest = Path(data_dir) if data_dir else None
+    dl = WorldBankDownloader()
+    try:
+        path = dl.download(indicator, countries, start_year, end_year, dest_dir=dest)
+    except (ValueError, Exception) as exc:
+        return {"error": str(exc)}
+
+    df = pd.read_parquet(path)
+    return {
+        "indicator": indicator,
+        "countries": list(df.columns),
+        "year_range": [int(df.index.min()), int(df.index.max())],
+        "rows": len(df),
+        "path": str(path),
+    }
+
+
+@registry.tool(
+    name="factor_list",
+    description="List locally available factor files",
+)
+def factor_list(data_dir: str | None = None) -> dict[str, Any]:
+    """List locally available factor data files."""
+    path = resolve_factor_dir(Path(data_dir) if data_dir else None)
+    if not path.exists():
+        return {"factors": [], "count": 0, "data_dir": str(path)}
+    factors = sorted(p.stem for p in path.glob("*.parquet"))
+    return {"factors": factors, "count": len(factors), "data_dir": str(path)}
+
+
+@registry.tool(
+    name="factor_inspect",
+    description="Inspect a factor file (year range, countries, sample values)",
+)
+def factor_inspect(
+    indicator: str,
+    data_dir: str | None = None,
+) -> dict[str, Any]:
+    """Inspect a locally stored factor file."""
+    path = resolve_factor_dir(Path(data_dir) if data_dir else None)
+    parquet_path = path / f"{indicator}.parquet"
+    if not parquet_path.exists():
+        return {
+            "indicator": indicator,
+            "error": f"No data for '{indicator}'. Run factor_download first.",
+            "available_indicators": sorted(INDICATOR_MAP),
+        }
+    df = pd.read_parquet(parquet_path)
+    return {
+        "indicator": indicator,
+        "countries": list(df.columns),
+        "year_range": [int(df.index.min()), int(df.index.max())],
+        "rows": len(df),
+        "missing_values": int(df.isna().sum().sum()),
+        "sample": df.tail(3).reset_index().astype(str).to_dict(orient="records"),
+    }
