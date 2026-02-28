@@ -94,6 +94,7 @@ open-xquant 采用 **Agent First** 的设计哲学——框架的首要使用者
 |----------|------|
 | `data_module.ipynb` | 数据下载与读取——学习如何使用 YFinance/AkShare 下载美股和 A 股行情数据，并通过 `LocalMarketDataProvider` 统一读取 |
 | `universe_module.ipynb` | 标的池构建——学习如何使用 `StaticUniverse` 定义固定标的池，以及使用 `FilterUniverse` 基于量价规则动态筛选 |
+| `backtest_module.ipynb` | 回测引擎——学习 Indicator → Signal → Rule 三阶段模型，使用 `BacktestEngine` 运行 SMA 均线交叉策略回测 |
 
 ```bash
 # 启动 Jupyter 运行教程
@@ -107,6 +108,7 @@ jupyter notebook examples/tutorials/
 
 | 文件 | 策略类型 |
 |------|----------|
+| `sma_crossover.py` | SMA 均线交叉策略（完整回测示例） |
 | `ma_crossover.py` | 均线交叉策略 |
 | `momentum_rotation.py` | 动量轮动策略 |
 | `mean_reversion.py` | 均值回归策略 |
@@ -236,6 +238,7 @@ Interactive Jupyter Notebooks that walk you through each core module:
 |----------|---------|
 | `data_module.ipynb` | Data download & reading — learn to fetch US and China A-share market data via YFinance/AkShare, and read it through `LocalMarketDataProvider` |
 | `universe_module.ipynb` | Universe construction — learn to define a fixed symbol pool with `StaticUniverse` and dynamically filter with `FilterUniverse` based on price/volume rules |
+| `backtest_module.ipynb` | Backtest engine — learn the Indicator → Signal → Rule three-phase model, run an SMA crossover strategy backtest with `BacktestEngine` |
 
 ```bash
 # Launch Jupyter to run tutorials
@@ -249,6 +252,7 @@ Complete strategy code demonstrating the Indicator → Signal → Rule three-pha
 
 | File | Strategy Type |
 |------|---------------|
+| `sma_crossover.py` | SMA Crossover (complete backtest example) |
 | `ma_crossover.py` | Moving Average Crossover |
 | `momentum_rotation.py` | Momentum Rotation |
 | `mean_reversion.py` | Mean Reversion |
