@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol, runtime_checkable
 
-import pandas as pd
-
 
 @dataclass(frozen=True)
 class Filter:
@@ -19,6 +17,7 @@ class Filter:
 class UniverseSnapshot:
     """Immutable snapshot of a resolved universe."""
 
+    as_of_date: str
     symbols: tuple[str, ...]
     source: str
     metadata: dict[str, Any]
@@ -28,4 +27,6 @@ class UniverseSnapshot:
 class UniverseProvider(Protocol):
     """Interface for universe resolution."""
 
-    def resolve(self, mktdata: dict[str, pd.DataFrame] | None = None) -> UniverseSnapshot: ...
+    def get_universe(self, as_of_date: str) -> UniverseSnapshot: ...
+
+    def get_history(self, start: str, end: str) -> list[UniverseSnapshot]: ...

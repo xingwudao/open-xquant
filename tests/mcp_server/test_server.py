@@ -36,6 +36,19 @@ def test_server_lists_data_tools(server_params: StdioServerParameters) -> None:
     assert "data_inspect" in tool_names
 
 
+def test_server_lists_universe_tools(server_params: StdioServerParameters) -> None:
+    tool_names = asyncio.run(_list_tools(server_params))
+    assert "universe_set" in tool_names
+    assert "universe_list_indexes" in tool_names
+    assert "universe_inspect" in tool_names
+    assert "universe_history" in tool_names
+
+
+def test_server_lists_mcp_only_tools(server_params: StdioServerParameters) -> None:
+    tool_names = asyncio.run(_list_tools(server_params))
+    assert "get_current_date" in tool_names
+
+
 async def _call_list_symbols(
     server_params: StdioServerParameters, data_dir: str,
 ) -> dict:

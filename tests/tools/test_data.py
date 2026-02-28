@@ -1,5 +1,5 @@
-# tests/mcp_server/test_data_tools.py
-"""Test that MCP data tools shim still works and core functions are accessible."""
+"""Tests for oxq.tools.data — migrated from tests/mcp_server/test_data_tools.py."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,9 +8,7 @@ from unittest.mock import MagicMock, patch
 import pandas as pd
 import pytest
 
-from oxq.tools.data import inspect_symbol as _inspect
-from oxq.tools.data import list_symbols as _list_symbols
-from oxq.tools.data import load_symbols as _load_symbols
+from oxq.tools.data import inspect_symbol, list_symbols, load_symbols
 
 
 @pytest.fixture()
@@ -32,19 +30,19 @@ def sample_data_dir(tmp_path: Path) -> Path:
 
 
 def test_list_symbols(sample_data_dir: Path) -> None:
-    result = _list_symbols(data_dir=str(sample_data_dir))
+    result = list_symbols(data_dir=str(sample_data_dir))
     assert set(result["symbols"]) == {"AAPL", "MSFT"}
     assert result["count"] == 2
 
 
 def test_list_symbols_empty(tmp_path: Path) -> None:
-    result = _list_symbols(data_dir=str(tmp_path))
+    result = list_symbols(data_dir=str(tmp_path))
     assert result["symbols"] == []
     assert result["count"] == 0
 
 
 def test_inspect_symbol(sample_data_dir: Path) -> None:
-    result = _inspect(symbol="AAPL", data_dir=str(sample_data_dir))
+    result = inspect_symbol(symbol="AAPL", data_dir=str(sample_data_dir))
     assert result["symbol"] == "AAPL"
     assert result["rows"] == 5
     assert result["columns"] == ["open", "high", "low", "close", "volume"]
@@ -52,7 +50,7 @@ def test_inspect_symbol(sample_data_dir: Path) -> None:
 
 
 def test_inspect_missing_symbol(tmp_path: Path) -> None:
-    result = _inspect(symbol="UNKNOWN", data_dir=str(tmp_path))
+    result = inspect_symbol(symbol="UNKNOWN", data_dir=str(tmp_path))
     assert result["error"] is not None
     assert "UNKNOWN" in result["error"]
 
@@ -73,7 +71,7 @@ def test_load_symbols_yfinance(tmp_path: Path) -> None:
         mock_ticker.history.return_value = mock_df
         mock_yf.Ticker.return_value = mock_ticker
 
-        result = _load_symbols(
+        result = load_symbols(
             symbols=["AAPL"],
             start="2024-01-01",
             end="2024-12-31",
