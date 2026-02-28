@@ -44,6 +44,13 @@ def test_server_lists_universe_tools(server_params: StdioServerParameters) -> No
     assert "universe_history" in tool_names
 
 
+def test_server_lists_factor_tools(server_params: StdioServerParameters) -> None:
+    tool_names = asyncio.run(_list_tools(server_params))
+    assert "factor_download" in tool_names
+    assert "factor_list" in tool_names
+    assert "factor_inspect" in tool_names
+
+
 def test_server_lists_mcp_only_tools(server_params: StdioServerParameters) -> None:
     tool_names = asyncio.run(_list_tools(server_params))
     assert "get_current_date" in tool_names

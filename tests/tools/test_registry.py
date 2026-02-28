@@ -53,3 +53,6 @@ def test_global_registry_has_all_tools() -> None:
     assert "universe_list_indexes" in names
     assert "universe_inspect" in names
     assert "universe_history" in names
+    assert "factor_download" in names
+    assert "factor_list" in names
+    assert "factor_inspect" in names
