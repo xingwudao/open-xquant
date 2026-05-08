@@ -41,3 +41,8 @@ Thumbs.db
 *.hdf5
 docs/plans/
 docs/guide-rules.md
+
+# Research notebook caches and binary outputs
+examples/research/*/cache/*
+!examples/research/*/cache/.gitkeep
+examples/research/*/outputs/*.pkl
