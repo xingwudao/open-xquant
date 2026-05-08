@@ -7,15 +7,15 @@ is **REJECTED** in this v0 configuration:
 
 | Metric | Strategy | Pure EMA Baseline | Gap | Target |
 |---|---|---|---|---|
-| Sharpe | **1.952** | **3.289** | **-1.336** | ≥ +0.30 |
-| Annual Return | 103.15% | 102.54% | — | — |
-| Max Drawdown | -23.577% | -13.149% | — | ≤ -25% |
-| Trades | 286 | 2313 | — | — |
+| Sharpe | **2.348** | **3.145** | **-0.797** | ≥ +0.30 |
+| Annual Return | 113.45% | 95.13% | — | — |
+| Max Drawdown | -24.543% | -13.864% | — | ≤ -25% |
+| Trades | 197 | 2313 | — | — |
 
 Both strategy and baseline have absolute Sharpe well above the ≥1.0 floor —
 this just means the universe is profitable. The KEY question (does ML add
 value?) gets a NO at v0: the model's aggressive 0.55 score
-threshold cuts ~88% of
+threshold cuts ~91% of
 baseline trades, losing positive convexity faster than it filters losers.
 
 ## Model
@@ -24,19 +24,19 @@ baseline trades, losing positive convexity faster than it filters losers.
 - **Tested on**:  2,313 closed samples (post-2021-05-07)
 - **Features**:   28 factors (see `feature_importance.csv`, `shap_summary.png`)
 
-PR-AUC (test): 0.2149 (random baseline ≈ 0.179)
+PR-AUC (test): 0.2123 (random baseline ≈ 0.179)
 Precision@top10%: 0.2511
 
 ## Best hyperparameters (Optuna best of 50 trials)
 
 ```json
 {
-  "num_leaves": 28,
-  "learning_rate": 0.037619132057241315,
-  "min_child_samples": 106,
-  "feature_fraction": 0.8380365045328141,
-  "bagging_fraction": 0.767752701654755,
-  "lambda_l2": 4.93770512439691
+  "num_leaves": 39,
+  "learning_rate": 0.06540578293003635,
+  "min_child_samples": 151,
+  "feature_fraction": 0.7633267667012671,
+  "bagging_fraction": 0.902976281816916,
+  "lambda_l2": 0.6797523951809247
 }
 ```
 
@@ -92,4 +92,4 @@ tickers with active EMA-entry signal + their model scores. The 39 rows
 include sector / Hurst / vol / ret_3m for inspection.
 
 ---
-Generated: 2026-05-08T14:04:57.689684
+Generated: 2026-05-08T15:24:53.736582
