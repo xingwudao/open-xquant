@@ -1,0 +1,5 @@
+,Strategy,Baseline,Target
+Sharpe,1.952,3.289,>= 1.0
+Annual Return,103.149%,102.535%,—
+Max DD,-23.577%,-13.149%,>= -25%
+Trades,286,2313,—
