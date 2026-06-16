@@ -144,7 +144,9 @@ class StrategySpec:
 
     def compute_hash(self) -> str:
         """Compute sha256 hash of the spec for reproducibility tracking."""
-        canonical = json.dumps(self.to_dict(), sort_keys=True, default=str)
+        from dataclasses import asdict
+
+        canonical = json.dumps(asdict(self), sort_keys=True, default=str)
         return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
     def to_dict(self) -> dict[str, Any]:

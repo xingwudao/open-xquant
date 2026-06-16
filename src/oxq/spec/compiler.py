@@ -246,6 +246,7 @@ def compile_run(
         initial_cash=spec.execution.initial_cash,
         lot_size=spec.execution.lot_size,
         rules=rules,
+        data_start=spec.data.min_start_date or None,
     )
 
     # Write artifacts — include microseconds to avoid collisions on same-second runs
@@ -288,6 +289,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
 
     # data_manifest.json
     symbols = spec.universe.symbols
+    missing_ratio = _compute_missing_ratio(result.mktdata) if result.mktdata else 0.0
     manifest = {
         "provider": spec.data.provider,
         "symbols": symbols,
@@ -295,6 +297,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "price_adjustment": spec.data.price_adjustment,
         "start": spec.validation.train_period[0] if spec.validation.train_period else "",
         "end": spec.validation.test_period[1] if spec.validation.test_period else "",
+        "missing_ratio": missing_ratio,
     }
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
@@ -356,6 +359,18 @@ def _to_timestamp(ts_val: str | object, tz: object | None = None) -> pd.Timestam
     if ts.tz is None and tz is not None:
         ts = ts.tz_localize(tz)
     return ts
+
+
+def _compute_missing_ratio(mktdata: dict[str, pd.DataFrame]) -> float:
+    """Compute the fraction of missing (NaN) values across all symbol DataFrames."""
+    total = 0
+    missing = 0
+    for df in mktdata.values():
+        if df.empty:
+            continue
+        total += df.size
+        missing += int(df.isna().sum().sum())
+    return missing / total if total > 0 else 0.0
 
 
 def _get_version() -> str:
