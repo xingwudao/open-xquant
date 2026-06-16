@@ -296,8 +296,8 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "symbols": symbols,
         "columns": spec.data.required_columns,
         "price_adjustment": spec.data.price_adjustment,
-        "start": spec.validation.train_period[0] if spec.validation.train_period else "",
-        "end": spec.validation.test_period[1] if spec.validation.test_period else "",
+        "start": str(spec.validation.train_period[0]) if spec.validation.train_period else "",
+        "end": str(spec.validation.test_period[1]) if spec.validation.test_period else "",
         "missing_ratio": missing_ratio,
     }
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
