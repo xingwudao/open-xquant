@@ -171,8 +171,9 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict) -> str
             return "REJECT"
 
     reject_if = decision_policy.get("reject_if", {})
-    oos_sharpe = metrics.get("sharpe_ratio", 0)
-    max_dd = metrics.get("max_drawdown", 0)
+    # Prefer OOS-only metrics for OOS decisions; fall back to aggregate
+    oos_sharpe = metrics.get("oos_sharpe_ratio", metrics.get("sharpe_ratio", 0))
+    max_dd = metrics.get("oos_max_drawdown", metrics.get("max_drawdown", 0))
 
     if reject_if.get("oos_sharpe_lt", -999) > oos_sharpe:
         return "REJECT"

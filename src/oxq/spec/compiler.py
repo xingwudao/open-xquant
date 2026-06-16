@@ -15,6 +15,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import pandas as pd
 import yaml
 
@@ -80,37 +81,39 @@ def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
 
 
 class _SignalFilteredEqualWeightOptimizer:
-    """Equal weight among symbols whose signal is currently active (True / > 0).
+    """Equal weight among symbols where a signal has become active and latches.
 
-    Reads the last row of each registered signal column.  Only symbols
-    where at least one signal column is truthy are included.  If no
-    symbol qualifies, the full portfolio goes to CASH.
+    For event-style signals (Crossover, Peak) that fire only on one bar,
+    the position is held until an exit rule (ExitRule/StopLoss) closes it.
+    This prevents premature cash-out on bars where the event signal has
+    already passed.
     """
 
     name = "SignalFilteredEqualWeight"
 
     def __init__(self, signal_names: list[str]) -> None:
         self._signal_names = signal_names
+        self._latched: dict[str, bool] = {}
 
     def optimize(
         self,
         signals: dict[str, pd.DataFrame],
         indicators: dict[str, pd.DataFrame],
     ) -> dict[str, float]:
-        active: list[str] = []
         for symbol, df in signals.items():
             for sig_name in self._signal_names:
                 if sig_name in df.columns:
                     val = df[sig_name].iloc[-1]
                     try:
                         if bool(val):
-                            active.append(symbol)
+                            self._latched[symbol] = True
                             break
                     except Exception:
                         if val and val > 0:
-                            active.append(symbol)
+                            self._latched[symbol] = True
                             break
 
+        active = [s for s in self._latched if self._latched[s]]
         if not active:
             return {"CASH": 1.0}
 
@@ -169,8 +172,9 @@ def compile_run(
     """
     strategy = compile_strategy(spec)
 
-    # Data provider
-    market = LocalMarketDataProvider(data_dir=Path(data_dir)) if data_dir else LocalMarketDataProvider()
+    # Data provider — use spec.data.data_dir as fallback
+    _data_dir = data_dir or (spec.data.data_dir or None)
+    market = LocalMarketDataProvider(data_dir=Path(_data_dir)) if _data_dir else LocalMarketDataProvider()
 
     # Broker with fee/slippage from spec
     fee_model = PercentageFee(rate=Decimal(str(spec.cost.fee_rate)), min_fee=Decimal(str(spec.cost.fee_min)))
@@ -252,21 +256,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     # metrics.json
-    metrics = {
-        "strategy_id": spec.strategy_id,
-        "run_id": run_id,
-        "total_return": result.total_return(),
-        "annualized_return": result.annualized_return(),
-        "annualized_volatility": result.annualized_volatility(),
-        "max_drawdown": result.max_drawdown(),
-        "sharpe_ratio": result.sharpe_ratio(),
-        "sortino_ratio": result.sortino_ratio(),
-        "calmar_ratio": result.calmar_ratio(),
-        "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
-        "trade_count": len(result.trades),
-        "cost_paid": float(sum(float(f.fee) for f in result.trades)),
-        "slippage_paid": 0.0,
-    }
+    metrics = _build_metrics(spec, result, run_id)
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
 
     # equity_curve.csv
@@ -325,3 +315,45 @@ def _get_version() -> str:
         return version("open-xquant")
     except Exception:
         return "0.1.0"
+
+
+def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[str, Any]:
+    """Build metrics dict including OOS-only metrics when test_period is defined."""
+    base = {
+        "strategy_id": spec.strategy_id,
+        "run_id": run_id,
+        "total_return": result.total_return(),
+        "annualized_return": result.annualized_return(),
+        "annualized_volatility": result.annualized_volatility(),
+        "max_drawdown": result.max_drawdown(),
+        "sharpe_ratio": result.sharpe_ratio(),
+        "sortino_ratio": result.sortino_ratio(),
+        "calmar_ratio": result.calmar_ratio(),
+        "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
+        "trade_count": len(result.trades),
+        "cost_paid": float(sum(float(f.fee) for f in result.trades)),
+        "slippage_paid": 0.0,
+    }
+
+    # Compute OOS-only metrics when test_period is defined
+    test = spec.validation.test_period
+    if test and len(test) >= 2 and len(result.equity_curve) > 1:
+        # Use first equity curve date's tz to match timezone-aware timestamps
+        first_dt = result.equity_curve[0][0]
+        tz = getattr(pd.Timestamp(first_dt), "tz", None)
+        test_start = pd.Timestamp(test[0], tz=tz)
+        oos_values = [v for d, v in result.equity_curve if pd.Timestamp(d) >= test_start]
+        if len(oos_values) >= 2:
+            oos_returns = np.diff(np.array(oos_values, dtype=float)) / np.array(oos_values[:-1], dtype=float)
+            oos_sharpe = float(np.mean(oos_returns) / np.std(oos_returns) * np.sqrt(252)) if np.std(oos_returns) > 0 else 0.0
+            oos_return = (oos_values[-1] - oos_values[0]) / oos_values[0]
+            peak = np.maximum.accumulate(np.array(oos_values, dtype=float))
+            oos_max_dd = float(np.min((np.array(oos_values, dtype=float) - peak) / peak))
+            base["oos_sharpe_ratio"] = oos_sharpe
+            base["oos_total_return"] = oos_return
+            base["oos_max_drawdown"] = oos_max_dd
+            # Filter OOS trades
+            oos_trades = [f for f in result.trades if pd.Timestamp(f.filled_at, tz=tz) >= test_start]
+            base["oos_trade_count"] = len(oos_trades)
+
+    return base
