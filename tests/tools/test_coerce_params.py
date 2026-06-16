@@ -1,6 +1,6 @@
 """Tests for tools-layer parameter coercion.
 
-MCP clients (LLMs) may send numeric params as strings (e.g. "0.5" instead of 0.5).
+Tool clients (LLMs) may send numeric params as strings (e.g. "0.5" instead of 0.5).
 The tools layer must coerce them before passing to SDK compute() methods.
 """
 

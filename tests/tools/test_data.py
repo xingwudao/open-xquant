@@ -1,4 +1,4 @@
-"""Tests for oxq.tools.data — migrated from tests/mcp_server/test_data_tools.py."""
+"""Tests for oxq.tools.data — migrated from test_data_tools.py."""
 
 from __future__ import annotations
 

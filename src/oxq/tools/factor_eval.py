@@ -9,7 +9,6 @@ import pandas as pd
 
 from oxq.core.registry import list_indicators
 from oxq.data.loaders import resolve_data_dir
-from oxq.tools._coerce import coerce_compute_params
 from oxq.factor_eval import (
     compute_decay,
     compute_ic,
@@ -18,6 +17,7 @@ from oxq.factor_eval import (
     compute_ts_ic,
     compute_turnover,
 )
+from oxq.tools._coerce import coerce_compute_params
 from oxq.tools.registry import registry
 
 _MIN_SYMBOLS_FOR_SIGNIFICANCE = 30

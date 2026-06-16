@@ -2,16 +2,16 @@
 
 ## Project Overview
 
-open-xquant is an Agent First quantitative trading framework. See `README.md` for motivation and `docs/architecture.md` for full design.
+open-xquant is an Agentic Quant Research Kernel. See `README.md` for motivation and `docs/architecture.md` for full design.
 
 ## Project Structure
 
 - `src/oxq/` — main Python package (pip install open-xquant)
-- `agent/` — Agent layer (skills, MCP server, bootstrap configs)
+- `agent/` — Agent layer (skills, bootstrap configs, OpenCode integration)
   - `agent/skills/` — Agent skill definitions (markdown workflows)
-  - `agent/mcp_server/` — MCP protocol server exposing oxq as tools
-  - `agent/bootstrap/` — Agent startup files (OpenClaw etc.)
-- `examples/` — example strategies, demo apps, tutorials
+  - `agent/openclaw/bootstrap/` — Agent startup files (OpenClaw etc.)
+  - `agent/opencode/` — OpenCode integration (agents, commands, skills)
+- `examples/` — example strategies, research cases, module demos
 - `tests/` — mirrors src/oxq/ structure
 - `docs/` — documentation
 
@@ -39,7 +39,7 @@ When fixing a bug or updating logic in one module, always check and update all r
 - Follow ruff defaults (E, F, I, N, W, UP rules)
 - Prefer Protocol over ABC for interfaces
 - Keep Indicator/Signal compute functions pure (no side effects)
-- **Do not add new top-level directories** — this is an open-source project; keep the root structure stable. New apps, demos, and tutorials go under `examples/`.
+- **Do not add new top-level directories** — this is an open-source project; keep the root structure stable. New apps, demos, and examples go under `examples/`.
 
 ## Component Creation
 

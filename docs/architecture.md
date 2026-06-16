@@ -2,85 +2,107 @@
 
 ## 1. 设计哲学
 
-open-xquant 是一个 **Agent-First** 的开源量化交易框架。引擎（SDK + Tool 定义）是地基，Skill 才是 Agent-First 的交付面——用户感知到的 Agent 体验，由 Skill 层交付。
+open-xquant 是一个 **Agentic Quant Research Kernel**——面向 AI Coding Agent 和人类量化研究者的确定性量化研究内核。
 
-底层是严谨的量化金融引擎，经 Indicator → Universe → Signal → Portfolio → Rule → Broker 管道生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义**（名称、参数、语义），每个工作流编写 skill.md，指导 Agent 如何组合 tools 完成复杂任务。
+**一句话定位**：
 
-**三种使用角色与入口**：
+```text
+OpenCode = 通用执行器，负责读写文件、调用命令、运行代码
+open-xquant = 量化研究内核，负责约束、计算、审计和产物标准
+XQuant Studio = 编排系统，负责状态机、角色分工、权限、模型路由、研究记忆和云端体验
+```
 
-- **Coding Agent / 开发者** → `import oxq`（主要方式），直接调用 SDK 和 Tool 函数
-- **非 Coding AI 客户端**（Claude Desktop、Windsurf 等）→ 通过 MCP Server 调用（可选分发层）
+核心工作流：**spec → validate → compile → backtest → audit → robustness → report**
+
+底层是严谨的量化金融引擎，经 Indicator → Universe → Signal → Portfolio → Rule → Broker 管道生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义 + 声明式 Strategy Spec**。
+
+**两种使用角色与入口**：
+
+- **Coding Agent / 开发者** → `import oxq` 或 `oxq` CLI（主要方式）
 - **平台方** → 基于 SDK + Tool 定义自建接口（REST API、gRPC 等）
 
-**四大设计原则**：
+**五大设计原则**：
 
-- **声明式**：策略定义与执行分离。策略是"做什么"的声明，引擎负责"怎么做"
-- **确定性**：相同输入必须产生相同输出。不可变数据类型 + 纯函数计算 + 审计追踪
-- **约束即自由**：统一的 Protocol 接口收窄 AI 的选择空间到只有正确的做法，消除幻觉温床
-- **全流程**：从策略构建、回测、参数优化、统计检验到交易执行，端到端覆盖
+- **声明式**：策略通过 `strategy_spec.yaml` 声明，spec → compiler → 可执行策略。策略是"做什么"的声明，引擎负责"怎么做"
+- **确定性**：相同 spec + 相同数据 = 相同回测结果。不可变数据类型 + 纯函数计算 + hash 审计追踪
+- **约束即安全**：spec validation + research bias audit + robustness tests 三道防线，自动检测常见回测陷阱
+- **可审计**：每次研究留下结构化 artifacts——metrics、trades、equity curve、audit、report——可版本化、可 diff、可复现
+- **全流程**：从 spec 创建、回测、审计、稳健性测试到报告生成，端到端覆盖
 
 ---
 
-## 2. 项目结构
+## 2. 总体架构（升级后）
+
+```
+┌────────────────────────────────────────────────────────────┐
+│ XQuant Studio Orchestrator                                  │
+│ State Machine / Roles / Gates / Model Routing / Memory      │
+│ 私有，不属于 open-xquant                                    │
+└──────────────────────────┬─────────────────────────────────┘
+                           │ calls CLI / SDK / tools
+┌──────────────────────────▼─────────────────────────────────┐
+│ Agent Runtime                                                │
+│ OpenCode / Claude Code / Codex / Local CLI                   │
+│ 部分示例可开源，完整云端编排私有                              │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+┌──────────────────────────▼─────────────────────────────────┐
+│ open-xquant: Agentic Quant Research Kernel                  │
+│ spec / validate / compile / backtest / audit / report / log  │
+└──────────────────────────┬─────────────────────────────────┘
+                           │
+┌──────────────────────────▼─────────────────────────────────┐
+│ Data Providers                                               │
+│ Local CSV / YFinance / AkShare / PIT Data Gateway / Custom   │
+└────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 3. 项目结构（升级后）
 
 ```
 open-xquant/
 ├── src/oxq/                        # 主 Python 包（pip install open-xquant）
-│   ├── core/                       # 核心引擎（类型、策略定义、执行引擎、注册中心、异常）
-│   ├── indicators/                 # 技术指标库（SMA, EMA, RSI, MACD, BBands...）
-│   ├── signals/                    # 信号生成器（交叉、阈值、比较、公式、组合、峰值、时间条件）
-│   ├── rules/                      # 交易规则（止损、止盈、追踪止损、回撤熔断、条件退出）
-│   ├── portfolio/                  # 组合管理（组合优化器、持仓、订单簿、记账、绩效分析）
-│   ├── optimize/                   # 参数优化（网格/随机/贝叶斯搜索、滚动前推、统计检验）
-│   ├── factor_eval/                # 因子评估（IC、ICIR、衰减、换手率、Tearsheet）
-│   ├── trade/                      # 交易执行（SimBroker、LiveBroker、费率、滑点、OrderGenerator）
-│   ├── contrib/                    # 第三方券商/数据源集成（按券商组织）
-│   │   └── alpaca/                # Alpaca 集成（AlpacaClient、AlpacaMarketDataProvider）
-│   ├── universe/                   # Universe 构建（静态池、指数成分、条件过滤）
-│   ├── data/                       # 数据层（Provider 协议、行情/因子数据、数据加载）
-│   ├── observe/                    # 可观测性（追踪、日志、事件总线、审计）
-│   └── tools/                      # 协议无关的 Tool 定义（核心资产）
+│   ├── core/                       # 核心引擎（Strategy, Engine, types, registry）
+│   ├── spec/                       # Strategy Spec (schema, parser, validator, compiler)
+│   ├── data/                       # 数据层（Provider 协议、行情/因子数据）
+│   ├── universe/                   # Universe 构建（静态、过滤、指数成分）
+│   ├── indicators/                 # 技术指标库（30+ 内置指标）
+│   ├── signals/                    # 信号生成器（7 种信号类型）
+│   ├── portfolio/                  # 组合管理（优化器、持仓、订单簿、绩效分析）
+│   ├── trade/                      # 交易执行（SimBroker、费率、滑点、OrderGenerator）
+│   ├── rules/                      # 交易规则（止损、止盈、风控熔断）
+│   ├── audit/                      # 审计系统（reproducibility + research bias）
+│   ├── robustness/                 # 稳健性测试（成本扰动、参数扰动、IS/OOS 对比）
+│   ├── report/                     # 研究报告生成器（research_report.md）
+│   ├── observe/                    # 可观测性（追踪、审计记录、实验日志）
+│   ├── optimize/                   # 参数优化（网格搜索、滚动前推、交叉验证）
+│   ├── factor_eval/                # 因子评估（IC、ICIR、衰减、Tearsheet）
+│   ├── tools/                      # 协议无关的 Tool 定义
+│   ├── cli/                        # oxq 命令行接口
+│   └── contrib/                    # 第三方券商/数据源集成
+│       └── alpaca/                 # Alpaca 集成
 │
-├── agent/                          # Agent 层（Skill + 分发 + 启动配置）
+├── agent/                          # Agent 层
 │   ├── skills/                     # Agent Skill 定义（markdown 工作流）
-│   ├── mcp_server/                 # MCP 协议适配层（可选分发渠道）
-│   └── bootstrap/                  # Agent 启动文件（OpenClaw 等龙虾类 Agent）
+│   ├── openclaw/                   # OpenClaw 集成
+│   │   └── bootstrap/              # Agent 启动文件（SOUL, AGENTS, TOOLS）
+│   └── opencode/                   # OpenCode 集成（agents, commands, skills）
 │
-├── examples/                       # 示例策略、demo 应用、教程
+├── examples/                       # 示例
+│   ├── modules/                     # 模块 SDK 使用示例（可执行 Python 脚本）
+│   ├── research_cases/             # 基于 spec 的端到端研究案例
+│   └── strategies/                 # 完整 E2E 策略示例
+│
 ├── tests/                          # 测试（镜像 src/oxq/ 结构）
 ├── docs/                           # 文档
+│   ├── architecture.md             # 本文档
+│   ├── design/                     # 设计文档和 RFC
+│   └── schemas/                    # spec schema 文档
 ├── pyproject.toml
 ├── LICENSE                         # MIT
 └── README.md
-```
-
----
-
-## 3. 分层架构
-
-```
-┌──────────────────────────────────────────────────────┐
-│              Agent Layer  (agent/)                     │  ← Agent 交付面
-│  ┌─────────────────┐  ┌──────────────────────────┐   │
-│  │ Skills (skill.md)│  │ Bootstrap (AGENT/SOUL/…) │   │
-│  │ 工作流指导        │  │ 龙虾类 Agent 启动配置     │   │
-│  └────────┬────────┘  └──────────────────────────┘   │
-│           ┆                                           │
-│     ┌─────┴─────────────────┐                        │
-│     │ MCP Server (可选分发层) │  ← 非 Coding AI 客户端 │
-│     │ agent/mcp_server/      │    协议适配             │
-│     └───────────────────────┘                        │
-├──────────────────────────────────────────────────────┤
-│              SDK + Tool Layer                         │  ← 核心资产
-│  oxq.universe / oxq.core / oxq.trade / ...           │  Python SDK
-│  oxq.tools (协议无关的 Tool 定义)                     │  Tool 定义
-├──────────────────────────────────────────────────────┤
-│              Engine Layer                             │  ← 纯计算，无 I/O
-│  Indicator → Universe → Signal → Portfolio → Rule → Broker │
-├──────────────────────────────────────────────────────┤
-│              Provider Layer                           │  ← 数据注入（Protocol）
-│  MarketData / Factor / Portfolio                      │
-└──────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -91,7 +113,7 @@ open-xquant/
 
 本框架的核心建模假设：**量化策略输出的一切皆组合**。即使策略只交易一个标的物，它产出的也是该标的物与现金（CASH）的组合——全仓买入是 `{AAPL: 1.0, CASH: 0.0}`，空仓是 `{CASH: 1.0}`，半仓是 `{AAPL: 0.5, CASH: 0.5}`。
 
-这意味着策略管道的终点始终是一组目标权重，而非单个买卖指令。交易算法负责将当前持仓调整到目标组合，Broker 负责执行。这种统一模型天然覆盖了单标的策略、多标的轮动、行业配置等所有场景，不需要为不同策略类型设计不同的执行路径。
+这意味着策略管道的终点始终是一组目标权重，而非单个买卖指令。交易算法负责将当前持仓调整到目标组合，Broker 负责执行。
 
 ### 4.2 Strategy = Universe + Signal + Portfolio
 
@@ -105,7 +127,7 @@ Strategy 是纯声明式容器——直接传给 Engine 执行。它始于假设
 
 **Indicator** 服务于上述三个组件以及 Rule，各模块通过 `required_indicators` 属性声明自己依赖的指标，Engine 负责统一收集和计算。
 
-**Rule** 不属于 Strategy。Rule 的职责是对持仓组合的准入约束和持仓监控，通过 `Engine.run(rules=[...])` 传入。这一分离使得同一个 Strategy 可以在不同的风控规则下执行。
+**Rule** 不属于 Strategy。Rule 的职责是对持仓组合的准入约束和持仓监控，通过 `Engine.run(rules=[...])` 传入。
 
 Engine 驱动完整管道：**Indicator → Universe → Signal → Portfolio → Pre-trade Rule → Trading Algorithm → Broker → Post-trade Rule**。
 
@@ -117,7 +139,6 @@ from oxq.portfolio.optimizers import EqualWeightOptimizer
 from oxq.rules import ExitRule, StopLossRule
 from oxq.universe import StaticUniverse
 
-# 创建信号并声明依赖的指标
 crossover = Crossover()
 crossover.required_indicators = {
     "sma_fast": (SMA(), {"column": "close", "period": 10}),
@@ -140,8 +161,6 @@ strategy = Strategy(
     portfolio=EqualWeightOptimizer(),
 )
 
-# 运行（Provider 决定模式：回测 / 模拟 / 实盘）
-# Rules 传给 Engine.run()，不属于 Strategy
 engine = Engine()
 result = engine.run(strategy,
     market=LocalMarketDataProvider(),
@@ -151,30 +170,7 @@ result = engine.run(strategy,
     start="2023-01-01", end="2024-12-31")
 ```
 
-**等价的 Tool 调用（AI Agent 方式）**：
-
-Tool 定义在 `oxq.tools` 中，协议无关——Coding Agent 直接 `import` 调用，MCP 客户端通过 MCP 协议调用，平台方也可通过 REST/gRPC 等任意方式触发。
-
-```
-→ strategy_create(name="sma_crossover",
-    hypothesis="短期均线上穿长期均线的标的在后续持有期内有正超额收益",
-    objectives={"total_return": {"min": 0.05}, "sharpe_ratio": {"min": 0.5}},
-    benchmarks=["SPY"])
-→ strategy_add_indicator(strategy="sma_crossover", name="sma_fast", type="SMA",
-    params={"column": "close", "period": 10})
-→ strategy_add_indicator(strategy="sma_crossover", name="sma_slow", type="SMA",
-    params={"column": "close", "period": 50})
-→ strategy_add_signal(strategy="sma_crossover", name="golden_cross", type="Crossover",
-    inputs={"fast": "sma_fast", "slow": "sma_slow"})
-→ engine_run(strategy="sma_crossover", symbols=["AAPL"],
-    start="2023-01-01", end="2024-12-31")
-→ engine_results(run_id="...")
-→ engine_trade_list(run_id="...")
-```
-
 ### 4.3 组件 Protocol
-
-框架的核心组件均通过 Protocol 定义契约。Indicator 和 Signal 签名相同——都是逐 symbol 的纯函数，输入单个 DataFrame，输出单个 Series。区别在于语义：Indicator 输出连续数值（描述市场状态），Signal 输出离散标签（判断交易意图）。
 
 ```python
 @runtime_checkable
@@ -209,11 +205,9 @@ class Rule(Protocol):
     ) -> RuleResult: ...
 ```
 
-PortfolioOptimizer 的 `optimize()` 返回目标权重 `dict[str, float]`，所有权重之和为 1.0（含 CASH）。Rule 的 `evaluate()` 返回 RuleResult（权重覆盖、约束条件、目标仓位、交易冻结），而非 Order。
-
 ### 4.4 宽表数据模型
 
-`mktdata` 是按 symbol 索引的宽表集合（`dict[str, pd.DataFrame]`），每个 symbol 对应一张独立的 DataFrame。Indicator、Signal 阶段通过追加列逐步加宽各 symbol 的宽表。每个 DataFrame 携带 `attrs["timezone"]` 和 `attrs["currency"]` 元数据，Engine 统一换算到基准时区（Asia/Shanghai）和基准币种（CNY）。
+`mktdata` 是按 symbol 索引的宽表集合（`dict[str, pd.DataFrame]`）。Indicator、Signal 阶段通过追加列逐步加宽各 symbol 的宽表。
 
 ```
 原始行情             Indicator 后              Signal 后
@@ -229,449 +223,363 @@ PortfolioOptimizer 的 `optimize()` 返回目标权重 `dict[str, float]`，所�
 +-----------+       +------------------+      +---------------------+
 ```
 
-各层对 `mktdata` 的操作方式：
-
-| 层 | 数据视角 | 引擎行为 | 模式 |
-|---|---|---|---|
-| Indicator | per symbol | `compute(df)` 返回 Series，引擎追加为新列 | 纯函数 + 引擎回写 |
-| Signal | per symbol | `compute(df)` 返回 Series，引擎追加为新列 | 纯函数 + 引擎回写 |
-| Portfolio | cross-sectional | `optimize(signals, indicators)` 返回目标权重 | 截面优化 |
-| Rule | per bar × per symbol | `evaluate(symbol, row, portfolio)` 返回 RuleResult | 只读，有状态 |
-
-Indicator/Signal 的 `compute` 方法是纯函数，不修改 mktdata。引擎负责将返回值追加为新列。这保证了组件的可测试性和确定性。
-
-宽表避免了层间数据传递的复杂性。Signal 无需知道 Indicator 的输出格式，只需按列名引用；Rule 同理。所有中间结果在同一张表上可见可查。
-
 ### 4.5 执行模型
 
-#### 管道流程
-
-Engine 按阶段逐层推进，每一步接收前一步的输出。回测时 Engine 逐 bar 驱动管道，每个 bar 都产出一个目标组合：
+Engine 按阶段逐层推进，回测时逐 bar 驱动管道：
 
 ```
 Engine.setup() — 向量化阶段:
-  Phase 1: Indicator   → 从各组件的 required_indicators 收集，逐 symbol 计算，追加为宽表列
+  Phase 1: Indicator   → 统一收集并计算所有依赖指标，追加为宽表列
   Phase 2: Signal      → 逐 symbol 计算信号，追加为宽表列
 
 Engine.step(date) — 逐 bar 阶段:
   Phase 3: Portfolio    → PortfolioOptimizer 产出目标权重
-  Phase 4: Pre-trade Rule  → 检查约束（回撤熔断、调仓频率等），调整权重或冻结交易
+  Phase 4: Pre-trade Rule  → 检查约束，调整权重或冻结交易
   Phase 5: Trading Algorithm → 目标权重 + 当前持仓 → 生成订单
   Phase 6: Broker       → 提交订单、撮合成交、更新持仓
-  Phase 7: Post-trade Rule → 监控持仓（止损、止盈、追踪止损等），触发减仓
+  Phase 7: Post-trade Rule → 监控持仓（止损、止盈等）
   Phase 8: Broker       → 执行减仓订单
 ```
 
-#### 向量化与逐 bar 状态机
+| 阶段 | 计算模式 | 路径依赖 |
+|------|----------|----------|
+| Indicator | 向量化 — 全量时间序列一次计算 | 否 |
+| Signal | 向量化 — 全量时间序列一次计算 | 否 |
+| Portfolio | 截面 — 当前 bar 的全 universe 优化 | 否 |
+| Rule | 逐 bar 循环 — 状态机模式 | 是 |
 
-| 阶段 | 计算模式 | 路径依赖 | 调用次数 |
-|---|---|---|---|
-| Indicator | 向量化 — 对全量时间序列一次计算 | 否 | 每个 symbol 1 次 |
-| Signal | 向量化 — 对全量时间序列一次计算 | 否 | 每个 symbol 1 次 |
-| Portfolio | 截面 — 对当前 bar 的全 universe 优化 | 否 | 每个 bar 1 次 |
-| Rule | 逐 bar 循环 — 状态机模式 | 是 | 每个 bar × 每个 symbol |
-
-Indicator/Signal 的值仅取决于截至 T 时刻的行情数据，与历史交易无关，可向量化一次算完。Rule 的决策取决于当前持仓、挂单、资金等状态，必须逐步推进。Portfolio 每个 bar 产出一组新的目标权重——调仓频率等约束由 Rule 层处理。
-
-**分阶段执行**：引擎支持 `run_through` 参数在任意阶段终止，用于逐组件独立评估：
-
-```python
-# 只执行到指标阶段
-result = engine.run(strategy, market, broker, run_through="indicator")
-
-# 只执行到信号阶段
-result = engine.run(strategy, market, broker, run_through="signal")
-```
-
-### 4.6 核心数据类型
-
-```python
-@dataclass(frozen=True)
-class Order:                              # 不可变订单请求
-    symbol: str
-    side: Literal["BUY", "SELL"]
-    shares: int
-    order_type: Literal["market", "limit", "stop", "stop_limit", "trailing_stop"] = "market"
-    limit_price: Decimal | None = None
-    stop_price: Decimal | None = None
-    trail_pct: float | None = None
-
-@dataclass(frozen=True)
-class Fill:                               # 成交回报
-    order: Order
-    filled_price: Decimal                 # 实际成交价（含滑点）
-    filled_at: str                        # ISO 日期
-    fee: Decimal = Decimal("0")
-
-@dataclass(frozen=True)
-class Position:                           # 单个持仓
-    symbol: str
-    shares: int
-    avg_cost: Decimal                     # 加权平均成本
-
-@dataclass
-class Portfolio:                          # 组合状态（可变，逐 bar 更新）
-    cash: Decimal
-    positions: dict[str, Position]
-    bar_prices: dict[str, Decimal]
-    # total_value(prices) → Decimal
-
-@dataclass
-class Constraint:                         # 单标的交易约束
-    max_shares: int | None = None
-    max_value: float | None = None
-
-@dataclass
-class RuleResult:                         # Rule 的统一返回类型
-    weights: dict[str, float] | None = None
-    constraints: dict[str, Constraint] | None = None
-    target_positions: dict[str, float] | None = None
-    hold: bool = False                    # True 时冻结后续交易
-    reason: str = ""                      # 审计用
-
-@dataclass(frozen=True)
-class UniverseSnapshot:                   # 某时间截面的标的池快照
-    as_of_date: str
-    symbols: tuple[str, ...]
-    source: str
-    metadata: dict[str, Any]
-```
-
-Order 是冻结的值对象，Rule 只负责生成意图（RuleResult），不直接产生 Order。OrderBook 中的 ManagedOrder 跟踪订单的生命周期（open → filled/canceled/expired），与 Order 本身分离。
-
-### 4.7 Broker Protocol：策略与执行分离
-
-策略层（Universe + Signal + Portfolio）只负责"做什么"的声明，通过两个可替换 Protocol 与执行环境解耦：
-
-```python
-@runtime_checkable
-class MarketDataProvider(Protocol):
-    def get_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame: ...
-    def get_latest(self, symbol: str) -> pd.Series: ...
-
-@runtime_checkable
-class Broker(OrderRouter, FillReceiver, Protocol):
-    def submit_order(self, order: Order) -> str: ...
-    def get_fills(self) -> list[Fill]: ...
-    def on_bar_open(self, mktdata, date) -> None: ...
-    def on_bar_close(self, mktdata, date) -> None: ...
-    def get_open_orders(self, symbol=None) -> list[ManagedOrder]: ...
-    def cancel_orders(self, symbol, side=None) -> list[ManagedOrder]: ...
-    def cap_pending_sells(self, symbol, max_shares) -> None: ...
-```
+### 4.6 Broker Protocol：策略与执行分离
 
 三种运行模式通过注入不同实现切换，策略代码零修改：
 
 | 模式 | MarketDataProvider | Broker |
-|---|---|---|
+|------|--------------------|--------|
 | 回测 | `LocalMarketDataProvider` | `SimBroker` |
 | Paper Trade | `AlpacaMarketDataProvider` | `SimBroker` |
 | 实盘 | `AlpacaMarketDataProvider` | `LiveBroker` |
 
-```python
-# 回测
-engine.run(strategy, market=LocalMarketDataProvider(),
-           broker=SimBroker(), rules=[...],
-           start="2023-01-01", end="2024-12-31")
+---
 
-# 实盘（未来）：仅替换 Provider
-engine.run(strategy, market=RealtimeDataProvider(),
-           broker=LiveBroker(), rules=[...])
+## 5. Strategy Spec 系统（新增）
+
+### 5.1 设计动机
+
+没有 spec，Agent 生成的是一次性代码。一次性代码难以审计、难以复现、难以比较、难以沉淀。
+
+有 spec，策略才变成研究资产：可版本化、可 diff、可 hash、可编译、可验证、可由不同 Agent 和不同运行时重复执行。
+
+### 5.2 Spec 文件
+
+标准文件名：`strategy_spec.yaml`
+
+```yaml
+schema_version: "0.1"
+strategy_id: "momentum_topn_weekly"
+name: "20-day Momentum Top-N Weekly Rotation"
+
+research:
+  hypothesis: "Past 20-day relative strength has short-term continuation."
+  rationale: "Momentum may persist due to delayed information diffusion."
+
+market:
+  asset_class: "equity"
+  region: "us"
+  currency: "USD"
+
+universe:
+  type: "static"
+  symbols: ["SPY", "QQQ", "IWM"]
+  point_in_time: false
+  survivorship_bias_policy: "warn"
+
+data:
+  provider: "local"
+  price_adjustment: "adjusted"
+  required_columns: ["open", "high", "low", "close", "volume"]
+
+signal:
+  signal_time: "close_t"
+  indicators:
+    momentum_20:
+      type: "NdayReturn"
+      params:
+        column: "close"
+        period: 20
+  rules:
+    positive_momentum:
+      type: "Threshold"
+      params:
+        column: "momentum_20"
+        threshold: 0
+        relationship: "gt"
+
+portfolio:
+  type: "TopNRanking"
+  params:
+    score_col: "momentum_20"
+    n: 1
+    filter_negative: true
+
+execution:
+  rebalance:
+    frequency: "weekly"
+  trade_time: "next_open"
+  fill_price_mode: "next_open"
+  initial_cash: 100000
+
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+
+benchmark:
+  symbols: ["SPY"]
+
+validation:
+  train_period: ["2018-01-01", "2021-12-31"]
+  test_period: ["2022-01-01", "2025-12-31"]
+  required_oos: true
+
+robustness:
+  cost_multiplier: [1.0, 2.0]
+  parameter_perturbation:
+    momentum_20.period: [15, 20, 25]
+
+decision_policy:
+  reject_if:
+    fatal_audit_findings: true
+    oos_sharpe_lt: 0.5
+    max_drawdown_lt: -0.30
+  promote_if:
+    oos_sharpe_gte: 1.0
+    max_drawdown_gte: -0.20
 ```
+
+### 5.3 Spec Validator
+
+命令：`oxq spec validate strategy_spec.yaml`
+
+P0 校验规则：
+
+| 检查项 | 严重级别 | 说明 |
+|--------|----------|------|
+| hypothesis 为空 | fatal | 没有可测试假设 |
+| universe 缺失 | fatal | 无法定义研究范围 |
+| signal_time 缺失 | fatal | 无法判断是否未来函数 |
+| trade_time 缺失 | fatal | 无法判断成交时点 |
+| signal_time=close_t 且 trade_time=close_t | fatal | 同根 K 线生成并成交 |
+| cost 缺失 | fatal | 默认零成本不可接受 |
+| slippage 缺失 | fatal | 默认零滑点不可接受 |
+| validation.test_period 缺失 | fatal | 无样本外验证 |
+| benchmark 缺失 | warning | 难以判断超额收益 |
+| static universe + point_in_time=false | warning | 可能有幸存者偏差 |
+
+### 5.4 Spec Compiler
+
+将 `strategy_spec.yaml` 编译为 open-xquant 可执行对象。
+
+两种模式：
+1. **Direct Runtime Mode**：直接从 spec 构造 Strategy 对象并运行（MVP 优先）
+2. **Generated Code Mode**：生成 `strategy.py`，便于人类 review 和 Git diff
 
 ---
 
-## 5. 功能模块
+## 6. Audit System（新增）
 
-### 5.1 数据层 (oxq.data)
+### 6.1 两层审计
 
-框架将所有外部数据统一视为 indicator——无论其原始来源是行情、财务报表、宏观经济指标还是新闻舆情。从策略视角，PE ratio、GDP 增速、舆情分数与 RSI 本质相同——都是"某个时间点上的一个数值"。所有数据最终以列的形式汇入宽表 `mktdata`，参与 Indicator → Signal → Portfolio 管道。
-
-核心原则：
-
-1. **一切皆 indicator**：不区分 indicator 和 factor，统一称为 indicator。它可能来自数学公式对量价数据的计算，可能由现有 indicator 衍生，也可能由外部系统（如机器学习模型）计算后注入
-2. **Point-in-Time 对齐**：数据按实际可用日（announce_date）而非报告期（period_date）对齐进宽表，防止前视偏差
-3. **频率打平**：低频数据（季度财报、月度宏观）通过 forward-fill 对齐到日频宽表
-4. **全局数据广播**：无 symbol 维度的数据（宏观指标）广播到全 universe 的每个 symbol
-
-### 5.2 Universe 构建 (oxq.universe)
-
-Universe 决定"每个时间截面上，哪些 symbol 参与计算"。缺少显式 Universe 管理会导致 survivorship bias。
-
-```python
-class UniverseProvider(Protocol):
-    def get_universe(self, as_of_date: str) -> UniverseSnapshot: ...
-    def get_history(self, start: str, end: str) -> list[UniverseSnapshot]: ...
+```
+Reproducibility Audit — 验证同输入是否产生同输出
+Research Bias Audit   — 判断回测研究是否可信
 ```
 
-三种内置实现：
+### 6.2 Reproducibility Audit
+
+检查 spec hash、data manifest hash、trades hash、equity curve hash、metrics hash、environment hash。
+
+命令：`oxq audit reproducibility runs/<run_id>/`
+
+### 6.3 Research Bias Audit
+
+P0 检查项：
+
+| ID | 级别 | 检查内容 |
+|----|------|----------|
+| execution_lag | fatal | 信号时间与成交时间是否冲突 |
+| cost_model | fatal | 是否使用零手续费或零滑点 |
+| oos_required | fatal | 是否存在样本外区间 |
+| benchmark_present | warning | 是否有基准 |
+| static_universe_survivorship | warning | 静态股票池是否可能幸存者偏差 |
+| parameter_count | warning | 参数数量是否过多 |
+| trade_count | warning | 交易次数是否过少 |
+| concentration | warning | 收益是否依赖少数交易 |
+| drawdown_tail | warning | 最大回撤是否不可接受 |
+| missing_data | warning | 数据缺失是否严重 |
+
+命令：`oxq audit research runs/<run_id>/`
+
+---
+
+## 7. Robustness Runner（新增）
+
+P0 稳健性测试四类：
+
+1. 样本内 / 样本外表现对比
+2. 手续费与滑点加倍
+3. 核心参数轻微扰动
+4. 市场状态分段分析
+
+命令：`oxq robustness run runs/<run_id>/`
+
+---
+
+## 8. Report Generator（新增）
+
+生成 `research_report.md`，结构：
+
+```text
+1. Executive Decision (Reject / Watchlist / Paper Trading Candidate)
+2. Hypothesis
+3. Strategy Spec Summary
+4. Data and Execution Assumptions
+5. Backtest Metrics
+6. Benchmark Comparison
+7. Reproducibility Audit
+8. Research Bias Audit
+9. Robustness Tests
+10. Failure Modes
+11. Next Actions
+```
+
+决策规则：存在 fatal audit finding → Reject；无 fatal 但 OOS 显著退化 → Watchlist；通过 audit 且稳健性尚可 → Paper Trading Candidate。
+
+命令：`oxq report write runs/<run_id>/`
+
+---
+
+## 9. Experiment Registry（新增）
+
+每次研究进入实验登记册，防止选择性记忆。
+
+本地实现：`experiments/experiments.jsonl`
+
+记录：experiment_id, strategy_id, spec_hash, run_id, metrics, audit_status, decision, created_at。
+
+命令：`oxq experiment add runs/<run_id>/`
+
+---
+
+## 10. CLI 设计
+
+```
+oxq spec init "策略想法"
+oxq spec validate strategy_spec.yaml
+oxq strategy compile strategy_spec.yaml
+oxq backtest run strategy_spec.yaml --out runs/auto
+oxq audit reproducibility runs/<run_id>/
+oxq audit research runs/<run_id>/
+oxq robustness run runs/<run_id>/
+oxq report write runs/<run_id>/
+oxq experiment add runs/<run_id>/
+```
+
+CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现。
+
+---
+
+## 11. 功能模块
+
+### 11.1 数据层 (oxq.data)
+
+一切外部数据统一视为 indicator——PE ratio、GDP 增速与 RSI 本质相同。最终以列的形式汇入宽表 `mktdata`。
+
+核心原则：
+1. **一切皆 indicator**
+2. **Point-in-Time 对齐**
+3. **频率打平**：低频数据通过 forward-fill 对齐到日频
+4. **全局数据广播**：无 symbol 维度的数据广播到全 universe
+
+### 11.2 Universe 构建 (oxq.universe)
 
 | 实现 | 说明 | 适用场景 |
 |------|------|----------|
-| `StaticUniverse` | 固定 symbol 列表 | 单标的策略、手动指定标的池 |
-| `IndexUniverse` | 指数成分股，支持 Point-in-Time | 沪深300轮动、行业指数策略 |
+| `StaticUniverse` | 固定 symbol 列表 | 单标的策略 |
+| `IndexUniverse` | 指数成分股 | 指数轮动策略 |
 | `FilterUniverse` | 基于 indicator 条件动态过滤 | 全市场因子策略 |
 
-### 5.3 指标库 (oxq.indicators)
+### 11.3 指标库 (oxq.indicators)
 
-Indicator 是路径无关的纯函数：输入单个 symbol 的 DataFrame，输出等长 Series，引擎追加为宽表新列。
+30+ 内置指标，按类别分：趋势 (SMA, EMA, WMA, DEMA, TEMA)、动量 (RSI, ROC, Momentum, NdayReturn)、MACD (MACDLine, MACDSignal, MACDHistogram)、波动 (Bollinger, ATR, RollingVolatility)、成交量 (OBV, VWAP, MFI)、方向 (ADX, AROON, CCI)。
 
-```python
-class Indicator(Protocol):
-    name: str
-    def compute(self, mktdata: pd.DataFrame, **params) -> pd.Series: ...
-```
+### 11.4 信号生成器 (oxq.signals)
 
-内置指标：
+7 种信号类型：Crossover, Threshold, Comparison, Formula, Peak, Timestamp, Composite。
 
-| 类别 | 指标 | 说明 |
+### 11.5 组合优化器 (oxq.portfolio.optimizers)
+
+| 优化器 | 逻辑 |
+|--------|------|
+| `EqualWeightOptimizer` | 等权分配 |
+| `RiskParityOptimizer` | 按波动率倒数加权 |
+| `KellyOptimizer` | Kelly 公式计算最优仓位 |
+| `TopNRankingOptimizer` | 按评分排名取 Top N 归一化 |
+
+### 11.6 交易规则 (oxq.rules)
+
+| 规则 | 时机 | 功能 |
 |------|------|------|
-| 趋势 | SMA, EMA, WMA, DEMA, TEMA | 移动平均系列 |
-| 动量 | RSI, ROC, PPO, Momentum, NdayReturn, LogReturn | 动量与收益指标 |
-| MACD | MACDLine, MACDSignal, MACDHistogram | MACD 拆分为三个独立指标 |
-| 波动 | BollingerUpper, BollingerLower, ATR, RollingVolatility, RollingMDD | 波动率指标 |
-| 成交量 | OBV, VWAP, MFI | 量价指标 |
-| 方向 | ADX, AROON, StochK, CCI | 趋势强度指标 |
-| 因子 | Ratio | 比率因子 |
+| `MaxDrawdownRisk` | Pre-trade | 回撤熔断 |
+| `DailyLossLimitRisk` | Pre-trade | 日亏损熔断 |
+| `StopLossRule` | Post-trade | 止损 |
+| `TakeProfitRule` | Post-trade | 止盈 |
+| `TrailingStopRule` | Post-trade | 追踪止损 |
+| `ExitRule` | Post-trade | 条件退出 |
 
-指标拆分原则：`compute()` 返回单个 Series（一列）。多输出指标拆分为独立类：BBands 拆为 `BollingerUpper` + `BollingerLower`，MACD 拆为三个。
+### 11.7 交易执行 (oxq.trade)
 
-### 5.4 信号生成器 (oxq.signals)
+- **OrderGenerator**：目标权重 + 当前持仓 → 订单列表
+- **SimBroker**：模拟撮合，支持 market/limit/stop/trailing_stop
+- **FeeModel / SlippageModel**：PercentageFee、PercentageSlippage
 
-Signal 和 Indicator 签名相同——都是逐 symbol 计算的纯函数。区别在于语义：Indicator 输出连续数值，Signal 输出离散的交易意图。Signal 描述"交易的欲望"，策略可能因风控规则或约束条件而不执行信号。
+### 11.8 参数优化 (oxq.optimize)
 
-```python
-class Signal(Protocol):
-    name: str
-    def compute(self, mktdata: pd.DataFrame, **params) -> pd.Series: ...
-```
+GridSearch、WalkForward、TimeSeriesCV、过拟合分析。
 
-7 种内置信号：
+### 11.9 因子评估 (oxq.factor_eval)
 
-| 信号类型 | 说明 |
-|----------|------|
-| `Crossover` | 两条线交叉（上穿检测） |
-| `Threshold` | 超过/低于阈值 |
-| `Comparison` | 两个值比较 |
-| `Formula` | 自定义布尔公式 |
-| `Peak` | 峰值/谷值检测 |
-| `Timestamp` | 时间条件触发 |
-| `Composite` | 多信号 AND/OR 组合 |
+截面评估（IC、ICIR、RankIC、衰减、换手率）+ 时序评估（命中率、衰减曲线、盈亏比、Tearsheet）。
 
-跨 symbol 的操作（排名、权重归一化）由 PortfolioOptimizer 负责，不属于 Signal 层。
+### 11.10 可观测性 (oxq.observe)
 
-### 5.5 组合优化器 (oxq.portfolio.optimizers)
-
-PortfolioOptimizer 负责将 Signal 输出转化为目标组合权重。所有权重之和为 1.0（含 CASH）。
-
-```python
-class PortfolioOptimizer(Protocol):
-    name: str
-    def optimize(
-        self,
-        signals: dict[str, pd.DataFrame],
-        indicators: dict[str, pd.DataFrame],
-    ) -> dict[str, float]: ...
-```
-
-4 种内置优化器：
-
-| 优化器 | 逻辑 | 适用场景 |
-|--------|------|----------|
-| `EqualWeightOptimizer` | 等权分配 | 分散投资、快速验证 |
-| `RiskParityOptimizer` | 按波动率倒数加权 | 风险均衡配置 |
-| `KellyOptimizer` | Kelly 公式计算最优仓位 | 有历史胜率数据时 |
-| `TopNRankingOptimizer` | 按评分排名取 Top N 归一化 | 截面动量/因子策略 |
-
-当所需的 indicator 列缺失时，优化器跳过对应标的物并将权重分配给 CASH，而非抛出错误。
-
-### 5.6 交易规则 (oxq.rules)
-
-Rule 返回 RuleResult，而非 Order。RuleResult 携带 weights（权重覆盖）、constraints（约束条件）、target_positions（目标仓位）或 hold（冻结后续规则）。Rules 不属于 Strategy，通过 `Engine.run(rules=[...])` 传入。
-
-在执行管道中 Rule 分为两个时机：
-
-- **Pre-trade Rule** — 在 Portfolio 产出目标组合后、交易执行前检查。可调整权重、附加约束或冻结交易
-- **Post-trade Rule** — 在交易执行后监控持仓。触发止损、止盈等减仓操作
-
-已实现的 Rule：
-
-| 规则 | 时机 | 返回 |
-|------|------|------|
-| `MaxDrawdownRisk` | Pre-trade | `RuleResult(target_positions={sym: 0.0}, hold=True)` |
-| `DailyLossLimitRisk` | Pre-trade | `RuleResult(hold=True)` |
-| `StopLossRule` | Post-trade | `RuleResult(target_positions={sym: 0.0})` |
-| `TakeProfitRule` | Post-trade | `RuleResult(target_positions={sym: 0.0})` |
-| `TrailingStopRule` | Post-trade | `RuleResult(target_positions={sym: 0.0})` |
-| `ExitRule` | Post-trade | `RuleResult(target_positions={sym: 0.0})` |
-
-Post-trade Rule 只产出减仓意图（target_positions），不产出加仓意图。加仓完全由 Signal + Portfolio 驱动。Engine 根据 target_positions 计算卖出股数并统一通过交易算法提交。
-
-### 5.7 交易执行 (oxq.trade)
-
-- **OrderGenerator**：将目标权重 + 当前持仓 → 订单列表（PlannedOrder），支持 lot_size 手数约束（美股默认 1，A 股 100）
-- **SimBroker**：模拟撮合，实现 Broker Protocol，支持 market/limit/stop/trailing_stop 订单类型
-- **LiveBroker**：实盘交易（Alpaca API）
-- **FeeModel / SlippageModel**：PercentageFee（比例手续费 + 最低收费）、PercentageSlippage（百分比滑点）
-- **多交易所**：SSE, SZSE, NYSE, NASDAQ, HKEX
-
-### 5.8 组合管理 (oxq.portfolio)
-
-- **OrderBook**：管理 ManagedOrder 集合，跟踪订单生命周期
-- **Portfolio**：管理持仓状态（positions）、现金余额（cash）、当前价格快照（bar_prices）
-- **RunResult**：回测结果，包含 portfolio、trades、equity_curve、mktdata、benchmark_prices，提供 total_return()、sharpe_ratio()、max_drawdown()、annualized_return()、annualized_volatility()、calmar_ratio()、sortino_ratio() 等方法
-- **ExecutionReport**：对比模拟成交与实盘成交
-
-### 5.9 执行引擎 (oxq.core.engine)
-
-Engine 是通用策略执行引擎，provider-agnostic——不知道自己在运行回测还是实盘。
-
-```python
-def run(self, strategy, market, broker,
-        start="", end="", initial_cash=100_000.0,
-        rules=None, run_through=None, tracer=None) -> RunResult
-```
-
-`setup()` + `step()` 分离支持两种执行模式：
-
-```python
-# 批量执行（回测）
-result = engine.run(strategy, market, broker, rules=[...], ...)
-
-# 逐步执行（实盘/调试）
-engine.setup(strategy=strategy, market=market, broker=broker, rules=[...], ...)
-for date in engine.dates:
-    engine.step(date)
-result = engine.result
-```
-
-### 5.10 参数优化 (oxq.optimize)
-
-```python
-paramset = ParamSet("sma_tuning")
-paramset.add_distribution("sma_fast", "period", values=range(5, 30, 5))
-paramset.add_distribution("sma_slow", "period", values=range(20, 100, 10))
-paramset.add_constraint("sma_fast.period < sma_slow.period")
-
-results = grid_search(strategy, paramset, data, metric="sharpe_ratio")
-
-wfa_results = walk_forward(strategy, paramset, data,
-    train_period="2Y", test_period="6M", step="3M",
-    optimize_metric="sharpe_ratio", anchored=False)
-```
-
-### 5.11 因子评估 (oxq.factor_eval)
-
-因子评估模块衡量 Indicator 作为 factor 的预测能力，分为截面评估和时序评估两个维度。
-
-核心数据结构：
-
-- **FactorBundle**：对齐的因子-行情数据容器，持有因子值、价格、前向收益率，并跟踪数据状态（对齐报告、涨跌停标记、停牌标记）
-- **AlignmentReport**：数据对齐质量报告（丢失率、多余日期、涨跌停/停牌天数）
-
-截面评估指标：
-
-| 指标 | 说明 |
-|------|------|
-| `compute_ic()` | 信息系数（因子与前向收益的 Pearson 相关） |
-| `compute_rank_ic()` | 排名 IC（Spearman 相关） |
-| `compute_icir()` | IC 信息比率（IC 均值 / IC 标准差） |
-| `compute_decay()` | IC 衰减分析（多持有期） |
-| `compute_turnover()` | 因子换手率 |
-
-时序评估指标：
-
-| 指标 | 说明 |
-|------|------|
-| `compute_hit_rate()` | 因子信号命中率 |
-| `compute_decay_curve()` | 多持有期衰减曲线 |
-| `compute_profit_loss_ratio()` | 盈亏比分析 |
-| `compute_cash_period_value()` | 空仓期价值 |
-| `compute_conditional_analysis()` | 条件分析（按市场状态分组） |
-| `compute_asset_comparison()` | 跨资产对比 |
-
-数据预处理：`apply_t1_offset()`（T+1 偏移）、`mark_limit_days()`（涨跌停标记）、`mark_suspension_days()`（停牌标记）。
-
-输出：`generate_tearsheet()` 生成完整评估报告（PNG 可视化）。
-
-### 5.12 统计检验 (oxq.optimize.validation)
-
-| 方法 | 用途 |
-|------|------|
-| `deflated_sharpe()` | 校正多重比较后的 Sharpe Ratio |
-| `haircut_sharpe()` | 对 Sharpe Ratio 施加 haircut |
-| `profit_hurdle()` | 最低利润门槛检验 |
-| `white_reality_check()` | Bootstrap 检验策略收益是否显著 |
-| `k_fold_cv()` | 时间序列 k 折交叉验证 |
-| `cscv()` | 组合对称交叉验证 |
-| `oos_deterioration()` | 样本外退化度量 |
-
-### 5.13 可观测性 (oxq.observe)
-
-- **DefaultTracer**：执行追踪，生命周期钩子（on_run_start、on_indicator、on_signal、on_rule、on_run_end），生成 TraceSpan
-- **AuditRecord**：审计日志，包含策略配置快照 + 四维哈希（mktdata_hash、trades_hash、equity_hash、result_hash）用于确定性验证
-- **StrategyMonitor**：监控策略运行状态，检测绩效偏离和异常期
-- **MarketStateDetector**：基于波动率检测市场状态（高波/低波/正常）
-- **ExperimentLog**：结构化实验日志，记录假设、观察、结论
+Execution tracing、AuditRecord（四维 hash）、StrategyMonitor、MarketStateDetector、ExperimentLog。
 
 ---
 
-## 6. Tool 定义与分发
+## 12. Tool 定义与分发
 
-### 6.1 Tool 定义（oxq.tools）
+### 12.1 Tool 定义（oxq.tools）
 
-Tool 定义是框架的核心资产之一，与传输协议无关。每个 Tool 是 SDK 的薄封装：参数解析 → 调用 `oxq` SDK → 格式化返回。所有计算和逻辑在 SDK 中实现。
+Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 
 | 工具组 | 工具名 | 说明 |
 |--------|--------|------|
-| **strategy** | `strategy_create` | 创建策略 |
-| | `strategy_add_indicator` | 添加指标 |
-| | `strategy_add_signal` | 添加信号 |
-| | `strategy_inspect` | 查看策略详情 |
-| | `strategy_list` | 列出所有策略 |
-| | `indicator_list` | 列出可用指标类型 |
-| | `indicator_describe` | 查看指标参数说明 |
-| | `signal_list` | 列出可用信号类型 |
-| | `signal_describe` | 查看信号参数说明 |
-| | `rule_list` | 列出可用规则类型 |
-| | `rule_describe` | 查看规则参数说明 |
-| **data** | `data_load_symbols` | 加载标的行情数据 |
-| | `data_list_symbols` | 列出已有标的 |
-| | `data_inspect` | 查看数据摘要 |
-| | `factor_download` | 下载宏观因子 |
-| | `factor_list` / `factor_inspect` | 因子查询 |
-| **universe** | `universe_set` | 设置 Universe |
-| | `universe_inspect` | 查看成分快照 |
-| | `universe_history` | 查看成分变动 |
-| **engine** | `engine_run` | 运行策略 |
-| | `engine_results` | 获取绩效指标 |
-| | `engine_trade_list` | 查看交易记录 |
-| | `run_list` | 列出运行历史 |
-| **optimize** | `paramset_create` / `paramset_list` | 参数空间管理 |
-| | `grid_search` / `walk_forward` | 搜索方法 |
-| | `cross_validate` / `overfit_analysis` | 统计检验 |
-| **factor_eval** | `factor_evaluate` | 截面因子评估（IC、ICIR、RankIC、衰减、换手率） |
-| | `factor_evaluate_ts` | 时序因子评估（命中率、衰减曲线、盈亏比、Tearsheet） |
-| **observe** | `observe_trace` / `observe_audit_*` | 追踪与审计 |
-| | `observe_monitor_*` | 策略监控 |
-| | `observe_experiment_*` | 实验日志 |
-| **live** | `live_connect` / `live_account` | 券商连接 |
-| | `live_positions` / `live_bars` | 实盘数据 |
-| | `live_generate_orders` / `live_submit_order` | 订单管理 |
-
-### 6.2 MCP Server（可选分发层）
-
-MCP Server 位于 `agent/mcp_server/`，是 `oxq.tools` 的 MCP 协议适配，用于支持不能执行代码的 AI 客户端。MCP Server 不包含业务逻辑，只做协议适配和自动注册。Coding Agent 直接 `import oxq` 即可，不需要 MCP Server。
-
-除自动注册 SDK tools 外，MCP Server 还提供两个 MCP-only 工具：`get_current_date`（获取当前日期）和 `skill_list` / `skill_load`（列出和加载 Agent Skill）。
+| **spec** | `spec_init`, `spec_validate` | Spec 创建与校验 |
+| **strategy** | `strategy_create`, `strategy_add_indicator`, `strategy_add_signal` | 策略构建 |
+| **data** | `data_load_symbols`, `data_list_symbols`, `data_inspect` | 数据管理 |
+| **universe** | `universe_set`, `universe_inspect`, `universe_history` | Universe 管理 |
+| **engine** | `engine_run`, `engine_results`, `engine_trade_list` | 回测执行 |
+| **audit** | `audit_reproducibility`, `audit_research` | 审计 |
+| **robustness** | `robustness_run` | 稳健性测试 |
+| **report** | `report_write` | 报告生成 |
+| **experiment** | `experiment_add` | 实验登记 |
+| **optimize** | `grid_search`, `walk_forward`, `cross_validate` | 参数优化 |
+| **factor_eval** | `factor_evaluate`, `factor_evaluate_ts` | 因子评估 |
+| **observe** | `observe_trace`, `observe_audit_*`, `observe_experiment_*` | 可观测性 |
 
 ---
 
-## 7. Agent Layer（agent/）
+## 13. Agent Layer（agent/）
 
-Agent 层是框架的 **Agent-First 交付面**，集中管理所有面向 AI Agent 的资源：Skills（工作流）、MCP Server（协议适配）、Bootstrap（启动配置）。
-
-### 7.1 Agent Skills（agent/skills/）
+### 13.1 Agent Skills（agent/skills/）
 
 每个 skill.md 描述一个完整的 Agent 工作流，指导 AI Agent 如何组合 tools 完成任务。
 
@@ -679,89 +587,133 @@ Agent 层是框架的 **Agent-First 交付面**，集中管理所有面向 AI Ag
 |-------|------|
 | `strategy-builder` | 约束 → 目标 → 假设 → 数据 → 逐层构建 → 回测 |
 | `data-explorer` | 检查数据 → 下载行情/因子 → 质量检查 |
-| `backtest-runner` | → 重定向至 strategy-builder |
 | `parameter-tuner` | 参数优化 + 统计检验 |
 | `performance-reviewer` | 绩效分析 + 归因 |
-| `trade-executor` | 订单生成 → 确认 → 监控 |
-| `strategy-monitor` | 实盘监控 + 偏离检测 |
-| `universe-builder` | Universe 构建 |
-| `live-trader` | Alpaca 模拟/实盘交易 |
-| `rule-builder` | 风控熔断、止损止盈、退出条件配置 + 回测 |
-| `chart-indicator` | 蜡烛图 + 指标叠加可视化 |
-| `component-creator` | 组件创建路由（检查注册中心 → 分发到子 skill） |
-| `create-indicator` | 创建 Indicator 组件（设计 → 编码 → 验证 → 注册） |
-| `create-signal` | 创建 Signal 组件 |
-| `create-rule` | 创建 Rule 组件 |
-| `create-portfolio-optimizer` | 创建 PortfolioOptimizer 组件 |
-| `factor-evaluator` | 因子评估路由（截面 vs 时序） |
-| `evaluate-cross-sectional` | 截面因子评估（IC、ICIR、RankIC、衰减、换手率） |
-| `evaluate-time-series` | 时序因子评估（命中率、衰减曲线、盈亏比、Tearsheet） |
+| `factor-evaluator` | 因子评估路由 |
+| `component-creator` | 组件创建路由 |
+| ... | ... |
 
-### 7.2 Bootstrap（agent/bootstrap/）
+### 13.2 OpenCode 集成（agent/opencode/）（新增）
 
-为 OpenClaw 等龙虾类 Agent 提供启动配置文件：
+```
+agent/opencode/
+  AGENTS.md
+  opencode.json
+  agents/
+    quant-planner.md
+    quant-builder.md
+    quant-auditor.md
+    quant-reporter.md
+  commands/
+    quant-new.md
+    quant-backtest.md
+    quant-audit.md
+    quant-report.md
+  skills/
+    quant-research/SKILL.md
+```
 
-| 文件 | 用途 |
-|------|------|
-| `AGENT.md` | 标准操作规程（启动流程、工作流、红线） |
-| `SOUL.md` | Agent 人格与专业定位（量化研究专精） |
-| `TOOLS.md` | 环境与工具参考（MCP Server、Python 环境、示例目录） |
+权限分离原则：Builder 和 Auditor 必须分离，审计阶段不允许修改策略，报告阶段不允许美化失败策略。
 
 ---
 
-## 8. 技术选型
+## 14. 技术选型
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
 | 语言 | Python 3.12+ | AI 生态最丰富 |
 | 类型系统 | dataclass(frozen=True) + Protocol | 不可变 + 鸭子类型 |
 | 金融精度 | Decimal | 避免浮点误差 |
-| 时间序列 | pandas DataFrame/Series | Indicator Protocol 标准输入输出类型 |
-| 核心依赖 | pandas, numpy | 向量化计算基础设施 |
-| 可选依赖 | scipy (optimize), ta-lib (指标加速) | 仅在特定模块引入 |
-| 可选依赖 | mcp (Python) | MCP Server 分发时需要 |
+| 时间序列 | pandas DataFrame/Series | 向量化计算基础设施 |
+| 核心依赖 | pandas, numpy, pyyaml | spec 解析 + 向量化计算 |
+| CLI | click | 标准 CLI 框架 |
 | 构建工具 | uv | 现代 Python 项目管理 |
 | 测试 | pytest | 标准选择 |
 
 ---
 
-## 9. 实现路线
+## 15. 实现路线
 
-### Phase 1: 核心引擎 + SDK (MVP) ✅ 已完成
-- `oxq.core`: Strategy (Universe + Signal + Portfolio), Engine, types (Order, Fill, Portfolio, Position, RuleResult, 全部 Protocol)
-- `oxq.universe`: UniverseProvider Protocol, StaticUniverse, FilterUniverse
-- `oxq.indicators`: 27 个内置指标
-- `oxq.signals`: 7 种 per-symbol 信号（Crossover, Threshold, Comparison, Formula, Composite, Peak, Timestamp）
-- `oxq.rules`: ExitRule, StopLossRule, TakeProfitRule, TrailingStopRule, MaxDrawdownRisk, DailyLossLimitRisk
-- `oxq.portfolio`: Portfolio, Position, RunResult + analytics, PortfolioOptimizer（EqualWeight, RiskParity, Kelly, TopNRanking）
-- `oxq.trade`: SimBroker, FeeModel, SlippageModel, OrderGenerator
-- `oxq.data`: LocalMarketDataProvider, YFinanceDownloader, AkShareDownloader, WorldBank 因子
-- `oxq.tools`: 40+ 个协议无关 Tool
-- `agent/mcp_server`: FastMCP 适配层
-- `agent/skills/`: strategy-builder, data-explorer, factor-evaluator 等 18 个 skill
-- `agent/bootstrap/`: OpenClaw 等龙虾类 Agent 启动配置
+### Phase 0: 定位收敛与文档 ✅ 已完成
+- README 定位更新
+- 架构文档更新
+- 明确 `spec → backtest → audit → report` 是 MVP 主线
 
-### Phase 2: 参数优化 + 统计检验 + 因子评估 ✅ 已完成
-- `oxq.optimize`: ParameterSet, GridSearch, WalkForward, TimeSeriesCV, 过拟合分析
-- `oxq.factor_eval`: FactorBundle、截面评估（IC/ICIR/RankIC/衰减/换手率）、时序评估（命中率/衰减曲线/盈亏比/Tearsheet）
-- 未完成: `IndexUniverse`（Point-in-Time）
+### Phase 1: Spec 与 Validator ✅ 已完成
+- `src/oxq/spec/schema.py`, `validator.py`
+- `src/oxq/cli/` — CLI 入口（`oxq spec init`, `oxq spec validate`）
+- `examples/research_cases/*/strategy_spec.yaml`（5 个 golden cases）
 
-### Phase 3: 交易执行 + 可观测性 🔄 部分完成
-- `oxq.observe`: DefaultTracer, AuditRecord, StrategyMonitor, MarketStateDetector, ExperimentLog
-- `oxq.trade`: LiveBroker (Alpaca), FillPriceMode
-- `oxq.contrib.alpaca`: AlpacaClient, AlpacaMarketDataProvider
-- `oxq.portfolio`: ExecutionReport, OrderBook
-- 未完成: observe_replay, EventBus
+### Phase 2: Spec Compiler 与 Backtest Artifacts ✅ 已完成
+- `src/oxq/spec/compiler.py`
+- 标准化 run directory 结构（10 个固定 artifacts）
+- CLI: `oxq strategy compile`, `oxq backtest run`
 
-### Phase 4: 多策略 + 高级特性
-- `oxq.orchestrator`: 多策略编排 + 资金分配
-- 更多指标/信号
-- 机构级多策略管理能力
+### Phase 3: Audit 与 Report ✅ 已完成
+- `src/oxq/audit/reproducibility.py`, `research_bias.py`
+- `src/oxq/report/generator.py`
+- CLI: `oxq audit reproducibility`, `oxq audit research`, `oxq report write`, `oxq experiment add`
+
+### Phase 4: Robustness 与 Experiment Registry ✅ 已完成
+- `src/oxq/robustness/runner.py`
+- CLI: `oxq robustness run`, `oxq experiment add`
+
+### Phase 5: OpenCode 本地集成 ✅ 已完成
+- `agent/opencode/` 完整配置（AGENTS.md, opencode.json, 4 agents, 4 commands, quant-research skill）
+
+### 已完成
+- Phase 1 (原): 核心引擎 + SDK ✅
+- Phase 2 (原): 参数优化 + 统计检验 + 因子评估 ✅
+- Phase 3 (原): 交易执行 + 可观测性 🔄 部分完成
+- Phase 0 (新): 定位收敛与文档 ✅
+- Phase 1 (新): Spec 与 Validator ✅
+- Phase 2 (新): Spec Compiler 与 Backtest Artifacts ✅
+- Phase 3 (新): Audit 与 Report ✅
+- Phase 4 (新): Robustness 与 Experiment Registry ✅
+- Phase 5 (新): OpenCode 本地集成 ✅
+
+---
+
+## 16. 反模式（Avoid These）
+
+| 反模式 | 说明 |
+|--------|------|
+| 把 open-xquant 做成新 Agent | open-xquant 是内核，不是 Agent。通用执行交给 OpenCode |
+| 追求自动发现赚钱策略 | 会把系统带向过拟合机器。第一目标是**杀死坏策略** |
+| 把所有壁垒都藏起来 | 开源版不可完整使用则用户不会信任 |
+| 只做回测，不做审计 | 量化最危险的是"不报错但赚钱的假策略" |
+| 让 Auditor 修改策略 | 审计者不能同时当优化者，否则审计变成收益包装 |
+| 过早接实盘 | 研究 Agent 和交易执行系统必须隔离 |
+
+---
+
+## 17. 验收标准
+
+用以下命令验证系统端到端可工作：
+
+```bash
+oxq spec init "20日动量轮动" --out strategy_spec.yaml
+oxq spec validate strategy_spec.yaml
+oxq backtest run strategy_spec.yaml --out runs/auto
+oxq audit research runs/<run_id>/
+oxq robustness run runs/<run_id>/
+oxq report write runs/<run_id>/
+oxq experiment add runs/<run_id>/
+```
+
+验证断言：
+
+1. 缺少成本模型的 spec 会 fail
+2. close_t 信号 close_t 成交会 fail
+3. 缺少样本外验证会 fail
+4. static universe 会产生 warning
+5. 相同 spec + 相同数据重复运行，核心 hash 一致
+6. 报告中不会把 fatal audit 策略标记为 Candidate
 
 ---
 
 ## 参考
 
-- **quantstrat (R)**: indicator → signal → rule 分层模型、paramset 参数优化、walk-forward analysis、Deflated Sharpe Ratio 统计检验、order book 管理
+- **quantstrat (R)**: indicator → signal → rule 分层模型、paramset 优化、walk-forward analysis
 - **xquant.shop**: agent pipeline 架构、immutable specs、provider injection
-- **Peterson, Brian G. (2017)**: *"Developing & Backtesting Systematic Trading Strategies"* — 假设驱动开发、逐组件评估、信号预测力评估、MAE/MFE 分析、Rule Burden、Walk Forward Analysis、统计检验方法论
+- **Peterson, Brian G. (2017)**: *"Developing & Backtesting Systematic Trading Strategies"* — 假设驱动开发、统计检验方法论

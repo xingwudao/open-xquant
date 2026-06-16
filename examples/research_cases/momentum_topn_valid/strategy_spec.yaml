@@ -1,0 +1,91 @@
+schema_version: "0.1"
+strategy_id: "momentum_topn_valid"
+name: "20-day Momentum Top-N Weekly Rotation"
+
+research:
+  hypothesis: >
+    Past 20-trading-day relative strength among liquid equities has short-term
+    continuation over the next 5 to 10 trading days.
+  rationale: >
+    Momentum may persist due to delayed information diffusion and institutional
+    flows. Using multiple ETFs and next_open execution avoids same-bar bias.
+  author: "open-xquant"
+  created_at: "2026-06-16"
+
+market:
+  asset_class: "equity"
+  region: "us"
+  currency: "USD"
+  calendar: "XNYS"
+
+universe:
+  type: "static"
+  symbols: ["SPY", "QQQ", "IWM"]
+  point_in_time: false
+  survivorship_bias_policy: "warn"
+
+data:
+  provider: "local"
+  price_adjustment: "adjusted"
+  required_columns: ["open", "high", "low", "close", "volume"]
+
+signal:
+  signal_time: "close_t"
+  indicators:
+    momentum_20:
+      type: "NdayReturn"
+      params:
+        column: "close"
+        period: 20
+  rules:
+    positive_momentum:
+      type: "Threshold"
+      params:
+        column: "momentum_20"
+        threshold: 0
+        relationship: "gt"
+
+portfolio:
+  type: "TopNRanking"
+  params:
+    score_col: "momentum_20"
+    n: 1
+    filter_negative: true
+    max_weight: 1.0
+
+execution:
+  rebalance:
+    frequency: "weekly"
+    interval_days: 5
+  trade_time: "next_open"
+  fill_price_mode: "next_open"
+  lot_size: 1
+  initial_cash: 100000
+
+cost:
+  fee_rate: 0.001
+  fee_min: 0
+  slippage_rate: 0.001
+
+benchmark:
+  symbols: ["SPY"]
+
+validation:
+  train_period: ["2018-01-01", "2021-12-31"]
+  test_period: ["2022-01-01", "2025-12-31"]
+  required_oos: true
+
+robustness:
+  cost_multiplier: [1.0, 2.0]
+  parameter_perturbation:
+    momentum_20.period: [15, 20, 25]
+  regime_analysis: true
+
+decision_policy:
+  reject_if:
+    fatal_audit_findings: true
+    oos_sharpe_lt: 0.5
+    max_drawdown_lt: -0.30
+  promote_if:
+    oos_sharpe_gte: 1.0
+    max_drawdown_gte: -0.20

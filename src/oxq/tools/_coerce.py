@@ -1,6 +1,6 @@
-"""Parameter coercion for MCP tool boundary.
+"""Parameter coercion for tool boundaries.
 
-MCP clients (LLMs) may send numeric values as strings in JSON tool calls.
+LLM clients may send numeric values as strings in JSON tool calls.
 This module coerces params to match the SDK's strict type annotations
 before passing them to compute() methods.
 """

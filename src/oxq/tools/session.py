@@ -1,7 +1,7 @@
 """Session store — holds mutable state across tool calls.
 
-State is persisted to a temp file so it survives MCP server restarts
-(each user message in agent_demo spawns a new MCP subprocess).
+State is persisted to a temp file so it survives subprocess restarts
+(each tool call may run in a separate process).
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from oxq.contrib.alpaca.market_data import AlpacaMarketDataProvider
     from oxq.core.strategy import Strategy
-    from oxq.observe.detector import MarketStateDetector
     from oxq.observe.audit import AuditRecord
+    from oxq.observe.detector import MarketStateDetector
     from oxq.observe.experiment import ExperimentLog
     from oxq.observe.monitor import StrategyMonitor
     from oxq.optimize.paramset import ParameterSet
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-_SESSION_FILE = Path(tempfile.gettempdir()) / "oxq_mcp_session.pkl"
+_SESSION_FILE = Path(tempfile.gettempdir()) / "oxq_session.pkl"
 
 _strategies: dict[str, Strategy] = {}
 _run_results: dict[str, RunResult] = {}
@@ -110,5 +110,5 @@ def clear() -> None:
     _SESSION_FILE.unlink(missing_ok=True)
 
 
-# Auto-load persisted state when the MCP server process starts.
+# Auto-load persisted state when the tool process starts.
 _load()

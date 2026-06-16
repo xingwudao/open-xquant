@@ -1,11 +1,6 @@
-from oxq.indicators.hurst_exponent import HurstExponent
-from oxq.indicators.ichimoku import (
-    IchimokuChikou,
-    IchimokuKijun,
-    IchimokuSenkouA,
-    IchimokuSenkouB,
-    IchimokuTenkan,
-)
+from oxq.indicators.accrual_ratio import AccrualRatio
+from oxq.indicators.annualized_volatility import AnnualizedVolatility
+from oxq.indicators.bp import BP
 from oxq.indicators.builtin import (
     ADX,
     AROON,
@@ -28,12 +23,17 @@ from oxq.indicators.builtin import (
     MACDSignal,
     StochK,
 )
-from oxq.indicators.accrual_ratio import AccrualRatio
-from oxq.indicators.annualized_volatility import AnnualizedVolatility
-from oxq.indicators.bp import BP
 from oxq.indicators.cash_flow_ratio import CashFlowRatio
 from oxq.indicators.ep import EP
 from oxq.indicators.garch_volatility import GarchVolatility
+from oxq.indicators.hurst_exponent import HurstExponent
+from oxq.indicators.ichimoku import (
+    IchimokuChikou,
+    IchimokuKijun,
+    IchimokuSenkouA,
+    IchimokuSenkouB,
+    IchimokuTenkan,
+)
 from oxq.indicators.log_return import LogReturn
 from oxq.indicators.market_cap import MarketCap
 from oxq.indicators.momentum import Momentum

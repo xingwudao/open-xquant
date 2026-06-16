@@ -42,7 +42,6 @@ Thumbs.db
 docs/plans/
 docs/guide-rules.md
 
-# Research notebook caches and binary outputs
-examples/research/*/cache/*
-!examples/research/*/cache/.gitkeep
-examples/research/*/outputs/*.pkl
+# Local research and testing
+examples/research/
+docs/local/

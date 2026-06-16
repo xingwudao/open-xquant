@@ -448,7 +448,8 @@ def rule_list() -> dict[str, Any]:
 
 @registry.tool(
     name="strategy_set_universe",
-    description="Set the universe (symbol pool) on a strategy. type='static' for a fixed list, type='filter' for condition-based screening.",
+    description="Set the universe (symbol pool) on a strategy. "
+    "type='static' for a fixed list, type='filter' for condition-based screening.",
 )
 def strategy_set_universe(
     strategy: str,

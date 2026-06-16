@@ -1,0 +1,65 @@
+schema_version: "0.1"
+strategy_id: "static_universe_warning"
+name: "Static Universe SMA Crossover"
+
+research:
+  hypothesis: >
+    SMA crossover on a static universe of large-cap US equities.
+    The static universe may have survivorship bias — this is expected and
+    should produce a warning, not a fatal error.
+  rationale: >
+    Golden case for spec validation — should PASS but with
+    static_universe_survivorship WARNING.
+
+market:
+  asset_class: "equity"
+  region: "us"
+  currency: "USD"
+
+universe:
+  type: "static"
+  symbols: ["AAPL", "MSFT", "GOOGL"]
+  point_in_time: false
+  survivorship_bias_policy: "warn"
+
+data:
+  price_adjustment: "adjusted"
+
+signal:
+  signal_time: "close_t"
+  indicators:
+    sma_fast:
+      type: "SMA"
+      params:
+        column: "close"
+        period: 10
+    sma_slow:
+      type: "SMA"
+      params:
+        column: "close"
+        period: 50
+  rules:
+    golden_cross:
+      type: "Crossover"
+      params:
+        fast: "sma_fast"
+        slow: "sma_slow"
+
+portfolio:
+  type: "EqualWeight"
+
+execution:
+  trade_time: "next_open"
+  fill_price_mode: "next_open"
+
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+
+benchmark:
+  symbols: ["SPY"]
+
+validation:
+  train_period: ["2018-01-01", "2021-12-31"]
+  test_period: ["2022-01-01", "2025-12-31"]
+  required_oos: true

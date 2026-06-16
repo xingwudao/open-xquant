@@ -1,4 +1,4 @@
-"""Tests for observe tools — strategy diagnostics MCP tools."""
+"""Tests for observe tools — strategy diagnostics tools."""
 
 from __future__ import annotations
 

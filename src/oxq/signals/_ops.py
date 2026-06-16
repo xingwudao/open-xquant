@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import operator
-from typing import Callable
+from collections.abc import Callable
 
 _OPS: dict[str, Callable] = {
     "gt": operator.gt,

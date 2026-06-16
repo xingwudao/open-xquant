@@ -1,8 +1,16 @@
 # open-xquant
 
-**Agent First 量化投资交易框架**
+open-xquant 是面向 AI Coding Agent 和人类量化研究者的 **Agentic Quant Research Kernel**。
 
-覆盖数据、因子、信号、回测、模拟交易、实盘交易全流程。
+它把交易想法转化为可声明、可复现、可审计、可沉淀的研究产物：
+
+```
+spec → validate → compile → backtest → audit → robustness → report
+```
+
+open-xquant 不是一个 Coding Agent，而是 Coding Agent 应该调用的确定性量化研究内核。
+
+它的目标不是更快生成更多策略，而是更快识别和拒绝假的回测结果。
 
 [English](#english) | [中文](#为什么需要-open-xquant)
 
@@ -18,7 +26,7 @@
 
 ### AI 时代的新矛盾
 
-大语言模型（LLM）正在重塑软件开发方式。越来越多的人开始通过 AI 编程（Vibe Coding）来构建量化策略。但这带来了一个根本性矛盾：
+大语言模型（LLM）正在重塑软件开发方式。越来越多的人开始通过 AI 编程来构建量化策略。但这带来了一个根本性矛盾：
 
 **AI 擅长理解意图、生成代码——但它会产生幻觉。**
 
@@ -38,103 +46,127 @@
 
 ## open-xquant 的解法
 
-open-xquant 采用 **Agent First** 的设计哲学——框架的首要使用者是 AI Agent，而非人类程序员。
+open-xquant 采用 **Agentic Quant Research Kernel** 的设计哲学——它是一个给 AI Agent 使用的确定性量化研究内核，提供声明式策略规格、确定性回测、偏差审计、稳健性测试和研究报告产物标准。
 
-这不意味着人不能使用它，而是意味着：
+### 1. 声明式优先
 
-### 1. 声明式优先，而非命令式
-
-用户（或 AI）描述**"做什么"**，框架负责**"怎么做"**。减少实现路径的分歧，从源头降低不确定性。
+用户（或 AI）描述**"做什么"**，框架负责**"怎么做"**。策略通过 `strategy_spec.yaml` 声明，减少实现路径的分歧，从源头降低不确定性。
 
 ### 2. 确定性执行保证
 
-相同的输入，必须产生相同的输出。框架层面强制保证回测结果的可重复性，不依赖使用者（无论是人还是 AI）的自律。
+相同 spec + 相同数据 = 相同回测结果，无例外。框架层面强制保证可重复性，不依赖使用者（无论是人还是 AI）的自律。
 
-### 3. 约束即自由
+### 3. 约束即安全
 
-通过精心设计的约束，收窄 AI 的选择空间。当正确的做法只有一种时，幻觉就无处可幻。
+通过 spec validation、research bias audit、robustness tests 三道防线，收窄 AI 的选择空间。当错误的做法会被自动检测时，幻觉就无处可存。
 
-### 4. 全流程一体化
+### 4. 结构化研究产物
 
-从数据获取到实盘交易，统一的数据模型和执行引擎。消除流程衔接中的不一致性——这正是 AI 最容易出错的地方。
+每次研究都留下固定结构的 artifacts——metrics、trades、equity curve、audit、report——可版本化、可 diff、可沉淀。
 
-## 设计目标
+## 核心流程
 
 ```
-数据 → 因子 → 信号 → 回测 → 模拟交易 → 实盘交易
- ↑                                              |
- └──────────── 统一数据模型 & 执行语义 ──────────┘
+oxq spec init "策略想法"
+  → oxq spec validate strategy_spec.yaml
+  → oxq backtest run strategy_spec.yaml
+  → oxq audit research runs/<run_id>/
+  → oxq robustness run runs/<run_id>/
+  → oxq report write runs/<run_id>/
+  → oxq experiment add runs/<run_id>/
 ```
-
-| 目标 | 说明 |
-|------|------|
-| **可重复性** | 同一策略 + 同一数据 = 同一结果，无例外 |
-| **AI 友好** | 最小化 AI 出错的可能性，最大化 AI 的生产力 |
-| **人类可审计** | AI 生成的策略，人类能完整理解和验证 |
-| **全流程覆盖** | 一个框架走完从研究到交易的全部流程 |
-| **渐进式使用** | 从单因子回测到多策略实盘，按需渐进 |
 
 ## 谁适合使用 open-xquant？
 
-- **AI 时代的量化学习者**：通过 Vibe Coding 学习量化投资，无需成为资深程序员
-- **量化策略研究者**：专注于策略逻辑本身，而非框架的使用方式
-- **AI 应用开发者**：构建基于 LLM 的自动化量化交易 Agent
+- **AI 时代的量化学习者**：通过声明式 spec 学习量化投资，无需成为资深程序员
+- **量化策略研究者**：专注于策略逻辑本身，框架负责验证、审计、报告
+- **AI 应用开发者**：构建基于 LLM 的自动化量化研究 Agent
 
 ## 通过示例学习
 
-`examples/` 目录提供了由浅入深的学习路径，帮助你快速上手 open-xquant。
+`examples/` 目录提供了由浅入深的学习路径。
 
 ### 推荐学习顺序
 
-**第一步：模块教程（`examples/tutorials/`）**
+**第一步：模块示例（`examples/modules/`）**
 
-交互式 Jupyter Notebook，逐步讲解各核心模块的用法：
+可执行的 Python 脚本，逐个演示核心模块的 SDK 和等价 CLI 用法：
 
-| Notebook | 内容 |
-|----------|------|
-| `data_module.ipynb` | 数据下载与读取——学习如何使用 YFinance/AkShare 下载美股和 A 股行情数据，并通过 `LocalMarketDataProvider` 统一读取 |
-| `universe_module.ipynb` | 标的池构建——学习如何使用 `StaticUniverse` 定义固定标的池，以及使用 `FilterUniverse` 基于量价规则动态筛选 |
-| `engine_module.ipynb` | 执行引擎——学习 Indicator → Signal → Rule 三阶段模型与三接口架构，使用 `Engine` 运行 SMA 均线交叉策略 |
+| 文件 | 内容 |
+|------|------|
+| `01_spec_and_validate.py` | Spec 创建与 P0 校验 |
+| `02_data_and_universe.py` | 数据下载、读取、Universe 构建 |
+| `03_backtest_and_artifacts.py` | Spec 编译、回测执行、artifact 读取 |
+| `04_audit_and_robustness.py` | 可复现审计、偏差审计、稳健性测试 |
+| `05_report_and_experiment.py` | 研究报告生成、实验登记 |
 
 ```bash
-# 启动 Jupyter 运行教程
-pip install open-xquant[yfinance,akshare]
-jupyter notebook examples/tutorials/
+uv run python examples/modules/01_spec_and_validate.py
 ```
 
-**第二步：策略示例（`examples/strategies/`）**
+**第二步：研究案例（`examples/research_cases/`）**
 
-完整的策略代码示例，展示 Indicator → Signal → Rule 三阶段模型的实际应用：
+基于 spec 的端到端研究案例，展示声明式策略研究闭环：
+
+| 案例 | 类型 |
+|------|------|
+| `sma_crossover_valid/` | 有效的均线交叉策略 |
+| `momentum_topn_valid/` | 有效的动量轮动策略 |
+| `same_bar_execution_invalid/` | 同根 K 线成交 — 应被 audit fatal |
+| `zero_cost_invalid/` | 零成本模型 — 应被 audit fatal |
+| `static_universe_warning/` | 静态股票池 — 应有 survivorship bias warning |
+
+**第三步：策略示例（`examples/strategies/`）**
+
+完整的端到端策略管线示例（spec → backtest → audit → report）：
 
 | 文件 | 策略类型 |
 |------|----------|
-| `sma_crossover.py` | SMA 均线交叉策略（完整回测示例） |
-| `ma_crossover.py` | 均线交叉策略 |
+| `sma_crossover_spec.py` | SMA 均线交叉 — 完整 E2E 管线 |
+| `momentum_rotation_spec.py` | 动量轮动 — 完整 E2E 管线 |
+| `sma_crossover.py` | SMA 均线交叉策略 |
 | `momentum_rotation.py` | 动量轮动策略 |
 | `mean_reversion.py` | 均值回归策略 |
-| `multi_strategy.py` | 多策略组合 |
 
-**第三步：Agent 应用（`examples/app/`）**
+## 与 XQuant Studio 的关系
 
-| 文件 | 说明 |
-|------|------|
-| `agent_demo.py` | 基于 Streamlit 的 AI Agent 演示，通过 MCP 协议调用 open-xquant 工具，体验 Agent First 的交互方式 |
+open-xquant 是开源研究内核，XQuant Studio 是云端编排平台：
 
-```bash
-# 运行 Agent Demo
-pip install streamlit openai mcp nest_asyncio
-streamlit run examples/app/agent_demo.py
-```
+| 模块 | open-xquant | XQuant Studio |
+|------|:-----------:|:-------------:|
+| Strategy Spec Schema | ✅ | |
+| Spec Validator | ✅ | 增强 |
+| Deterministic Backtest | ✅ | |
+| 基础 Bias Audit | ✅ | 增强 |
+| Reproducibility Audit | ✅ | 增强 |
+| 基础 Report Generator | ✅ | 增强 |
+| CLI / SDK / Tools | ✅ | 封装 |
+| 云端状态机 | | ✅ |
+| 高级 Audit Rule Pack | | ✅ |
+| 私有 Eval Corpus | | ✅ |
+| PIT 数据服务 | | ✅ |
+| 用户研究记忆图谱 | | ✅ |
+| UI / 协作 / 计费 | | ✅ |
+
+原则：**开源版必须完整可用，云端版必须明显更稳、更快、更智能。**
 
 ## 项目状态
 
-open-xquant 正处于早期设计阶段。我们正在：
+open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Research Kernel。
 
-- 定义核心数据模型和接口规范
-- 设计声明式策略描述语言
-- 构建确定性执行引擎的原型
+已完成：
+- 核心引擎 (Engine, Strategy, types, registry)
+- 30+ 指标库、7 种信号、9 种规则、5 种组合优化器
+- 因子评估 (IC, ICIR, decay, turnover, tearsheet)
+- 参数优化 (grid search, walk-forward, cross-validation)
+- 可观测性 (tracing, audit, monitoring, experiment log)
 
-欢迎关注项目进展，参与讨论。
+进行中：
+- Strategy Spec (schema, validator, compiler)
+- Audit System (reproducibility + research bias)
+- Robustness Runner
+- Research Report Generator
+- OpenCode 集成
 
 ## License
 
@@ -146,9 +178,17 @@ open-xquant 正处于早期设计阶段。我们正在：
 
 # open-xquant
 
-**Agent First Quantitative Trading Framework**
+open-xquant is an **Agentic Quant Research Kernel** for AI coding agents and human quant researchers.
 
-End-to-end coverage: data, factors, signals, backtesting, paper trading, and live trading.
+It turns trading ideas into declarative, reproducible, auditable, and persistent research artifacts:
+
+```
+spec → validate → compile → backtest → audit → robustness → report
+```
+
+open-xquant is not a coding agent. It is the deterministic quant research runtime that coding agents should use.
+
+Its goal is not to generate more strategies faster, but to make false backtests easier to detect and reject.
 
 ---
 
@@ -156,129 +196,147 @@ End-to-end coverage: data, factors, signals, backtesting, paper trading, and liv
 
 ### The Problem with Traditional Quant Frameworks
 
-Existing backtesting frameworks (Backtrader, vnpy, Zipline, etc.) are designed for **programmers**. They assume users can write every line of code precisely, manage state and data flow manually, and navigate complex API documentation to find the right calls.
+Existing backtesting frameworks (Backtrader, vnpy, Zipline, etc.) are designed for **programmers**. They assume users can write every line of code precisely, manage state and data flow manually, and navigate complex API documentation.
 
 This was fine in the past — humans were the only ones writing code.
 
 ### A New Contradiction in the AI Era
 
-Large Language Models (LLMs) are reshaping software development. More and more people are building quantitative strategies through AI programming (Vibe Coding). But this introduces a fundamental contradiction:
+LLMs are reshaping software development. More people are building quant strategies through AI programming. But this introduces a fundamental contradiction:
 
 **AI is great at understanding intent and generating code — but it hallucinates.**
 
-Current mainstream AI is based on the Transformer architecture, where generation is inherently probabilistic. The same prompt can produce subtly different code on two runs. This uncertainty is acceptable in most software domains, but in financial trading it's fatal:
+Current mainstream AI generation is inherently probabilistic. The same prompt can produce subtly different code on two runs. This uncertainty is acceptable in most software domains, but in financial trading it's fatal:
 
 > **Not reproducible = not trustworthy = not tradable**
-
-A backtest result that cannot be exactly reproduced has zero decision-making value.
 
 ### Root Cause
 
 The problem isn't that AI isn't smart enough — it's that **existing frameworks were never designed with AI as a user**. When AI is forced to use frameworks built for humans:
 
 - **Too many degrees of freedom** → AI may choose different implementation paths each time
-- **Implicit conventions** → AI cannot reliably follow rules not explicitly stated in code
+- **Implicit conventions** → AI cannot reliably follow rules not explicitly stated
 - **Complex state management** → AI easily introduces inconsistencies across multi-step operations
 
 ## The open-xquant Approach
 
-open-xquant adopts an **Agent First** design philosophy — the framework's primary user is an AI Agent, not a human programmer.
+open-xquant is an **Agentic Quant Research Kernel** — a deterministic runtime that provides declarative strategy specs, deterministic backtests, bias audits, robustness tests, and research report standards.
 
-This doesn't mean humans can't use it. It means:
+### 1. Declarative First
 
-### 1. Declarative First, Not Imperative
-
-Users (or AI) describe **"what to do"**; the framework handles **"how to do it"**. Fewer divergent implementation paths, less uncertainty at the source.
+Users (or AI) describe **"what to do"**; the framework handles **"how to do it"**. Strategies are declared via `strategy_spec.yaml`, reducing divergent implementation paths at the source.
 
 ### 2. Deterministic Execution Guarantee
 
-Same input must produce same output. Reproducibility of backtest results is enforced at the framework level, not dependent on the discipline of the user — human or AI.
+Same spec + same data = same backtest result, no exceptions. Reproducibility is enforced at the framework level.
 
-### 3. Constraints as Freedom
+### 3. Constraints as Safety
 
-Carefully designed constraints narrow AI's choice space. When there's only one correct way to do something, hallucination has nowhere to go.
+Three defense lines — spec validation, research bias audit, and robustness tests — narrow AI's choice space. When wrong approaches are automatically detected, hallucination has nowhere to go.
 
-### 4. End-to-End Integration
+### 4. Structured Research Artifacts
 
-From data acquisition to live trading — unified data models and execution engine. Eliminates inconsistencies at process boundaries, exactly where AI is most prone to errors.
+Every research run produces fixed-structure artifacts — metrics, trades, equity curve, audit, report — versionable, diffable, and persistent.
 
-## Design Goals
+## Core Workflow
 
 ```
-Data → Factors → Signals → Backtest → Paper Trading → Live Trading
- ↑                                                        |
- └──────────── Unified Data Model & Execution Semantics ──┘
+oxq spec init "strategy idea"
+  → oxq spec validate strategy_spec.yaml
+  → oxq backtest run strategy_spec.yaml
+  → oxq audit research runs/<run_id>/
+  → oxq robustness run runs/<run_id>/
+  → oxq report write runs/<run_id>/
+  → oxq experiment add runs/<run_id>/
 ```
-
-| Goal | Description |
-|------|-------------|
-| **Reproducibility** | Same strategy + same data = same result, no exceptions |
-| **AI-Friendly** | Minimize AI error surface, maximize AI productivity |
-| **Human-Auditable** | AI-generated strategies that humans can fully understand and verify |
-| **Full Pipeline** | One framework from research to trading |
-| **Progressive** | From single-factor backtest to multi-strategy live trading, adopt incrementally |
 
 ## Who Is This For?
 
-- **Quant learners in the AI era**: Learn quantitative investing through Vibe Coding — no need to be a senior programmer
-- **Quant strategy researchers**: Focus on strategy logic, not framework mechanics
-- **AI application developers**: Build LLM-powered automated trading agents
+- **Quant learners in the AI era**: Learn quant investing through declarative specs
+- **Quant strategy researchers**: Focus on strategy logic; the framework handles validation, audit, and reporting
+- **AI application developers**: Build LLM-powered automated quant research agents
 
 ## Learn by Examples
 
-The `examples/` directory provides a progressive learning path to help you get started with open-xquant.
+### Step 1: Module Examples (`examples/modules/`)
 
-### Recommended Learning Order
+Runnable Python scripts demonstrating each core module with SDK and equivalent CLI:
 
-**Step 1: Module Tutorials (`examples/tutorials/`)**
-
-Interactive Jupyter Notebooks that walk you through each core module:
-
-| Notebook | Content |
-|----------|---------|
-| `data_module.ipynb` | Data download & reading — learn to fetch US and China A-share market data via YFinance/AkShare, and read it through `LocalMarketDataProvider` |
-| `universe_module.ipynb` | Universe construction — learn to define a fixed symbol pool with `StaticUniverse` and dynamically filter with `FilterUniverse` based on price/volume rules |
-| `engine_module.ipynb` | Execution engine — learn the Indicator → Signal → Rule three-phase model and three-protocol architecture, run an SMA crossover strategy with `Engine` |
+| File | Content |
+|------|---------|
+| `01_spec_and_validate.py` | Spec creation & P0 validation |
+| `02_data_and_universe.py` | Data download, inspect, universe construction |
+| `03_backtest_and_artifacts.py` | Spec compile, backtest run, artifact inspection |
+| `04_audit_and_robustness.py` | Reproducibility audit, bias audit, robustness tests |
+| `05_report_and_experiment.py` | Research report generation, experiment registry |
 
 ```bash
-# Launch Jupyter to run tutorials
-pip install open-xquant[yfinance,akshare]
-jupyter notebook examples/tutorials/
+uv run python examples/modules/01_spec_and_validate.py
 ```
 
-**Step 2: Strategy Examples (`examples/strategies/`)**
+### Step 2: Research Cases (`examples/research_cases/`)
 
-Complete strategy code demonstrating the Indicator → Signal → Rule three-phase model:
+Spec-based end-to-end research cases demonstrating the declarative research loop:
+
+| Case | Type |
+|------|------|
+| `sma_crossover_valid/` | Valid SMA crossover strategy |
+| `momentum_topn_valid/` | Valid momentum rotation strategy |
+| `same_bar_execution_invalid/` | Same-bar execution — audit fatal expected |
+| `zero_cost_invalid/` | Zero cost model — audit fatal expected |
+| `static_universe_warning/` | Static universe — survivorship bias warning expected |
+
+### Step 3: Strategy Examples (`examples/strategies/`)
+
+Complete E2E pipeline examples (spec → backtest → audit → report):
 
 | File | Strategy Type |
 |------|---------------|
-| `sma_crossover.py` | SMA Crossover (complete strategy example) |
-| `ma_crossover.py` | Moving Average Crossover |
-| `momentum_rotation.py` | Momentum Rotation |
-| `mean_reversion.py` | Mean Reversion |
-| `multi_strategy.py` | Multi-Strategy Portfolio |
+| `sma_crossover_spec.py` | SMA Crossover — complete E2E pipeline |
+| `momentum_rotation_spec.py` | Momentum Rotation — complete E2E pipeline |
+| `sma_crossover.py` | SMA Crossover (SDK only) |
+| `momentum_rotation.py` | Momentum Rotation (SDK only) |
+| `mean_reversion.py` | Mean Reversion (SDK only) |
 
-**Step 3: Agent Application (`examples/app/`)**
+## Relationship with XQuant Studio
 
-| File | Description |
-|------|-------------|
-| `agent_demo.py` | Streamlit-based AI Agent demo that calls open-xquant tools via MCP protocol — experience the Agent First interaction model |
+open-xquant is the open-source research kernel; XQuant Studio is the cloud orchestration platform:
 
-```bash
-# Run the Agent Demo
-pip install streamlit openai mcp nest_asyncio
-streamlit run examples/app/agent_demo.py
-```
+| Module | open-xquant | XQuant Studio |
+|--------|:-----------:|:-------------:|
+| Strategy Spec Schema | ✅ | |
+| Spec Validator | ✅ | Enhanced |
+| Deterministic Backtest | ✅ | |
+| Basic Bias Audit | ✅ | Enhanced |
+| Reproducibility Audit | ✅ | Enhanced |
+| Basic Report Generator | ✅ | Enhanced |
+| CLI / SDK / Tools | ✅ | Wrapped |
+| Cloud State Machine | | ✅ |
+| Advanced Audit Rules | | ✅ |
+| Private Eval Corpus | | ✅ |
+| PIT Data Service | | ✅ |
+| User Research Memory Graph | | ✅ |
+| UI / Collaboration / Billing | | ✅ |
+
+Principle: **Open-source must be fully usable; cloud must be noticeably more stable, faster, and smarter.**
 
 ## Project Status
 
-open-xquant is in early design phase. We are currently:
+open-xquant is upgrading from an Agent First trading framework to an Agentic Quant Research Kernel.
 
-- Defining core data models and interface specifications
-- Designing the declarative strategy description language
-- Building a prototype of the deterministic execution engine
+Completed:
+- Core engine (Engine, Strategy, types, registry)
+- 30+ indicators, 7 signals, 9 rules, 5 portfolio optimizers
+- Factor evaluation (IC, ICIR, decay, turnover, tearsheet)
+- Parameter optimization (grid search, walk-forward, cross-validation)
+- Observability (tracing, audit, monitoring, experiment log)
 
-Follow along and join the discussion.
+In Progress:
+- Strategy Spec (schema, validator, compiler)
+- Audit System (reproducibility + research bias)
+- Robustness Runner
+- Research Report Generator
+- OpenCode integration
 
 ## License
 

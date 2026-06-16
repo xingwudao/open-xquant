@@ -10,7 +10,7 @@ from oxq.observe.audit import AuditRecord
 from oxq.observe.detector import MarketStateDetector
 from oxq.observe.experiment import ExperimentLog
 from oxq.observe.monitor import StrategyMonitor
-from oxq.observe.tracer import DefaultTracer, TraceSpan
+from oxq.observe.tracer import DefaultTracer
 from oxq.tools import session
 from oxq.tools.registry import registry
 
