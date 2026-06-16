@@ -43,7 +43,12 @@ def add_experiment(
     bias_path = run_path / "research_bias_audit.json"
     if bias_path.exists():
         bias = json.loads(bias_path.read_text(encoding="utf-8"))
-        audit_status = bias.get("status", "unknown")
+    else:
+        from oxq.audit.research_bias import audit_research
+
+        bias = audit_research(run_path)
+        bias_path.write_text(json.dumps(bias, indent=2) + "\n", encoding="utf-8")
+    audit_status = bias.get("status", "unknown")
 
     entry = {
         "experiment_id": f"exp_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S')}",

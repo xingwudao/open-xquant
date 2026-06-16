@@ -364,6 +364,68 @@ class NeverBuyOptimizer:
         return {"CASH": 1.0}
 
 
+class AlwaysExitRule:
+    """Rule that exits any open position."""
+
+    name = "AlwaysExit"
+
+    def evaluate(
+        self,
+        symbol: str,
+        row: pd.Series,
+        portfolio: Portfolio,
+        prices: dict[str, Decimal] | None = None,
+    ) -> RuleResult:
+        if symbol in portfolio.positions:
+            return RuleResult(target_positions={symbol: 0.0})
+        return RuleResult()
+
+
+class ResetAwareAlwaysBuyOptimizer(AlwaysBuyOptimizer):
+    """Optimizer that records exit reset notifications."""
+
+    def __init__(self) -> None:
+        self.reset_symbols_seen: list[str] = []
+
+    def reset_symbols(self, symbols: list[str]) -> None:
+        self.reset_symbols_seen.extend(symbols)
+
+
+def test_engine_notifies_optimizer_after_full_exit() -> None:
+    """Exit fills should notify optimizers that keep per-symbol entry state."""
+    dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    optimizer = ResetAwareAlwaysBuyOptimizer()
+    strategy = Strategy(
+        name="reset_after_exit",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=optimizer,
+    )
+
+    Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-01",
+        end="2024-01-02",
+        rules=[AlwaysExitRule()],
+    )
+
+    assert optimizer.reset_symbols_seen == ["AAA", "AAA"]
+
+
 def test_engine_lot_size() -> None:
     """lot_size=100 rounds trade shares to multiples of 100."""
     dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")

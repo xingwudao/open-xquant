@@ -111,6 +111,11 @@ class _SignalFilteredEqualWeightOptimizer:
         self._signal_types = signal_types
         self._latched: dict[str, bool] = {}
 
+    def reset_symbols(self, symbols: list[str]) -> None:
+        """Clear event-signal latch state for symbols that fully exited."""
+        for symbol in symbols:
+            self._latched.pop(symbol, None)
+
     def optimize(
         self,
         signals: dict[str, pd.DataFrame],
@@ -184,6 +189,8 @@ def compile_strategy(spec: StrategySpec) -> Strategy:
             optimizer.required_indicators = required
 
     # Build universe
+    if spec.universe.type != "static":
+        raise ValueError(f"Unsupported universe.type '{spec.universe.type}'. Only 'static' is available.")
     universe = StaticUniverse(tuple(spec.universe.symbols))
 
     return Strategy(
@@ -281,12 +288,15 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     run_id = run_dir.name
 
     # strategy_spec.yaml
-    (run_dir / "strategy_spec.yaml").write_text(
+    spec_path = run_dir / "strategy_spec.yaml"
+    spec_path.write_text(
         yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False), encoding="utf-8"
     )
+    serialized_spec = StrategySpec.from_yaml(spec_path)
+    serialized_spec_hash = serialized_spec.compute_hash()
 
     # spec_hash.txt
-    (run_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n")
+    (run_dir / "spec_hash.txt").write_text(serialized_spec_hash + "\n")
 
     # environment.json
     env = {
@@ -294,7 +304,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "python_version": sys.version,
         "platform": platform.platform(),
         "run_timestamp": datetime.now(UTC).isoformat(),
-        "spec_hash": spec.compute_hash(),
+        "spec_hash": serialized_spec_hash,
     }
     if effective_data_dir:
         env["data_dir"] = effective_data_dir

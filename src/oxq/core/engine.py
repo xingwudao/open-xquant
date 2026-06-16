@@ -353,9 +353,16 @@ class Engine:
 
             # ── Step 8: Broker executes exit orders ───────────────────
             broker.on_bar_close(mktdata, date)
+            fully_exited: list[str] = []
             for fill in broker.get_fills():
                 _apply_fill(portfolio, fill)
                 self._trades.append(fill)
+                if fill.order.side == "SELL" and fill.order.symbol not in portfolio.positions:
+                    fully_exited.append(fill.order.symbol)
+
+            reset_symbols = getattr(strategy.portfolio, "reset_symbols", None)
+            if fully_exited and callable(reset_symbols):
+                reset_symbols(list(dict.fromkeys(fully_exited)))
 
         # ── Cash interest ──────────────────────────────────────────
         if self._cash_annual_return > 0:
