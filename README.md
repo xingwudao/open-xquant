@@ -106,17 +106,13 @@ oxq spec init "策略想法"
 uv run python examples/modules/01_spec_and_validate.py
 ```
 
-**第二步：研究案例（`examples/research_cases/`）**
+**第二步：Spec 校验（`examples/strategies/spec_validation_demo.py`）**
 
-基于 spec 的端到端研究案例，展示声明式策略研究闭环：
+展示 validator 对 5 种 spec 的判断（pass / fail / warn）：
 
-| 案例 | 类型 |
-|------|------|
-| `sma_crossover_valid/` | 有效的均线交叉策略 |
-| `momentum_topn_valid/` | 有效的动量轮动策略 |
-| `same_bar_execution_invalid/` | 同根 K 线成交 — 应被 audit fatal |
-| `zero_cost_invalid/` | 零成本模型 — 应被 audit fatal |
-| `static_universe_warning/` | 静态股票池 — 应有 survivorship bias warning |
+```bash
+uv run python examples/strategies/spec_validation_demo.py
+```
 
 **第三步：策略示例（`examples/strategies/`）**
 
@@ -276,17 +272,13 @@ Runnable Python scripts demonstrating each core module with SDK and equivalent C
 uv run python examples/modules/01_spec_and_validate.py
 ```
 
-### Step 2: Research Cases (`examples/research_cases/`)
+### Step 2: Spec Validation (`examples/strategies/spec_validation_demo.py`)
 
-Spec-based end-to-end research cases demonstrating the declarative research loop:
+Demonstrates 5 validator outcomes (pass / fail / warn):
 
-| Case | Type |
-|------|------|
-| `sma_crossover_valid/` | Valid SMA crossover strategy |
-| `momentum_topn_valid/` | Valid momentum rotation strategy |
-| `same_bar_execution_invalid/` | Same-bar execution — audit fatal expected |
-| `zero_cost_invalid/` | Zero cost model — audit fatal expected |
-| `static_universe_warning/` | Static universe — survivorship bias warning expected |
+```bash
+uv run python examples/strategies/spec_validation_demo.py
+```
 
 ### Step 3: Strategy Examples (`examples/strategies/`)
 

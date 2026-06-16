@@ -92,8 +92,7 @@ open-xquant/
 │
 ├── examples/                       # 示例
 │   ├── modules/                     # 模块 SDK 使用示例（可执行 Python 脚本）
-│   ├── research_cases/             # 基于 spec 的端到端研究案例
-│   └── strategies/                 # 完整 E2E 策略示例
+│   ├── strategies/                 # 完整 E2E 策略示例 + spec 校验演示
 │
 ├── tests/                          # 测试（镜像 src/oxq/ 结构）
 ├── docs/                           # 文档
@@ -642,7 +641,7 @@ agent/opencode/
 ### Phase 1: Spec 与 Validator ✅ 已完成
 - `src/oxq/spec/schema.py`, `validator.py`
 - `src/oxq/cli/` — CLI 入口（`oxq spec init`, `oxq spec validate`）
-- `examples/research_cases/*/strategy_spec.yaml`（5 个 golden cases）
+- `examples/strategies/spec_validation_demo.py`（5 个 pass/fail/warn 演示）
 
 ### Phase 2: Spec Compiler 与 Backtest Artifacts ✅ 已完成
 - `src/oxq/spec/compiler.py`

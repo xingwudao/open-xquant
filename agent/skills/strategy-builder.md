@@ -169,7 +169,7 @@ oxq backtest run strategy_spec.yaml --out runs/auto
 | "构建均线策略" | 从 Phase 0 开始 |
 | "修改参数" | 编辑 `strategy_spec.yaml` → `oxq spec validate` |
 | "加止损/风控" | 在 spec 中添加 rules 配置 |
-| "查看完整示例" | `cat examples/research_cases/sma_crossover_valid/strategy_spec.yaml` |
+| "查看完整示例" | `uv run python examples/strategies/spec_validation_demo.py` |
 | "回测" | Phase 5：`oxq backtest run` |
 
 ## 红线

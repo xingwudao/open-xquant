@@ -208,12 +208,7 @@ Located in `examples/` within the repo:
 | `modules/03_backtest_and_artifacts.py` | Backtest run & artifact inspection |
 | `modules/04_audit_and_robustness.py` | Reproducibility + bias audit, robustness |
 | `modules/05_report_and_experiment.py` | Report generation & experiment registry |
-| **Research Cases** | |
-| `research_cases/sma_crossover_valid/` | SMA crossover golden case |
-| `research_cases/momentum_topn_valid/` | Momentum rotation golden case |
-| `research_cases/same_bar_execution_invalid/` | Same-bar execution (audit fail) |
-| `research_cases/zero_cost_invalid/` | Zero-cost model (audit fail) |
-| `research_cases/static_universe_warning/` | Static universe (audit warn) |
+| `strategies/spec_validation_demo.py` | Spec validator demo (5 pass/fail/warn cases) |
 | **Strategies** | |
 | `strategies/sma_crossover_spec.py` | SMA crossover — full E2E pipeline |
 | `strategies/momentum_rotation_spec.py` | Momentum rotation — full E2E pipeline |

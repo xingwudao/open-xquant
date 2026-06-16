@@ -99,4 +99,4 @@ oxq report write runs/<run_id>/
 - 查看所有可用命令：`oxq --help`
 - 模块示例：`uv run python examples/modules/01_spec_and_validate.py`
 - 完整架构：`docs/architecture.md`
-- 研究案例：`examples/research_cases/`
+- Spec 校验演示：`uv run python examples/strategies/spec_validation_demo.py`
