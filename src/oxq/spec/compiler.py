@@ -42,8 +42,9 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
 
 # Signals that fire on a single bar and should latch once triggered.
 # NOTE: Peak is excluded because its implementation uses shift(-i)
-# which introduces future-data bias.
-_EVENT_SIGNAL_TYPES = frozenset({"Crossover", "Timestamp"})
+# which introduces future-data bias. Timestamp is excluded because
+# it is time-based and should re-evaluate every bar.
+_EVENT_SIGNAL_TYPES = frozenset({"Crossover"})
 
 # Frequency string → interval_days mapping.
 _FREQUENCY_INTERVAL: dict[str, int] = {

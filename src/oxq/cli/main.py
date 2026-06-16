@@ -135,8 +135,7 @@ def strategy():
 
 @strategy.command()
 @click.argument("spec_file", type=click.Path(exists=True))
-@click.option("--out", "-o", default=None, help="Output directory for generated strategy files")
-def compile(spec_file: str, out: str | None):
+def compile(spec_file: str):
     """Compile a strategy spec into an executable strategy.
 
     SPEC_FILE is the path to a strategy_spec.yaml file.
