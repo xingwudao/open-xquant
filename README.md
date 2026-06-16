@@ -2,6 +2,8 @@
 
 open-xquant 是面向 AI Coding Agent 和人类量化研究者的 **Agentic Quant Research Kernel**。
 
+> 本框架源于 [xquant.shop](https://xquant.shop) 量化研究平台的实践沉淀。
+
 它把交易想法转化为可声明、可复现、可审计、可沉淀的研究产物：
 
 ```
@@ -176,6 +178,8 @@ open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Rese
 # open-xquant
 
 open-xquant is an **Agentic Quant Research Kernel** for AI coding agents and human quant researchers.
+
+> This framework emerged from building the [xquant.shop](https://xquant.shop) quant research platform.
 
 It turns trading ideas into declarative, reproducible, auditable, and persistent research artifacts:
 
