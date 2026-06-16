@@ -1,7 +1,7 @@
 """Module example: Factor Evaluation.
 
-Demonstrates factor evaluation metrics: IC, ICIR, Rank IC, decay,
-and turnover. Evaluates a 20-day momentum factor on multiple ETFs.
+Demonstrates: IC, ICIR, Rank IC, decay, turnover, tearsheet,
+multi-period comparison, and risk-adjusted momentum.
 
 Run: uv run python examples/modules/08_factor_eval.py
 """
@@ -111,7 +111,68 @@ print(f"  Mean turnover: {to:.4f}")
 print("  (fraction of ranking changed per period; lower = more stable)")
 
 # ===========================================================================
-# Part 6: Tearsheet (visual summary)
+# Part 6: Multi-Period Comparison
+# ===========================================================================
+print(f"\n{'='*50}")
+print("MULTI-PERIOD: 10d vs 30d vs 60d Momentum")
+print("=" * 50)
+
+periods = [10, 30, 60]
+print(f"\n{'Period':<12} {'IC Mean':<10} {'ICIR':<10} {'Rank IC':<10} {'Turnover':<10}")
+print("-" * 52)
+for p in periods:
+    factor_p = pd.DataFrame()
+    for sym in SYMBOLS:
+        bars = market.get_bars(sym, "2018-01-01", "2024-12-31")
+        factor_p[sym] = bars["close"].pct_change(p)
+    factor_p = factor_p.dropna()
+    common_p = factor_p.index.intersection(forward_returns.dropna().index)
+    factor_p = factor_p.loc[common_p]
+    fwd_p = forward_returns.loc[common_p]
+
+    ic_p = compute_ic(factor=factor_p, forward_returns=fwd_p)
+    rk_p = compute_rank_ic(factor=factor_p, forward_returns=fwd_p)
+    to_p = compute_turnover(factor=factor_p)
+    icir_p = compute_icir(ic_p["mean"], ic_p["std"])
+    print(f"  {p:<12} {ic_p['mean']:<10.4f} {icir_p:<10.4f} {rk_p['mean']:<10.4f} {to_p:<10.4f}")
+
+# ===========================================================================
+# Part 7: Risk-Adjusted Momentum
+# ===========================================================================
+print(f"\n{'='*50}")
+print("RISK-ADJUSTED MOMENTUM")
+print("=" * 50)
+
+# Momentum / Volatility = signal strength adjusted for risk
+ram_df = pd.DataFrame()
+for sym in SYMBOLS:
+    bars = market.get_bars(sym, "2018-01-01", "2024-12-31")
+    close = bars["close"]
+    mom = close.pct_change(20)
+    vol = close.pct_change().rolling(20).std()
+    ram_df[sym] = mom / vol.replace(0, float("nan"))
+ram_df = ram_df.dropna()
+
+common_ram = ram_df.index.intersection(forward_returns.dropna().index)
+ram_df = ram_df.loc[common_ram]
+fwd_ram = forward_returns.loc[common_ram]
+
+print(f"\n{'':20} {'Momentum(20)':>16} {'RiskAdj-Mom(20)':>16}")
+print("-" * 52)
+mom_ic = compute_ic(factor=factor_df, forward_returns=forward_returns)
+ram_ic = compute_ic(factor=ram_df, forward_returns=fwd_ram)
+mom_icir = compute_icir(mom_ic["mean"], mom_ic["std"])
+ram_icir = compute_icir(ram_ic["mean"], ram_ic["std"])
+for label, m_key in [("IC Mean", "mean"), ("IC Std", "std"), ("ICIR", "")]:
+    if m_key:
+        print(f"  {label:<20} {mom_ic[m_key]:>16.4f} {ram_ic[m_key]:>16.4f}")
+    else:
+        print(f"  {label:<20} {mom_icir:>16.4f} {ram_icir:>16.4f}")
+
+print("  (Risk-Adjusted = momentum / rolling volatility)")
+
+# ===========================================================================
+# Part 8: Tearsheet (visual summary)
 # ===========================================================================
 print(f"\n{'='*50}")
 print("TEARSHEET")
