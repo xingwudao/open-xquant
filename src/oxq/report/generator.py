@@ -98,7 +98,7 @@ def generate_report(run_dir: str | Path) -> str:
     lines.append(f"**Status**: {repro_audit['status'].upper()}")
     lines.append("")
     for c in repro_audit["checks"]:
-        icon = "PASS" if c["status"] == "pass" else "FAIL"
+        icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
         lines.append(f"- [{c['severity'].upper()}] {icon} **{c['id']}**: {c['message']}")
     lines.append("")
 
@@ -111,7 +111,7 @@ def generate_report(run_dir: str | Path) -> str:
     )
     lines.append("")
     for c in bias_audit["checks"]:
-        icon = "PASS" if c["status"] == "pass" else "FAIL"
+        icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
         lines.append(f"- [{c['severity'].upper()}] {icon} **{c['id']}**: {c['message']}")
     lines.append("")
 

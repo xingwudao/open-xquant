@@ -134,19 +134,18 @@ def audit_research(run_dir: str | Path) -> dict:
     if data_manifest_path.exists():
         try:
             manifest = json.loads(data_manifest_path.read_text(encoding="utf-8"))
+            missing_ratio = manifest.get("missing_ratio")
+            if missing_ratio is None:
+                checks.append(_finding(
+                    "missing_data", "fail", "warning",
+                    "data_manifest.json has no missing_ratio — data quality not measured",
+                ))
+            elif missing_ratio > 0.05:
+                checks.append(_finding("missing_data", "fail", "warning", f"Data missing ratio {missing_ratio:.1%} is high"))
+            else:
+                checks.append(_finding("missing_data", "pass", "info", "Data quality acceptable"))
         except (json.JSONDecodeError, OSError):
             checks.append(_finding("missing_data", "fail", "warning", "data_manifest.json is corrupted — cannot assess data quality"))
-            manifest = {}
-        missing_ratio = manifest.get("missing_ratio")
-        if missing_ratio is None:
-            checks.append(_finding(
-                "missing_data", "fail", "warning",
-                "data_manifest.json has no missing_ratio — data quality not measured",
-            ))
-        elif missing_ratio > 0.05:
-            checks.append(_finding("missing_data", "fail", "warning", f"Data missing ratio {missing_ratio:.1%} is high"))
-        else:
-            checks.append(_finding("missing_data", "pass", "info", "Data quality acceptable"))
     else:
         checks.append(_finding("missing_data", "fail", "warning", "data_manifest.json not found — cannot assess data quality"))
 

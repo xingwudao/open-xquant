@@ -183,7 +183,7 @@ def reproducibility(run_dir: str, as_json: bool):
         click.echo(f"Status: {result['status'].upper()}")
         click.echo(f"Fatal: {result['fatal_count']}, Warnings: {result['warning_count']}")
         for c in result["checks"]:
-            icon = "PASS" if c["status"] == "pass" else "FAIL"
+            icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
             click.echo(f"  [{c['severity']}] {icon} {c['id']}: {c['message']}")
 
     if result["status"] == "fail":
@@ -210,7 +210,7 @@ def research(run_dir: str, as_json: bool):
         click.echo(f"Status: {result['status'].upper()}")
         click.echo(f"Fatal: {result['fatal_count']}, Warnings: {result['warning_count']}")
         for c in result["checks"]:
-            icon = "PASS" if c["status"] == "pass" else "FAIL"
+            icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
             click.echo(f"  [{c['severity']}] {icon} {c['id']}: {c['message']}")
 
     if result["status"] == "fail":
