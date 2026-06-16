@@ -170,8 +170,7 @@ def compile_run(
     strategy = compile_strategy(spec)
 
     # Data provider
-    data_path = Path(data_dir) if data_dir else None
-    market = LocalMarketDataProvider(data_dir=str(data_path)) if data_path else LocalMarketDataProvider()
+    market = LocalMarketDataProvider(data_dir=Path(data_dir)) if data_dir else LocalMarketDataProvider()
 
     # Broker with fee/slippage from spec
     fee_model = PercentageFee(rate=Decimal(str(spec.cost.fee_rate)), min_fee=Decimal(str(spec.cost.fee_min)))

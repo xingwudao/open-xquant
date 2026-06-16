@@ -126,9 +126,7 @@ uv run python examples/modules/01_spec_and_validate.py
 |------|----------|
 | `sma_crossover_spec.py` | SMA 均线交叉 — 完整 E2E 管线 |
 | `momentum_rotation_spec.py` | 动量轮动 — 完整 E2E 管线 |
-| `sma_crossover.py` | SMA 均线交叉策略 |
-| `momentum_rotation.py` | 动量轮动策略 |
-| `mean_reversion.py` | 均值回归策略 |
+| `factor_screen.py` | 多因子筛选示例 |
 
 ## 与 XQuant Studio 的关系
 
@@ -298,9 +296,7 @@ Complete E2E pipeline examples (spec → backtest → audit → report):
 |------|---------------|
 | `sma_crossover_spec.py` | SMA Crossover — complete E2E pipeline |
 | `momentum_rotation_spec.py` | Momentum Rotation — complete E2E pipeline |
-| `sma_crossover.py` | SMA Crossover (SDK only) |
-| `momentum_rotation.py` | Momentum Rotation (SDK only) |
-| `mean_reversion.py` | Mean Reversion (SDK only) |
+| `factor_screen.py` | Multi-factor screening example |
 
 ## Relationship with XQuant Studio
 
