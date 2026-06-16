@@ -350,6 +350,14 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         )
 
 
+def _to_timestamp(ts_val: str | object, tz: object | None = None) -> pd.Timestamp:
+    """Convert a fill timestamp to pd.Timestamp, handling existing timezone."""
+    ts = pd.Timestamp(ts_val)
+    if ts.tz is None and tz is not None:
+        ts = ts.tz_localize(tz)
+    return ts
+
+
 def _get_version() -> str:
     """Get open-xquant version from package metadata."""
     try:
@@ -396,7 +404,7 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
             base["oos_total_return"] = oos_return
             base["oos_max_drawdown"] = oos_max_dd
             # Filter OOS trades
-            oos_trades = [f for f in result.trades if pd.Timestamp(f.filled_at, tz=tz) >= test_start]
+            oos_trades = [f for f in result.trades if _to_timestamp(f.filled_at, tz=tz) >= test_start]
             base["oos_trade_count"] = len(oos_trades)
 
     return base
