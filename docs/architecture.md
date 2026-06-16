@@ -257,6 +257,8 @@ Engine.step(date) — 逐 bar 阶段:
 | Paper Trade | `AlpacaMarketDataProvider` | `SimBroker` |
 | 实盘 | `AlpacaMarketDataProvider` | `LiveBroker` |
 
+> 接入新券商？参考 [自定义 Broker 实现指南](custom-broker-guide.md)。
+
 ---
 
 ## 5. Strategy Spec 系统（新增）
