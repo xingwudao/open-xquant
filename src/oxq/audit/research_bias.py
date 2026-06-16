@@ -48,7 +48,11 @@ def audit_research(run_dir: str | Path) -> dict:
     metrics = {}
     metrics_path = run_path / "metrics.json"
     if metrics_path.exists():
-        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            checks.append(_finding("metrics_json", "fail", "fatal", "metrics.json is corrupted — cannot parse"))
+            metrics = {}
 
     # --- Execution lag ---
     signal_time = spec.signal.signal_time
@@ -128,7 +132,11 @@ def audit_research(run_dir: str | Path) -> dict:
     # --- Missing data ---
     data_manifest_path = run_path / "data_manifest.json"
     if data_manifest_path.exists():
-        manifest = json.loads(data_manifest_path.read_text(encoding="utf-8"))
+        try:
+            manifest = json.loads(data_manifest_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            checks.append(_finding("missing_data", "fail", "warning", "data_manifest.json is corrupted — cannot assess data quality"))
+            manifest = {}
         missing_ratio = manifest.get("missing_ratio")
         if missing_ratio is None:
             checks.append(_finding(
