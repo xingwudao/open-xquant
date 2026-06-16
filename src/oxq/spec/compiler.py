@@ -124,10 +124,11 @@ class _SignalFilteredEqualWeightOptimizer:
 
                 val = df[sig_name].iloc[-1]
                 sig_type = self._signal_types.get(sig_name, "")
+                # NaN values are not a signal
                 try:
-                    is_true = bool(val)
+                    is_true = not pd.isna(val) and bool(val)
                 except Exception:
-                    is_true = val is not None and val > 0
+                    is_true = not pd.isna(val) and val is not None and val > 0
 
                 if sig_type in _EVENT_SIGNAL_TYPES:
                     # Event signal — latch once triggered

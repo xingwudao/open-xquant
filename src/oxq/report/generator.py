@@ -24,7 +24,7 @@ def generate_report(run_dir: str | Path) -> str:
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
-    decision = _determine_decision(bias_audit, spec_dict, metrics)
+    decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit)
 
     lines: list[str] = []
     lines.append(f"# Research Report: {strategy_id}")
@@ -161,9 +161,12 @@ def generate_report(run_dir: str | Path) -> str:
     return "\n".join(lines)
 
 
-def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict) -> str:
+def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_audit: dict | None = None) -> str:
     """Determine the executive decision based on audit results and decision policy."""
     decision_policy = spec_dict.get("decision_policy", {})
+
+    if repro_audit and repro_audit.get("status") == "fail":
+        return "REJECT"
 
     if bias_audit.get("fatal_count", 0) > 0:
         reject_if = decision_policy.get("reject_if", {})
