@@ -45,6 +45,16 @@ def validate(spec: StrategySpec) -> ValidationResult:
     # --- Universe ---
     if not spec.universe.type:
         errors.append(_err("fatal", "universe_missing", "universe.type is missing — cannot define research scope"))
+    supported_universe_types = frozenset({"static"})
+    if spec.universe.type and spec.universe.type not in supported_universe_types:
+        errors.append(
+            _err(
+                "fatal",
+                "universe_type_unsupported",
+                f"Universe type '{spec.universe.type}' is not yet supported. "
+                f"Only 'static' is available.",
+            )
+        )
     if spec.universe.type == "static" and not spec.universe.symbols:
         errors.append(_err("fatal", "universe_empty", "static universe has no symbols"))
     if spec.universe.type == "static" and not spec.universe.point_in_time:

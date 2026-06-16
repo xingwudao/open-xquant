@@ -237,6 +237,17 @@ def compile_run(
     if interval_days > 1:
         rules.append(RebalanceFrequencyRule(interval_days=interval_days))
 
+    # Auto-add ExitRule for Crossover signals so positions close on reverse cross.
+    for _sig_name, sig_def in spec.signal.rules.items():
+        if sig_def.type == "Crossover":
+            fast = sig_def.params.get("fast", "")
+            slow = sig_def.params.get("slow", "")
+            if fast and slow:
+                from oxq.rules.exit import ExitRule
+
+                rules.append(ExitRule(fast=fast, slow=slow))
+            break  # one ExitRule handles all crossover entries
+
     # Run engine
     engine = Engine()
     result = engine.run(
