@@ -70,6 +70,18 @@ def validate(spec: StrategySpec) -> ValidationResult:
     if not spec.execution.fill_price_mode:
         errors.append(_err("fatal", "fill_price_mode_missing", "execution.fill_price_mode is missing"))
 
+    # Validate fill mode against known values
+    valid_fill_modes = frozenset({"close", "next_open", "mid", "next_high", "next_low"})
+    if spec.execution.fill_price_mode and spec.execution.fill_price_mode not in valid_fill_modes:
+        errors.append(
+            _err(
+                "fatal",
+                "fill_price_mode_invalid",
+                f"Unknown fill_price_mode '{spec.execution.fill_price_mode}'. "
+                f"Valid: {', '.join(sorted(valid_fill_modes))}",
+            )
+        )
+
     # Fatal: same-bar signal generation and execution
     if spec.signal.signal_time == "close_t":
         if spec.execution.trade_time == "close_t":

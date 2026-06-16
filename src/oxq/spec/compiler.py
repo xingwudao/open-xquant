@@ -246,8 +246,8 @@ def compile_run(
         rules=rules,
     )
 
-    # Write artifacts
-    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
+    # Write artifacts — include microseconds to avoid collisions on same-second runs
+    timestamp = datetime.now(UTC).strftime("%Y%m%d_%H%M%S_%f")
     out_path = Path(out_dir)
     if out_path.name == "auto":
         run_dir = out_path.parent / f"{timestamp}_{spec.strategy_id}"
