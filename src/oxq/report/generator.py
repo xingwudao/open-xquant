@@ -175,13 +175,19 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict) -> str
     oos_sharpe = metrics.get("oos_sharpe_ratio", metrics.get("sharpe_ratio", 0))
     max_dd = metrics.get("oos_max_drawdown", metrics.get("max_drawdown", 0))
 
-    if reject_if.get("oos_sharpe_lt", -999) > oos_sharpe:
+    if "oos_sharpe_lt" in reject_if and reject_if["oos_sharpe_lt"] > oos_sharpe:
         return "REJECT"
-    if reject_if.get("max_drawdown_lt", -999) > max_dd:
+    if "max_drawdown_lt" in reject_if and reject_if["max_drawdown_lt"] > max_dd:
         return "REJECT"
 
     promote_if = decision_policy.get("promote_if", {})
-    if promote_if.get("oos_sharpe_gte", 999) <= oos_sharpe and promote_if.get("max_drawdown_gte", 999) <= max_dd:
+    # Only check thresholds that are explicitly configured
+    promote_checks: list[bool] = []
+    if "oos_sharpe_gte" in promote_if:
+        promote_checks.append(promote_if["oos_sharpe_gte"] <= oos_sharpe)
+    if "max_drawdown_gte" in promote_if:
+        promote_checks.append(promote_if["max_drawdown_gte"] <= max_dd)
+    if promote_checks and all(promote_checks):
         return "PAPER TRADING CANDIDATE"
 
     if bias_audit.get("warning_count", 0) > 0:

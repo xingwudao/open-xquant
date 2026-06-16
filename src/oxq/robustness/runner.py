@@ -42,11 +42,18 @@ def run_robustness(run_dir: str | Path) -> dict:
     baseline_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
     baseline_sharpe = baseline_metrics.get("sharpe_ratio", 0)
 
+    # Preserve the effective data directory from the original run
+    env_path = run_path / "environment.json"
+    data_dir = None
+    if env_path.exists():
+        env = json.loads(env_path.read_text(encoding="utf-8"))
+        data_dir = env.get("data_dir")
+
     # --- Test 1: Cost x2 ---
     try:
         cost_x2_dir = run_path.parent / f"{run_path.name}_cost_x2"
         cost_spec = _clone_spec_with_cost_multiplier(spec, 2.0)
-        cost_result, _ = compile_run(cost_spec, out_dir=str(cost_x2_dir))
+        cost_result, _ = compile_run(cost_spec, out_dir=str(cost_x2_dir), data_dir=data_dir)
         perturbed_sharpe = cost_result.sharpe_ratio()
         tests.append({
             "name": "cost_x2",

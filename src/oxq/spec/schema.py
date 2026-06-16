@@ -13,7 +13,7 @@ import yaml
 
 @dataclass
 class ResearchSection:
-    hypothesis: str
+    hypothesis: str = ""
     rationale: str = ""
     author: str = ""
     created_at: str = ""

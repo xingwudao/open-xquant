@@ -249,12 +249,12 @@ def compile_run(
         run_dir = out_path / f"{timestamp}_{spec.strategy_id}"
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    _write_artifacts(spec, result, run_dir, engine)
+    _write_artifacts(spec, result, run_dir, engine, effective_data_dir=_data_dir)
 
     return result, run_dir
 
 
-def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engine: Engine) -> None:
+def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engine: Engine, effective_data_dir: str | None = None) -> None:
     """Write all standardized backtest artifacts to run_dir."""
     run_id = run_dir.name
 
@@ -274,6 +274,8 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "run_timestamp": datetime.now(UTC).isoformat(),
         "spec_hash": spec.compute_hash(),
     }
+    if effective_data_dir:
+        env["data_dir"] = effective_data_dir
     (run_dir / "environment.json").write_text(json.dumps(env, indent=2) + "\n")
 
     # data_manifest.json
