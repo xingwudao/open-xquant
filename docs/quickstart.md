@@ -5,7 +5,14 @@
 ## 1. 安装
 
 ```bash
-pip install open-xquant[yfinance]
+git clone https://github.com/xingwudao/open-xquant
+cd open-xquant
+pip install -e ".[yfinance]"
+```
+
+使用 `uv` 则无需显式安装，直接在仓库目录下运行：
+```bash
+uv run oxq --help
 ```
 
 ## 2. 创建策略 Spec
