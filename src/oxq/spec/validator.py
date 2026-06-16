@@ -135,6 +135,18 @@ def validate(spec: StrategySpec) -> ValidationResult:
             _err("warning", "parameter_count", f"signal indicators have {param_count} total params — risk of overfitting")
         )
 
+    # --- Future-data bias: Peak signal ---
+    for rule_def in spec.signal.rules.values():
+        if rule_def.type == "Peak":
+            warnings.append(
+                _err(
+                    "warning",
+                    "peak_future_data",
+                    "Peak signal uses shift(-i) which introduces future-data bias. "
+                    "Consider using a different signal type for causal backtests.",
+                )
+            )
+
     # Compute hash and determine status
     spec_hash = spec.compute_hash()
     has_fatal = any(e["severity"] == "fatal" for e in errors)

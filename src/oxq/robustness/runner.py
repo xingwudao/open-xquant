@@ -71,8 +71,9 @@ def run_robustness(run_dir: str | Path) -> dict:
     if train and test and len(train) >= 2 and len(test) >= 2:
         tests.append({
             "name": "is_oos_comparison",
-            "status": "pass",
-            "message": f"IS: {train[0]} to {train[1]}, OOS: {test[0]} to {test[1]}",
+            "status": "warn",
+            "message": f"IS: {train[0]} to {train[1]}, OOS: {test[0]} to {test[1]} — "
+                       "IS/OOS metrics comparison not yet implemented",
         })
     else:
         tests.append({
@@ -86,8 +87,9 @@ def run_robustness(run_dir: str | Path) -> dict:
     if perturbations:
         tests.append({
             "name": "parameter_perturbation",
-            "status": "pass",
-            "message": f"Perturbation targets configured: {list(perturbations.keys())}",
+            "status": "warn",
+            "message": f"Perturbation targets configured: {list(perturbations.keys())} — "
+                       "re-running with perturbed parameters not yet implemented",
         })
     else:
         tests.append({

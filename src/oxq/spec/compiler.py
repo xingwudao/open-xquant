@@ -41,7 +41,9 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
 }
 
 # Signals that fire on a single bar and should latch once triggered.
-_EVENT_SIGNAL_TYPES = frozenset({"Crossover", "Peak", "Timestamp"})
+# NOTE: Peak is excluded because its implementation uses shift(-i)
+# which introduces future-data bias.
+_EVENT_SIGNAL_TYPES = frozenset({"Crossover", "Timestamp"})
 
 # Frequency string → interval_days mapping.
 _FREQUENCY_INTERVAL: dict[str, int] = {
@@ -373,7 +375,7 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
         "trade_count": len(result.trades),
         "cost_paid": float(sum(float(f.fee) for f in result.trades)),
-        "slippage_paid": 0.0,
+        "slippage_paid": None,  # Not measurable without raw-vs-slipped fill price tracking
     }
 
     # Compute OOS-only metrics when test_period is defined

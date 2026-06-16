@@ -80,7 +80,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     except Exception:
         checks.append(_check("data_manifest", False, "warning", "data_manifest.json is invalid JSON"))
 
-    # Compute hashes for key artifacts
+    # Compute hashes for key artifacts (informational — no expected values stored yet)
     for fname, check_id in [
         ("equity_curve.csv", "equity_hash"),
         ("trades.csv", "trades_hash"),
@@ -91,7 +91,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         checks.append(
             {
                 "id": check_id,
-                "status": "pass",
+                "status": "info",
                 "severity": "info",
                 "message": f"{fname} hash: sha256:{h}",
                 "hash": f"sha256:{h}",
