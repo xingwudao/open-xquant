@@ -71,26 +71,28 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "fill_price_mode_missing", "execution.fill_price_mode is missing"))
 
     # Fatal: same-bar signal generation and execution
-    if spec.signal.signal_time == "close_t" and spec.execution.trade_time == "close_t":
-        errors.append(
-            _err(
-                "fatal",
-                "execution_lag",
-                "signal_time=close_t and trade_time=close_t — "
-                "signal generated and filled on same bar. "
-                "Use trade_time=next_open or next_bar execution.",
+    if spec.signal.signal_time == "close_t":
+        if spec.execution.trade_time == "close_t":
+            errors.append(
+                _err(
+                    "fatal",
+                    "execution_lag",
+                    "signal_time=close_t and trade_time=close_t — "
+                    "signal generated and filled on same bar. "
+                    "Use trade_time=next_open.",
+                )
             )
-        )
-    if spec.signal.signal_time == "close_t" and spec.execution.fill_price_mode == "close":
-        errors.append(
-            _err(
-                "fatal",
-                "execution_lag",
-                "signal_time=close_t and fill_price_mode=close — "
-                "signal generated at close and filled at same close price. "
-                "Use fill_price_mode=next_open.",
+        if spec.execution.fill_price_mode in ("close", "mid"):
+            errors.append(
+                _err(
+                    "fatal",
+                    "execution_lag",
+                    f"signal_time=close_t and fill_price_mode={spec.execution.fill_price_mode} — "
+                    "signal computed at close but filled at same-bar price "
+                    f"({spec.execution.fill_price_mode}). "
+                    "Use fill_price_mode=next_open.",
+                )
             )
-        )
 
     # --- Cost ---
     if spec.cost.fee_rate == 0.0 and spec.cost.slippage_rate == 0.0:

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import yaml
+from oxq.spec.schema import StrategySpec
 
 
 def audit_research(run_dir: str | Path) -> dict:
@@ -42,7 +42,7 @@ def audit_research(run_dir: str | Path) -> dict:
             "warning_count": 0,
         }
 
-    spec = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+    spec = StrategySpec.from_yaml(str(spec_path))
 
     # Load metrics if available
     metrics = {}
@@ -51,28 +51,27 @@ def audit_research(run_dir: str | Path) -> dict:
         metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
 
     # --- Execution lag ---
-    signal_time = spec.get("signal", {}).get("signal_time", "")
-    execution = spec.get("execution", {})
-    trade_time = execution.get("trade_time", "")
-    fill_price_mode = execution.get("fill_price_mode", "")
+    signal_time = spec.signal.signal_time
+    trade_time = spec.execution.trade_time
+    fill_price_mode = spec.execution.fill_price_mode
 
     if signal_time == "close_t" and trade_time == "close_t":
         checks.append(_finding(
             "execution_lag", "fail", "fatal",
             "signal_time=close_t and trade_time=close_t — signal generated and filled on same bar",
         ))
-    elif signal_time == "close_t" and fill_price_mode == "close":
+    elif signal_time == "close_t" and fill_price_mode in ("close", "mid"):
         checks.append(_finding(
             "execution_lag", "fail", "fatal",
-            "signal_time=close_t and fill_price_mode=close — filled at same close price as signal",
+            f"signal_time=close_t and fill_price_mode={fill_price_mode} — "
+            "filled at same-bar price",
         ))
     else:
         checks.append(_finding("execution_lag", "pass", "info", "signal/trade timing is reasonable"))
 
     # --- Cost model ---
-    cost = spec.get("cost", {})
-    fee_rate = cost.get("fee_rate", 0)
-    slippage_rate = cost.get("slippage_rate", 0)
+    fee_rate = spec.cost.fee_rate
+    slippage_rate = spec.cost.slippage_rate
     if fee_rate == 0 and slippage_rate == 0:
         checks.append(_finding("cost_model", "fail", "fatal", "Both fee_rate and slippage_rate are zero — zero-cost model"))
     elif fee_rate == 0:
@@ -83,24 +82,21 @@ def audit_research(run_dir: str | Path) -> dict:
         checks.append(_finding("cost_model", "pass", "info", f"fee_rate={fee_rate}, slippage_rate={slippage_rate}"))
 
     # --- OOS required ---
-    validation = spec.get("validation", {})
-    test_period = validation.get("test_period", [])
+    test_period = spec.validation.test_period
     if not test_period or len(test_period) < 2:
         checks.append(_finding("oos_required", "fail", "fatal", "No out-of-sample test period defined"))
     else:
         checks.append(_finding("oos_required", "pass", "info", f"OOS period: {test_period[0]} to {test_period[1]}"))
 
     # --- Benchmark present ---
-    benchmark = spec.get("benchmark", {})
-    bench_symbols = benchmark.get("symbols", [])
+    bench_symbols = spec.benchmark.symbols
     if not bench_symbols:
         checks.append(_finding("benchmark_present", "fail", "warning", "No benchmark defined — difficult to assess excess return"))
     else:
         checks.append(_finding("benchmark_present", "pass", "info", f"Benchmark: {bench_symbols}"))
 
     # --- Survivorship bias ---
-    universe = spec.get("universe", {})
-    if universe.get("type") == "static" and not universe.get("point_in_time", False):
+    if spec.universe.type == "static" and not spec.universe.point_in_time:
         checks.append(_finding(
             "static_universe_survivorship", "fail", "warning",
             "Static universe without point-in-time may have survivorship bias",
@@ -109,8 +105,7 @@ def audit_research(run_dir: str | Path) -> dict:
         checks.append(_finding("static_universe_survivorship", "pass", "info", "Universe configuration is OK"))
 
     # --- Parameter count ---
-    indicators = spec.get("signal", {}).get("indicators", {})
-    param_count = sum(len(ind.get("params", {})) for ind in indicators.values())
+    param_count = sum(len(ind.params) for ind in spec.signal.indicators.values())
     if param_count > 10:
         checks.append(_finding("parameter_count", "fail", "warning", f"{param_count} indicator parameters — risk of overfitting"))
     else:

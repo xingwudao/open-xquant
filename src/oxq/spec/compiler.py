@@ -152,26 +152,32 @@ def compile_strategy(spec: StrategySpec) -> Strategy:
     This is the Direct Runtime Mode — constructs Strategy, indicator instances,
     and signal instances with required_indicators wired up.
     """
-    # Build signal instances with required_indicators
+    # Build signal instances with required_indicators.
+    # When there are no signal rules, attach indicators to the portfolio optimizer instead.
     signals: dict[str, tuple[Signal, dict[str, Any]]] = {}
+    required: dict[str, tuple[Any, dict[str, Any]]] = {}
+    for ind_name, ind_def in spec.signal.indicators.items():
+        ind_cls = _resolve_indicator(ind_def.type)
+        ind_instance = ind_cls()
+        required[ind_name] = (ind_instance, ind_def.params)
+
     for signal_name, signal_def in spec.signal.rules.items():
         signal_cls = _resolve_signal(signal_def.type)
         signal_instance = signal_cls() if hasattr(signal_cls, "__init__") else signal_cls()
-
-        # Wire up required_indicators from the spec's indicator definitions
-        required: dict[str, tuple[Any, dict[str, Any]]] = {}
-        for ind_name, ind_def in spec.signal.indicators.items():
-            ind_cls = _resolve_indicator(ind_def.type)
-            ind_instance = ind_cls()
-            required[ind_name] = (ind_instance, ind_def.params)
-
         signal_instance.required_indicators = required
-
         signals[signal_name] = (signal_instance, signal_def.params)
 
     # Build portfolio optimizer — use signal-filtered variant when EqualWeight
     # is paired with boolean signal rules (e.g. Crossover/Threshold).
     optimizer = _build_optimizer(spec)
+
+    # When there are no signal rules, attach indicators to the portfolio optimizer
+    # so the engine still computes them (e.g. for ranking strategies like TopNRanking).
+    if not spec.signal.rules and required:
+        if hasattr(optimizer, "required_indicators"):
+            optimizer.required_indicators = required
+        else:
+            optimizer.required_indicators = required
 
     # Build universe
     universe = StaticUniverse(tuple(spec.universe.symbols))
