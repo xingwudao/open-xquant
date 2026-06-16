@@ -24,6 +24,7 @@ from oxq.core.strategy import Strategy
 from oxq.core.types import PortfolioOptimizer, Signal
 from oxq.data.market import LocalMarketDataProvider
 from oxq.portfolio.analytics import RunResult
+from oxq.rules.constraint import RebalanceFrequencyRule
 from oxq.spec.schema import StrategySpec
 from oxq.trade.fees import PercentageFee
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
@@ -65,6 +66,58 @@ def _resolve_portfolio_optimizer(name: str) -> type:
     return cls
 
 
+def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
+    """Build a portfolio optimizer from spec, using signal-filtered equal weight when appropriate."""
+    opt_cls = _resolve_portfolio_optimizer(spec.portfolio.type)
+
+    # When EqualWeight is used with signal rules, wrap it in a signal-filtered variant
+    # so that only symbols with active signal (True/positive) get weight.
+    if spec.portfolio.type == "EqualWeight" and spec.signal.rules:
+        signal_names = list(spec.signal.rules.keys())
+        return _SignalFilteredEqualWeightOptimizer(signal_names=signal_names)
+
+    return opt_cls(**spec.portfolio.params)
+
+
+class _SignalFilteredEqualWeightOptimizer:
+    """Equal weight among symbols whose signal is currently active (True / > 0).
+
+    Reads the last row of each registered signal column.  Only symbols
+    where at least one signal column is truthy are included.  If no
+    symbol qualifies, the full portfolio goes to CASH.
+    """
+
+    name = "SignalFilteredEqualWeight"
+
+    def __init__(self, signal_names: list[str]) -> None:
+        self._signal_names = signal_names
+
+    def optimize(
+        self,
+        signals: dict[str, pd.DataFrame],
+        indicators: dict[str, pd.DataFrame],
+    ) -> dict[str, float]:
+        active: list[str] = []
+        for symbol, df in signals.items():
+            for sig_name in self._signal_names:
+                if sig_name in df.columns:
+                    val = df[sig_name].iloc[-1]
+                    try:
+                        if bool(val):
+                            active.append(symbol)
+                            break
+                    except Exception:
+                        if val and val > 0:
+                            active.append(symbol)
+                            break
+
+        if not active:
+            return {"CASH": 1.0}
+
+        weight = 1.0 / len(active)
+        return {s: weight for s in active}
+
+
 def compile_strategy(spec: StrategySpec) -> Strategy:
     """Compile a StrategySpec into an executable Strategy object.
 
@@ -88,9 +141,9 @@ def compile_strategy(spec: StrategySpec) -> Strategy:
 
         signals[signal_name] = (signal_instance, signal_def.params)
 
-    # Build portfolio optimizer
-    opt_cls = _resolve_portfolio_optimizer(spec.portfolio.type)
-    optimizer: PortfolioOptimizer = opt_cls(**spec.portfolio.params)
+    # Build portfolio optimizer — use signal-filtered variant when EqualWeight
+    # is paired with boolean signal rules (e.g. Crossover/Threshold).
+    optimizer = _build_optimizer(spec)
 
     # Build universe
     universe = StaticUniverse(tuple(spec.universe.symbols))
@@ -117,7 +170,8 @@ def compile_run(
     strategy = compile_strategy(spec)
 
     # Data provider
-    market = LocalMarketDataProvider(data_dir=data_dir) if data_dir else LocalMarketDataProvider()
+    data_path = Path(data_dir) if data_dir else None
+    market = LocalMarketDataProvider(data_dir=str(data_path)) if data_path else LocalMarketDataProvider()
 
     # Broker with fee/slippage from spec
     fee_model = PercentageFee(rate=Decimal(str(spec.cost.fee_rate)), min_fee=Decimal(str(spec.cost.fee_min)))
@@ -131,6 +185,12 @@ def compile_run(
     start = train[0] if train else (test[0] if test else "2018-01-01")
     end = test[1] if test else (train[1] if train else "2025-12-31")
 
+    # Build rules from spec
+    rules: list = []
+    interval_days = spec.execution.rebalance.interval_days
+    if interval_days > 1:
+        rules.append(RebalanceFrequencyRule(interval_days=interval_days))
+
     # Run engine
     engine = Engine()
     result = engine.run(
@@ -141,6 +201,7 @@ def compile_run(
         end=end,
         initial_cash=spec.execution.initial_cash,
         lot_size=spec.execution.lot_size,
+        rules=rules,
     )
 
     # Write artifacts
