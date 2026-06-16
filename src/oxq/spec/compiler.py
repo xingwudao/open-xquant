@@ -40,6 +40,18 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
     "next_low": FillPriceMode.NEXT_LOW,
 }
 
+# Signals that fire on a single bar and should latch once triggered.
+_EVENT_SIGNAL_TYPES = frozenset({"Crossover", "Peak", "Timestamp"})
+
+# Frequency string → interval_days mapping.
+_FREQUENCY_INTERVAL: dict[str, int] = {
+    "daily": 1,
+    "weekly": 5,
+    "biweekly": 10,
+    "monthly": 21,
+    "quarterly": 63,
+}
+
 
 def _resolve_indicator(name: str) -> type:
     """Look up an indicator class by name from the registry."""
@@ -75,24 +87,25 @@ def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
     # so that only symbols with active signal (True/positive) get weight.
     if spec.portfolio.type == "EqualWeight" and spec.signal.rules:
         signal_names = list(spec.signal.rules.keys())
-        return _SignalFilteredEqualWeightOptimizer(signal_names=signal_names)
+        signal_types = {name: defn.type for name, defn in spec.signal.rules.items()}
+        return _SignalFilteredEqualWeightOptimizer(signal_names=signal_names, signal_types=signal_types)
 
     return opt_cls(**spec.portfolio.params)
 
 
 class _SignalFilteredEqualWeightOptimizer:
-    """Equal weight among symbols where a signal has become active and latches.
+    """Equal weight among symbols with active signals.
 
-    For event-style signals (Crossover, Peak) that fire only on one bar,
-    the position is held until an exit rule (ExitRule/StopLoss) closes it.
-    This prevents premature cash-out on bars where the event signal has
-    already passed.
+    Event-style signals (Crossover, Peak, Timestamp) latch once triggered —
+    the position is held until an exit rule closes it.  Level-style signals
+    (Threshold, Comparison, Formula, Composite) are re-evaluated every bar.
     """
 
     name = "SignalFilteredEqualWeight"
 
-    def __init__(self, signal_names: list[str]) -> None:
+    def __init__(self, signal_names: list[str], signal_types: dict[str, str]) -> None:
         self._signal_names = signal_names
+        self._signal_types = signal_types
         self._latched: dict[str, bool] = {}
 
     def optimize(
@@ -100,20 +113,32 @@ class _SignalFilteredEqualWeightOptimizer:
         signals: dict[str, pd.DataFrame],
         indicators: dict[str, pd.DataFrame],
     ) -> dict[str, float]:
+        active: list[str] = []
         for symbol, df in signals.items():
             for sig_name in self._signal_names:
-                if sig_name in df.columns:
-                    val = df[sig_name].iloc[-1]
-                    try:
-                        if bool(val):
-                            self._latched[symbol] = True
-                            break
-                    except Exception:
-                        if val and val > 0:
-                            self._latched[symbol] = True
-                            break
+                if sig_name not in df.columns:
+                    continue
 
-        active = [s for s in self._latched if self._latched[s]]
+                val = df[sig_name].iloc[-1]
+                sig_type = self._signal_types.get(sig_name, "")
+                try:
+                    is_true = bool(val)
+                except Exception:
+                    is_true = val is not None and val > 0
+
+                if sig_type in _EVENT_SIGNAL_TYPES:
+                    # Event signal — latch once triggered
+                    if is_true:
+                        self._latched[symbol] = True
+                    if self._latched.get(symbol):
+                        active.append(symbol)
+                        break
+                else:
+                    # Level signal — re-evaluate every bar
+                    if is_true:
+                        active.append(symbol)
+                        break
+
         if not active:
             return {"CASH": 1.0}
 
@@ -179,7 +204,11 @@ def compile_run(
     # Broker with fee/slippage from spec
     fee_model = PercentageFee(rate=Decimal(str(spec.cost.fee_rate)), min_fee=Decimal(str(spec.cost.fee_min)))
     slippage_model = PercentageSlippage(rate=Decimal(str(spec.cost.slippage_rate)))
-    fill_mode = FILL_PRICE_MODE_MAP.get(spec.execution.fill_price_mode, FillPriceMode.NEXT_OPEN)
+    fill_mode_str = spec.execution.fill_price_mode
+    fill_mode = FILL_PRICE_MODE_MAP.get(fill_mode_str)
+    if fill_mode is None:
+        valid = ", ".join(sorted(FILL_PRICE_MODE_MAP.keys()))
+        raise ValueError(f"Unknown fill_price_mode '{fill_mode_str}'. Valid: {valid}")
     broker = SimBroker(fee_model=fee_model, slippage_model=slippage_model, fill_price_mode=fill_mode)
 
     # Determine date range
@@ -191,6 +220,10 @@ def compile_run(
     # Build rules from spec
     rules: list = []
     interval_days = spec.execution.rebalance.interval_days
+    # Map frequency string to interval_days when interval_days is not explicitly set
+    freq = spec.execution.rebalance.frequency
+    if interval_days <= 1 and freq and freq in _FREQUENCY_INTERVAL:
+        interval_days = _FREQUENCY_INTERVAL[freq]
     if interval_days > 1:
         rules.append(RebalanceFrequencyRule(interval_days=interval_days))
 
