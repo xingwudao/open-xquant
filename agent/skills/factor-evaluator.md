@@ -1,119 +1,48 @@
 ---
 name: factor-evaluator
-description: Use when a user wants to evaluate an indicator's predictive power as a factor, assess whether a factor is worth using, or interpret factor evaluation results. Routes to cross-sectional or time-series evaluation sub-skills based on strategy type.
-tools_required: [indicator_list, indicator_describe, data_load_symbols, data_list_symbols]
+description: 路由 skill — 根据策略类型分派到截面评估或时序评估子 skill
 ---
 
-## Your Role
+## 你的角色
 
-You are a factor evaluation navigator for open-xquant. You help users evaluate whether an Indicator has predictive power worth building a strategy around. You do NOT build strategies or run backtests — you produce and interpret structured evaluation reports.
+你是一个因子评估路由器，根据策略类型决定使用截面评估还是时序评估。
 
-**Core principle:** Evaluation answers "is this factor worth pursuing?" — strategy construction is a separate step handled by `strategy-builder`.
+## Phase 0：明确意图
 
----
+1. 策略是选股型（stock-picking）还是择时/轮动型（rotation/timing）？
+2. 有多少标的？（样本量要求见下表）
+3. 关注的预测周期是多久？
 
-## When to Use
+## 路由规则
 
-- User says "evaluate this indicator / factor"
-- User asks "is this factor effective?" or "does momentum work on these stocks?"
-- User wants to compare factors or test across different universes
-- User asks about IC, ICIR, RankIC, hit rate, decay, turnover, or other factor metrics
-- User has a rotation/timing strategy and wants to understand factor quality
+| 策略类型 | 评估方式 | 加载 skill |
+|----------|---------|-----------|
+| 选股（截面排名） | 截面评估 (IC, RankIC, ICIR) | `evaluate-cross-sectional` |
+| 择时/轮动（时序预测） | 时序评估 (Hit Rate, Decay, P/L) | `evaluate-time-series` |
 
-## When NOT to Use
+## 样本量指南
 
-- User wants to build a strategy → use `strategy-builder`
-- User wants to create a new Indicator → use `component-creator`
-- User wants to visually inspect an indicator → use `chart-indicator`
+| 标的数量 | 截面 IC 可靠性 |
+|----------|--------------|
+| < 10 | 不可靠 — 用时序评估 |
+| 10-30 | 可用但谨慎 |
+| > 30 | 可靠 |
 
----
+## 数据准备
 
-## Phase 0: Clarify Evaluation Intent
-
-Before running any evaluation, confirm these 3 things:
-
-1. **Which Indicator?** — Name and parameters (e.g., `SMA` with `period=20`). If the user doesn't specify parameters, run `indicator_describe(type="...")` to show available params and suggest common defaults.
-2. **Which universe?** — List of symbols to evaluate against.
-3. **What strategy type?** — This determines which sub-skill to use:
-
-| Strategy Type | Sub-skill | Why |
-|---------------|-----------|-----|
-| Stock-picking / long-short | `evaluate-cross-sectional` | Need to distinguish winners from losers across symbols |
-| Rotation / trend-following / timing | `evaluate-time-series` | Need to predict each asset's own future returns |
-| Both / unsure | Both sub-skills | Run both and compare |
-
-**If the user doesn't know their strategy type**, ask:
-> "你的策略是在多个标的之间选股（选好的买、差的卖），还是在几个资产之间轮动/择时（哪个趋势好就持有哪个）？前者用截面评估，后者用时序评估。"
-
----
-
-## Phase 1: Verify Indicator & Data Readiness
-
-### 1.0 Check Indicator Exists
-```
-indicator_list()
-indicator_describe(type="SMA")
-```
-If the indicator is not in the registry, route to `component-creator` **before** proceeding.
-
-### 1.1 Check Available Data
-```
-data_list_symbols()
+```python
+from oxq.data.loaders import YFinanceDownloader
+# 下载所有标的的行情数据
+for sym in symbols:
+    YFinanceDownloader().download(symbol=sym, start="...", end="...")
 ```
 
-### 1.2 Download Missing Data
-```
-data_load_symbols(symbols=[...], start="...", end="...", source="yfinance")
-```
+## 红线
 
-### 1.3 Sample Size Guidance
+- **标的 < 10 不跑截面 IC**：改用时序评估
+- **不跳过因子预处理**：T+1 偏移、涨跌停标记、停牌标记
+- **多周期评估**：至少跑 3 个 forward period（1d, 5d, 20d）
 
-| Universe Size | Cross-sectional | Time-series | Recommendation |
-|---------------|-----------------|-------------|----------------|
-| 1 symbol | Meaningless | Valid (if >60 bars) | Only use `evaluate-time-series` |
-| 2-29 symbols | Weak significance | Valid | Warn user, prefer time-series |
-| 30+ symbols | Valid | Valid | Both sub-skills viable |
-| 100+ symbols | Strong | Valid | Ideal for cross-sectional |
+## SDK 参考
 
----
-
-## Phase 2: Route to Sub-Skill
-
-Based on Phase 0 and Phase 1 results, hand off to the appropriate sub-skill:
-
-| Condition | Action |
-|-----------|--------|
-| Stock-picking strategy, 30+ symbols | Invoke `evaluate-cross-sectional` |
-| Rotation / timing strategy, any symbol count | Invoke `evaluate-time-series` |
-| Both / unsure | Invoke both, present results together |
-| Single symbol | Invoke `evaluate-time-series` only (cross-sectional is meaningless) |
-| 1-29 symbols, stock-picking | Warn about weak significance, invoke both |
-
-Hand off completely to the sub-skill. It will handle tool invocation, result interpretation, and next-step recommendations.
-
----
-
-## Phase 3: Multi-Factor Comparison
-
-When the user wants to compare multiple factors:
-
-1. Determine the evaluation type (cross-sectional or time-series) based on Phase 0
-2. Run the chosen sub-skill for each factor on the **same universe and date range**
-3. Present a comparison table consolidating results from all runs
-4. Recommend the factor(s) with the best risk-adjusted predictive power
-
----
-
-## Red Lines
-
-- **Never skip Phase 0** — always clarify strategy type before routing
-- **Never run cross-sectional evaluation on a single symbol** — route to time-series
-- **Never ignore sample size warnings** — explain implications to the user
-- **Never proceed to strategy building without user confirmation** — evaluation informs decisions, doesn't make them
-- **Never write code yourself** — delegate to sub-skills
-
-## Error Handling
-
-- **Unknown indicator**: Run `indicator_list()` and suggest the closest match, or route to `component-creator`
-- **No data for symbols**: Guide user to download via `data_load_symbols`
-- **Unexpected errors**: Show the full error. Common causes: wrong parameter names (check `indicator_describe`), data format issues, or insufficient date range
+`examples/modules/08_factor_eval.py` — 完整因子评估示例（IC, RankIC, Decay, Turnover, Tearsheet）

@@ -1,317 +1,56 @@
 ---
 name: evaluate-time-series
-description: Evaluate an indicator's time-series predictive power — does it predict an asset's own future returns? Uses hit rate, decay curve, profit/loss ratio, cash period value, and optionally market state conditional analysis and multi-asset comparison.
-tools_required: [factor_evaluate_ts]
+description: 时序因子评估 — Hit Rate、Decay Curve、P/L Ratio、Tearsheet
 ---
 
-## Your Role
+## 你的角色
 
-You are a time-series factor evaluation specialist. You evaluate whether an indicator can predict an individual asset's future returns — the core question for rotation, trend-following, and timing strategies.
+你是一个时序因子评估助手，评估因子在时间序列上对方向的预测能力。
 
-**You are invoked by `factor-evaluator`.** The parent skill has already confirmed the indicator, universe, and strategy type. Proceed directly to evaluation.
+适用场景：择时/轮动策略（单标的或少量标的的时序预测）。
 
----
-
-## Phase 0: Determine Factor Type
-
-Before running evaluation, determine if the factor is a **registered indicator** or a **composite/custom factor**:
-
-| Factor Type | Example | How to Evaluate |
-|-------------|---------|-----------------|
-| Registered indicator | SMA, RSI, MACD | Mode 1: `indicator` parameter directly |
-| Composite factor (reusable) | Momentum / Volatility | Create via `component-creator` first, then Mode 1 |
-| Composite factor (one-off) | Quick exploration | Mode 3: `engine_run` + `run_id` + `factor_column` |
-| Ad-hoc column | Already in parquet | Mode 2: `factor_column` parameter |
-
-### Composite Factor: Option A (Recommended) — Create a Self-Contained Indicator
-
-Route to `component-creator` → `create-indicator`. The key is to create a **self-contained** composite indicator that internally computes its base indicators. Example:
+## SDK 方式
 
 ```python
-# This is what component-creator will generate:
-class RiskAdjustedMomentum:
-    name = "RiskAdjustedMomentum"
+from oxq.factor_eval.bundle import create_bundle
+from oxq.factor_eval.tearsheet import generate_tearsheet
 
-    def compute(self, mktdata, column="close", momentum_period=20, vol_period=20):
-        mom = Momentum().compute(mktdata, column=column, period=momentum_period)
-        vol = RollingVolatility().compute(mktdata, column=column, period=vol_period)
-        return mom / vol
-```
+# 构建 FactorBundle
+factor_series = factor_df.stack().rename_axis(["date", "asset"]).rename("factor_name")
+bundle = create_bundle(
+    factor_values=factor_series,
+    prices=prices_df,
+    forward_periods=[1, 5, 20],
+)
 
-**Why this works:** The `compute()` method receives raw mktdata (OHLCV), internally creates and calls base Indicator instances, and returns the final result. No Engine dependency chain needed.
-
-**Why `Ratio` indicator doesn't work here:** `Ratio` expects `col_a` and `col_b` to already exist as columns in mktdata. When `factor_evaluate_ts` loads parquet data, only OHLCV columns exist — the base indicator columns haven't been computed yet. `Ratio` is designed for the Engine pipeline (which computes dependencies in order), not for standalone evaluation.
-
-After the indicator is created and registered, evaluate directly:
-```
-factor_evaluate_ts(
-    indicator="RiskAdjustedMomentum",
-    params={"momentum_period": 20, "vol_period": 20},
-    symbols=["AAPL"],
-    ...
+# 生成 Tearsheet
+result = generate_tearsheet(
+    bundle=bundle,
+    forward_periods=[1, 5, 20],
+    output_dir="/tmp/tearsheet",
 )
 ```
 
-### Composite Factor: Option B (Quick One-Off) — engine_run + run_id
+## 指标解读
 
-For quick exploration without creating a reusable indicator:
+| 指标 | 好 | 一般 | 差 |
+|------|----|------|----|
+| Hit Rate | > 55% | 50-55% | < 50% |
+| P/L Ratio | > 1.5 | 1.0-1.5 | < 1.0 |
+| Max DD | > -15% | -15% to -30% | < -30% |
 
-1. Build a minimal strategy that declares the full indicator dependency chain
-2. Run `engine_run(run_through="indicator")` — the Engine resolves the chain and writes all columns to mktdata → returns `run_id`
-3. Call `factor_evaluate_ts(run_id="...", factor_column="...")` — reads mktdata from session
+## 三种模式
 
-```
-# Step 1: Create strategy with indicator dependency chain
-strategy_create(name="eval_tmp", ...)
-strategy_add_signal(
-    strategy="eval_tmp",
-    name="dummy",
-    type="Threshold",
-    params={"column": "risk_adj_momentum", "threshold": 0, "direction": "above"},
-    indicators={
-        "momentum": {"type": "Momentum", "params": {"period": 20}},
-        "volatility": {"type": "RollingVolatility", "params": {"period": 20}},
-        "risk_adj_momentum": {"type": "Ratio", "params": {"col_a": "momentum", "col_b": "volatility"}},
-    },
-)
+**A. 注册指标**：使用 `oxq.indicators` 中的内置指标，直接传入 name。
 
-# Step 2: Engine computes full dependency chain
-engine_run(strategy="eval_tmp", start="2022-01-01", end="2024-12-31",
-           symbols=["AAPL"], run_through="indicator")
-# → returns run_id
+**B. 计算列**：先 compute 得到 Series，再传入 bundle。
 
-# Step 3: Evaluate the composite column from session
-factor_evaluate_ts(
-    run_id="eval_tmp_...",
-    factor_column="risk_adj_momentum",
-    symbols=["AAPL"],
-    start="2022-01-01",
-    end="2024-12-31",
-    forward_periods=[1, 5, 10, 20],
-    t1_offset=false
-)
-```
+**C. 复合因子**：从 engine_run 的 mktdata 中提取多列，合成自定义因子。
 
-**When to use Option A vs B:**
-- Option A: User will reuse this factor across multiple evaluations or strategies
-- Option B: Quick one-off exploration, or the composite logic is too complex to encapsulate
+参考：`examples/modules/08_factor_eval.py`
 
----
+## 红线
 
-## Phase 1: Run Evaluation
-
-### Single Asset
-```
-factor_evaluate_ts(
-    indicator="SMA",
-    params={"column": "close", "period": 20},
-    symbols=["AAPL"],
-    start="2022-01-01",
-    end="2024-12-31",
-    forward_periods=[1, 3, 5, 10, 20],
-    signal_threshold=0.0,
-    t1_offset=false,
-    market_state_method="sma"
-)
-```
-
-### Multi-Asset (Rotation Strategy)
-```
-factor_evaluate_ts(
-    indicator="SMA",
-    params={"column": "close", "period": 20},
-    symbols=["SPY", "QQQ", "GLD", "TLT"],
-    start="2022-01-01",
-    end="2024-12-31",
-    forward_periods=[1, 5, 10, 20],
-    t1_offset=false,
-    market_state_method="sma"
-)
-```
-
-### A-Share
-```
-factor_evaluate_ts(
-    indicator="SMA",
-    params={"column": "close", "period": 20},
-    symbols=["600519"],
-    start="2022-01-01",
-    end="2024-12-31",
-    forward_periods=[1, 5, 10, 20],
-    t1_offset=true,
-    market_state_method="sma",
-    exclude_limit_days=true
-)
-```
-
-### Pre-computed Factor Column (from parquet)
-```
-factor_evaluate_ts(
-    factor_column="risk_adj_momentum",
-    symbols=["AAPL"],
-    start="2022-01-01",
-    end="2024-12-31",
-    forward_periods=[1, 5, 10, 20],
-    t1_offset=false
-)
-```
-
-### Composite Factor (from engine_run)
-```
-factor_evaluate_ts(
-    run_id="eval_tmp_20220101_20241231",
-    factor_column="risk_adj_momentum",
-    symbols=["AAPL"],
-    start="2022-01-01",
-    end="2024-12-31",
-    forward_periods=[1, 5, 10, 20],
-    t1_offset=false
-)
-```
-
-**Parameter guidance:**
-- `forward_periods`: Include the intended holding period. `[1, 3, 5, 10, 20]` covers most cases
-- `t1_offset`: Set `true` for A-shares (T+1 market), `false` for US/HK
-- `market_state_method`: Set `"sma"` to get conditional analysis. Omit to skip
-- `signal_threshold`: Default 0 works for most indicators. Adjust if the factor's neutral value is non-zero
-- `exclude_limit_days`: Set `true` for A-shares to exclude limit-up/down days
-
----
-
-## Phase 2: Interpret Results
-
-### 2.1 Core Metrics
-
-| Metric | Good | Decent | Weak | What it Means |
-|--------|------|--------|------|---------------|
-| Hit Rate (total) | >60% | 55-60% | <55% | How often factor direction matches return direction |
-| Hit Rate (long) | >60% | 55-60% | <55% | Long signal accuracy |
-| P/L Ratio | >1.5 | 1.0-1.5 | <1.0 | Average win / average loss. >1 means wins are bigger |
-| Decay Half-life | >10d | 5-10d | <5d | Factor stays predictive for this many days |
-| Return Spread | >0.02 | 0.01-0.02 | <0.01 | Holding returns minus cash returns |
-
-### 2.2 Combined Judgment
-
-Neither hit rate nor P/L ratio alone determines factor value. Use this matrix:
-
-| Hit Rate | P/L Ratio | Verdict |
-|----------|-----------|---------|
-| High (>60%) | High (>1.5) | Excellent factor — high accuracy, big wins |
-| High (>60%) | Low (<1.0) | Frequently right but wins are small. May work with high frequency |
-| Low (<55%) | High (>1.5) | Infrequent but large wins compensate. Suitable for trend-following |
-| Low (<55%) | Low (<1.0) | Weak factor. Try different parameters or indicator |
-
-### 2.3 Decay Curve Interpretation
-
-The decay curve shows how factor predictive power weakens over time:
-
-- **Half-life**: How many days until correlation drops to 50% of initial value
-- **Inflection point**: Where sharp decline begins — the recommended max holding period
-
-> 如果因子半衰期为 5 天，建议换仓周期不超过 5 天。超过半衰期的持仓，因子已经失去大部分预测力。
-
-### 2.4 Cash Period Value
-
-The cash period analysis answers: "Does the factor effectively avoid downturns?"
-
-- If `cash_avg_return < 0`: The factor correctly signals when to be out of the market
-- If `return_spread > 0.02`: Strong entry/exit discrimination ability
-- If `holding_ratio > 0.8`: The factor is almost always "long" — may not provide useful timing
-
-### 2.5 Conditional Analysis (if market_state available)
-
-Check whether the factor works consistently or only in specific market regimes:
-
-- If hit rate is high in **trend** but low in **crash**: Factor is a fair-weather predictor
-- If hit rate is stable across all states: Factor is robust — more valuable
-- Watch for **sample_count warnings**: Small sample states are unreliable
-
-### 2.6 Multi-Asset Comparison (if multiple symbols)
-
-For rotation strategies, compare across assets:
-
-- If hit rates are similar across assets: Factor captures a common market signal
-- If hit rates differ: Factor works better on some assets — can be used for asset selection
-- Compare decay half-lives: Shorter half-life assets need more frequent rebalancing
-
-### 2.7 Report Template
-
-```
-## 时序因子评估报告：{Indicator} ({params})
-
-**评估范围:** {symbols}, {start} ~ {end}
-**配置:** T+1偏移={t1_offset}, 信号阈值={threshold}, 前瞻期={forward_periods}
-
-### 数据质量
-| 项目 | 值 |
-|------|-----|
-| 有效样本数 | {sample_count} |
-| 数据对齐丢失率 | {loss_ratio}% |
-| 前视偏差检测 | {bias_result} |
-
-### 核心指标
-| 指标 | 值 | 评级 |
-|------|-----|------|
-| 总命中率 | {total}% | {good/decent/weak} |
-| 多头命中率 | {long}% | {good/decent/weak} |
-| 盈亏比 | {ratio} | {good/decent/weak} |
-| 衰减半衰期 | {half_life}天 | {good/decent/weak} |
-| 持仓vs空仓收益差 | {spread} | {good/decent/weak} |
-
-### 衰减曲线
-| 前瞻期 | 相关系数 |
-|--------|---------|
-| 1d | ... |
-| 5d | ... |
-| 10d | ... |
-| 20d | ... |
-
-### 市场状态分析（如有）
-| 状态 | 命中率 | 盈亏比 | 平均收益 | 样本数 |
-|------|--------|--------|---------|--------|
-| trend | ... | ... | ... | ... |
-| ranging | ... | ... | ... | ... |
-| crash | ... | ... | ... | ... |
-
-### 结论
-{Assessment combining hit rate, P/L ratio, decay, and conditional results}
-
-### 建议
-{Recommended holding period, parameter adjustments, or next steps}
-```
-
----
-
-## Phase 3: Guide Next Steps
-
-| Result | Recommendation |
-|--------|---------------|
-| High hit rate + high P/L ratio + long half-life | Proceed to `strategy-builder` with confidence |
-| High hit rate + low P/L ratio | Consider tighter stop-loss rules |
-| Low hit rate + high P/L ratio | Trend-following style — use with wider stops |
-| Good only in trend state | Add market regime filter to strategy |
-| Different assets have different effectiveness | Use for asset rotation |
-| Half-life < 3 days | High-frequency strategy or try longer indicator period |
-| Weak everything | Try different parameters, different indicator, or different universe |
-
----
-
-## Charts
-
-The tool returns PNG chart paths. Show relevant charts to the user:
-
-- **Rolling hit rate**: Shows if factor effectiveness changes over time
-- **Decay curve**: Visualizes the optimal holding period
-- **Return distribution**: Shows the shape of wins vs losses
-- **Cash period comparison**: Holding vs non-holding period returns
-
-Use the `Read` tool on chart PNG paths to display them to the user.
-
----
-
-## Red Lines
-
-- **Never skip bias detection** — if the tool reports possible lookahead bias, warn the user prominently
-- **Never ignore data quality warnings** — if aligned samples < 60, say so clearly
-- **Never recommend a holding period beyond the half-life** — the factor has lost its edge
-- **Never trust conditional analysis with small samples** — if a state has < 30 samples, the results are noise
+- **不只用 Hit Rate**：高命中率 + 低盈亏比 = 赚小亏大
+- **T+1 偏移必须处理**：t 日信号 → t+1 日执行，评估时必须对齐
+- **涨跌停/停牌标记**：无法成交的交易日必须排除

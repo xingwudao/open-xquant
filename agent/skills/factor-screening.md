@@ -1,73 +1,56 @@
-# Factor Screening Skill
+---
+name: factor-screening
+description: 指导 Agent 使用 SDK 进行因子筛选（下载财务数据、合并且筛选）
+---
 
-## Purpose
+## 你的角色
 
-Screen stocks by indicator conditions from a specified index or custom universe.
+你是一个因子筛选助手，帮助用户下载财务数据和行情数据，合并后进行因子筛选。
 
-## When to Use
+## SDK 方式
 
-User wants to filter/screen stocks by financial or technical indicator conditions.
-Examples:
-- "从沪深300中选择ROE大于15的股票"
-- "Select CSI500 stocks with PB < 5 and momentum > 10"
-- "筛选上证50中市盈率低于20的股票"
+```python
+from oxq.data.loaders import YFinanceDownloader
+from oxq.data.market import LocalMarketDataProvider
+from oxq.core.registry import list_indicators
 
-## Workflow
+# 1. 下载行情数据
+dl = YFinanceDownloader()
+for sym in ["AAPL", "MSFT", "GOOGL"]:
+    dl.download(symbol=sym, start="2020-01-01", end="2024-12-31")
 
-### Step 1: Clarify Universe
+# 2. 加载并计算因子
+market = LocalMarketDataProvider()
+indicators = list_indicators()
 
-If user specifies an index (沪深300, CSI300, etc.):
-```
-→ universe_set(type="index", code="csi300")
-```
+for sym in symbols:
+    bars = market.get_bars(sym, "2020-01-01", "2024-12-31")
+    pe = indicators["PE"]().compute(bars)
+    pb = indicators["PB"]().compute(bars)
+    roe = indicators["ROEChange"]().compute(bars)
 
-If user provides a symbol list:
-```
-→ universe_set(type="static", symbols=[...])
-```
-
-If neither specified, ask: "Which universe? (e.g., csi300, csi500, sse50, or a list of symbols)"
-
-### Step 2: Resolve Indicator Names
-
-Use `resolve_alias()` to map Chinese names to canonical English:
-- 市净率 → pb
-- 市盈率 → pe_ttm
-- 动量 → momentum
-- 净资产收益率 → roe
-
-### Step 3: Ensure Data Availability
-
-For each indicator needed:
-
-**Download-type indicators (roe, pe_ttm, pb, roa, peg):**
-```
-→ financial_download(symbol=sym, start=start, end=end, source="eastmoney",
-                     indicators=["roe", "pe_ttm", "pb"])
+# 3. 筛选条件
+# 合并所有因子到 DataFrame，按条件筛选
+mask = (pe_series < 20) & (pb_series < 3) & (roe_series > 0.15)
+candidates = mask[mask].index
 ```
 
-**Compute-type indicators (momentum, volatility):**
-1. Ensure OHLCV data is available: `data_load_symbols(symbols=..., source=...)`
-2. Indicators will be computed by Engine from OHLCV data.
+参考：`examples/strategies/factor_screen.py`
 
-**Important:** Downloaded financial data needs to be merged into the mktdata wide table
-before screening. Use `read_factor()` to load financial data, then merge relevant
-columns into each symbol's OHLCV DataFrame.
+## 可用财务指标
 
-### Step 4: Screen
+`PE`、`PB`、`BP`、`EP`、`ROEChange`、`NetProfitMargin`、`AccrualRatio`、`CashFlowRatio`、`MarketCap`、`TurnoverRate`、`PowerRatio`
 
-```
-→ universe_set(type="filter", symbols=symbols,
-    filters=[
-        {"column": "roe", "op": ">", "value": 15},
-        {"column": "pb", "op": "<", "value": 10},
-    ])
-```
+## 筛选模式
 
-### Step 5: Present Results
+| 模式 | 方法 |
+|------|------|
+| 百分位筛选 | `factor.rank(pct=True) < 0.2` (取前 20%) |
+| 绝对值筛选 | `factor < threshold` |
+| 多因子合成 | `score = rank(mom) + rank(pe) + rank(roe)` |
 
-Show the audit table (details) to the user for verification.
-Offer next steps:
-- "构建等权组合并回测？"
-- "调整筛选条件？"
-- "导出符合条件的股票列表？"
+## 红线
+
+- **不只用单因子**：单因子筛选不稳定，至少 2-3 个因子合成
+- **不忽略数据缺失**：NaN 在筛选中会产生假阳性/假阴性
+- **中国 A 股用 AkShare，美股用 YFinance**：不混淆数据源

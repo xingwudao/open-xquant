@@ -1,77 +1,48 @@
 ---
 name: chart-indicator
-description: When a user wants to visually verify an indicator, use the chart_indicator tool to render a candlestick chart with indicator overlays
-tools_required: [engine_run, chart_indicator]
+description: 指导 Agent 使用 SDK 渲染 K 线图和指标叠加
 ---
 
-## When to Use
+## 你的角色
 
-After creating or debugging an Indicator, the user wants to **see** the output on a real price chart to verify correctness. This skill guides you through the visualization workflow.
+你是一个图表渲染助手，帮助用户通过 SDK 可视化指标和价格数据。
 
-## Workflow
+## SDK 方式
 
-### Step 1: Ensure Data Exists
+```python
+import pandas as pd
+from oxq.data.market import LocalMarketDataProvider
+from oxq.tools.chart import chart_indicator
 
-The symbol's market data must be downloaded locally. Use `data_download` if needed:
+# 加载数据
+market = LocalMarketDataProvider()
+bars = market.get_bars("SPY", "2024-01-01", "2024-06-30")
 
-```
-data_download(symbols=["AAPL"], start="2024-01-01", end="2024-12-31")
-```
-
-### Step 2: Build a Minimal Strategy
-
-Create a throwaway strategy with the indicator(s) to visualize:
-
-```
-strategy_create(name="viz", hypothesis="indicator visualization", objectives={"total_return": {"min": -1.0}})
-strategy_add_signal(
-    strategy="viz",
-    name="dummy",
-    type="Threshold",
-    params={"column": "my_indicator", "threshold": 0, "direction": "above"},
+# 渲染 K 线图 + 指标叠加
+chart_indicator(
+    data=bars,
+    columns=["close"],
     indicators={
-        "my_indicator": {"type": "IchimokuTenkan", "params": {"period": 9}},
+        "SMA_20": {"type": "SMA", "params": {"column": "close", "period": 20}},
+        "SMA_50": {"type": "SMA", "params": {"column": "close", "period": 50}},
     },
+    output="chart.png",
 )
 ```
 
-**Tip:** Use a `Threshold` signal as a dummy — the signal itself doesn't matter, we just need the Engine to compute the indicator columns.
-
-### Step 3: Run Through Indicator Phase
-
-```
-engine_run(strategy="viz", start="2024-01-01", end="2024-12-31", symbols=["AAPL"], run_through="indicator")
+需要在 `pyproject.toml` 安装 chart 可选依赖：
+```bash
+pip install open-xquant[chart]
 ```
 
-This populates `mktdata` with OHLCV + indicator columns without running the full backtest.
+## 检查清单
 
-### Step 4: Chart
+渲染后检查：
+- NaN 区域是否正确处理
+- 指标比例与价格轴是否匹配
+- 形态是否符合预期（金叉/死叉位置）
+- 成交量是否异常
 
-```
-chart_indicator(run_id="viz_...", symbol="AAPL", columns=["my_indicator"], overlay=true)
-```
+## 红线
 
-- **overlay=true** — for price-scale indicators (SMA, Ichimoku, Bollinger)
-- **overlay=false** — for oscillators or different-scale indicators (RSI, RollingVolatility, HurstExponent)
-
-### Step 5: Read the Chart
-
-Use the `Read` tool on the returned PNG path to visually inspect the chart.
-
-## Multiple Indicators
-
-You can plot multiple indicators at once:
-
-```
-chart_indicator(run_id="...", symbol="AAPL", columns=["IchimokuTenkan", "IchimokuKijun"], overlay=true)
-```
-
-## What to Look For
-
-When verifying a new indicator:
-
-1. **NaN region** — first N values should be NaN for period-based indicators
-2. **Scale** — does the indicator range make sense relative to price?
-3. **Shape** — does the curve behave as expected? (e.g., SMA should be smoother than price)
-4. **Constant input** — try constant prices, the indicator should produce a flat or zero line
-5. **Known patterns** — verify against known market patterns if possible
+- **不用于策略回测验证**：图表仅用于视觉检查，不可替代 audit
