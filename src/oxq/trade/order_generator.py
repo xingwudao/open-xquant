@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from decimal import Decimal
 
@@ -43,6 +44,8 @@ def generate_orders(
     total_capital: Decimal,
     lot_size: int = 1,
     currency: str = "CNY",
+    pending_orders: list[Order] | None = None,
+    buy_cost_estimator: Callable[[str, Decimal, int], Decimal] | None = None,
 ) -> list[PlannedOrder]:
     """Generate a trade plan from target weights.
 
@@ -62,6 +65,10 @@ def generate_orders(
         Total portfolio value (cash + positions market value).
     lot_size : int
         Minimum trade unit. Default 1 (US stocks). Use 100 for A-shares.
+    pending_orders : list[Order] or None
+        Open orders already submitted but not filled.
+    buy_cost_estimator : Callable or None
+        Function returning total estimated cash needed for a BUY order.
 
     Returns
     -------
@@ -69,8 +76,25 @@ def generate_orders(
         Ordered list of planned trades with context.
     """
     planned: list[PlannedOrder] = []
+    pending_delta: dict[str, int] = {}
+    pending_sell_shares: dict[str, int] = {}
+    pending_buy_notional = Decimal("0")
+    estimate_cost = buy_cost_estimator or _default_buy_cost_estimator
+    for order in pending_orders or []:
+        if order.order_type != "market":
+            continue
+        signed_shares = order.shares if order.side == "BUY" else -order.shares
+        pending_delta[order.symbol] = pending_delta.get(order.symbol, 0) + signed_shares
+        if order.side == "BUY" and order.symbol in prices:
+            pending_buy_notional += estimate_cost(order.symbol, prices[order.symbol], order.shares)
+        elif order.side == "SELL":
+            pending_sell_shares[order.symbol] = pending_sell_shares.get(order.symbol, 0) + order.shares
+    reserved_capital = max(Decimal("0"), pending_buy_notional)
+    remaining_buy_budget = max(Decimal("0"), total_capital - reserved_capital)
 
-    # All symbols: union of targets and current positions
+    # All symbols: union of targets and current positions.
+    # Pending-only symbols are already represented by open orders and should
+    # not generate compensating trades unless a new target or position exists.
     all_symbols = set(target_weights.keys()) | set(positions.keys())
 
     for symbol in sorted(all_symbols):
@@ -80,6 +104,7 @@ def generate_orders(
 
         target_weight = target_weights.get(symbol, Decimal("0"))
         current_shares = positions[symbol].shares if symbol in positions else 0
+        projected_shares = current_shares + pending_delta.get(symbol, 0)
         current_value = price * current_shares
         current_weight = current_value / total_capital if total_capital > 0 else Decimal("0")
 
@@ -87,22 +112,43 @@ def generate_orders(
         raw_target = total_capital * target_weight / price
         target_shares = int(raw_target / lot_size) * lot_size
 
-        delta = target_shares - current_shares
-        if delta == 0:
+        buy_delta = target_shares - projected_shares
+        sellable_after_pending_sells = max(0, current_shares - pending_sell_shares.get(symbol, 0))
+        sell_delta = min(max(0, projected_shares - target_shares), sellable_after_pending_sells)
+        if buy_delta > 0:
+            side = "BUY"
+            shares = buy_delta
+            affordable_shares = int((remaining_buy_budget / price) / lot_size) * lot_size
+            shares = min(shares, affordable_shares)
+            while shares > 0 and estimate_cost(symbol, price, shares) > remaining_buy_budget:
+                shares -= lot_size
+            if shares <= 0:
+                continue
+            remaining_buy_budget -= estimate_cost(symbol, price, shares)
+            planned_target_shares = projected_shares + shares
+        elif sell_delta > 0:
+            side = "SELL"
+            shares = sell_delta
+            shares = min(shares, current_shares)
+            if shares <= 0:
+                continue
+            planned_target_shares = current_shares - shares
+        else:
             continue
-
-        side = "BUY" if delta > 0 else "SELL"
-        shares = abs(delta)
 
         planned.append(
             PlannedOrder(
                 order=Order(symbol=symbol, side=side, shares=shares, currency=currency),
                 current_shares=current_shares,
-                target_shares=target_shares,
+                target_shares=planned_target_shares,
                 current_weight=current_weight,
                 target_weight=target_weight,
                 estimated_amount=price * shares,
             )
         )
 
-    return planned
+    return sorted(planned, key=lambda item: 0 if item.order.side == "SELL" else 1)
+
+
+def _default_buy_cost_estimator(_symbol: str, price: Decimal, shares: int) -> Decimal:
+    return price * shares

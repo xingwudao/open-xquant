@@ -7,6 +7,7 @@ and regime analysis.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from oxq.spec.compiler import compile_run
@@ -40,7 +41,7 @@ def run_robustness(run_dir: str | Path) -> dict:
 
     spec = StrategySpec.from_yaml(str(spec_path))
     baseline_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-    baseline_sharpe = baseline_metrics.get("sharpe_ratio", 0)
+    baseline_sharpe = _finite_float(baseline_metrics.get("sharpe_ratio"))
 
     # Preserve the effective data directory from the original run
     env_path = run_path / "environment.json"
@@ -54,14 +55,23 @@ def run_robustness(run_dir: str | Path) -> dict:
         cost_x2_dir = run_path.parent / f"{run_path.name}_cost_x2"
         cost_spec = _clone_spec_with_cost_multiplier(spec, 2.0)
         cost_result, _ = compile_run(cost_spec, out_dir=str(cost_x2_dir), data_dir=data_dir)
-        perturbed_sharpe = cost_result.sharpe_ratio()
-        tests.append({
-            "name": "cost_x2",
-            "baseline_sharpe": round(baseline_sharpe, 4),
-            "perturbed_sharpe": round(perturbed_sharpe, 4),
-            "status": "fail" if perturbed_sharpe < 0 else ("warn" if perturbed_sharpe < baseline_sharpe * 0.5 else "pass"),
-            "message": f"Sharpe drops from {baseline_sharpe:.2f} to {perturbed_sharpe:.2f} with 2x costs",
-        })
+        perturbed_sharpe = _finite_float(cost_result.sharpe_ratio())
+        if baseline_sharpe is None or perturbed_sharpe is None:
+            tests.append({
+                "name": "cost_x2",
+                "baseline_sharpe": baseline_sharpe,
+                "perturbed_sharpe": perturbed_sharpe,
+                "status": "warn",
+                "message": "Sharpe unavailable for cost x2 robustness comparison",
+            })
+        else:
+            tests.append({
+                "name": "cost_x2",
+                "baseline_sharpe": round(baseline_sharpe, 4),
+                "perturbed_sharpe": round(perturbed_sharpe, 4),
+                "status": "fail" if perturbed_sharpe < 0 else ("warn" if perturbed_sharpe < baseline_sharpe * 0.5 else "pass"),
+                "message": f"Sharpe drops from {baseline_sharpe:.2f} to {perturbed_sharpe:.2f} with 2x costs",
+            })
     except Exception as e:
         tests.append({"name": "cost_x2", "status": "error", "message": str(e)})
 
@@ -100,7 +110,11 @@ def run_robustness(run_dir: str | Path) -> dict:
 
     # --- Test 4: Regime analysis ---
     if spec.robustness.regime_analysis:
-        tests.append({"name": "regime_analysis", "status": "pass", "message": "Regime analysis requested in spec"})
+        tests.append({
+            "name": "regime_analysis",
+            "status": "warn",
+            "message": "Regime analysis requested in spec — regime metrics are not yet implemented",
+        })
     else:
         tests.append({"name": "regime_analysis", "status": "warn", "message": "Regime analysis not configured"})
 
@@ -121,6 +135,16 @@ def run_robustness(run_dir: str | Path) -> dict:
     return {"status": status, "tests": tests, "baseline_sharpe": baseline_sharpe}
 
 
+def _finite_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
 def _clone_spec_with_cost_multiplier(spec: StrategySpec, multiplier: float) -> StrategySpec:
     """Create a copy of spec with costs multiplied."""
     return StrategySpec(
@@ -137,7 +161,7 @@ def _clone_spec_with_cost_multiplier(spec: StrategySpec, multiplier: float) -> S
         execution=spec.execution,
         cost=CostSection(
             fee_rate=spec.cost.fee_rate * multiplier,
-            fee_min=spec.cost.fee_min,
+            fee_min=spec.cost.fee_min * multiplier,
             slippage_rate=spec.cost.slippage_rate * multiplier,
         ),
         benchmark=spec.benchmark,

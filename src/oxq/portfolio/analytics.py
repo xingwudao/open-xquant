@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 
 from oxq.core.types import BarSnapshot, Fill, Portfolio
+
+if TYPE_CHECKING:
+    from oxq.portfolio.orderbook import ManagedOrder
 
 
 @dataclass
@@ -20,6 +24,7 @@ class RunResult:
     mktdata: dict[str, pd.DataFrame] = field(repr=False)
     benchmark_prices: dict[str, pd.Series] = field(default_factory=dict)
     snapshots: list[BarSnapshot] = field(default_factory=list)
+    orders: list[ManagedOrder] = field(default_factory=list)
 
     # -- Metrics --------------------------------------------------------------
 

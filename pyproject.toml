@@ -28,6 +28,7 @@ dependencies = [
     "pyarrow>=14.0",
     "pyyaml>=6.0",
     "click>=8.0",
+    "exchange-calendars>=4.5",
 ]
 
 [project.scripts]

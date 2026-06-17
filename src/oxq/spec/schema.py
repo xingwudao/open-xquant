@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -226,8 +228,8 @@ def _parse_market(raw: dict) -> MarketSection:
 def _parse_universe(raw: dict) -> UniverseSection:
     return UniverseSection(
         type=raw.get("type", "static"),
-        symbols=raw.get("symbols", []),
-        point_in_time=raw.get("point_in_time", False),
+        symbols=_parse_str_list(raw.get("symbols", []), "universe.symbols"),
+        point_in_time=_parse_bool(raw.get("point_in_time", False), "universe.point_in_time"),
         survivorship_bias_policy=raw.get("survivorship_bias_policy", "warn"),
     )
 
@@ -237,7 +239,7 @@ def _parse_data(raw: dict) -> DataSection:
         provider=raw.get("provider", "local"),
         data_dir=raw.get("data_dir", ""),
         price_adjustment=raw.get("price_adjustment", "adjusted"),
-        required_columns=raw.get("required_columns", ["open", "high", "low", "close", "volume"]),
+        required_columns=_parse_str_list(raw.get("required_columns", ["open", "high", "low", "close", "volume"]), "data.required_columns"),
         min_start_date=raw.get("min_start_date", ""),
     )
 
@@ -265,35 +267,39 @@ def _parse_portfolio(raw: dict) -> PortfolioSection:
 
 def _parse_execution(raw: dict) -> ExecutionSection:
     rebalance_raw = raw.get("rebalance", {})
+    rebalance_frequency = rebalance_raw.get("frequency", "daily")
     return ExecutionSection(
         trade_time=raw.get("trade_time", "next_open"),
         fill_price_mode=raw.get("fill_price_mode", "next_open"),
         rebalance=RebalanceDef(
-            frequency=rebalance_raw.get("frequency", "daily"),
-            interval_days=rebalance_raw.get("interval_days", 1),
+            frequency=rebalance_frequency,
+            interval_days=_parse_int(
+                rebalance_raw.get("interval_days", 1),
+                "execution.rebalance.interval_days",
+            ),
         ),
-        lot_size=raw.get("lot_size", 1),
-        initial_cash=raw.get("initial_cash", 100_000.0),
+        lot_size=_parse_int(raw.get("lot_size", 1), "execution.lot_size"),
+        initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),
     )
 
 
 def _parse_cost(raw: dict) -> CostSection:
     return CostSection(
-        fee_rate=raw.get("fee_rate", 0.0),
-        fee_min=raw.get("fee_min", 0.0),
-        slippage_rate=raw.get("slippage_rate", 0.0),
+        fee_rate=_parse_float(raw.get("fee_rate", 0.0), "cost.fee_rate"),
+        fee_min=_parse_float(raw.get("fee_min", 0.0), "cost.fee_min"),
+        slippage_rate=_parse_float(raw.get("slippage_rate", 0.0), "cost.slippage_rate"),
     )
 
 
 def _parse_benchmark(raw: dict) -> BenchmarkSection:
-    return BenchmarkSection(symbols=raw.get("symbols", []))
+    return BenchmarkSection(symbols=_parse_str_list(raw.get("symbols", []), "benchmark.symbols"))
 
 
 def _parse_validation(raw: dict) -> ValidationSection:
     return ValidationSection(
-        train_period=raw.get("train_period", []),
-        test_period=raw.get("test_period", []),
-        required_oos=raw.get("required_oos", False),
+        train_period=_parse_date_list(raw.get("train_period", []), "validation.train_period"),
+        test_period=_parse_date_list(raw.get("test_period", []), "validation.test_period"),
+        required_oos=_parse_bool(raw.get("required_oos", False), "validation.required_oos"),
     )
 
 
@@ -301,15 +307,85 @@ def _parse_robustness(raw: dict) -> RobustnessSection:
     return RobustnessSection(
         cost_multiplier=raw.get("cost_multiplier", []),
         parameter_perturbation=raw.get("parameter_perturbation", {}),
-        regime_analysis=raw.get("regime_analysis", False),
+        regime_analysis=_parse_bool(raw.get("regime_analysis", False), "robustness.regime_analysis"),
     )
 
 
 def _parse_decision_policy(raw: dict) -> DecisionPolicy:
+    reject_if = dict(raw.get("reject_if", {}))
+    promote_if = dict(raw.get("promote_if", {}))
+    for key in ("oos_sharpe_lt", "max_drawdown_lt"):
+        if key in reject_if:
+            reject_if[key] = _parse_float(reject_if[key], f"decision_policy.reject_if.{key}")
+    for key in ("oos_sharpe_gte", "max_drawdown_gte"):
+        if key in promote_if:
+            promote_if[key] = _parse_float(promote_if[key], f"decision_policy.promote_if.{key}")
     return DecisionPolicy(
-        reject_if=raw.get("reject_if", {}),
-        promote_if=raw.get("promote_if", {}),
+        reject_if=reject_if,
+        promote_if=promote_if,
     )
+
+
+def _parse_str_list(value: object, field_name: str) -> list[str]:
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError(f"{field_name} must be a list of strings")
+    return value
+
+
+def _parse_date_list(value: object, field_name: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"{field_name} must be a list of dates")
+    parsed = []
+    for item in value:
+        if isinstance(item, datetime):
+            parsed.append(item.date().isoformat())
+        elif isinstance(item, date):
+            parsed.append(item.isoformat())
+        elif isinstance(item, str):
+            parsed.append(item)
+        else:
+            raise ValueError(f"{field_name} must be a list of date strings")
+    return parsed
+
+
+def _parse_float(value: object, field_name: str) -> float:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be numeric")
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be numeric") from exc
+    if not math.isfinite(parsed):
+        raise ValueError(f"{field_name} must be finite")
+    return parsed
+
+
+def _parse_int(value: object, field_name: str) -> int:
+    if isinstance(value, bool):
+        raise ValueError(f"{field_name} must be an integer")
+    if isinstance(value, int):
+        return value
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith(("+", "-")):
+            digits = stripped[1:]
+        else:
+            digits = stripped
+        if digits.isdigit():
+            return int(stripped)
+    raise ValueError(f"{field_name} must be an integer")
+
+
+def _parse_bool(value: object, field_name: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized == "true":
+            return True
+        if normalized == "false":
+            return False
+    raise ValueError(f"{field_name} must be a boolean")
 
 
 def _dataclass_to_dict(obj: Any) -> Any:

@@ -3,6 +3,7 @@
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
 from oxq.core.types import Broker, FillReceiver, Order, OrderRouter
 from oxq.trade.fees import PercentageFee
@@ -526,38 +527,92 @@ class TestFillPriceMode:
     def test_next_open_mode(self):
         """NEXT_OPEN fills at next bar's open price."""
         mktdata, dates = self._make_mktdata()
-        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN)
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
         broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
         broker.on_bar_close(mktdata, dates[0])
+        assert broker.get_fills() == []
+        broker.on_bar_open(mktdata, dates[1])
         fills = broker.get_fills()
         assert fills[0].filled_price == Decimal("102")
+        assert fills[0].filled_at == dates[1].isoformat()
 
-    def test_next_high_mode(self):
-        """NEXT_HIGH fills at next bar's high price."""
-        mktdata, dates = self._make_mktdata()
-        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_HIGH)
-        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
-        broker.on_bar_close(mktdata, dates[0])
-        fills = broker.get_fills()
-        assert fills[0].filled_price == Decimal("105")
+    def test_next_high_mode_is_rejected(self):
+        """NEXT_HIGH is not causal for market-order backtests."""
+        with pytest.raises(ValueError, match="NEXT_HIGH"):
+            SimBroker(fill_price_mode=FillPriceMode.NEXT_HIGH)
 
-    def test_next_low_mode(self):
-        """NEXT_LOW fills at next bar's low price."""
+    def test_next_low_mode_is_rejected(self):
+        """NEXT_LOW is not causal for market-order backtests."""
+        with pytest.raises(ValueError, match="NEXT_LOW"):
+            SimBroker(fill_price_mode=FillPriceMode.NEXT_LOW)
+
+    def test_next_open_requires_market_calendar(self):
+        with pytest.raises(ValueError, match="market_calendar"):
+            SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN)
+
+    def test_next_mode_without_submission_timestamp_does_not_peek(self):
+        """NEXT_OPEN without created_at should not read next-bar prices."""
         mktdata, dates = self._make_mktdata()
-        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_LOW)
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
         broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+        broker.on_bar_open(mktdata, dates[0])
         broker.on_bar_close(mktdata, dates[0])
+        assert broker.get_fills() == []
+
+        broker.on_bar_open(mktdata, dates[1])
         fills = broker.get_fills()
-        assert fills[0].filled_price == Decimal("98")
+        assert fills[0].filled_price == Decimal("102")
 
     def test_next_mode_last_bar_skips(self):
         """NEXT_OPEN on last bar -> no fill (no next bar)."""
         mktdata, dates = self._make_mktdata()
-        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN)
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
         broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
         broker.on_bar_close(mktdata, dates[1])  # last bar
         fills = broker.get_fills()
         assert len(fills) == 0
+
+    def test_next_open_expires_when_next_bar_is_missing(self):
+        """NEXT_OPEN orders should not fill on a later stale bar."""
+        dates = pd.date_range("2024-01-01", periods=3)
+        df = pd.DataFrame(
+            {
+                "open": [100.0, 104.0],
+                "high": [101.0, 105.0],
+                "low": [99.0, 103.0],
+                "close": [100.0, 104.0],
+                "volume": [1000, 1000],
+            },
+            index=[dates[0], dates[2]],
+        )
+        mktdata = {"AAPL": df}
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+
+        broker.on_bar_close(mktdata, dates[0])
+        broker.on_bar_open(mktdata, dates[2])
+
+        assert broker.get_fills() == []
+        assert broker.get_open_orders() == []
+
+    def test_next_open_replaced_market_order_does_not_fill(self):
+        """Only the latest same-symbol NEXT_OPEN market order should fill."""
+        mktdata, dates = self._make_mktdata()
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=20))
+
+        broker.on_bar_close(mktdata, dates[0])
+        broker.on_bar_open(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        orders = broker.get_all_orders()
+        assert len(fills) == 1
+        assert fills[0].order.shares == 20
+        assert [order.status for order in orders] == ["canceled", "filled"]
 
 
 class TestFillPriceModeMid:

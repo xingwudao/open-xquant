@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import click
@@ -293,13 +294,28 @@ def run_robustness_cmd(run_dir: str, as_json: bool):
         click.echo(_json.dumps(result, indent=2, default=str))
     else:
         click.echo(f"Status: {result['status'].upper()}")
-        click.echo(f"Baseline Sharpe: {result.get('baseline_sharpe', 0):.4f}")
+        click.echo(f"Baseline Sharpe: {_format_optional_float(result.get('baseline_sharpe'))}")
         click.echo("")
         for t in result["tests"]:
             icon = "PASS" if t["status"] == "pass" else ("FAIL" if t["status"] == "fail" else "WARN")
             click.echo(f"  [{t['status'].upper()}] {icon} {t['name']}: {t.get('message', '')}")
             if "baseline_sharpe" in t:
-                click.echo(f"         Baseline: {t['baseline_sharpe']:.4f} → Perturbed: {t['perturbed_sharpe']:.4f}")
+                click.echo(
+                    "         Baseline: "
+                    f"{_format_optional_float(t.get('baseline_sharpe'))} → "
+                    f"Perturbed: {_format_optional_float(t.get('perturbed_sharpe'))}"
+                )
+
+    if result.get("status") in {"error", "fragile"}:
+        raise SystemExit(1)
+
+
+def _format_optional_float(value: object) -> str:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return "N/A"
+    return f"{parsed:.4f}" if math.isfinite(parsed) else "N/A"
 
 
 main.add_command(agent_group)

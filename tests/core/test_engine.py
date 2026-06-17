@@ -497,7 +497,7 @@ def test_engine_next_open_fills_on_next_bar_before_optimization() -> None:
                 "open": [10.0, 12.0, 14.0],
                 "high": [10.0, 12.0, 14.0],
                 "low": [10.0, 12.0, 14.0],
-                "close": [10.0, 12.0, 14.0],
+                "close": [12.0, 12.0, 14.0],
                 "volume": [1_000_000, 1_000_000, 1_000_000],
             },
             index=dates,
@@ -513,7 +513,7 @@ def test_engine_next_open_fills_on_next_bar_before_optimization() -> None:
     result = Engine().run(
         strategy,
         market=FakeMarketDataProvider(data),
-        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN),
+        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS"),
         start="2024-01-01",
         end="2024-01-03",
     )
@@ -522,6 +522,83 @@ def test_engine_next_open_fills_on_next_bar_before_optimization() -> None:
     assert len(buy_trades) == 1
     assert buy_trades[0].filled_price == Decimal("12")
     assert buy_trades[0].filled_at == dates[1].isoformat()
+
+
+def test_engine_rejects_next_open_buy_when_gap_up_exceeds_cash() -> None:
+    """A next-open gap up should not create negative cash."""
+    dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 20.0],
+                "high": [10.0, 20.0],
+                "low": [10.0, 20.0],
+                "close": [10.0, 20.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    strategy = Strategy(
+        name="next_open_gap",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS"),
+        start="2024-01-01",
+        end="2024-01-02",
+        initial_cash=100.0,
+    )
+
+    assert result.trades == []
+    assert result.portfolio.positions == {}
+    assert result.portfolio.cash == Decimal("100.0")
+    rejected_orders = [order for order in result.orders if order.status == "rejected"]
+    assert len(rejected_orders) == 1
+    assert rejected_orders[0].status_reason == "insufficient_cash"
+    assert rejected_orders[0].order.symbol == "AAA"
+
+
+def test_engine_cancels_pending_next_open_buy_before_exit_sell() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 5.0, 5.0],
+                "high": [10.0, 5.0, 5.0],
+                "low": [10.0, 5.0, 5.0],
+                "close": [10.0, 5.0, 5.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    strategy = Strategy(
+        name="cancel_pending_buy_before_exit",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS"),
+        start="2024-01-01",
+        end="2024-01-03",
+        initial_cash=1000.0,
+        rules=[AlwaysExitRule()],
+    )
+
+    canceled_buys = [order for order in result.orders if order.order.side == "BUY" and order.status == "canceled"]
+    assert result.portfolio.positions == {}
+    assert canceled_buys
+    assert all(order.status_reason == "exit_sell_submitted" for order in canceled_buys)
 
 
 def test_engine_lot_size() -> None:

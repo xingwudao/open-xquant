@@ -241,6 +241,8 @@ class Engine:
     @property
     def result(self) -> RunResult:
         """Current result based on accumulated state."""
+        get_all_orders = getattr(self._broker, "get_all_orders", None)
+        orders = list(get_all_orders()) if callable(get_all_orders) else []
         return RunResult(
             portfolio=self._portfolio,
             trades=self._trades,
@@ -248,6 +250,7 @@ class Engine:
             mktdata=self._mktdata,
             benchmark_prices=self._benchmark_prices,
             snapshots=self._snapshots,
+            orders=orders,
         )
 
     def step(self, date: pd.Timestamp) -> None:
@@ -277,6 +280,7 @@ class Engine:
         # for the new bar, so target generation sees the actual portfolio.
         fill_due_market_orders = getattr(broker, "fill_due_market_orders", None)
         if callable(fill_due_market_orders):
+            _sync_broker_cash(broker, portfolio)
             fill_due_market_orders(mktdata, date)
         _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
@@ -289,6 +293,9 @@ class Engine:
                 signals_data[s] = sliced
                 indicators_data[s] = sliced
 
+        set_held_symbols = getattr(strategy.portfolio, "set_held_symbols", None)
+        if callable(set_held_symbols):
+            set_held_symbols(list(portfolio.positions.keys()))
         target_weights = strategy.portfolio.optimize(signals_data, indicators_data)
         raw_target_weights = dict(target_weights)
 
@@ -310,6 +317,12 @@ class Engine:
         # ── Step 4: Trading algorithm (skip if hold) ──────────────────
         if not hold:
             total_capital = portfolio.total_value(bar_prices)
+            estimate_market_buy_cost = getattr(broker, "estimate_market_buy_cost", None)
+            buy_cost_estimator = None
+            if callable(estimate_market_buy_cost):
+                def buy_cost_estimator(symbol: str, price: Decimal, shares: int) -> Decimal:
+                    return estimate_market_buy_cost(symbol, price, shares, portfolio.currency)
+
             planned = generate_orders(
                 target_weights={
                     s: Decimal(str(w))
@@ -321,14 +334,18 @@ class Engine:
                 total_capital=total_capital,
                 lot_size=self._lot_size,
                 currency=portfolio.currency,
+                pending_orders=[managed.order for managed in broker.get_open_orders() if managed.order.order_type == "market"],
+                buy_cost_estimator=buy_cost_estimator,
             )
             for p in planned:
                 broker.submit_order(p.order)
 
         # ── Step 5: Broker executes ───────────────────────────────────
+        _sync_broker_cash(broker, portfolio)
         broker.on_bar_open(mktdata, date)
         _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
+        _sync_broker_cash(broker, portfolio)
         broker.on_bar_close(mktdata, date)
         _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
@@ -356,9 +373,15 @@ class Engine:
                 target_shares = int(pos.shares * target_ratio)
                 sell_shares = pos.shares - target_shares
                 if sell_shares > 0:
+                    cancel_market_orders = getattr(broker, "cancel_market_orders", None)
+                    if callable(cancel_market_orders):
+                        cancel_market_orders(sym, "BUY", reason="exit_sell_submitted")
+                    else:
+                        broker.cancel_orders(sym, side="BUY")
                     broker.submit_order(Order(symbol=sym, side="SELL", shares=sell_shares, currency=portfolio.currency))
 
             # ── Step 8: Broker executes exit orders ───────────────────
+            _sync_broker_cash(broker, portfolio)
             broker.on_bar_close(mktdata, date)
             _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
@@ -483,7 +506,7 @@ class Engine:
         return self.result
 
 
-def _apply_fill(portfolio: Portfolio, fill: Fill) -> None:
+def _apply_fill(portfolio: Portfolio, fill: Fill) -> bool:
     """Update portfolio state based on a fill."""
     order = fill.order
     symbol = order.symbol
@@ -505,7 +528,7 @@ def _apply_fill(portfolio: Portfolio, fill: Fill) -> None:
                 symbol=symbol,
                 shares=order.shares,
                 avg_cost=fill.filled_price,
-            )
+                )
     elif order.side == "SELL":
         portfolio.cash += cost - fill.fee
         if symbol in portfolio.positions:
@@ -519,13 +542,21 @@ def _apply_fill(portfolio: Portfolio, fill: Fill) -> None:
                     shares=remaining,
                     avg_cost=old.avg_cost,
                 )
+    return True
+
+
+def _sync_broker_cash(broker: Broker, portfolio: Portfolio) -> None:
+    set_available_cash = getattr(broker, "set_available_cash", None)
+    if callable(set_available_cash):
+        set_available_cash(portfolio.cash)
 
 
 def _apply_fills(portfolio: Portfolio, fills: list[Fill], trades: list[Fill], optimizer: object) -> None:
     """Apply fills and notify stateful optimizers when positions fully exit."""
     fully_exited: list[str] = []
     for fill in fills:
-        _apply_fill(portfolio, fill)
+        if not _apply_fill(portfolio, fill):
+            continue
         trades.append(fill)
         if fill.order.side == "SELL" and fill.order.symbol not in portfolio.positions:
             fully_exited.append(fill.order.symbol)

@@ -20,5 +20,10 @@ class Composite:
     ) -> pd.Series:
         if not signals:
             return pd.Series(dtype=bool)
-        op = pd.Series.__and__ if logic == "and" else pd.Series.__or__
+        if logic == "and":
+            op = pd.Series.__and__
+        elif logic == "or":
+            op = pd.Series.__or__
+        else:
+            raise ValueError("logic must be 'and' or 'or'")
         return reduce(op, (mktdata[col] for col in signals))

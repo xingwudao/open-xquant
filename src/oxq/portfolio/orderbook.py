@@ -39,12 +39,14 @@ class ManagedOrder:
         self.order = order
         self.id = id
         self.status: Literal[
-            "open", "filled", "partial", "canceled", "expired"
+            "open", "filled", "partial", "canceled", "expired", "rejected"
         ] = "open"
         self.created_at = created_at
         self.filled_at: str | None = None
         self.filled_price: Decimal | None = None
         self.filled_shares: int | None = None
+        self.due_at: str | None = None
+        self.status_reason: str = ""
         self.trail_high_water: Decimal | None = None
 
 
@@ -55,8 +57,8 @@ class OrderBook:
     order types. Provides methods to add orders, query open orders,
     update status, and cancel orders.
 
-    When adding a non-market order for the same symbol + side +
-    order_type as an existing open order, the old order is
+    When adding an order for the same symbol + side + order_type
+    as an existing open order, the old order is
     automatically canceled (deduplication).
     """
 
@@ -67,8 +69,8 @@ class OrderBook:
     def add(self, order: Order, created_at: str) -> ManagedOrder:
         """Add an order to the book.
 
-        For non-market orders, deduplicates by canceling any
-        existing open order with the same symbol + side + order_type.
+        Deduplicates by canceling any existing open order with the same
+        symbol + side + order_type.
 
         Parameters
         ----------
@@ -82,15 +84,15 @@ class OrderBook:
         ManagedOrder
             The managed order with assigned ID.
         """
-        if order.order_type != "market":
-            for existing in self._orders:
-                if (
-                    existing.status == "open"
-                    and existing.order.symbol == order.symbol
-                    and existing.order.side == order.side
-                    and existing.order.order_type == order.order_type
-                ):
-                    existing.status = "canceled"
+        for existing in self._orders:
+            if (
+                existing.status == "open"
+                and existing.order.symbol == order.symbol
+                and existing.order.side == order.side
+                and existing.order.order_type == order.order_type
+            ):
+                existing.status = "canceled"
+                existing.status_reason = "replaced"
         self._counter += 1
         managed = ManagedOrder(
             order=order, id=f"ord_{self._counter}", created_at=created_at,
@@ -115,6 +117,10 @@ class OrderBook:
         if symbol is not None:
             result = [m for m in result if m.order.symbol == symbol]
         return result
+
+    def get_all_orders(self) -> list[ManagedOrder]:
+        """Return all orders with their current lifecycle status."""
+        return list(self._orders)
 
     def cancel_orders(
         self,
@@ -142,6 +148,7 @@ class OrderBook:
             if side is not None and m.order.side != side:
                 continue
             m.status = "canceled"
+            m.status_reason = "canceled"
             canceled.append(m)
         return canceled
 
@@ -167,6 +174,7 @@ class OrderBook:
             ):
                 if max_shares <= 0:
                     m.status = "canceled"
+                    m.status_reason = "position_closed"
                 elif m.order.shares > max_shares:
                     m.order = replace(m.order, shares=max_shares)
 

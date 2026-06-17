@@ -110,6 +110,15 @@ def test_local_provider_legacy_parquet_gets_utc(
     assert "timezone" in caplog.text.lower()
 
 
+def test_local_provider_rejects_unsafe_symbol_path(tmp_path: Path) -> None:
+    from oxq.data.market import LocalMarketDataProvider
+
+    provider = LocalMarketDataProvider(data_dir=tmp_path)
+
+    with pytest.raises(ValueError, match="Unsafe symbol"):
+        provider.get_bars("../outside", "2024-01-01", "2024-12-31")
+
+
 def test_engine_rejects_naive_index() -> None:
     """Engine must reject data with naive (no timezone) DatetimeIndex."""
     from oxq.core.engine import Engine

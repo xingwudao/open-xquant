@@ -53,14 +53,21 @@ class SimBroker:
         fee_model: FeeModel | None = None,
         slippage_model: SlippageModel | None = None,
         fill_price_mode: FillPriceMode = FillPriceMode.CLOSE,
+        market_calendar: str | None = None,
     ) -> None:
+        if fill_price_mode in {FillPriceMode.NEXT_HIGH, FillPriceMode.NEXT_LOW}:
+            raise ValueError(f"{fill_price_mode.name} is not supported for causal market-order backtests")
+        if fill_price_mode == FillPriceMode.NEXT_OPEN and market_calendar is None:
+            raise ValueError("market_calendar is required for NEXT_OPEN fills")
         self._fee_model = fee_model
         self._slippage_model = slippage_model
         self._fill_price_mode = fill_price_mode
+        self._market_calendar = market_calendar
         self._order_book = OrderBook()
         self._pending_market: list[ManagedOrder] = []
         self._fills: list[Fill] = []
         self._current_date: pd.Timestamp | None = None
+        self._available_cash: Decimal | None = None
 
     # -- Broker lifecycle hooks -----------------------------------------------
 
@@ -99,12 +106,22 @@ class SimBroker:
         created_at = self._current_date.isoformat() if self._current_date is not None else ""
         managed = self._order_book.add(order, created_at=created_at)
         if order.order_type == "market":
+            if (
+                self._fill_price_mode == FillPriceMode.NEXT_OPEN
+                and self._market_calendar is not None
+                and self._current_date is not None
+            ):
+                managed.due_at = self._next_session_after(self._current_date).isoformat()
             self._pending_market.append(managed)
         return managed.id
 
     def set_current_date(self, date: pd.Timestamp) -> None:
         """Set the engine bar date used to timestamp newly submitted orders."""
         self._current_date = pd.Timestamp(date)
+
+    def set_available_cash(self, cash: Decimal) -> None:
+        """Set cash available for simulated BUY fills."""
+        self._available_cash = cash
 
     # -- Order Processing -----------------------------------------------------
 
@@ -178,13 +195,39 @@ class SimBroker:
         """
         still_pending: list[ManagedOrder] = []
         for managed in self._pending_market:
+            if managed.status != "open":
+                continue
             order = managed.order
+            if self._fill_price_mode == FillPriceMode.NEXT_OPEN:
+                due_status = self._next_open_due_status(managed, mktdata, date)
+                if due_status == "pending":
+                    still_pending.append(managed)
+                    continue
+                if due_status == "expired":
+                    managed.status = "expired"
+                    managed.status_reason = "next_open_due_bar_missing"
+                    continue
             raw_price = self._get_fill_price(managed, mktdata, date)
             if raw_price is None:
+                if self._is_due_next_open_order(managed, date):
+                    managed.status = "expired"
+                    managed.status_reason = "next_open_price_missing"
+                    continue
                 still_pending.append(managed)
                 continue
             fill_price = self._apply_slippage(order, raw_price)
             fee = self._calc_fee(order, fill_price)
+            cash_delta = fill_price * order.shares
+            if order.side == "BUY":
+                required_cash = cash_delta + fee
+                if self._available_cash is not None and required_cash > self._available_cash:
+                    managed.status = "rejected"
+                    managed.status_reason = "insufficient_cash"
+                    continue
+                if self._available_cash is not None:
+                    self._available_cash -= required_cash
+            elif self._available_cash is not None:
+                self._available_cash += cash_delta - fee
             fill = self._order_book.fill(managed, fill_price, date.isoformat(), fee)
             self._fills.append(fill)
         self._pending_market = still_pending
@@ -193,6 +236,8 @@ class SimBroker:
         self, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
     ) -> None:
         """Fill market orders whose configured execution time has arrived."""
+        if self._fill_price_mode != FillPriceMode.NEXT_OPEN:
+            return
         self.fill_market_orders(mktdata, date)
 
     # -- FillReceiver ---------------------------------------------------------
@@ -219,6 +264,10 @@ class SimBroker:
             Open orders.
         """
         return self._order_book.get_open_orders(symbol)
+
+    def get_all_orders(self) -> list[ManagedOrder]:
+        """Return all submitted orders with their final lifecycle status."""
+        return self._order_book.get_all_orders()
 
     def cap_pending_sells(self, symbol: str, max_shares: int) -> None:
         """Cap pending SELL order shares to current position size.
@@ -253,6 +302,25 @@ class SimBroker:
             The canceled orders.
         """
         return self._order_book.cancel_orders(symbol, side)
+
+    def cancel_market_orders(self, symbol: str, side: str | None = None, reason: str = "canceled") -> list[ManagedOrder]:
+        """Cancel open market orders for a symbol and optional side."""
+        canceled: list[ManagedOrder] = []
+        for managed in self._order_book.get_open_orders(symbol):
+            if managed.order.order_type != "market":
+                continue
+            if side is not None and managed.order.side != side:
+                continue
+            managed.status = "canceled"
+            managed.status_reason = reason
+            canceled.append(managed)
+        return canceled
+
+    def estimate_market_buy_cost(self, symbol: str, price: Decimal, shares: int, currency: str = "CNY") -> Decimal:
+        """Estimate total cash required for a market BUY, including costs."""
+        order = Order(symbol=symbol, side="BUY", shares=shares, currency=currency)
+        fill_price = self._apply_slippage(order, price)
+        return fill_price * shares + self._calc_fee(order, fill_price)
 
     # -- Backward Compatibility -----------------------------------------------
 
@@ -292,6 +360,10 @@ class SimBroker:
                 return None
             return (open_price + close_price) / 2
 
+        if not managed.created_at:
+            managed.created_at = pd.Timestamp(date).isoformat()
+            return None
+
         if managed.created_at:
             created_at = pd.Timestamp(managed.created_at)
             if pd.Timestamp(date) <= created_at:
@@ -304,18 +376,53 @@ class SimBroker:
             price = Decimal(str(float(df.loc[date, col])))  # type: ignore[arg-type]
             return price if price.is_finite() else None
 
-        # Legacy direct-broker use without an engine-created timestamp.
-        idx = df.index.get_loc(date)
-        if idx + 1 >= len(df):
-            return None  # no next bar
-        next_date = df.index[idx + 1]
-        col = {
-            FillPriceMode.NEXT_OPEN: "open",
-            FillPriceMode.NEXT_HIGH: "high",
-            FillPriceMode.NEXT_LOW: "low",
-        }[self._fill_price_mode]
-        price = Decimal(str(float(df.loc[next_date, col])))  # type: ignore[arg-type]
-        return price if price.is_finite() else None
+        return None
+
+    def _is_due_next_open_order(self, managed: ManagedOrder, date: pd.Timestamp) -> bool:
+        if self._fill_price_mode != FillPriceMode.NEXT_OPEN or not managed.created_at:
+            return False
+        return pd.Timestamp(date) > pd.Timestamp(managed.created_at)
+
+    def _next_open_due_status(self, managed: ManagedOrder, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp) -> str:
+        if not managed.created_at:
+            managed.created_at = pd.Timestamp(date).isoformat()
+        if managed.due_at is None:
+            if self._market_calendar is not None:
+                managed.due_at = self._next_session_after(pd.Timestamp(managed.created_at)).isoformat()
+            else:
+                due_at = self._next_available_bar_after(managed.order.symbol, mktdata, pd.Timestamp(managed.created_at))
+                if due_at is None:
+                    return "pending"
+                managed.due_at = due_at.isoformat()
+        current_date = pd.Timestamp(date).date()
+        due_date = pd.Timestamp(managed.due_at).date()
+        if current_date < due_date:
+            return "pending"
+        if current_date > due_date:
+            return "expired"
+        return "due"
+
+    def _next_session_after(self, date: pd.Timestamp) -> pd.Timestamp:
+        import exchange_calendars as xcals
+
+        cal = xcals.get_calendar(self._market_calendar or "XNYS")
+        session_date = pd.Timestamp(date)
+        if session_date.tz is not None:
+            session_date = session_date.tz_convert(None)
+        session_date = session_date.normalize()
+        if cal.is_session(session_date):
+            return pd.Timestamp(cal.next_session(session_date))
+        return pd.Timestamp(cal.date_to_session(session_date, direction="next"))
+
+    @staticmethod
+    def _next_available_bar_after(symbol: str, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp) -> pd.Timestamp | None:
+        if symbol not in mktdata:
+            return None
+        index = pd.DatetimeIndex(mktdata[symbol].index)
+        later = index[index > pd.Timestamp(date)]
+        if later.empty:
+            return None
+        return pd.Timestamp(later[0])
 
     def _apply_slippage(self, order: Order, price: Decimal) -> Decimal:
         if self._slippage_model:

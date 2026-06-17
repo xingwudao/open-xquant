@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import pytest
+
 from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 from oxq.spec.validator import validate
 
@@ -12,6 +14,409 @@ def test_validate_rejects_reversed_test_period() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "validation_period_order" for error in result.errors)
+
+
+def test_validate_rejects_empty_or_unsafe_strategy_id() -> None:
+    empty = StrategySpec.template(strategy_id="", hypothesis="strategy id is required")
+    unsafe = StrategySpec.template(strategy_id="../outside", hypothesis="strategy id must be path safe")
+
+    empty_result = validate(empty)
+    unsafe_result = validate(unsafe)
+
+    assert empty_result.status == "fail"
+    assert unsafe_result.status == "fail"
+    assert any(error["check"] == "strategy_id_invalid" for error in empty_result.errors)
+    assert any(error["check"] == "strategy_id_invalid" for error in unsafe_result.errors)
+
+
+def test_validate_rejects_min_start_date_after_requested_start() -> None:
+    spec = StrategySpec.template(strategy_id="bad_min_start", hypothesis="min_start_date must not truncate requested range")
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-01", "2024-12-31"]
+    spec.data.min_start_date = "2024-02-01"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "data_min_start_date" for error in result.errors)
+
+
+def test_validate_rejects_negative_costs() -> None:
+    spec = StrategySpec.template(strategy_id="negative_costs", hypothesis="costs cannot improve fills")
+    spec.cost.fee_rate = -0.001
+    spec.cost.slippage_rate = -0.001
+    spec.cost.fee_min = -1.0
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    checks = {error["check"] for error in result.errors}
+    assert "cost_model_missing" in checks
+    assert "fee_min_negative" in checks
+
+
+def test_from_yaml_rejects_scalar_universe_symbols(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: scalar_symbols
+research:
+  hypothesis: symbols must be a list
+universe:
+  type: static
+  symbols: SPY
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="universe.symbols"):
+        StrategySpec.from_yaml(spec_path)
+
+
+def test_from_yaml_coerces_quoted_point_in_time_false(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: quoted_point_in_time
+research:
+  hypothesis: quoted booleans should not bypass audits
+universe:
+  type: static
+  symbols: ["SPY"]
+  point_in_time: "false"
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    result = validate(spec)
+
+    assert spec.universe.point_in_time is False
+    assert any(warning["check"] == "static_universe_survivorship" for warning in result.warnings)
+
+
+def test_from_yaml_rejects_invalid_point_in_time_bool(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: invalid_point_in_time
+research:
+  hypothesis: invalid booleans should fail parsing
+universe:
+  type: static
+  symbols: ["SPY"]
+  point_in_time: maybe
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="universe.point_in_time"):
+        StrategySpec.from_yaml(spec_path)
+
+
+def test_validate_rejects_unsafe_universe_symbols() -> None:
+    spec = StrategySpec.template(strategy_id="unsafe_symbol", hypothesis="symbols are data filenames")
+    spec.universe.symbols = ["../outside"]
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "universe_symbol_unsafe" for error in result.errors)
+
+
+def test_from_yaml_coerces_quoted_decision_policy_thresholds(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: policy_thresholds
+research:
+  hypothesis: quoted policy thresholds should parse
+decision_policy:
+  reject_if:
+    oos_sharpe_lt: "0.5"
+  promote_if:
+    max_drawdown_gte: "-0.2"
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.decision_policy.reject_if["oos_sharpe_lt"] == 0.5
+    assert spec.decision_policy.promote_if["max_drawdown_gte"] == -0.2
+
+
+def test_from_yaml_rejects_invalid_decision_policy_thresholds(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: bad_policy_threshold
+research:
+  hypothesis: policy thresholds must be numeric
+decision_policy:
+  promote_if:
+    oos_sharpe_gte: high
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="decision_policy"):
+        StrategySpec.from_yaml(spec_path)
+
+
+def test_from_yaml_normalizes_unquoted_validation_dates(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: unquoted_dates
+research:
+  hypothesis: unquoted YAML dates should be accepted
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  train_period: [2020-01-01, 2021-12-31]
+  test_period: [2022-01-01, 2024-12-31]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.validation.train_period == ["2020-01-01", "2021-12-31"]
+    assert spec.validation.test_period == ["2022-01-01", "2024-12-31"]
+
+
+def test_from_yaml_coerces_quoted_numeric_fields(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: quoted_numbers
+research:
+  hypothesis: quoted numeric fields should parse
+universe:
+  type: static
+  symbols: [SPY]
+cost:
+  fee_rate: "0.001"
+  fee_min: "1.5"
+  slippage_rate: "0.002"
+execution:
+  trade_time: next_open
+  fill_price_mode: next_open
+  rebalance:
+    frequency: daily
+    interval_days: "5"
+  lot_size: "100"
+  initial_cash: "250000"
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    result = validate(spec)
+
+    assert spec.cost.fee_rate == 0.001
+    assert spec.cost.fee_min == 1.5
+    assert spec.cost.slippage_rate == 0.002
+    assert spec.execution.rebalance.interval_days == 5
+    assert spec.execution.lot_size == 100
+    assert spec.execution.initial_cash == 250000.0
+    assert result.status == "pass"
+
+
+def test_from_yaml_rejects_non_finite_numeric_fields(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: non_finite
+research:
+  hypothesis: non-finite values are invalid
+cost:
+  fee_rate: .nan
+  slippage_rate: .inf
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="finite"):
+        StrategySpec.from_yaml(spec_path)
+
+
+def test_validate_rejects_invalid_execution_numeric_ranges() -> None:
+    spec = StrategySpec.template(strategy_id="bad_execution_numbers", hypothesis="execution numbers need ranges")
+    spec.execution.lot_size = 0
+    spec.execution.rebalance.interval_days = 0
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    checks = {error["check"] for error in result.errors}
+    assert "lot_size_invalid" in checks
+    assert "rebalance_interval_invalid" in checks
+
+
+def test_validate_rejects_rebalance_frequency_when_interval_is_omitted(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: weekly_rebalance
+research:
+  hypothesis: calendar frequency without explicit interval is ambiguous
+universe:
+  symbols: ["SPY"]
+execution:
+  rebalance:
+    frequency: weekly
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    result = validate(spec)
+
+    assert spec.execution.rebalance.interval_days == 1
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_frequency_unsupported" for error in result.errors)
+
+
+def test_validate_accepts_non_daily_rebalance_with_explicit_interval() -> None:
+    spec = StrategySpec.template(strategy_id="explicit_rebalance", hypothesis="explicit N-bar rebalance is supported")
+    spec.execution.rebalance.frequency = "weekly"
+    spec.execution.rebalance.interval_days = 5
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_accepts_timestamp_signal_dry_run() -> None:
+    spec = StrategySpec.template(strategy_id="timestamp_signal", hypothesis="timestamp signals use datetime indexes")
+    spec.signal.rules = {"monday": SignalRuleDef(type="Timestamp", params={"rule": "weekday:0"})}
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_rejects_timestamp_end_period_rules() -> None:
+    spec = StrategySpec.template(strategy_id="timestamp_month_end", hypothesis="timestamp end rules need calendar support")
+    spec.signal.rules = {"month_end": SignalRuleDef(type="Timestamp", params={"rule": "month_end"})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "timestamp_end_rule_unsupported" for error in result.errors)
+
+
+def test_validate_rejects_invalid_timestamp_rules() -> None:
+    spec = StrategySpec.template(strategy_id="bad_timestamp_rule", hypothesis="timestamp rules must be explicit")
+    spec.signal.rules = {
+        "typo": SignalRuleDef(type="Timestamp", params={"rule": "weekdy:0"}),
+        "weekend": SignalRuleDef(type="Timestamp", params={"rule": "weekday:6"}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    errors = [error for error in result.errors if error["check"] == "timestamp_rule_invalid"]
+    assert len(errors) == 2
+
+
+def test_validate_rejects_unsupported_price_adjustment() -> None:
+    spec = StrategySpec.template(strategy_id="raw_prices", hypothesis="price adjustment semantics must be explicit")
+    spec.data.price_adjustment = "raw"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "price_adjustment_unsupported" for error in result.errors)
+
+
+def test_validate_rejects_required_columns_without_close() -> None:
+    spec = StrategySpec.template(strategy_id="missing_close", hypothesis="close is required for valuation")
+    spec.data.required_columns = ["open", "high", "low", "volume"]
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "required_columns_missing_close" for error in result.errors)
+
+
+def test_validate_rejects_next_open_required_columns_without_open() -> None:
+    spec = StrategySpec.template(strategy_id="missing_open", hypothesis="open is required for next-open fills")
+    spec.data.required_columns = ["high", "low", "close", "volume"]
+    spec.execution.fill_price_mode = "next_open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "required_columns_missing_open" for error in result.errors)
+
+
+def test_validate_rejects_unsupported_data_provider() -> None:
+    spec = StrategySpec.template(strategy_id="remote_provider", hypothesis="compiler only supports local data")
+    spec.data.provider = "yfinance"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "data_provider_unsupported" for error in result.errors)
+
+
+def test_validate_rejects_unsupported_market_calendar() -> None:
+    spec = StrategySpec.template(strategy_id="bad_calendar", hypothesis="calendar must resolve deterministically")
+    spec.market.calendar = "BAD"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "market_calendar_unsupported" for error in result.errors)
+
+
+def test_from_yaml_rejects_fractional_integer_fields(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: fractional_int
+research:
+  hypothesis: integer fields cannot truncate
+execution:
+  rebalance:
+    interval_days: 1.5
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="integer"):
+        StrategySpec.from_yaml(spec_path)
 
 
 def test_validate_rejects_overlapping_train_and_test_periods() -> None:
@@ -46,6 +451,16 @@ def test_validate_rejects_trade_time_fill_price_mismatch() -> None:
     assert any(error["check"] == "execution_timing_mismatch" for error in result.errors)
 
 
+def test_validate_rejects_unsupported_signal_time() -> None:
+    spec = StrategySpec.template(strategy_id="unsupported_signal_time", hypothesis="runtime only supports close signals")
+    spec.signal.signal_time = "open_t"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_time_unsupported" for error in result.errors)
+
+
 def test_validate_rejects_multiple_crossover_rules() -> None:
     spec = StrategySpec.template(strategy_id="multi_cross", hypothesis="multiple crossovers are ambiguous")
     spec.signal.indicators = {
@@ -63,3 +478,264 @@ def test_validate_rejects_multiple_crossover_rules() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "multiple_crossover_rules" for error in result.errors)
+
+
+def test_validate_rejects_peak_signal_future_data() -> None:
+    spec = StrategySpec.template(strategy_id="peak_signal", hypothesis="future data signals must not run")
+    spec.signal.rules = {"peak": SignalRuleDef(type="Peak", params={"column": "close"})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "peak_future_data" for error in result.errors)
+
+
+def test_validate_rejects_unknown_indicator_type() -> None:
+    spec = StrategySpec.template(strategy_id="unknown_indicator", hypothesis="registry names must resolve")
+    spec.signal.indicators = {"bad": IndicatorDef(type="NoSuchIndicator")}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "compile_dry_run_failed" for error in result.errors)
+
+
+def test_validate_rejects_bad_indicator_compute_params() -> None:
+    spec = StrategySpec.template(strategy_id="bad_indicator_params", hypothesis="indicator params must bind")
+    spec.signal.indicators = {"sma": IndicatorDef(type="SMA", params={"window": 20})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "compute_dry_run_failed" for error in result.errors)
+
+
+def test_validate_rejects_unknown_signal_type() -> None:
+    spec = StrategySpec.template(strategy_id="unknown_signal", hypothesis="registry names must resolve")
+    spec.signal.rules = {"bad": SignalRuleDef(type="NoSuchSignal")}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "compile_dry_run_failed" for error in result.errors)
+
+
+def test_validate_rejects_bad_signal_compute_params() -> None:
+    spec = StrategySpec.template(strategy_id="bad_signal_params", hypothesis="signal params must execute")
+    spec.signal.rules = {
+        "threshold": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": "0.5"}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "compute_dry_run_failed" for error in result.errors)
+
+
+def test_validate_rejects_unknown_portfolio_type() -> None:
+    spec = StrategySpec.template(strategy_id="unknown_portfolio", hypothesis="registry names must resolve")
+    spec.portfolio.type = "NoSuchOptimizer"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "compile_dry_run_failed" for error in result.errors)
+
+
+def test_validate_rejects_pct_equity_with_signal_rules() -> None:
+    spec = StrategySpec.template(strategy_id="pct_signal", hypothesis="PctEquity cannot consume unfiltered signals")
+    spec.portfolio.type = "PctEquity"
+    spec.signal.rules = {"threshold": SignalRuleDef(type="Threshold", params={"column": "score", "threshold": 0.0})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_portfolio_unsupported" for error in result.errors)
+
+
+def test_validate_rejects_missing_optimizer_constructor_params() -> None:
+    spec = StrategySpec.template(strategy_id="missing_optimizer_param", hypothesis="optimizer params must instantiate")
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "compile_dry_run_failed" for error in result.errors)
+
+
+def test_validate_rejects_optimizer_references_to_unknown_columns() -> None:
+    spec = StrategySpec.template(strategy_id="missing_score_col", hypothesis="optimizer inputs must be declared")
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "score", "n": 2}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "optimizer_column_missing" for error in result.errors)
+
+
+def test_validate_rejects_invalid_top_n_ranking_params() -> None:
+    spec = StrategySpec.template(strategy_id="bad_top_n_params", hypothesis="ranking optimizer params must be valid")
+    spec.signal.indicators = {"score": IndicatorDef(type="SMA", params={"period": 3})}
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "score", "n": 0, "max_weight": 1.5}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    errors = [error for error in result.errors if error["check"] == "optimizer_param_invalid"]
+    assert len(errors) == 2
+
+
+def test_validate_rejects_risk_parity_missing_volatility_col() -> None:
+    spec = StrategySpec.template(strategy_id="bad_risk_parity", hypothesis="risk parity volatility input must exist")
+    spec.portfolio.type = "RiskParity"
+    spec.portfolio.params = {"volatility_col": "volatility"}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "optimizer_column_missing" for error in result.errors)
+
+
+def test_validate_rejects_kelly_missing_input_cols_and_bad_fraction() -> None:
+    spec = StrategySpec.template(strategy_id="bad_kelly", hypothesis="kelly inputs must be declared")
+    spec.signal.indicators = {"win_rate": IndicatorDef(type="SMA", params={"period": 3})}
+    spec.portfolio.type = "Kelly"
+    spec.portfolio.params = {
+        "win_rate_col": "win_rate",
+        "avg_win_col": "avg_win",
+        "avg_loss_col": "avg_loss",
+        "fraction": 0,
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    checks = [error["check"] for error in result.errors]
+    assert "optimizer_column_missing" in checks
+    assert "optimizer_param_invalid" in checks
+
+
+def test_validate_rejects_signal_references_to_unknown_columns() -> None:
+    spec = StrategySpec.template(strategy_id="missing_signal_columns", hypothesis="signal inputs must be declared")
+    spec.signal.rules = {"entry": SignalRuleDef(type="Crossover", params={"fast": "fast_missing", "slow": "slow_missing"})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_column_missing" for error in result.errors)
+
+
+def test_validate_rejects_indicator_and_signal_names_that_overwrite_data_columns() -> None:
+    spec = StrategySpec.template(strategy_id="name_collision", hypothesis="derived columns must not overwrite prices")
+    spec.signal.indicators = {"close": IndicatorDef(type="SMA", params={"period": 3})}
+    spec.signal.rules = {"open": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    errors = [error for error in result.errors if error["check"] == "signal_name_collision"]
+    assert len(errors) == 2
+
+
+def test_validate_rejects_duplicate_indicator_and_signal_names() -> None:
+    spec = StrategySpec.template(strategy_id="derived_name_collision", hypothesis="derived columns must be unique")
+    spec.signal.indicators = {"entry": IndicatorDef(type="SMA", params={"period": 3})}
+    spec.signal.rules = {"entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_name_collision" for error in result.errors)
+
+
+def test_validate_rejects_missing_required_signal_params() -> None:
+    spec = StrategySpec.template(strategy_id="missing_signal_params", hypothesis="signal params are required")
+    spec.signal.rules = {
+        "cross": SignalRuleDef(type="Crossover", params={"fast": "close"}),
+        "threshold": SignalRuleDef(type="Threshold", params={}),
+        "compare": SignalRuleDef(type="Comparison", params={"left": "close"}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    errors = [error for error in result.errors if error["check"] == "signal_param_missing"]
+    assert len(errors) == 3
+
+
+def test_validate_rejects_formula_without_expr() -> None:
+    spec = StrategySpec.template(strategy_id="missing_formula_expr", hypothesis="formula expr is required")
+    spec.signal.rules = {"formula": SignalRuleDef(type="Formula", params={})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_param_missing" for error in result.errors)
+
+
+def test_validate_rejects_formula_references_to_unknown_columns() -> None:
+    spec = StrategySpec.template(strategy_id="bad_formula_expr", hypothesis="formula names must resolve")
+    spec.signal.rules = {"formula": SignalRuleDef(type="Formula", params={"expr": "missing > 0"})}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_column_missing" for error in result.errors)
+
+
+def test_validate_rejects_invalid_signal_relationships() -> None:
+    spec = StrategySpec.template(strategy_id="bad_relationship", hypothesis="relationships must be known operators")
+    spec.signal.rules = {
+        "threshold": SignalRuleDef(type="Threshold", params={"column": "close", "relationship": "roughly"}),
+        "compare": SignalRuleDef(type="Comparison", params={"left": "close", "right": "open", "relationship": "near"}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    errors = [error for error in result.errors if error["check"] == "signal_relationship_invalid"]
+    assert len(errors) == 2
+
+
+def test_validate_rejects_composite_references_to_later_signals() -> None:
+    spec = StrategySpec.template(strategy_id="composite_order", hypothesis="composites need computed input signals")
+    spec.signal.rules = {
+        "combo": SignalRuleDef(type="Composite", params={"signals": ["entry"]}),
+        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_column_missing" for error in result.errors)
+
+
+def test_validate_rejects_empty_or_invalid_composite_signals() -> None:
+    spec = StrategySpec.template(strategy_id="bad_composite_signals", hypothesis="composites need explicit input signals")
+    spec.signal.rules = {
+        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "empty": SignalRuleDef(type="Composite", params={"signals": []}),
+        "bad": SignalRuleDef(type="Composite", params={"signals": ["entry", 1]}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    errors = [error for error in result.errors if error["check"] == "signal_param_missing"]
+    assert len(errors) == 2
+
+
+def test_validate_rejects_invalid_composite_logic() -> None:
+    spec = StrategySpec.template(strategy_id="bad_composite_logic", hypothesis="composite logic must be explicit")
+    spec.signal.rules = {
+        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "combo": SignalRuleDef(type="Composite", params={"signals": ["entry"], "logic": "adn"}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_logic_invalid" for error in result.errors)

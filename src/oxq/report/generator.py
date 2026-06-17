@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -72,15 +73,15 @@ def generate_report(run_dir: str | Path) -> str:
     lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
-    lines.append(f"| Total Return | {metrics.get('total_return', 0):.2%} |")
-    lines.append(f"| Annualized Return | {metrics.get('annualized_return', 0):.2%} |")
-    lines.append(f"| Annualized Volatility | {metrics.get('annualized_volatility', 0):.2%} |")
-    lines.append(f"| Max Drawdown | {metrics.get('max_drawdown', 0):.2%} |")
-    lines.append(f"| Sharpe Ratio | {metrics.get('sharpe_ratio', 0):.2f} |")
-    lines.append(f"| Sortino Ratio | {metrics.get('sortino_ratio', 0):.2f} |")
-    lines.append(f"| Calmar Ratio | {metrics.get('calmar_ratio', 0):.2f} |")
+    lines.append(f"| Total Return | {_format_percent(metrics.get('total_return'))} |")
+    lines.append(f"| Annualized Return | {_format_percent(metrics.get('annualized_return'))} |")
+    lines.append(f"| Annualized Volatility | {_format_percent(metrics.get('annualized_volatility'))} |")
+    lines.append(f"| Max Drawdown | {_format_percent(metrics.get('max_drawdown'))} |")
+    lines.append(f"| Sharpe Ratio | {_format_float(metrics.get('sharpe_ratio'))} |")
+    lines.append(f"| Sortino Ratio | {_format_float(metrics.get('sortino_ratio'))} |")
+    lines.append(f"| Calmar Ratio | {_format_float(metrics.get('calmar_ratio'))} |")
     lines.append(f"| Trade Count | {metrics.get('trade_count', 0)} |")
-    lines.append(f"| Cost Paid | ${metrics.get('cost_paid', 0):.2f} |")
+    lines.append(f"| Cost Paid | {_format_money(metrics.get('cost_paid'))} |")
     lines.append("")
 
     # 6. Benchmark Comparison
@@ -175,21 +176,31 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
 
     reject_if = decision_policy.get("reject_if", {})
     # Prefer OOS-only metrics for OOS decisions; fall back to aggregate
-    oos_sharpe = metrics.get("oos_sharpe_ratio", metrics.get("sharpe_ratio", 0))
-    max_dd = metrics.get("oos_max_drawdown", metrics.get("max_drawdown", 0))
+    oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio", "sharpe_ratio")
+    max_dd = _finite_metric(metrics, "oos_max_drawdown", "max_drawdown")
 
-    if "oos_sharpe_lt" in reject_if and reject_if["oos_sharpe_lt"] > oos_sharpe:
-        return "REJECT"
-    if "max_drawdown_lt" in reject_if and reject_if["max_drawdown_lt"] > max_dd:
-        return "REJECT"
+    if "oos_sharpe_lt" in reject_if:
+        threshold = _as_finite_float(reject_if["oos_sharpe_lt"])
+        if threshold is None or oos_sharpe is None or threshold > oos_sharpe:
+            return "REJECT"
+    if "max_drawdown_lt" in reject_if:
+        threshold = _as_finite_float(reject_if["max_drawdown_lt"])
+        if threshold is None or max_dd is None or threshold > max_dd:
+            return "REJECT"
 
     promote_if = decision_policy.get("promote_if", {})
     # Only check thresholds that are explicitly configured
     promote_checks: list[bool] = []
     if "oos_sharpe_gte" in promote_if:
-        promote_checks.append(promote_if["oos_sharpe_gte"] <= oos_sharpe)
+        threshold = _as_finite_float(promote_if["oos_sharpe_gte"])
+        if threshold is None or oos_sharpe is None:
+            return "WATCHLIST"
+        promote_checks.append(threshold <= oos_sharpe)
     if "max_drawdown_gte" in promote_if:
-        promote_checks.append(promote_if["max_drawdown_gte"] <= max_dd)
+        threshold = _as_finite_float(promote_if["max_drawdown_gte"])
+        if threshold is None or max_dd is None:
+            return "WATCHLIST"
+        promote_checks.append(threshold <= max_dd)
     if promote_checks and all(promote_checks):
         return "PAPER TRADING CANDIDATE"
 
@@ -197,6 +208,42 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
         return "WATCHLIST"
 
     return "PAPER TRADING CANDIDATE"
+
+
+def _finite_metric(metrics: dict, primary: str, fallback: str) -> float | None:
+    value = metrics[primary] if primary in metrics else metrics.get(fallback)
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _as_finite_float(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None
+
+
+def _format_percent(value: object) -> str:
+    parsed = _as_finite_float(value)
+    return "N/A" if parsed is None else f"{parsed:.2%}"
+
+
+def _format_float(value: object) -> str:
+    parsed = _as_finite_float(value)
+    return "N/A" if parsed is None else f"{parsed:.2f}"
+
+
+def _format_money(value: object) -> str:
+    parsed = _as_finite_float(value)
+    return "N/A" if parsed is None else f"${parsed:.2f}"
 
 
 def _decision_explanation() -> str:

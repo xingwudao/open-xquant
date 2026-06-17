@@ -1,6 +1,7 @@
 """Tests for Composite signal."""
 
 import pandas as pd
+import pytest
 
 from oxq.signals.composite import Composite
 
@@ -46,6 +47,11 @@ def test_composite_empty_signals():
     result = Composite().compute(_make_df(), signals=[], logic="and")
     assert isinstance(result, pd.Series)
     assert len(result) == 0
+
+
+def test_composite_rejects_unknown_logic():
+    with pytest.raises(ValueError, match="logic"):
+        Composite().compute(_make_df(), signals=["sig_a", "sig_b"], logic="adn")
 
 
 def test_composite_per_symbol():

@@ -1,0 +1,1 @@
+"""Trade executor compatibility module."""

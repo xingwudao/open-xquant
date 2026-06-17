@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pandas as pd
 import pytest
 
+import oxq.tools.engine as engine_tools
+from oxq.core.types import Portfolio
+from oxq.portfolio.analytics import RunResult
 from oxq.tools import session
 from oxq.tools.engine import engine_results, engine_run, engine_trade_list
 from oxq.tools.strategy import (
@@ -104,6 +109,59 @@ def test_engine_run_missing_strategy() -> None:
         start="2024-01-01", end="2024-12-31",
     )
     assert "error" in result
+
+
+def test_engine_run_rejects_unsupported_fill_price_mode(sample_data_dir) -> None:
+    _build_full_strategy()
+
+    result = engine_run(
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
+        data_dir=str(sample_data_dir),
+        fill_price_mode="next_high",
+    )
+
+    assert "Unsupported fill_price_mode" in result["error"]
+
+
+def test_engine_run_passes_market_calendar_to_provider_and_broker(monkeypatch, sample_data_dir) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeMarketProvider:
+        def __init__(self, data_dir, currency=None, calendar=None) -> None:
+            captured["provider_calendar"] = calendar
+
+    class FakeBroker:
+        def __init__(self, **kwargs) -> None:
+            captured["broker_calendar"] = kwargs.get("market_calendar")
+
+    def fake_run(self, *args, **kwargs) -> RunResult:
+        return RunResult(
+            portfolio=Portfolio(cash=Decimal("100000")),
+            trades=[],
+            equity_curve=[],
+            mktdata={},
+        )
+
+    monkeypatch.setattr(engine_tools, "LocalMarketDataProvider", FakeMarketProvider)
+    monkeypatch.setattr(engine_tools, "SimBroker", FakeBroker)
+    monkeypatch.setattr(engine_tools.Engine, "run", fake_run)
+    _build_full_strategy()
+
+    result = engine_run(
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
+        data_dir=str(sample_data_dir),
+        fill_price_mode="next_open",
+        market_calendar="XHKG",
+    )
+
+    assert "error" not in result
+    assert captured == {"provider_calendar": "XHKG", "broker_calendar": "XHKG"}
 
 
 def test_engine_run_through_indicator(sample_data_dir) -> None:

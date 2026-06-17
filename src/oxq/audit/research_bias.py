@@ -8,6 +8,7 @@ drawdown severity, and data quality.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 from oxq.spec.schema import StrategySpec
@@ -42,7 +43,30 @@ def audit_research(run_dir: str | Path) -> dict:
             "warning_count": 0,
         }
 
-    spec = StrategySpec.from_yaml(str(spec_path))
+    try:
+        spec = StrategySpec.from_yaml(str(spec_path))
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "checks": [{
+                "id": "spec_parse_error",
+                "status": "fail",
+                "severity": "fatal",
+                "message": f"strategy_spec.yaml could not be parsed: {exc}",
+            }],
+            "fatal_count": 1,
+            "warning_count": 0,
+        }
+    from oxq.spec.validator import validate
+
+    validation = validate(spec)
+    for error in validation.errors:
+        checks.append(_finding(
+            "spec_validation",
+            "fail",
+            "fatal" if error.get("severity") == "fatal" else "warning",
+            f"{error.get('check')}: {error.get('message')}",
+        ))
 
     # Load metrics if available
     metrics = {}
@@ -52,6 +76,9 @@ def audit_research(run_dir: str | Path) -> dict:
             metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
         except (json.JSONDecodeError, OSError):
             checks.append(_finding("metrics_json", "fail", "fatal", "metrics.json is corrupted — cannot parse"))
+            metrics = {}
+        if not isinstance(metrics, dict):
+            checks.append(_finding("metrics_schema", "fail", "fatal", "metrics.json must contain a JSON object"))
             metrics = {}
     else:
         checks.append(_finding("metrics_json", "fail", "fatal", "metrics.json not found — cannot audit run metrics"))
@@ -64,6 +91,17 @@ def audit_research(run_dir: str | Path) -> dict:
             "fail",
             "fatal",
             f"metrics.json missing required metrics: {missing_metrics}",
+        ))
+    invalid_metrics = [
+        metric for metric in sorted(required_metrics.difference(missing_metrics))
+        if _finite_number(metrics.get(metric)) is None
+    ]
+    if invalid_metrics:
+        checks.append(_finding(
+            "metrics_schema",
+            "fail",
+            "fatal",
+            f"metrics.json has invalid required metrics: {invalid_metrics}",
         ))
 
     # --- Execution lag ---
@@ -88,12 +126,20 @@ def audit_research(run_dir: str | Path) -> dict:
     # --- Cost model ---
     fee_rate = spec.cost.fee_rate
     slippage_rate = spec.cost.slippage_rate
-    if fee_rate == 0 and slippage_rate == 0:
-        checks.append(_finding("cost_model", "fail", "fatal", "Both fee_rate and slippage_rate are zero — zero-cost model"))
-    elif fee_rate == 0:
-        checks.append(_finding("cost_model", "fail", "fatal", "fee_rate is zero"))
-    elif slippage_rate == 0:
-        checks.append(_finding("cost_model", "fail", "fatal", "slippage_rate is zero"))
+    fee_min = spec.cost.fee_min
+    if fee_rate <= 0 and slippage_rate <= 0:
+        checks.append(_finding(
+            "cost_model",
+            "fail",
+            "fatal",
+            "fee_rate and slippage_rate must be positive — zero or negative costs are invalid",
+        ))
+    elif fee_rate <= 0:
+        checks.append(_finding("cost_model", "fail", "fatal", "fee_rate must be positive"))
+    elif slippage_rate <= 0:
+        checks.append(_finding("cost_model", "fail", "fatal", "slippage_rate must be positive"))
+    elif fee_min < 0:
+        checks.append(_finding("cost_model", "fail", "fatal", "fee_min must not be negative"))
     else:
         checks.append(_finding("cost_model", "pass", "info", f"fee_rate={fee_rate}, slippage_rate={slippage_rate}"))
 
@@ -112,7 +158,7 @@ def audit_research(run_dir: str | Path) -> dict:
         checks.append(_finding("benchmark_present", "pass", "info", f"Benchmark: {bench_symbols}"))
 
     # --- Survivorship bias ---
-    if spec.universe.type == "static" and not spec.universe.point_in_time:
+    if spec.universe.type == "static" and spec.universe.point_in_time is not True:
         checks.append(_finding(
             "static_universe_survivorship", "fail", "warning",
             "Static universe without point-in-time may have survivorship bias",
@@ -128,15 +174,41 @@ def audit_research(run_dir: str | Path) -> dict:
         checks.append(_finding("parameter_count", "pass", "info", f"{param_count} indicator parameters"))
 
     # --- Trade count ---
-    trade_count = metrics.get("trade_count", 0)
-    if trade_count < 10:
-        checks.append(_finding("trade_count", "fail", "warning", f"Only {trade_count} trades — statistical significance is low"))
+    if test_period and len(test_period) >= 2:
+        if "oos_trade_count" not in metrics:
+            checks.append(_finding(
+                "trade_count",
+                "fail",
+                "warning",
+                "OOS trade count is missing — cannot assess out-of-sample statistical significance",
+            ))
+        else:
+            oos_trade_count = _finite_number(metrics.get("oos_trade_count"))
+            if oos_trade_count is None:
+                checks.append(_finding("trade_count", "fail", "warning", "OOS trade count is invalid"))
+            elif oos_trade_count < 10:
+                checks.append(_finding(
+                    "trade_count",
+                    "fail",
+                    "warning",
+                    f"Only {oos_trade_count} OOS trades — out-of-sample statistical significance is low",
+                ))
+            else:
+                checks.append(_finding("trade_count", "pass", "info", f"{oos_trade_count} OOS trades"))
     else:
-        checks.append(_finding("trade_count", "pass", "info", f"{trade_count} trades"))
+        trade_count = _finite_number(metrics.get("trade_count", 0))
+        if trade_count is None:
+            checks.append(_finding("trade_count", "fail", "warning", "Trade count is invalid"))
+        elif trade_count < 10:
+            checks.append(_finding("trade_count", "fail", "warning", f"Only {trade_count} trades — statistical significance is low"))
+        else:
+            checks.append(_finding("trade_count", "pass", "info", f"{trade_count} trades"))
 
     # --- Concentration ---
-    max_dd = metrics.get("max_drawdown", 0)
-    if max_dd < -0.50:
+    max_dd = _finite_number(metrics.get("max_drawdown"))
+    if max_dd is None:
+        checks.append(_finding("drawdown_tail", "fail", "warning", "Max drawdown is invalid"))
+    elif max_dd < -0.50:
         checks.append(_finding("drawdown_tail", "fail", "warning", f"Max drawdown {max_dd:.1%} is severe"))
     else:
         checks.append(_finding("drawdown_tail", "pass", "info", f"Max drawdown: {max_dd:.1%}"))
@@ -146,16 +218,19 @@ def audit_research(run_dir: str | Path) -> dict:
     if data_manifest_path.exists():
         try:
             manifest = json.loads(data_manifest_path.read_text(encoding="utf-8"))
-            missing_ratio = manifest.get("missing_ratio")
-            if missing_ratio is None:
-                checks.append(_finding(
-                    "missing_data", "fail", "warning",
-                    "data_manifest.json has no missing_ratio — data quality not measured",
-                ))
-            elif missing_ratio > 0.05:
-                checks.append(_finding("missing_data", "fail", "warning", f"Data missing ratio {missing_ratio:.1%} is high"))
+            if not isinstance(manifest, dict):
+                checks.append(_finding("missing_data", "fail", "warning", "data_manifest.json must contain a JSON object"))
             else:
-                checks.append(_finding("missing_data", "pass", "info", "Data quality acceptable"))
+                missing_ratio = _finite_number(manifest.get("missing_ratio"))
+                if missing_ratio is None:
+                    checks.append(_finding(
+                        "missing_data", "fail", "warning",
+                        "data_manifest.json has no valid missing_ratio — data quality not measured",
+                    ))
+                elif missing_ratio > 0.05:
+                    checks.append(_finding("missing_data", "fail", "warning", f"Data missing ratio {missing_ratio:.1%} is high"))
+                else:
+                    checks.append(_finding("missing_data", "pass", "info", "Data quality acceptable"))
         except (json.JSONDecodeError, OSError):
             checks.append(_finding("missing_data", "fail", "warning", "data_manifest.json is corrupted — cannot assess data quality"))
     else:
@@ -176,3 +251,13 @@ def audit_research(run_dir: str | Path) -> dict:
 
 def _finding(check_id: str, status: str, severity: str, message: str) -> dict:
     return {"id": check_id, "status": status, "severity": severity, "message": message}
+
+
+def _finite_number(value: object) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if math.isfinite(parsed) else None

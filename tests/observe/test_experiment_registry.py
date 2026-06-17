@@ -57,6 +57,30 @@ def test_add_experiment_ids_are_unique_within_same_second(tmp_path) -> None:
     assert first["experiment_id"] != second["experiment_id"]
 
 
+def test_add_experiment_returns_error_for_corrupt_metrics_json(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    registry_path = tmp_path / "experiments.jsonl"
+    (run_dir / "metrics.json").write_text("{not-json", encoding="utf-8")
+
+    entry = add_experiment(run_dir, registry_path=registry_path)
+
+    assert "error" in entry
+    assert not registry_path.exists()
+
+
+def test_add_experiment_returns_error_for_non_object_metrics_json(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    registry_path = tmp_path / "experiments.jsonl"
+    (run_dir / "metrics.json").write_text("[]", encoding="utf-8")
+
+    entry = add_experiment(run_dir, registry_path=registry_path)
+
+    assert "error" in entry
+    assert not registry_path.exists()
+
+
 def test_add_experiment_reruns_stale_research_audit(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

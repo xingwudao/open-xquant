@@ -8,6 +8,7 @@ to prevent selective memory. Complements the in-memory
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -32,36 +33,42 @@ def add_experiment(
     if not metrics_path.exists():
         return {"error": f"metrics.json not found in {run_dir}"}
 
-    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    try:
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {"error": f"metrics.json could not be parsed in {run_dir}: {exc}"}
+    if not isinstance(metrics, dict):
+        return {"error": f"metrics.json must contain an object in {run_dir}"}
 
     spec_hash = ""
     spec_hash_path = run_path / "spec_hash.txt"
     if spec_hash_path.exists():
         spec_hash = spec_hash_path.read_text(encoding="utf-8").strip()
 
-    audit_status = "unknown"
-    bias_path = run_path / "research_bias_audit.json"
-    from oxq.audit.research_bias import audit_research
-
-    bias = audit_research(run_path)
-    bias_path.write_text(json.dumps(bias, indent=2) + "\n", encoding="utf-8")
-    audit_status = bias.get("status", "unknown")
-
-    entry = {
-        "experiment_id": f"exp_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S_%f')}",
-        "strategy_id": metrics.get("strategy_id", ""),
-        "spec_hash": spec_hash,
-        "run_id": metrics.get("run_id", ""),
-        "metrics": metrics,
-        "audit_status": audit_status,
-        "decision": decision,
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-
     reg_path = Path(registry_path)
     reg_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(reg_path, "a") as f:
-        f.write(json.dumps(entry) + "\n")
+    lock_path = reg_path.with_suffix(reg_path.suffix + ".lock")
+    with _FileLock(lock_path):
+        bias_path = run_path / "research_bias_audit.json"
+        from oxq.audit.research_bias import audit_research
+
+        bias = audit_research(run_path)
+        _atomic_write_text(bias_path, json.dumps(bias, indent=2) + "\n")
+        audit_status = bias.get("status", "unknown")
+
+        entry = {
+            "experiment_id": f"exp_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S_%f')}",
+            "strategy_id": metrics.get("strategy_id", ""),
+            "spec_hash": spec_hash,
+            "run_id": metrics.get("run_id", ""),
+            "metrics": metrics,
+            "audit_status": audit_status,
+            "decision": decision,
+            "created_at": datetime.now(UTC).isoformat(),
+        }
+
+        with open(reg_path, "a") as f:
+            f.write(json.dumps(entry) + "\n")
 
     return entry
 
@@ -83,3 +90,31 @@ def list_experiments(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> list[
             if line:
                 entries.append(json.loads(line))
     return entries
+
+
+class _FileLock:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._fh = None
+
+    def __enter__(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._path, "a+")
+        import fcntl
+
+        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._fh is None:
+            return
+        import fcntl
+
+        fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        self._fh.close()
+
+
+def _atomic_write_text(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp_path.write_text(content, encoding="utf-8")
+    tmp_path.replace(path)

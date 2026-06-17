@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from oxq.core.types import Position
+from oxq.core.types import Order, Position
 from oxq.trade.order_generator import generate_orders
 
 
@@ -60,6 +60,17 @@ class TestGenerateOrders:
         assert len(sells) == 1
         assert sells[0].order.symbol == "AAPL"
         assert sells[0].order.shares == 50
+
+    def test_rebalance_orders_sell_before_buy(self):
+        result = generate_orders(
+            target_weights={"AAA": Decimal("0.5")},
+            positions={"ZZZ": Position(symbol="ZZZ", shares=100, avg_cost=Decimal("10"))},
+            prices={"AAA": Decimal("10"), "ZZZ": Decimal("10")},
+            total_capital=Decimal("1000"),
+        )
+
+        assert [item.order.side for item in result] == ["SELL", "BUY"]
+        assert [item.order.symbol for item in result] == ["ZZZ", "AAA"]
 
     def test_lot_size(self):
         """lot_size=100 rounds down to nearest lot."""
@@ -119,3 +130,129 @@ class TestGenerateOrders:
         )
         assert result[0].current_weight == Decimal("0.3")
         assert result[0].current_shares == 30
+
+    def test_pending_protective_orders_do_not_reduce_projected_position(self):
+        """Protective non-market orders should not trigger compensating buys."""
+        result = generate_orders(
+            target_weights={"AAPL": Decimal("1.0")},
+            positions={"AAPL": Position(symbol="AAPL", shares=100, avg_cost=Decimal("10"))},
+            prices={"AAPL": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[
+                Order(
+                    symbol="AAPL",
+                    side="SELL",
+                    shares=50,
+                    order_type="stop",
+                    stop_price=Decimal("9"),
+                )
+            ],
+        )
+
+        assert result == []
+
+    def test_pending_market_buys_reserve_capital_for_new_orders(self):
+        """Open market buys reserve cash while other targets are planned."""
+        result = generate_orders(
+            target_weights={"MSFT": Decimal("1.0")},
+            positions={},
+            prices={"AAPL": Decimal("10"), "MSFT": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[
+                Order(
+                    symbol="AAPL",
+                    side="BUY",
+                    shares=50,
+                )
+            ],
+        )
+
+        assert len(result) == 1
+        assert result[0].order.symbol == "MSFT"
+        assert result[0].order.shares == 50
+
+    def test_pending_market_buys_reserve_estimated_execution_costs(self):
+        result = generate_orders(
+            target_weights={"MSFT": Decimal("1.0")},
+            positions={},
+            prices={"AAPL": Decimal("10"), "MSFT": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[Order(symbol="AAPL", side="BUY", shares=50)],
+            buy_cost_estimator=lambda _symbol, price, shares: price * shares * Decimal("2"),
+        )
+
+        assert result == []
+
+    def test_pending_market_buys_do_not_double_discount_other_target_weights(self):
+        """Target weights stay anchored to total capital before budget capping."""
+        result = generate_orders(
+            target_weights={"AAPL": Decimal("0.5"), "MSFT": Decimal("0.5")},
+            positions={},
+            prices={"AAPL": Decimal("10"), "MSFT": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[
+                Order(
+                    symbol="AAPL",
+                    side="BUY",
+                    shares=50,
+                )
+            ],
+        )
+
+        assert len(result) == 1
+        assert result[0].order.symbol == "MSFT"
+        assert result[0].order.shares == 50
+
+    def test_pending_market_buy_does_not_create_sell_without_position(self):
+        """Unfilled buys are not sellable inventory when targets fall."""
+        result = generate_orders(
+            target_weights={"AAPL": Decimal("0")},
+            positions={},
+            prices={"AAPL": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[
+                Order(
+                    symbol="AAPL",
+                    side="BUY",
+                    shares=100,
+                )
+            ],
+        )
+
+        assert result == []
+
+    def test_pending_market_buy_increases_sell_needed_when_target_drops(self):
+        result = generate_orders(
+            target_weights={"AAPL": Decimal("0.5")},
+            positions={"AAPL": Position(symbol="AAPL", shares=100, avg_cost=Decimal("10"))},
+            prices={"AAPL": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[Order(symbol="AAPL", side="BUY", shares=100)],
+        )
+
+        assert len(result) == 1
+        assert result[0].order.side == "SELL"
+        assert result[0].order.shares == 100
+
+    def test_pending_market_sell_does_not_create_duplicate_exit(self):
+        result = generate_orders(
+            target_weights={"AAPL": Decimal("0")},
+            positions={"AAPL": Position(symbol="AAPL", shares=100, avg_cost=Decimal("10"))},
+            prices={"AAPL": Decimal("10")},
+            total_capital=Decimal("1000"),
+            pending_orders=[Order(symbol="AAPL", side="SELL", shares=100)],
+        )
+
+        assert result == []
+
+    def test_buy_orders_are_capped_by_estimated_execution_costs(self):
+        result = generate_orders(
+            target_weights={"AAPL": Decimal("1.0")},
+            positions={},
+            prices={"AAPL": Decimal("10")},
+            total_capital=Decimal("1000"),
+            buy_cost_estimator=lambda _symbol, price, shares: (price * shares * Decimal("1.01")) + Decimal("1"),
+        )
+
+        assert len(result) == 1
+        assert result[0].order.shares == 98
