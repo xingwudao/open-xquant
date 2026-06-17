@@ -763,7 +763,7 @@ print(metrics["sharpe_ratio"])
 ## 14. 参考入口
 
 - 架构说明：`docs/architecture.md`
-- 人类快速入门：`docs/quickstart.md`
+- 人类使用指南：`docs/human-guide.md`
 - 自定义 Broker：`docs/custom-broker-guide.md`
 - 模块示例：`examples/modules/`
 - 策略示例：`examples/strategies/`

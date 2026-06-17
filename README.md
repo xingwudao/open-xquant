@@ -14,7 +14,7 @@ open-xquant 不是一个 Coding Agent，而是 Coding Agent 应该调用的确�
 
 它的目标不是更快生成更多策略，而是更快识别和拒绝假的回测结果。
 
-→ **[Quick Start](docs/quickstart.md)**（5 分钟跑通第一个回测）
+→ **[Human Guide](docs/human-guide.md)**（用 Agent 使用 open-xquant）
 → **[Agent Guide](docs/agent-guide.md)**（给 AI Agent 看的安装和使用指南）
 
 [English](#english) | [中文](#为什么需要-open-xquant)
@@ -184,7 +184,7 @@ open-xquant is not a coding agent. It is the deterministic quant research runtim
 
 Its goal is not to generate more strategies faster, but to make false backtests easier to detect and reject.
 
-→ **[Quick Start](docs/quickstart.md)** (5 minutes to your first backtest)
+→ **[Human Guide](docs/human-guide.md)** (use open-xquant through an Agent)
 → **[Agent Guide](docs/agent-guide.md)** (setup guide for AI agents)
 
 ---
