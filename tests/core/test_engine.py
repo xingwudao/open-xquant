@@ -10,7 +10,7 @@ from oxq.core.types import Fill, Order, Portfolio, Position, RuleResult
 from oxq.indicators.sma import SMA
 from oxq.portfolio.optimizers import EqualWeightOptimizer
 from oxq.signals.crossover import Crossover
-from oxq.trade.sim_broker import SimBroker
+from oxq.trade.sim_broker import FillPriceMode, SimBroker
 from oxq.universe.static import StaticUniverse
 
 
@@ -391,6 +391,35 @@ class ResetAwareAlwaysBuyOptimizer(AlwaysBuyOptimizer):
         self.reset_symbols_seen.extend(symbols)
 
 
+class CloseSellBroker(SimBroker):
+    """Broker that emits a full SELL from the normal on_bar_close path."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._buy_shares = 0
+        self._close_count = 0
+
+    def submit_order(self, order: Order) -> str:
+        if order.side == "BUY":
+            self._buy_shares = order.shares
+        return super().submit_order(order)
+
+    def on_bar_close(self, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp) -> None:
+        self._close_count += 1
+        if self._close_count == 1:
+            super().on_bar_close(mktdata, date)
+            return
+        if self._buy_shares:
+            self._fills.append(
+                Fill(
+                    order=Order(symbol="AAA", side="SELL", shares=self._buy_shares),
+                    filled_price=Decimal("10"),
+                    filled_at=date.isoformat(),
+                )
+            )
+            self._buy_shares = 0
+
+
 def test_engine_notifies_optimizer_after_full_exit() -> None:
     """Exit fills should notify optimizers that keep per-symbol entry state."""
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
@@ -424,6 +453,75 @@ def test_engine_notifies_optimizer_after_full_exit() -> None:
     )
 
     assert optimizer.reset_symbols_seen == ["AAA", "AAA"]
+
+
+def test_engine_notifies_optimizer_after_normal_broker_full_exit() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    optimizer = ResetAwareAlwaysBuyOptimizer()
+    strategy = Strategy(
+        name="normal_exit_reset",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=optimizer,
+    )
+
+    Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=CloseSellBroker(),
+        start="2024-01-01",
+        end="2024-01-02",
+    )
+
+    assert optimizer.reset_symbols_seen == ["AAA"]
+
+
+def test_engine_next_open_fills_on_next_bar_before_optimization() -> None:
+    """NEXT_OPEN market orders should fill on the next bar, before new targets."""
+    dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 12.0, 14.0],
+                "high": [10.0, 12.0, 14.0],
+                "low": [10.0, 12.0, 14.0],
+                "close": [10.0, 12.0, 14.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    strategy = Strategy(
+        name="next_open_causal",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN),
+        start="2024-01-01",
+        end="2024-01-03",
+    )
+
+    buy_trades = [t for t in result.trades if t.order.side == "BUY"]
+    assert len(buy_trades) == 1
+    assert buy_trades[0].filled_price == Decimal("12")
+    assert buy_trades[0].filled_at == dates[1].isoformat()
 
 
 def test_engine_lot_size() -> None:

@@ -34,6 +34,9 @@ dependencies = [
 oxq = "oxq.cli.main:main"
 
 [project.optional-dependencies]
+mcp = [
+    "mcp>=1.0",
+]
 yfinance = [
     "yfinance>=0.2",
 ]
@@ -54,6 +57,12 @@ live = [
     "httpx>=0.27",
     "websockets>=13.0",
 ]
+agent = [
+    "streamlit>=1.30",
+    "openai>=1.0",
+    "mcp>=1.0",
+    "nest-asyncio>=1.5",
+]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio",
@@ -61,6 +70,7 @@ dev = [
     "ruff",
     "mypy",
     "pandas-stubs",
+    "mcp>=1.0",
     "httpx>=0.27",
     "websockets>=13.0",
 ]

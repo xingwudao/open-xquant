@@ -35,6 +35,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         "metrics.json",
         "equity_curve.csv",
         "trades.csv",
+        "artifact_hashes.json",
     ]
     missing = [f for f in required_files if not (run_path / f).exists()]
     if missing:
@@ -80,23 +81,31 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     except Exception:
         checks.append(_check("data_manifest", False, "warning", "data_manifest.json is invalid JSON"))
 
-    # Compute hashes for key artifacts (informational — no expected values stored yet)
-    for fname, check_id in [
-        ("equity_curve.csv", "equity_hash"),
-        ("trades.csv", "trades_hash"),
-        ("metrics.json", "metrics_hash"),
-    ]:
-        content = (run_path / fname).read_bytes()
-        h = hashlib.sha256(content).hexdigest()[:16]
-        checks.append(
-            {
-                "id": check_id,
-                "status": "info",
-                "severity": "info",
-                "message": f"{fname} hash: sha256:{h}",
-                "hash": f"sha256:{h}",
-            }
-        )
+    try:
+        expected_hashes = json.loads((run_path / "artifact_hashes.json").read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        checks.append(_check("artifact_hashes", False, "fatal", "artifact_hashes.json is invalid JSON"))
+        expected_hashes = {}
+
+    if expected_hashes:
+        for fname, check_id in [
+            ("data_manifest.json", "data_manifest_hash"),
+            ("equity_curve.csv", "equity_hash"),
+            ("trades.csv", "trades_hash"),
+            ("metrics.json", "metrics_hash"),
+        ]:
+            try:
+                if fname == "metrics.json":
+                    actual = _hash_json_file(run_path / fname, exclude_keys={"run_id"})
+                elif fname == "data_manifest.json":
+                    actual = _hash_json_file(run_path / fname)
+                else:
+                    content = (run_path / fname).read_bytes()
+                    actual = f"sha256:{hashlib.sha256(content).hexdigest()[:16]}"
+                expected = expected_hashes.get(fname)
+                checks.append(_check(check_id, actual == expected, "fatal", f"{fname} hash mismatch: stored={expected}, actual={actual}"))
+            except (json.JSONDecodeError, OSError):
+                checks.append(_check(check_id, False, "fatal", f"{fname} is corrupted or unreadable"))
 
     fatal_count = sum(1 for c in checks if c["severity"] == "fatal" and c["status"] == "fail")
     warning_count = sum(1 for c in checks if c["severity"] == "warning" and c["status"] == "fail")
@@ -117,3 +126,11 @@ def _check(check_id: str, passed: bool, severity: str, message: str) -> dict:
         "severity": severity,
         "message": message if not passed else f"{check_id}: OK",
     }
+
+
+def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and exclude_keys:
+        data = {key: value for key, value in data.items() if key not in exclude_keys}
+    canonical = json.dumps(data, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"

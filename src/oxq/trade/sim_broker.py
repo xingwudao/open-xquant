@@ -60,6 +60,7 @@ class SimBroker:
         self._order_book = OrderBook()
         self._pending_market: list[ManagedOrder] = []
         self._fills: list[Fill] = []
+        self._current_date: pd.Timestamp | None = None
 
     # -- Broker lifecycle hooks -----------------------------------------------
 
@@ -67,6 +68,8 @@ class SimBroker:
         self, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
     ) -> None:
         """Process pending stop/limit/trailing_stop orders at bar open."""
+        if self._fill_price_mode == FillPriceMode.NEXT_OPEN:
+            self.fill_due_market_orders(mktdata, date)
         self.process_pending_orders(mktdata, date)
 
     def on_bar_close(
@@ -93,10 +96,15 @@ class SimBroker:
         str
             Order ID.
         """
-        managed = self._order_book.add(order, created_at="")
+        created_at = self._current_date.isoformat() if self._current_date is not None else ""
+        managed = self._order_book.add(order, created_at=created_at)
         if order.order_type == "market":
             self._pending_market.append(managed)
         return managed.id
+
+    def set_current_date(self, date: pd.Timestamp) -> None:
+        """Set the engine bar date used to timestamp newly submitted orders."""
+        self._current_date = pd.Timestamp(date)
 
     # -- Order Processing -----------------------------------------------------
 
@@ -171,7 +179,7 @@ class SimBroker:
         still_pending: list[ManagedOrder] = []
         for managed in self._pending_market:
             order = managed.order
-            raw_price = self._get_fill_price(order.symbol, mktdata, date)
+            raw_price = self._get_fill_price(managed, mktdata, date)
             if raw_price is None:
                 still_pending.append(managed)
                 continue
@@ -180,6 +188,12 @@ class SimBroker:
             fill = self._order_book.fill(managed, fill_price, date.isoformat(), fee)
             self._fills.append(fill)
         self._pending_market = still_pending
+
+    def fill_due_market_orders(
+        self, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
+    ) -> None:
+        """Fill market orders whose configured execution time has arrived."""
+        self.fill_market_orders(mktdata, date)
 
     # -- FillReceiver ---------------------------------------------------------
 
@@ -260,9 +274,10 @@ class SimBroker:
     # -- Private helpers ------------------------------------------------------
 
     def _get_fill_price(
-        self, symbol: str, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
+        self, managed: ManagedOrder, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
     ) -> Decimal | None:
         """Get fill price based on fill_price_mode."""
+        symbol = managed.order.symbol
         df = mktdata[symbol]
         if date not in df.index:
             return None
@@ -277,7 +292,19 @@ class SimBroker:
                 return None
             return (open_price + close_price) / 2
 
-        # NEXT_* modes: find next bar
+        if managed.created_at:
+            created_at = pd.Timestamp(managed.created_at)
+            if pd.Timestamp(date) <= created_at:
+                return None
+            col = {
+                FillPriceMode.NEXT_OPEN: "open",
+                FillPriceMode.NEXT_HIGH: "high",
+                FillPriceMode.NEXT_LOW: "low",
+            }[self._fill_price_mode]
+            price = Decimal(str(float(df.loc[date, col])))  # type: ignore[arg-type]
+            return price if price.is_finite() else None
+
+        # Legacy direct-broker use without an engine-created timestamp.
         idx = df.index.get_loc(date)
         if idx + 1 >= len(df):
             return None  # no next bar

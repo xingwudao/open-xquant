@@ -269,6 +269,17 @@ class Engine:
                 bar_prices[s] = Decimal(str(self._last_known_price[s]))
         portfolio.bar_prices = bar_prices
 
+        set_current_date = getattr(broker, "set_current_date", None)
+        if callable(set_current_date):
+            set_current_date(date)
+
+        # Fill previously submitted next-bar market orders before optimizing
+        # for the new bar, so target generation sees the actual portfolio.
+        fill_due_market_orders = getattr(broker, "fill_due_market_orders", None)
+        if callable(fill_due_market_orders):
+            fill_due_market_orders(mktdata, date)
+        _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
+
         # ── Step 2: Portfolio optimizer → target_weights ──────────────
         signals_data: dict[str, pd.DataFrame] = {}
         indicators_data: dict[str, pd.DataFrame] = {}
@@ -316,14 +327,10 @@ class Engine:
 
         # ── Step 5: Broker executes ───────────────────────────────────
         broker.on_bar_open(mktdata, date)
-        for fill in broker.get_fills():
-            _apply_fill(portfolio, fill)
-            self._trades.append(fill)
+        _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
         broker.on_bar_close(mktdata, date)
-        for fill in broker.get_fills():
-            _apply_fill(portfolio, fill)
-            self._trades.append(fill)
+        _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
         # ── Step 6: Post-trade monitoring rules ───────────────────────
         exit_targets: dict[str, float] = {}
@@ -353,16 +360,7 @@ class Engine:
 
             # ── Step 8: Broker executes exit orders ───────────────────
             broker.on_bar_close(mktdata, date)
-            fully_exited: list[str] = []
-            for fill in broker.get_fills():
-                _apply_fill(portfolio, fill)
-                self._trades.append(fill)
-                if fill.order.side == "SELL" and fill.order.symbol not in portfolio.positions:
-                    fully_exited.append(fill.order.symbol)
-
-            reset_symbols = getattr(strategy.portfolio, "reset_symbols", None)
-            if fully_exited and callable(reset_symbols):
-                reset_symbols(list(dict.fromkeys(fully_exited)))
+            _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
         # ── Cash interest ──────────────────────────────────────────
         if self._cash_annual_return > 0:
@@ -521,3 +519,17 @@ def _apply_fill(portfolio: Portfolio, fill: Fill) -> None:
                     shares=remaining,
                     avg_cost=old.avg_cost,
                 )
+
+
+def _apply_fills(portfolio: Portfolio, fills: list[Fill], trades: list[Fill], optimizer: object) -> None:
+    """Apply fills and notify stateful optimizers when positions fully exit."""
+    fully_exited: list[str] = []
+    for fill in fills:
+        _apply_fill(portfolio, fill)
+        trades.append(fill)
+        if fill.order.side == "SELL" and fill.order.symbol not in portfolio.positions:
+            fully_exited.append(fill.order.symbol)
+
+    reset_symbols = getattr(optimizer, "reset_symbols", None)
+    if fully_exited and callable(reset_symbols):
+        reset_symbols(list(dict.fromkeys(fully_exited)))

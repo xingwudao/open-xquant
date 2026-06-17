@@ -109,7 +109,187 @@ uv run oxq experiment add <run_dir>                   登记实验
 
 ## 5. SDK 使用
 
-当需要自定义计算逻辑时，使用 Python SDK：
+当需要自定义计算逻辑时，每个模块都可以独立扩展。以下是各模块的自定义示例。
+
+### 5.1 Data Provider — 自定义数据源
+
+```python
+import pandas as pd
+from oxq.data.providers import MarketDataProvider
+
+class MyDataProvider:
+    """从自定义数据源加载行情数据。"""
+
+    def get_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
+        # 从你的数据源加载 OHLCV，返回 DataFrame
+        # 必须包含列: open, high, low, close, volume
+        # index 必须是 tz-aware DatetimeIndex
+        df = pd.read_parquet(f"/path/to/data/{symbol}.parquet")
+        return df.loc[start:end]
+
+    def get_latest(self, symbol: str) -> pd.Series:
+        bars = self.get_bars(symbol, "2020-01-01", "2099-12-31")
+        return bars.iloc[-1]
+
+# 使用
+market = MyDataProvider()
+engine.run(strategy, market=market, broker=broker, start="2023-01-01", end="2024-12-31")
+```
+
+### 5.2 Universe — 自定义标的池
+
+```python
+from oxq.universe.base import UniverseProvider, UniverseSnapshot
+
+class MyUniverse:
+    """按条件动态筛选标的池。"""
+
+    def get_universe(self, as_of_date: str) -> UniverseSnapshot:
+        # 根据日期筛选标的
+        symbols = self._filter_by_condition(as_of_date)
+        return UniverseSnapshot(
+            as_of_date=as_of_date,
+            symbols=tuple(symbols),
+            source="my_filter",
+            metadata={},
+        )
+
+    def get_history(self, start: str, end: str) -> list[UniverseSnapshot]:
+        # 按日/周/月返回快照列表
+        ...
+
+    def _filter_by_condition(self, date: str) -> list[str]:
+        # 实现你的筛选逻辑
+        ...
+
+# 使用
+strategy = Strategy(
+    universe=MyUniverse(),
+    ...
+)
+```
+
+### 5.3 Indicator — 自定义指标
+
+```python
+import pandas as pd
+from oxq.core.types import Indicator
+
+class MyMomentum:
+    """自定义动量指标：过去 N 日累计收益。"""
+
+    name = "MyMomentum"
+
+    def compute(self, mktdata: pd.DataFrame, column: str = "close", period: int = 20) -> pd.Series:
+        return mktdata[column].pct_change(period)
+
+# 使用：在 Signal 中声明依赖
+my_indicator = MyMomentum()
+signal.required_indicators = {
+    "my_mom": (my_indicator, {"column": "close", "period": 20}),
+}
+```
+
+### 5.4 Signal — 自定义信号
+
+```python
+import pandas as pd
+from oxq.core.types import Signal
+
+class MySignal:
+    """自定义信号：成交量放大且价格上涨时买入。"""
+
+    name = "MySignal"
+
+    def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+        vol_ratio = mktdata["volume"] / mktdata["volume"].rolling(20).mean()
+        price_up = mktdata["close"] > mktdata["close"].shift(1)
+        return (vol_ratio > 1.5) & price_up
+
+# 使用
+my_signal = MySignal()
+strategy = Strategy(
+    signals={"volume_breakout": (my_signal, {})},
+    ...
+)
+```
+
+### 5.5 Portfolio Optimizer — 自定义组合优化器
+
+```python
+import pandas as pd
+
+class MyOptimizer:
+    """自定义优化器：按评分排名，取前三，等权分配。"""
+
+    name = "MyTop3"
+
+    def optimize(
+        self,
+        signals: dict[str, pd.DataFrame],
+        indicators: dict[str, pd.DataFrame],
+    ) -> dict[str, float]:
+        # 读取评分列
+        scores = {}
+        for sym, df in indicators.items():
+            if "my_mom" in df.columns:
+                scores[sym] = float(df["my_mom"].iloc[-1])
+
+        if not scores:
+            return {"CASH": 1.0}
+
+        # 取前三
+        top = sorted(scores, key=scores.get, reverse=True)[:3]
+        weight = 1.0 / len(top)
+        return {s: weight for s in top}
+
+# 使用
+strategy = Strategy(
+    portfolio=MyOptimizer(),
+    ...
+)
+```
+
+### 5.6 Rule — 自定义规则
+
+```python
+from decimal import Decimal
+import pandas as pd
+from oxq.core.types import Portfolio, RuleResult
+
+class MyRiskRule:
+    """自定义风控：单日亏损超过 3% 则冻结当日交易。"""
+
+    name = "MyRiskRule"
+
+    def evaluate(
+        self,
+        symbol: str,
+        row: pd.Series,
+        portfolio: Portfolio,
+        prices: dict[str, Decimal] | None = None,
+    ) -> RuleResult:
+        # 检查当日亏损
+        if prices and symbol in prices:
+            price = float(prices[symbol])
+            if symbol in portfolio.positions:
+                pos = portfolio.positions[symbol]
+                pnl_pct = (price - float(pos.avg_cost)) / float(pos.avg_cost)
+                if pnl_pct < -0.03:
+                    return RuleResult(
+                        target_positions={symbol: 0.0},
+                        reason=f"Daily loss {pnl_pct:.2%} exceeds -3%",
+                    )
+        return RuleResult()
+
+# 使用：在回测时传入规则列表
+engine.run(strategy, market=market, broker=broker,
+           rules=[MyRiskRule()], ...)
+```
+
+### 5.7 完整管线
+
+各模块组合使用的完整示例：
 
 ```python
 from oxq.core import Engine, Strategy
@@ -122,7 +302,6 @@ from oxq.trade.sim_broker import SimBroker
 from oxq.trade.fees import PercentageFee
 from oxq.trade.slippage import PercentageSlippage
 
-# 构建策略
 crossover = Crossover()
 crossover.required_indicators = {
     "sma_10": (SMA(), {"column": "close", "period": 10}),
@@ -138,7 +317,6 @@ strategy = Strategy(
     portfolio=EqualWeightOptimizer(),
 )
 
-# 运行回测
 engine = Engine()
 result = engine.run(
     strategy=strategy,

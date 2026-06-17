@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import date
 
 from oxq.spec.schema import StrategySpec
 
@@ -27,6 +28,13 @@ class ValidationResult:
 
 def _err(severity: str, check: str, message: str) -> dict:
     return {"severity": severity, "check": check, "message": message}
+
+
+def _parse_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def validate(spec: StrategySpec) -> ValidationResult:
@@ -81,7 +89,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "fill_price_mode_missing", "execution.fill_price_mode is missing"))
 
     # Validate fill mode against known values
-    valid_fill_modes = frozenset({"close", "next_open", "mid", "next_high", "next_low"})
+    valid_fill_modes = frozenset({"close", "next_open", "mid"})
     if spec.execution.fill_price_mode and spec.execution.fill_price_mode not in valid_fill_modes:
         errors.append(
             _err(
@@ -89,6 +97,20 @@ def validate(spec: StrategySpec) -> ValidationResult:
                 "fill_price_mode_invalid",
                 f"Unknown fill_price_mode '{spec.execution.fill_price_mode}'. "
                 f"Valid: {', '.join(sorted(valid_fill_modes))}",
+            )
+        )
+    expected_trade_time = {
+        "close": "close_t",
+        "mid": "close_t",
+        "next_open": "next_open",
+    }.get(spec.execution.fill_price_mode)
+    if expected_trade_time and spec.execution.trade_time != expected_trade_time:
+        errors.append(
+            _err(
+                "fatal",
+                "execution_timing_mismatch",
+                f"execution.trade_time={spec.execution.trade_time} does not match "
+                f"fill_price_mode={spec.execution.fill_price_mode}; expected {expected_trade_time}",
             )
         )
 
@@ -133,6 +155,28 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(
             _err("fatal", "oos_incomplete", "required_oos=true but train_period or test_period missing")
         )
+    if spec.validation.test_period and len(spec.validation.test_period) >= 2:
+        test_start = _parse_date(spec.validation.test_period[0])
+        test_end = _parse_date(spec.validation.test_period[1])
+        if test_start is None or test_end is None or test_start > test_end:
+            errors.append(
+                _err("fatal", "validation_period_order", "validation.test_period must satisfy start <= end")
+            )
+        if spec.validation.train_period and len(spec.validation.train_period) >= 2:
+            train_start = _parse_date(spec.validation.train_period[0])
+            train_end = _parse_date(spec.validation.train_period[1])
+            if train_start is None or train_end is None or train_start > train_end:
+                errors.append(
+                    _err("fatal", "validation_period_order", "validation.train_period must satisfy start <= end")
+                )
+            elif test_start is not None and train_end >= test_start:
+                errors.append(
+                    _err(
+                        "fatal",
+                        "validation_period_order",
+                        "validation.train_period must end before validation.test_period starts",
+                    )
+                )
 
     # --- Benchmark ---
     if not spec.benchmark.symbols:
@@ -156,6 +200,16 @@ def validate(spec: StrategySpec) -> ValidationResult:
                     "Consider using a different signal type for causal backtests.",
                 )
             )
+
+    crossover_count = sum(1 for rule_def in spec.signal.rules.values() if rule_def.type == "Crossover")
+    if crossover_count > 1:
+        errors.append(
+            _err(
+                "fatal",
+                "multiple_crossover_rules",
+                "multiple Crossover signal rules are not supported by the spec compiler",
+            )
+        )
 
     # Compute hash and determine status
     spec_hash = spec.compute_hash()

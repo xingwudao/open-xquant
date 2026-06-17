@@ -7,6 +7,7 @@ Two modes:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import platform
 import sys
@@ -36,8 +37,6 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
     "close": FillPriceMode.CLOSE,
     "next_open": FillPriceMode.NEXT_OPEN,
     "mid": FillPriceMode.MID,
-    "next_high": FillPriceMode.NEXT_HIGH,
-    "next_low": FillPriceMode.NEXT_LOW,
 }
 
 # Signals that fire on a single bar and should latch once triggered.
@@ -161,6 +160,7 @@ def compile_strategy(spec: StrategySpec) -> Strategy:
     This is the Direct Runtime Mode — constructs Strategy, indicator instances,
     and signal instances with required_indicators wired up.
     """
+    _validate_crossover_rule_count(spec)
     # Build signal instances with required_indicators.
     # When there are no signal rules, attach indicators to the portfolio optimizer instead.
     signals: dict[str, tuple[Signal, dict[str, Any]]] = {}
@@ -212,6 +212,8 @@ def compile_run(
 
     Returns (RunResult, run_dir).
     """
+    _validate_strategy_id_for_path(spec.strategy_id)
+    _validate_crossover_rule_count(spec)
     strategy = compile_strategy(spec)
 
     # Data provider — use spec.data.data_dir as fallback
@@ -253,7 +255,6 @@ def compile_run(
                 from oxq.rules.exit import ExitRule
 
                 rules.append(ExitRule(fast=fast, slow=slow))
-            break  # one ExitRule handles all crossover entries
 
     # Run engine
     engine = Engine()
@@ -312,14 +313,22 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
 
     # data_manifest.json
     symbols = spec.universe.symbols
-    missing_ratio = _compute_missing_ratio(result.mktdata) if result.mktdata else 0.0
+    missing_ratio = _compute_missing_ratio(result.mktdata, spec.data.required_columns) if result.mktdata else 0.0
+    manifest_start = spec.data.min_start_date or ""
+    if not manifest_start and spec.validation.train_period:
+        manifest_start = str(spec.validation.train_period[0])
+    if not manifest_start and spec.validation.test_period:
+        manifest_start = str(spec.validation.test_period[0])
+    manifest_end = str(spec.validation.test_period[1]) if spec.validation.test_period else ""
+    if not manifest_end and spec.validation.train_period:
+        manifest_end = str(spec.validation.train_period[1])
     manifest = {
         "provider": spec.data.provider,
         "symbols": symbols,
         "columns": spec.data.required_columns,
         "price_adjustment": spec.data.price_adjustment,
-        "start": str(spec.validation.train_period[0]) if spec.validation.train_period else "",
-        "end": str(spec.validation.test_period[1]) if spec.validation.test_period else "",
+        "start": manifest_start,
+        "end": manifest_end,
         "missing_ratio": missing_ratio,
     }
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
@@ -360,6 +369,14 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     ]
     pd.DataFrame(order_rows).to_csv(run_dir / "orders.csv", index=False)
 
+    artifact_hashes = {
+        "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
+        "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
+        "trades.csv": _hash_file(run_dir / "trades.csv"),
+        "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
+    }
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
+
     # run_log.jsonl
     with open(run_dir / "run_log.jsonl", "w") as lf:
         lf.write(
@@ -384,16 +401,47 @@ def _to_timestamp(ts_val: str | object, tz: object | None = None) -> pd.Timestam
     return ts
 
 
-def _compute_missing_ratio(mktdata: dict[str, pd.DataFrame]) -> float:
+def _compute_missing_ratio(mktdata: dict[str, pd.DataFrame], columns: list[str] | None = None) -> float:
     """Compute the fraction of missing (NaN) values across all symbol DataFrames."""
     total = 0
     missing = 0
     for df in mktdata.values():
         if df.empty:
             continue
-        total += df.size
-        missing += int(df.isna().sum().sum())
+        check_columns = columns or list(df.columns)
+        for col in check_columns:
+            total += len(df)
+            if col in df.columns:
+                missing += int(df[col].isna().sum())
+            else:
+                missing += len(df)
     return missing / total if total > 0 else 0.0
+
+
+def _hash_file(path: Path) -> str:
+    """Compute a short content hash for an artifact file."""
+    return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()[:16]}"
+
+
+def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
+    """Compute a short canonical JSON hash, optionally excluding run metadata keys."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(data, dict) and exclude_keys:
+        data = {key: value for key, value in data.items() if key not in exclude_keys}
+    canonical = json.dumps(data, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
+def _validate_strategy_id_for_path(strategy_id: str) -> None:
+    """Reject strategy IDs that could escape the requested run directory."""
+    if "/" in strategy_id or "\\" in strategy_id or ".." in Path(strategy_id).parts:
+        raise ValueError("strategy_id must not contain path separators or '..'")
+
+
+def _validate_crossover_rule_count(spec: StrategySpec) -> None:
+    count = sum(1 for rule in spec.signal.rules.values() if rule.type == "Crossover")
+    if count > 1:
+        raise ValueError("Multiple Crossover rules are not supported by the spec compiler")
 
 
 def _get_version() -> str:

@@ -53,6 +53,18 @@ def audit_research(run_dir: str | Path) -> dict:
         except (json.JSONDecodeError, OSError):
             checks.append(_finding("metrics_json", "fail", "fatal", "metrics.json is corrupted — cannot parse"))
             metrics = {}
+    else:
+        checks.append(_finding("metrics_json", "fail", "fatal", "metrics.json not found — cannot audit run metrics"))
+
+    required_metrics = {"trade_count", "max_drawdown"}
+    missing_metrics = sorted(required_metrics.difference(metrics))
+    if missing_metrics:
+        checks.append(_finding(
+            "metrics_required",
+            "fail",
+            "fatal",
+            f"metrics.json missing required metrics: {missing_metrics}",
+        ))
 
     # --- Execution lag ---
     signal_time = spec.signal.signal_time
