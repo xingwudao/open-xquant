@@ -127,27 +127,20 @@ uv run python examples/strategies/spec_validation_demo.py
 | `momentum_rotation_spec.py` | 动量轮动 — 完整 E2E 管线 |
 | `factor_screen.py` | 多因子筛选示例 |
 
-## 与 XQuant Studio 的关系
+## 项目边界
 
-open-xquant 是开源研究内核，XQuant Studio 是云端编排平台：
+open-xquant 是完整可用的开源研究内核，聚焦确定性计算、
+声明式 spec、审计、报告和 Agent 可调用的 CLI / SDK / Tools。
 
-| 模块 | open-xquant | XQuant Studio |
-|------|:-----------:|:-------------:|
-| Strategy Spec Schema | ✅ | |
-| Spec Validator | ✅ | 增强 |
-| Deterministic Backtest | ✅ | |
-| 基础 Bias Audit | ✅ | 增强 |
-| Reproducibility Audit | ✅ | 增强 |
-| 基础 Report Generator | ✅ | 增强 |
-| CLI / SDK / Tools | ✅ | 封装 |
-| 云端状态机 | | ✅ |
-| 高级 Audit Rule Pack | | ✅ |
-| 私有 Eval Corpus | | ✅ |
-| PIT 数据服务 | | ✅ |
-| 用户研究记忆图谱 | | ✅ |
-| UI / 协作 / 计费 | | ✅ |
+不属于 open-xquant 核心边界的能力：
 
-原则：**开源版必须完整可用，云端版必须明显更稳、更快、更智能。**
+- 托管式云端状态机。
+- 多用户协作和计费。
+- 私有研究记忆图谱。
+- 私有 Eval Corpus。
+- 托管式 PIT 数据服务。
+
+原则：**开源版必须能独立完成可复现的量化研究闭环。**
 
 ## 项目状态
 
@@ -296,27 +289,22 @@ Complete E2E pipeline examples (spec → backtest → audit → report):
 | `momentum_rotation_spec.py` | Momentum Rotation — complete E2E pipeline |
 | `factor_screen.py` | Multi-factor screening example |
 
-## Relationship with XQuant Studio
+## Project Boundaries
 
-open-xquant is the open-source research kernel; XQuant Studio is the cloud orchestration platform:
+open-xquant is a complete open-source research kernel focused on deterministic
+computation, declarative specs, audits, reports, and Agent-callable
+CLI / SDK / Tools.
 
-| Module | open-xquant | XQuant Studio |
-|--------|:-----------:|:-------------:|
-| Strategy Spec Schema | ✅ | |
-| Spec Validator | ✅ | Enhanced |
-| Deterministic Backtest | ✅ | |
-| Basic Bias Audit | ✅ | Enhanced |
-| Reproducibility Audit | ✅ | Enhanced |
-| Basic Report Generator | ✅ | Enhanced |
-| CLI / SDK / Tools | ✅ | Wrapped |
-| Cloud State Machine | | ✅ |
-| Advanced Audit Rules | | ✅ |
-| Private Eval Corpus | | ✅ |
-| PIT Data Service | | ✅ |
-| User Research Memory Graph | | ✅ |
-| UI / Collaboration / Billing | | ✅ |
+Capabilities outside the core open-xquant boundary:
 
-Principle: **Open-source must be fully usable; cloud must be noticeably more stable, faster, and smarter.**
+- Hosted cloud state machines.
+- Multi-user collaboration and billing.
+- Private research memory graphs.
+- Private eval corpora.
+- Hosted PIT data services.
+
+Principle: **The open-source package must independently complete a
+reproducible quant research loop.**
 
 ## Project Status
 

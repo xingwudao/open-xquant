@@ -9,7 +9,6 @@ open-xquant 是一个 **Agentic Quant Research Kernel**——面向 AI Coding Ag
 ```text
 OpenCode = 通用执行器，负责读写文件、调用命令、运行代码
 open-xquant = 量化研究内核，负责约束、计算、审计和产物标准
-XQuant Studio = 编排系统，负责状态机、角色分工、权限、模型路由、研究记忆和云端体验
 ```
 
 核心工作流：**spec → validate → compile → backtest → audit → robustness → report**
@@ -35,15 +34,9 @@ XQuant Studio = 编排系统，负责状态机、角色分工、权限、模型�
 
 ```
 ┌────────────────────────────────────────────────────────────┐
-│ XQuant Studio Orchestrator                                  │
-│ State Machine / Roles / Gates / Model Routing / Memory      │
-│ 私有，不属于 open-xquant                                    │
-└──────────────────────────┬─────────────────────────────────┘
-                           │ calls CLI / SDK / tools
-┌──────────────────────────▼─────────────────────────────────┐
 │ Agent Runtime                                                │
 │ OpenCode / Claude Code / Codex / Local CLI                   │
-│ 部分示例可开源，完整云端编排私有                              │
+│ 负责读写文件、调用命令、运行代码                              │
 └──────────────────────────┬─────────────────────────────────┘
                            │
 ┌──────────────────────────▼─────────────────────────────────┐
