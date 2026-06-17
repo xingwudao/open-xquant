@@ -57,9 +57,10 @@ class OrderBook:
     order types. Provides methods to add orders, query open orders,
     update status, and cancel orders.
 
-    When adding an order for the same symbol + side + order_type
-    as an existing open order, the old order is
-    automatically canceled (deduplication).
+    When adding a non-market order for the same symbol + side + order_type
+    as an existing open non-market order, the old order is automatically
+    canceled (deduplication). Market order replacement is broker-specific
+    and must be handled before calling :meth:`add`.
     """
 
     def __init__(self) -> None:
@@ -69,8 +70,8 @@ class OrderBook:
     def add(self, order: Order, created_at: str) -> ManagedOrder:
         """Add an order to the book.
 
-        Deduplicates by canceling any existing open order with the same
-        symbol + side + order_type.
+        Deduplicates non-market orders by canceling any existing open order
+        with the same symbol + side + order_type.
 
         Parameters
         ----------
@@ -86,7 +87,8 @@ class OrderBook:
         """
         for existing in self._orders:
             if (
-                existing.status == "open"
+                order.order_type != "market"
+                and existing.status == "open"
                 and existing.order.symbol == order.symbol
                 and existing.order.side == order.side
                 and existing.order.order_type == order.order_type

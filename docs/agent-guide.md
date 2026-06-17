@@ -138,7 +138,8 @@ uv run oxq agent install --target openclaw --yes
 
 安装会写入各 Agent 官方支持的长期能力位置：
 
-- Codex: `~/.agents/skills/` 和 `${CODEX_HOME:-~/.codex}/AGENTS.md`
+- Codex: `${CODEX_HOME:-~/.codex}/skills/` 和
+  `${CODEX_HOME:-~/.codex}/AGENTS.md`
 - OpenCode: `~/.config/opencode/skills/` 和
   `~/.config/opencode/AGENTS.md`
 - Claude Code: `~/.claude/skills/` 和 `~/.claude/CLAUDE.md`

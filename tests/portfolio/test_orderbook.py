@@ -110,14 +110,13 @@ def test_fill_with_fee() -> None:
     assert fill.fee == Decimal("15")
 
 
-def test_dedup_replaces_market_orders() -> None:
+def test_market_orders_are_not_deduped_in_shared_orderbook() -> None:
     book = OrderBook()
     book.add(Order(symbol="AAPL", side="BUY", shares=100), "2024-01-02")
     book.add(Order(symbol="AAPL", side="BUY", shares=200), "2024-01-02")
     orders = book.get_all_orders()
-    assert len(book.get_open_orders()) == 1
-    assert [order.status for order in orders] == ["canceled", "open"]
-    assert orders[0].status_reason == "replaced"
+    assert len(book.get_open_orders()) == 2
+    assert [order.status for order in orders] == ["open", "open"]
 
 
 def test_filled_order_not_in_open_orders() -> None:

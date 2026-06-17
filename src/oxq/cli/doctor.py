@@ -107,7 +107,7 @@ def _check_workspace() -> dict[str, Any]:
 
 
 def _check_data() -> dict[str, Any]:
-    data_dir = Path.home() / ".oxq" / "data"
+    data_dir = Path.home() / ".oxq" / "data" / "market"
     return {"status": "ok" if data_dir.exists() else "warn", "path": str(data_dir)}
 
 

@@ -328,9 +328,10 @@ def _slice_to_manifest_range(df: pd.DataFrame, manifest: dict) -> pd.DataFrame:
     if df.empty or not start or not end:
         return df
     index = pd.DatetimeIndex(df.index)
-    start_ts = _coerce_timestamp(str(start), index)
-    end_ts = _coerce_timestamp(str(end), index)
-    return df.loc[(index >= start_ts) & (index <= end_ts)]
+    start_date = pd.Timestamp(str(start)).date()
+    end_date = pd.Timestamp(str(end)).date()
+    session_dates = pd.Index([pd.Timestamp(idx).date() for idx in index])
+    return df.loc[(session_dates >= start_date) & (session_dates <= end_date)]
 
 
 def _align_to_calendar_sessions(df: pd.DataFrame, calendar: object, start: object, end: object) -> pd.DataFrame:
@@ -342,13 +343,46 @@ def _align_to_calendar_sessions(df: pd.DataFrame, calendar: object, start: objec
 
     cal = xcals.get_calendar(calendar)
     sessions = cal.sessions_in_range(pd.Timestamp(start).date(), pd.Timestamp(end).date())
-    df_index = pd.DatetimeIndex(df.index)
-    sessions = pd.DatetimeIndex(sessions)
-    if df_index.tz is not None:
-        sessions = sessions.tz_localize(df_index.tz) if sessions.tz is None else sessions.tz_convert(df_index.tz)
-    elif sessions.tz is not None:
-        sessions = sessions.tz_localize(None)
-    return df.reindex(pd.DatetimeIndex(sessions))
+    return _select_frame_for_session_fingerprint(df, pd.DatetimeIndex(sessions))
+
+
+def _select_frame_for_session_fingerprint(df: pd.DataFrame, expected_index: pd.DatetimeIndex) -> pd.DataFrame:
+    if df.empty:
+        return df.reindex(expected_index)
+    source = df.copy()
+    source_index = pd.DatetimeIndex(source.index)
+    missing_index = _expected_index_with_source_tz(expected_index, source_index)
+    session_dates = pd.Index([pd.Timestamp(idx).date() for idx in source.index])
+    if session_dates.has_duplicates:
+        raise ValueError("market data has multiple rows for the same market session")
+    expected_dates = pd.Index([pd.Timestamp(idx).date() for idx in expected_index])
+    source_by_date = dict(zip(session_dates, range(len(source)), strict=True))
+    rows: list[pd.Series] = []
+    index_values: list[object] = []
+    for expected_date, missing_ts in zip(expected_dates, missing_index, strict=True):
+        source_pos = source_by_date.get(expected_date)
+        if source_pos is None:
+            rows.append(pd.Series(index=source.columns, dtype="object"))
+            index_values.append(missing_ts)
+            continue
+        rows.append(source.iloc[source_pos])
+        index_values.append(source.index[source_pos])
+    aligned = pd.DataFrame(rows)
+    aligned.index = pd.Index(index_values)
+    return aligned
+
+
+def _expected_index_with_source_tz(
+    expected_index: pd.DatetimeIndex,
+    source_index: pd.DatetimeIndex,
+) -> pd.DatetimeIndex:
+    if source_index.tz is not None and expected_index.tz is None:
+        return expected_index.tz_localize(source_index.tz)
+    if source_index.tz is None and expected_index.tz is not None:
+        return expected_index.tz_localize(None)
+    if source_index.tz is not None and expected_index.tz is not None:
+        return expected_index.tz_convert(source_index.tz)
+    return expected_index
 
 
 def _coerce_timestamp(value: str, index: pd.DatetimeIndex) -> pd.Timestamp:

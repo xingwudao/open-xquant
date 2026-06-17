@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import yaml
 from click.testing import CliRunner
 
 from oxq.cli.main import main
@@ -37,3 +38,13 @@ def test_robustness_run_exits_nonzero_for_fragile(monkeypatch, tmp_path) -> None
 
     assert result.exit_code == 1
     assert "Status: FRAGILE" in result.output
+
+
+def test_spec_init_generates_path_safe_strategy_id(tmp_path) -> None:
+    out = tmp_path / "strategy_spec.yaml"
+
+    result = CliRunner().invoke(main, ["spec", "init", "SMA/RSI crossover!!!", "--out", str(out)])
+
+    assert result.exit_code == 0, result.output
+    spec = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert spec["strategy_id"] == "sma_rsi_crossover"

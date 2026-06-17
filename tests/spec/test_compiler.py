@@ -86,6 +86,35 @@ def test_reproducibility_audit_allows_self_contained_run_without_parent_digest(t
     assert not any(check["id"] == "run_digest" for check in audit["checks"])
 
 
+def test_run_digest_append_creates_lock_file(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="digest_lock", hypothesis="shared digest writes are locked")
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0, 1.0],
+                    "high": [1.0, 1.0, 1.0],
+                    "low": [1.0, 1.0, 1.0],
+                    "close": [1.0, 1.0, 1.0],
+                    "volume": [1, 1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    _write_artifacts(spec, result, run_dir, Engine())
+
+    assert (tmp_path / "run_digests.jsonl.lock").exists()
+    assert (tmp_path / "run_digests.jsonl").read_text(encoding="utf-8").endswith("\n")
+
+
 def test_reproducibility_audit_fails_when_parent_digest_mismatches(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="digest_mismatch", hypothesis="external digest detects artifact hash tampering")
     dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
@@ -218,6 +247,79 @@ def test_missing_ratio_ignores_derived_indicator_nans(tmp_path) -> None:
 
     manifest = json.loads((tmp_path / "data_manifest.json").read_text(encoding="utf-8"))
     assert manifest["missing_ratio"] == 0.0
+
+
+def test_missing_ratio_treats_non_midnight_daily_rows_as_sessions(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="non_midnight_rows", hypothesis="daily row timestamps map by session date")
+    spec.market.calendar = "XNYS"
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    dates = pd.to_datetime(["2024-01-02 21:00", "2024-01-03 21:00"], utc=True)
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+
+    _write_artifacts(spec, result, tmp_path, Engine())
+
+    manifest = json.loads((tmp_path / "data_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["missing_ratio"] == 0.0
+    assert manifest["data_fingerprints"]["SPY"]["row_count"] == 2
+
+
+def test_data_fingerprint_covers_non_midnight_daily_row_values() -> None:
+    expected_index = pd.DatetimeIndex(["2024-01-02", "2024-01-03"], tz="UTC")
+    dates = pd.to_datetime(["2024-01-02 21:00", "2024-01-03 21:00"], utc=True)
+    base = pd.DataFrame(
+        {
+            "open": [1.0, 1.0],
+            "high": [1.0, 1.0],
+            "low": [1.0, 1.0],
+            "close": [1.0, 1.0],
+            "volume": [1, 1],
+        },
+        index=dates,
+    )
+    tampered = base.copy()
+    tampered.loc[dates[1], "close"] = 2.0
+
+    first = compiler._fingerprint_dataframe(
+        compiler._reindex_for_fingerprint(base, expected_index),
+        ["open", "high", "low", "close", "volume"],
+    )
+    second = compiler._fingerprint_dataframe(
+        compiler._reindex_for_fingerprint(tampered, expected_index),
+        ["open", "high", "low", "close", "volume"],
+    )
+
+    assert first["content_hash"] != second["content_hash"]
+
+
+def test_data_fingerprint_preserves_non_midnight_source_index() -> None:
+    expected_index = pd.DatetimeIndex(["2024-01-02", "2024-01-03"], tz="UTC")
+    early_dates = pd.to_datetime(["2024-01-02 21:00", "2024-01-03 21:00"], utc=True)
+    late_dates = pd.to_datetime(["2024-01-02 22:00", "2024-01-03 22:00"], utc=True)
+    base = pd.DataFrame({"close": [1.0, 1.0]}, index=early_dates)
+    shifted = pd.DataFrame({"close": [1.0, 1.0]}, index=late_dates)
+
+    first = compiler._fingerprint_dataframe(compiler._reindex_for_fingerprint(base, expected_index), ["close"])
+    second = compiler._fingerprint_dataframe(compiler._reindex_for_fingerprint(shifted, expected_index), ["close"])
+
+    assert first["content_hash"] != second["content_hash"]
+    assert first["start"] == early_dates[0].isoformat()
 
 
 def test_missing_ratio_counts_absent_required_columns(tmp_path) -> None:
@@ -562,6 +664,41 @@ def test_reproducibility_audit_normalizes_naive_source_data_index(tmp_path) -> N
     assert any(check["id"] == "data_fingerprint" and check["status"] == "pass" for check in audit["checks"])
 
 
+def test_reproducibility_audit_detects_non_midnight_source_index_change(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="source_time_hash", hypothesis="source timestamps are part of fingerprints")
+    loaded_dates = pd.to_datetime(["2024-01-02 21:00", "2024-01-03 21:00"], utc=True)
+    source_dates = pd.to_datetime(["2024-01-02 22:00", "2024-01-03 22:00"], utc=True)
+    loaded_df = pd.DataFrame(
+        {
+            "open": [1.0, 1.0],
+            "high": [1.0, 1.0],
+            "low": [1.0, 1.0],
+            "close": [1.0, 1.0],
+            "volume": [1, 1],
+        },
+        index=loaded_dates,
+    )
+    source_df = loaded_df.copy()
+    source_df.index = source_dates
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(loaded_dates[0], 100000.0), (loaded_dates[1], 100001.0)],
+        mktdata={"SPY": loaded_df},
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source_df.to_parquet(data_dir / "SPY.parquet")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "data_fingerprint" and check["status"] == "fail" for check in audit["checks"])
+
+
 def test_reproducibility_audit_filters_source_data_to_manifest_calendar(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="calendar_source_hash", hypothesis="audit uses runtime calendar filter")
     dates = pd.to_datetime(["2024-01-02", "2024-01-06"], utc=True)
@@ -610,6 +747,23 @@ def test_reproducibility_calendar_alignment_accepts_aware_sessions(monkeypatch) 
     aligned = reproducibility._align_to_calendar_sessions(df, "XNYS", "2024-01-02", "2024-01-03")
 
     assert aligned.index.equals(index)
+
+
+def test_reproducibility_calendar_alignment_maps_non_midnight_daily_rows(monkeypatch) -> None:
+    class _Calendar:
+        @staticmethod
+        def sessions_in_range(start, end):
+            return pd.DatetimeIndex(["2024-01-02", "2024-01-03"], tz="UTC")
+
+    import exchange_calendars as xcals
+
+    monkeypatch.setattr(xcals, "get_calendar", lambda _name: _Calendar())
+    dates = pd.to_datetime(["2024-01-02 21:00", "2024-01-03 21:00"], utc=True)
+    df = pd.DataFrame({"close": [1.0, 2.0]}, index=dates)
+
+    aligned = reproducibility._align_to_calendar_sessions(df, "XNYS", "2024-01-02", "2024-01-03")
+
+    assert aligned["close"].tolist() == [1.0, 2.0]
 
 
 def test_reproducibility_audit_warns_when_source_data_dir_unavailable(tmp_path) -> None:
@@ -1654,6 +1808,63 @@ def test_signal_filtered_equal_weight_ignores_negative_numeric_signals() -> None
     signal_bar = pd.DataFrame({"threshold": [-1]})
 
     assert optimizer.optimize({"SPY": signal_bar}, {"SPY": signal_bar}) == {"CASH": 1.0}
+
+
+def test_signal_filtered_equal_weight_uses_only_terminal_composite_signal() -> None:
+    spec = StrategySpec.template(strategy_id="composite_terminal", hypothesis="composite is the terminal entry signal")
+    spec.signal.rules = {
+        "above": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "combo": SignalRuleDef(type="Composite", params={"signals": ["above", "trend"], "logic": "and"}),
+    }
+
+    optimizer = _build_optimizer(spec)
+    signal_bar = pd.DataFrame({"above": [True], "trend": [False], "combo": [False]})
+
+    assert optimizer.optimize({"SPY": signal_bar}, {"SPY": signal_bar}) == {"CASH": 1.0}
+
+
+def test_terminal_composite_with_crossover_latches_until_exit_reset() -> None:
+    spec = StrategySpec.template(strategy_id="composite_cross_latch", hypothesis="event composite holds until exit")
+    spec.signal.rules = {
+        "cross": SignalRuleDef(type="Crossover", params={"fast": "fast", "slow": "slow"}),
+        "filter": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "entry": SignalRuleDef(type="Composite", params={"signals": ["cross", "filter"], "logic": "and"}),
+    }
+
+    optimizer = _build_optimizer(spec)
+    entry_bar = pd.DataFrame({"cross": [True], "filter": [True], "entry": [True]})
+    inactive_bar = pd.DataFrame({"cross": [False], "filter": [True], "entry": [False]})
+
+    assert optimizer.optimize({"SPY": entry_bar}, {"SPY": entry_bar}) == {"SPY": 1.0}
+    optimizer.set_held_symbols(["SPY"])
+    assert optimizer.optimize({"SPY": inactive_bar}, {"SPY": inactive_bar}) == {"SPY": 1.0}
+
+    optimizer.reset_symbols(["SPY"])
+
+    assert optimizer.optimize({"SPY": inactive_bar}, {"SPY": inactive_bar}) == {"CASH": 1.0}
+
+
+def test_compile_strategy_rejects_or_composite_mixing_event_and_level_signals() -> None:
+    spec = StrategySpec.template(strategy_id="or_mixed_lifecycle", hypothesis="or composites must not mix lifecycles")
+    spec.signal.rules = {
+        "cross": SignalRuleDef(type="Crossover", params={"fast": "fast", "slow": "slow"}),
+        "filter": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "entry": SignalRuleDef(type="Composite", params={"signals": ["cross", "filter"], "logic": "or"}),
+    }
+
+    with pytest.raises(ValueError, match="cannot mix event and level signals"):
+        compile_strategy(spec)
+
+
+def test_compile_strategy_rejects_multiple_terminal_signal_rules() -> None:
+    spec = StrategySpec.template(strategy_id="multi_terminal", hypothesis="ambiguous signal rules must not imply or")
+    spec.signal.rules = {
+        "above": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "trend": SignalRuleDef(type="Threshold", params={"column": "volume", "threshold": 1.0}),
+    }
+
+    with pytest.raises(ValueError, match="Exactly one terminal signal rule"):
+        compile_strategy(spec)
 
 
 def test_signal_filtered_equal_weight_keeps_latched_event_symbol_without_current_bar() -> None:

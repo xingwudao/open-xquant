@@ -27,6 +27,7 @@ from oxq.cli.agent_targets import (
     CONCRETE_TARGETS,
     SUPPORTED_TARGETS,
     AgentTarget,
+    SkillValidationError,
     detect_targets,
     discover_skills,
     render_skill_for_target,
@@ -56,7 +57,7 @@ def default_agent_config() -> dict[str, Any]:
         "schema_version": CONFIG_SCHEMA_VERSION,
         "default_target": "auto",
         "installed_targets": [],
-        "default_data_dir": "~/.oxq/data",
+        "default_data_dir": "~/.oxq/data/market",
         "auto_init_workspace": True,
         "allow_auto_download": "ask",
         "preferred_runner": "uv run oxq",
@@ -104,7 +105,7 @@ def agent() -> None:
 def install(target: str | None, all_targets: bool, from_local: str | None, dry_run: bool, repair: bool, yes: bool) -> None:
     """Install open-xquant skills into supported Agent homes."""
 
-    del repair, yes
+    del yes
     target_ids = _select_targets(target, all_targets)
     if target_ids == ["generic"]:
         _print_generic()
@@ -112,7 +113,7 @@ def install(target: str | None, all_targets: bool, from_local: str | None, dry_r
         return
 
     source_root = resolve_source_root(from_local)
-    skills = discover_skills(source_root)
+    skills = _discover_skills_or_raise(source_root)
     manifest = _load_manifest()
     now = _now()
     manifest.setdefault("schema_version", MANIFEST_SCHEMA_VERSION)
@@ -124,7 +125,15 @@ def install(target: str | None, all_targets: bool, from_local: str | None, dry_r
     installed: list[str] = []
     for target_id in target_ids:
         target_obj = resolve_target(target_id)
-        target_state = _install_target(target_obj, skills, source_root, dry_run=dry_run)
+        existing_state = manifest["targets"].get(target_id) if isinstance(manifest.get("targets"), dict) else None
+        target_state = _install_target(
+            target_obj,
+            skills,
+            source_root,
+            dry_run=dry_run,
+            repair=repair,
+            existing_state=existing_state if isinstance(existing_state, dict) else None,
+        )
         manifest["targets"][target_id] = target_state
         installed.append(target_id)
 
@@ -144,9 +153,13 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
     """Uninstall managed Agent skills."""
 
     del yes
+    if all_targets and target:
+        raise click.ClickException("Use --target or --all-targets, not both.")
+    if target is None and not all_targets:
+        raise click.ClickException("Use --target or --all-targets to uninstall managed Agent files.")
     manifest = _require_manifest()
     targets = manifest.get("targets", {})
-    selected = list(targets) if all_targets or target is None else [target]
+    selected = list(targets) if all_targets else [target]
     for target_id in selected:
         state = targets.get(target_id)
         if not isinstance(state, dict) or not state.get("installed"):
@@ -211,7 +224,7 @@ def upgrade(
     del yes
     manifest = _require_manifest()
     source_root = _upgrade_source(from_local, repo, git_ref)
-    skills = discover_skills(source_root)
+    skills = _discover_skills_or_raise(source_root)
     targets = manifest.get("targets", {})
     selected = list(targets) if all_targets or target is None else [target]
     updated: list[str] = []
@@ -246,20 +259,48 @@ def _select_targets(target: str | None, all_targets: bool) -> list[str]:
     return detect_targets()
 
 
-def _install_target(target: AgentTarget, skills: list[Any], source_root: Path, dry_run: bool) -> dict[str, Any]:
+def _discover_skills_or_raise(source_root: Path) -> list[Any]:
+    try:
+        return discover_skills(source_root)
+    except SkillValidationError as exc:
+        raise click.ClickException(str(exc)) from exc
+
+
+def _install_target(
+    target: AgentTarget,
+    skills: list[Any],
+    source_root: Path,
+    dry_run: bool,
+    repair: bool = False,
+    existing_state: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     if target.id == "generic":
         raise click.ClickException("generic target does not install files.")
     assert target.skills_dir is not None
     target_skills: list[dict[str, Any]] = []
     installed_paths: list[str] = []
+    existing_records = {
+        record["name"]: record
+        for record in (existing_state or {}).get("skills", [])
+        if isinstance(record, dict) and isinstance(record.get("name"), str)
+    }
     for skill in skills:
         content = render_skill_for_target(skill, target.id)
-        dest_dir = target.skills_dir / skill.name
+        dest_dir = _safe_skill_dest_dir(target, skill.name)
         dest_file = dest_dir / "SKILL.md"
         marker_file = dest_dir / MANAGED_MARKER
         if dest_dir.exists() and not marker_file.exists():
             click.echo(f"{target.id}: skip unmarked existing skill {dest_dir}")
             continue
+        if repair and marker_file.exists() and dest_file.exists():
+            marker_data = read_json_file(marker_file)
+            if marker_data.get("managed_by") == "open-xquant" and sha256_file(dest_file) != marker_data.get("dest_sha256"):
+                click.echo(f"{target.id}: skip modified managed skill {dest_dir}")
+                existing_record = existing_records.get(skill.name)
+                if existing_record is not None:
+                    installed_paths.append(str(dest_dir.resolve()))
+                    target_skills.append(existing_record)
+                continue
         dest_sha = _sha256_text(content)
         if not dry_run:
             dest_dir.mkdir(parents=True, exist_ok=True)
@@ -304,20 +345,7 @@ def _install_target(target: AgentTarget, skills: list[Any], source_root: Path, d
 
 def _uninstall_target(target_id: str, state: dict[str, Any], dry_run: bool) -> None:
     for raw_path in state.get("installed_paths", []):
-        path = expand_path(raw_path)
-        marker = path / MANAGED_MARKER
-        if not marker.exists():
-            click.echo(f"{target_id}: skip unmarked path {path}")
-            continue
-        marker_data = read_json_file(marker)
-        if marker_data.get("managed_by") != "open-xquant":
-            click.echo(f"{target_id}: skip unmanaged path {path}")
-            continue
-        if path.is_symlink():
-            click.echo(f"{target_id}: skip symlink path {path}")
-            continue
-        if not dry_run:
-            shutil.rmtree(path)
+        _remove_managed_skill_dir(target_id, expand_path(raw_path), dry_run=dry_run)
     for block in state.get("managed_blocks", []):
         try:
             if not dry_run:
@@ -337,21 +365,44 @@ def _upgrade_target(
 ) -> list[str]:
     assert target.skills_dir is not None
     by_name = {skill.name: skill for skill in skills}
+    old_records = {
+        record["name"]: record
+        for record in state.get("skills", [])
+        if isinstance(record, dict) and isinstance(record.get("name"), str)
+    }
     skipped: list[str] = []
     new_skill_records: list[dict[str, Any]] = []
-    for record in state.get("skills", []):
-        name = record["name"]
-        source_skill = by_name.get(name)
-        if source_skill is None:
+    removed_names: list[str] = []
+    for name, record in old_records.items():
+        if name in by_name:
             continue
-        dest = expand_path(record["dest"])
-        if dest.exists() and sha256_file(dest) != record.get("dest_sha256"):
+        dest = expand_path(record["dest"]) if isinstance(record.get("dest"), str) else None
+        if dest is not None and dest.exists() and sha256_file(dest) != record.get("dest_sha256"):
+            skipped.append(name)
+            new_skill_records.append(record)
+            continue
+        if _remove_managed_skill_dir(target.id, expand_path(record["dest"]).parent, dry_run=dry_run):
+            removed_names.append(name)
+    for source_skill in skills:
+        name = source_skill.name
+        record = old_records.get(name)
+        dest = (
+            expand_path(record["dest"])
+            if record and isinstance(record.get("dest"), str)
+            else _safe_skill_dest_dir(target, name) / "SKILL.md"
+        )
+        marker = dest.parent / MANAGED_MARKER
+        if dest.parent.exists() and not marker.exists():
+            click.echo(f"{target.id}: skip unmarked existing skill {dest.parent}")
+            continue
+        if record and dest.exists() and sha256_file(dest) != record.get("dest_sha256"):
             skipped.append(name)
             new_skill_records.append(record)
             continue
         content = render_skill_for_target(source_skill, target.id)
         dest_sha = _sha256_text(content)
         if not dry_run:
+            dest.parent.mkdir(parents=True, exist_ok=True)
             write_text_file(dest, content)
             _write_managed_marker(
                 dest.parent / MANAGED_MARKER,
@@ -373,11 +424,40 @@ def _upgrade_target(
         content = CLAUDE_AGENT_BLOCK if target.id == "claude-code" else GLOBAL_AGENT_BLOCK
         upsert_marker_block(target.instruction_file, "open-xquant", content)
     if target.id == "openclaw":
+        if removed_names:
+            _remove_openclaw_config(expand_path(state["config_file"]), removed_names, dry_run=dry_run)
         _merge_openclaw_config(target, [record["name"] for record in new_skill_records], dry_run=dry_run)
     if not dry_run:
         state["skills"] = new_skill_records
+        state["installed_paths"] = [str(expand_path(record["dest"]).parent) for record in new_skill_records]
         state["updated_at"] = _now()
     return skipped
+
+
+def _remove_managed_skill_dir(target_id: str, path: Path, dry_run: bool) -> bool:
+    marker = path / MANAGED_MARKER
+    if not marker.exists():
+        click.echo(f"{target_id}: skip unmarked path {path}")
+        return False
+    marker_data = read_json_file(marker)
+    if marker_data.get("managed_by") != "open-xquant":
+        click.echo(f"{target_id}: skip unmanaged path {path}")
+        return False
+    if path.is_symlink():
+        click.echo(f"{target_id}: skip symlink path {path}")
+        return False
+    if not dry_run:
+        shutil.rmtree(path)
+    return True
+
+
+def _safe_skill_dest_dir(target: AgentTarget, skill_name: str) -> Path:
+    assert target.skills_dir is not None
+    root = target.skills_dir.resolve()
+    dest = (target.skills_dir / skill_name).resolve()
+    if not dest.is_relative_to(root):
+        raise click.ClickException(f"invalid skill name: {skill_name}")
+    return dest
 
 
 def _merge_openclaw_config(target: AgentTarget, skill_names: list[str], dry_run: bool) -> None:

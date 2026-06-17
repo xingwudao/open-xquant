@@ -175,13 +175,13 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
             return "REJECT"
 
     reject_if = decision_policy.get("reject_if", {})
-    # Prefer OOS-only metrics for OOS decisions; fall back to aggregate
-    oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio", "sharpe_ratio")
+    # OOS policy thresholds require OOS-only metrics.
+    policy_oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio")
     max_dd = _finite_metric(metrics, "oos_max_drawdown", "max_drawdown")
 
     if "oos_sharpe_lt" in reject_if:
         threshold = _as_finite_float(reject_if["oos_sharpe_lt"])
-        if threshold is None or oos_sharpe is None or threshold > oos_sharpe:
+        if threshold is None or policy_oos_sharpe is None or threshold > policy_oos_sharpe:
             return "REJECT"
     if "max_drawdown_lt" in reject_if:
         threshold = _as_finite_float(reject_if["max_drawdown_lt"])
@@ -193,16 +193,16 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
     promote_checks: list[bool] = []
     if "oos_sharpe_gte" in promote_if:
         threshold = _as_finite_float(promote_if["oos_sharpe_gte"])
-        if threshold is None or oos_sharpe is None:
+        if threshold is None or policy_oos_sharpe is None:
             return "WATCHLIST"
-        promote_checks.append(threshold <= oos_sharpe)
+        promote_checks.append(threshold <= policy_oos_sharpe)
     if "max_drawdown_gte" in promote_if:
         threshold = _as_finite_float(promote_if["max_drawdown_gte"])
         if threshold is None or max_dd is None:
             return "WATCHLIST"
         promote_checks.append(threshold <= max_dd)
-    if promote_checks and all(promote_checks):
-        return "PAPER TRADING CANDIDATE"
+    if promote_if:
+        return "PAPER TRADING CANDIDATE" if promote_checks and all(promote_checks) else "WATCHLIST"
 
     if bias_audit.get("warning_count", 0) > 0:
         return "WATCHLIST"
@@ -210,8 +210,8 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
     return "PAPER TRADING CANDIDATE"
 
 
-def _finite_metric(metrics: dict, primary: str, fallback: str) -> float | None:
-    value = metrics[primary] if primary in metrics else metrics.get(fallback)
+def _finite_metric(metrics: dict, primary: str, fallback: str | None = None) -> float | None:
+    value = metrics[primary] if primary in metrics else metrics.get(fallback) if fallback else None
     if value is None or isinstance(value, bool):
         return None
     try:

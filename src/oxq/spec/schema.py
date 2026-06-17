@@ -5,12 +5,21 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+def make_strategy_id(description: str, max_length: int = 50) -> str:
+    """Create a validator-safe strategy_id from free-form text."""
+    slug = description.lower()
+    slug = re.sub(r"[^a-z0-9_-]+", "_", slug)
+    slug = re.sub(r"_+", "_", slug).strip("_-")
+    return (slug[:max_length].rstrip("_-") or "strategy")
 
 
 @dataclass

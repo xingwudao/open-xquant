@@ -430,6 +430,29 @@ def test_validate_rejects_overlapping_train_and_test_periods() -> None:
     assert any(error["check"] == "validation_period_order" for error in result.errors)
 
 
+def test_validate_rejects_present_periods_without_exactly_two_dates() -> None:
+    spec = StrategySpec.template(strategy_id="bad_period_lengths", hypothesis="periods need start and end")
+    spec.validation.train_period = ["2020-01-01"]
+    spec.validation.test_period = ["2021-01-01", "2021-12-31"]
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "validation_period_length" for error in result.errors)
+
+
+def test_validate_rejects_required_oos_without_two_date_train_period() -> None:
+    spec = StrategySpec.template(strategy_id="bad_required_oos", hypothesis="required OOS needs full periods")
+    spec.validation.required_oos = True
+    spec.validation.train_period = ["2020-01-01"]
+    spec.validation.test_period = ["2021-01-01", "2021-12-31"]
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "oos_incomplete" for error in result.errors)
+
+
 def test_validate_rejects_next_high_and_next_low_fill_modes() -> None:
     spec = StrategySpec.template(strategy_id="bad_fill", hypothesis="unsupported next extrema fills fail")
     spec.execution.fill_price_mode = "next_high"
@@ -739,3 +762,30 @@ def test_validate_rejects_invalid_composite_logic() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "signal_logic_invalid" for error in result.errors)
+
+
+def test_validate_rejects_multiple_terminal_signal_rules() -> None:
+    spec = StrategySpec.template(strategy_id="ambiguous_terminal", hypothesis="multiple terminal signals are ambiguous")
+    spec.signal.rules = {
+        "above": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "trend": SignalRuleDef(type="Threshold", params={"column": "volume", "threshold": 1.0}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_terminal_ambiguous" for error in result.errors)
+
+
+def test_validate_rejects_or_composite_mixing_event_and_level_signals() -> None:
+    spec = StrategySpec.template(strategy_id="or_mixed_lifecycle", hypothesis="or composites must not mix lifecycles")
+    spec.signal.rules = {
+        "cross": SignalRuleDef(type="Crossover", params={"fast": "fast", "slow": "slow"}),
+        "filter": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0}),
+        "entry": SignalRuleDef(type="Composite", params={"signals": ["cross", "filter"], "logic": "or"}),
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_lifecycle_ambiguous" for error in result.errors)

@@ -81,6 +81,20 @@ class TestSubmitOrder:
         assert len(open_orders) == 1
         assert open_orders[0].id == oid
 
+    def test_market_orders_are_not_locally_replaced_without_remote_cancel(self, mock_client):
+        broker, client = mock_client
+        client.submit_order.side_effect = [
+            {"id": "alpaca-001", "status": "accepted"},
+            {"id": "alpaca-002", "status": "accepted"},
+        ]
+
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=100))
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=200))
+
+        client.cancel_order.assert_not_called()
+        open_orders = broker.get_open_orders("AAPL")
+        assert [order.id for order in open_orders] == ["alpaca-001", "alpaca-002"]
+
 
 class TestGetFills:
     def test_empty_fills(self, mock_client):

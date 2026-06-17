@@ -16,11 +16,15 @@ __all__ = ["AkShareDownloader", "Downloader", "YFinanceDownloader", "resolve_dat
 def resolve_data_dir(dest_dir: Path | None = None) -> Path:
     """Resolve data storage directory. Priority: parameter > OXQ_DATA_DIR > default."""
     if dest_dir is not None:
-        return dest_dir
+        return _expand_path(dest_dir)
     env = os.environ.get("OXQ_DATA_DIR")
     if env:
-        return Path(env) / "market"
+        return _expand_path(Path(env) / "market")
     return Path.home() / ".oxq" / "data" / "market"
+
+
+def _expand_path(path: Path) -> Path:
+    return Path(os.path.expandvars(os.path.expanduser(str(path))))
 
 
 def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:

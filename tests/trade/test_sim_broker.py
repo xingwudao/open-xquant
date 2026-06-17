@@ -597,8 +597,8 @@ class TestFillPriceMode:
         assert broker.get_fills() == []
         assert broker.get_open_orders() == []
 
-    def test_next_open_replaced_market_order_does_not_fill(self):
-        """Only the latest same-symbol NEXT_OPEN market order should fill."""
+    def test_next_open_multiple_market_orders_fill_independently(self):
+        """Broker-level market orders should not replace each other."""
         mktdata, dates = self._make_mktdata()
         broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
         broker.set_current_date(dates[0])
@@ -610,9 +610,8 @@ class TestFillPriceMode:
 
         fills = broker.get_fills()
         orders = broker.get_all_orders()
-        assert len(fills) == 1
-        assert fills[0].order.shares == 20
-        assert [order.status for order in orders] == ["canceled", "filled"]
+        assert [fill.order.shares for fill in fills] == [10, 20]
+        assert [order.status for order in orders] == ["filled", "filled"]
 
 
 class TestFillPriceModeMid:

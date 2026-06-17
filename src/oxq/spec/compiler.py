@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import platform
 import sys
 from datetime import UTC, datetime
@@ -47,6 +48,7 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
 # it is time-based and should re-evaluate every bar.
 _EVENT_SIGNAL_TYPES = frozenset({"Crossover"})
 
+
 def _resolve_indicator(name: str) -> type:
     """Look up an indicator class by name from the registry."""
     cls = _INDICATOR_REGISTRY.get(name)
@@ -80,8 +82,8 @@ def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
     # When EqualWeight is used with signal rules, wrap it in a signal-filtered variant
     # so that only symbols with active signal (True/positive) get weight.
     if spec.portfolio.type == "EqualWeight" and spec.signal.rules:
-        signal_names = list(spec.signal.rules.keys())
-        signal_types = {name: defn.type for name, defn in spec.signal.rules.items()}
+        signal_names = _terminal_signal_names(spec)
+        signal_types = {name: _effective_signal_type(spec, name) for name in spec.signal.rules}
         return _SignalFilteredEqualWeightOptimizer(signal_names=signal_names, signal_types=signal_types)
 
     return opt_cls(**spec.portfolio.params)
@@ -475,7 +477,7 @@ def _compute_missing_ratio(
     missing = 0
     for symbol in symbols_to_check:
         df = mktdata.get(symbol, pd.DataFrame())
-        aligned = df.reindex(expected_index)
+        aligned = _align_frame_to_session_dates(df, expected_index)
         check_columns = columns or list(df.columns) or ["__rows__"]
         for col in check_columns:
             total += len(expected_index)
@@ -578,15 +580,60 @@ def _compute_data_fingerprints(
 
 
 def _reindex_for_fingerprint(df: pd.DataFrame, expected_index: pd.DatetimeIndex) -> pd.DataFrame:
+    return _select_frame_for_session_fingerprint(df, expected_index)
+
+
+def _align_frame_to_session_dates(df: pd.DataFrame, expected_index: pd.DatetimeIndex) -> pd.DataFrame:
     if df.empty:
         return df.reindex(expected_index)
-    source_index = pd.DatetimeIndex(df.index)
-    aligned_index = expected_index
-    if source_index.tz is not None and aligned_index.tz is None:
-        aligned_index = aligned_index.tz_localize(source_index.tz)
-    elif source_index.tz is None and aligned_index.tz is not None:
-        aligned_index = aligned_index.tz_localize(None)
-    return df.reindex(aligned_index)
+    source = df.copy()
+    session_dates = pd.Index([pd.Timestamp(idx).date() for idx in source.index])
+    if session_dates.has_duplicates:
+        raise ValueError("market data has multiple rows for the same market session")
+    expected_dates = pd.Index([pd.Timestamp(idx).date() for idx in expected_index])
+    source.index = session_dates
+    aligned = source.reindex(expected_dates)
+    aligned.index = expected_index
+    return aligned
+
+
+def _select_frame_for_session_fingerprint(df: pd.DataFrame, expected_index: pd.DatetimeIndex) -> pd.DataFrame:
+    if df.empty:
+        return df.reindex(expected_index)
+    source = df.copy()
+    source_index = pd.DatetimeIndex(source.index)
+    missing_index = _expected_index_with_source_tz(expected_index, source_index)
+    session_dates = pd.Index([pd.Timestamp(idx).date() for idx in source.index])
+    if session_dates.has_duplicates:
+        raise ValueError("market data has multiple rows for the same market session")
+    source_by_date = dict(zip(session_dates, range(len(source)), strict=True))
+    rows: list[pd.Series] = []
+    index_values: list[Any] = []
+    for expected_ts, missing_ts in zip(expected_index, missing_index, strict=True):
+        expected_date = pd.Timestamp(expected_ts).date()
+        source_pos = source_by_date.get(expected_date)
+        if source_pos is None:
+            rows.append(pd.Series(index=source.columns, dtype="object"))
+            index_values.append(missing_ts)
+            continue
+        rows.append(source.iloc[source_pos])
+        index_values.append(source.index[source_pos])
+    aligned = pd.DataFrame(rows)
+    aligned.index = pd.Index(index_values)
+    return aligned
+
+
+def _expected_index_with_source_tz(
+    expected_index: pd.DatetimeIndex,
+    source_index: pd.DatetimeIndex,
+) -> pd.DatetimeIndex:
+    if source_index.tz is not None and expected_index.tz is None:
+        return expected_index.tz_localize(source_index.tz)
+    if source_index.tz is None and expected_index.tz is not None:
+        return expected_index.tz_localize(None)
+    if source_index.tz is not None and expected_index.tz is not None:
+        return expected_index.tz_convert(source_index.tz)
+    return expected_index
 
 
 def _fingerprint_dataframe(df: pd.DataFrame, columns: list[str] | None = None) -> dict[str, Any]:
@@ -686,13 +733,38 @@ def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
 
 def _append_run_digest(run_dir: Path, artifact_hashes_hash: str) -> None:
     digest_path = run_dir.parent / "run_digests.jsonl"
+    lock_path = digest_path.with_suffix(digest_path.suffix + ".lock")
     entry = {
         "run_id": run_dir.name,
         "artifact_hashes": artifact_hashes_hash,
         "created_at": datetime.now(UTC).isoformat(),
     }
-    with open(digest_path, "a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry, sort_keys=True) + "\n")
+    with _FileLock(lock_path):
+        with open(digest_path, "a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, sort_keys=True) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+
+class _FileLock:
+    def __init__(self, path: Path) -> None:
+        self._path = path
+        self._fh: Any = None
+
+    def __enter__(self) -> None:
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._fh = open(self._path, "a+")
+        import fcntl
+
+        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        if self._fh is None:
+            return
+        import fcntl
+
+        fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
+        self._fh.close()
 
 
 def _sanitize_json(value: Any) -> Any:
@@ -715,6 +787,50 @@ def _validate_crossover_rule_count(spec: StrategySpec) -> None:
     count = sum(1 for rule in spec.signal.rules.values() if rule.type == "Crossover")
     if count > 1:
         raise ValueError("Multiple Crossover rules are not supported by the spec compiler")
+
+
+def _terminal_signal_names(spec: StrategySpec) -> list[str]:
+    referenced: set[str] = set()
+    for rule_def in spec.signal.rules.values():
+        if rule_def.type != "Composite":
+            continue
+        signals = rule_def.params.get("signals", [])
+        if isinstance(signals, list):
+            referenced.update(signal_name for signal_name in signals if isinstance(signal_name, str))
+    terminal = [name for name in spec.signal.rules if name not in referenced]
+    if len(terminal) != 1:
+        raise ValueError(
+            "Exactly one terminal signal rule is required for EqualWeight specs with signal.rules; "
+            f"found {terminal or 'none'}"
+        )
+    return terminal
+
+
+def _effective_signal_type(spec: StrategySpec, signal_name: str, seen: set[str] | None = None) -> str:
+    rule_def = spec.signal.rules[signal_name]
+    if rule_def.type != "Composite":
+        return rule_def.type
+    seen = set(seen or ())
+    if signal_name in seen:
+        return rule_def.type
+    seen.add(signal_name)
+    signals = rule_def.params.get("signals", [])
+    if not isinstance(signals, list):
+        return rule_def.type
+    child_types: list[str] = []
+    for child_name in signals:
+        if not isinstance(child_name, str) or child_name not in spec.signal.rules:
+            continue
+        child_types.append(_effective_signal_type(spec, child_name, seen))
+    has_event = any(child_type in _EVENT_SIGNAL_TYPES for child_type in child_types)
+    has_level = any(child_type not in _EVENT_SIGNAL_TYPES for child_type in child_types)
+    if rule_def.params.get("logic", "and") == "or" and has_event and has_level:
+        raise ValueError(
+            f"Composite signal '{signal_name}' with logic='or' cannot mix event and level signals"
+        )
+    if has_event:
+        return "Crossover"
+    return rule_def.type
 
 
 def _get_version() -> str:

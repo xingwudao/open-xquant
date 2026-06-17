@@ -87,6 +87,9 @@ Issues = "https://github.com/xingwudao/open-xquant/issues"
 [tool.hatch.build.targets.wheel]
 packages = ["src/oxq"]
 
+[tool.hatch.build.targets.wheel.force-include]
+"agent/skills" = "agent/skills"
+
 [tool.ruff]
 target-version = "py312"
 line-length = 140

@@ -7,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from oxq.spec.schema import StrategySpec
+from oxq.spec.schema import StrategySpec, make_strategy_id
 from oxq.spec.validator import validate as validate_spec
 from oxq.tools.registry import registry
 
@@ -19,7 +19,7 @@ from oxq.tools.registry import registry
 )
 def spec_init(description: str, out: str = "strategy_spec.yaml") -> dict[str, Any]:
     """Create a strategy spec template."""
-    strategy_id = description.lower().replace(" ", "_").replace("，", "_").replace(",", "_")[:50]
+    strategy_id = make_strategy_id(description)
     template = StrategySpec.template(strategy_id=strategy_id, hypothesis=description)
 
     output_path = Path(out)

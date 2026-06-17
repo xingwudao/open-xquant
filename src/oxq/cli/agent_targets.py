@@ -45,7 +45,7 @@ def home_path(*parts: str) -> Path:
 
 def resolve_codex_target() -> AgentTarget:
     codex_home = expand_path(os.environ.get("CODEX_HOME", "~/.codex"))
-    return AgentTarget("codex", home_path(".agents", "skills"), codex_home / "AGENTS.md")
+    return AgentTarget("codex", codex_home / "skills", codex_home / "AGENTS.md")
 
 
 def resolve_opencode_target() -> AgentTarget:
@@ -135,6 +135,8 @@ def _read_skill(path: Path) -> SkillSource:
     description = metadata.get("description")
     if not isinstance(name, str) or not name.strip():
         raise SkillValidationError(f"Skill {path} is missing name frontmatter")
+    if not _is_safe_skill_name(name.strip()):
+        raise SkillValidationError(f"invalid skill name: {name}")
     if not isinstance(description, str) or not description.strip():
         raise SkillValidationError(f"Skill {path} is missing description frontmatter")
     return SkillSource(
@@ -162,6 +164,13 @@ def _split_frontmatter(content: str, path: Path) -> tuple[dict[str, object], str
     if not isinstance(metadata, dict):
         raise SkillValidationError(f"Skill {path} frontmatter must be a mapping")
     return metadata, content[body_start:]
+
+
+def _is_safe_skill_name(name: str) -> bool:
+    if not name or "/" in name or "\\" in name:
+        return False
+    candidate = Path(name)
+    return not candidate.is_absolute() and all(part not in {"", ".", ".."} for part in candidate.parts)
 
 
 def validate_skill_for_target(skill: SkillSource, target_id: str) -> None:

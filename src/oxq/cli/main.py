@@ -11,7 +11,7 @@ import yaml
 from oxq.cli.agent import agent as agent_group
 from oxq.cli.doctor import doctor
 from oxq.cli.research import research as research_group
-from oxq.spec.schema import StrategySpec
+from oxq.spec.schema import StrategySpec, make_strategy_id
 from oxq.spec.validator import validate as validate_spec
 
 
@@ -33,7 +33,7 @@ def init(description: str, out: str):
 
     DESCRIPTION is a brief strategy idea in natural language.
     """
-    strategy_id = description.lower().replace(" ", "_").replace("，", "_").replace(",", "_")[:50]
+    strategy_id = make_strategy_id(description)
     template = StrategySpec.template(strategy_id=strategy_id, hypothesis=description)
 
     output_path = Path(out)

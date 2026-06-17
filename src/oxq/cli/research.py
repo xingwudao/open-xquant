@@ -23,7 +23,7 @@ def research() -> None:
 
 @research.command(name="init")
 @click.option("--name", default=None, help="Workspace name.")
-@click.option("--data-dir", default="~/.oxq/data", help="Market data directory.")
+@click.option("--data-dir", default="~/.oxq/data/market", help="Market data directory.")
 @click.option("--minimal", is_flag=True, help="Create only required workspace files.")
 @click.option("--force", is_flag=True, help="Replace managed workspace config.")
 def init_workspace(name: str | None, data_dir: str, minimal: bool, force: bool) -> None:
@@ -36,7 +36,7 @@ def initialize_workspace(
     cwd: Path,
     *,
     name: str | None = None,
-    data_dir: str = "~/.oxq/data",
+    data_dir: str = "~/.oxq/data/market",
     minimal: bool = False,
     force: bool = False,
 ) -> None:

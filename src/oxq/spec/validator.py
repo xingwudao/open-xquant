@@ -227,6 +227,76 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
     return errors
 
 
+def _validate_terminal_signal_rules(spec: StrategySpec) -> list[dict]:
+    if not spec.signal.rules or spec.portfolio.type != "EqualWeight":
+        return []
+    referenced: set[str] = set()
+    for rule_def in spec.signal.rules.values():
+        if rule_def.type != "Composite":
+            continue
+        signals = rule_def.params.get("signals", [])
+        if isinstance(signals, list):
+            referenced.update(signal_name for signal_name in signals if isinstance(signal_name, str))
+    terminal = [name for name in spec.signal.rules if name not in referenced]
+    if len(terminal) == 1:
+        return []
+    return [
+        _err(
+            "fatal",
+            "signal_terminal_ambiguous",
+            "EqualWeight specs with signal.rules must declare exactly one terminal signal rule; "
+            f"found {terminal or 'none'}",
+        )
+    ]
+
+
+def _validate_composite_lifecycle_rules(spec: StrategySpec) -> list[dict]:
+    errors: list[dict] = []
+    for signal_name, rule_def in spec.signal.rules.items():
+        if rule_def.type != "Composite" or rule_def.params.get("logic", "and") != "or":
+            continue
+        signals = rule_def.params.get("signals", [])
+        if not isinstance(signals, list):
+            continue
+        child_types = [
+            _effective_signal_type(spec, child_name)
+            for child_name in signals
+            if isinstance(child_name, str) and child_name in spec.signal.rules
+        ]
+        has_event = any(child_type == "event" for child_type in child_types)
+        has_level = any(child_type == "level" for child_type in child_types)
+        if has_event and has_level:
+            errors.append(
+                _err(
+                    "fatal",
+                    "signal_lifecycle_ambiguous",
+                    f"signal.rules.{signal_name} with logic='or' cannot mix event and level signals",
+                )
+            )
+    return errors
+
+
+def _effective_signal_type(spec: StrategySpec, signal_name: str, seen: set[str] | None = None) -> str:
+    rule_def = spec.signal.rules[signal_name]
+    if rule_def.type != "Composite":
+        return "event" if rule_def.type == "Crossover" else "level"
+    seen = set(seen or ())
+    if signal_name in seen:
+        return "level"
+    seen.add(signal_name)
+    signals = rule_def.params.get("signals", [])
+    if not isinstance(signals, list):
+        return "level"
+    child_types = [
+        _effective_signal_type(spec, child_name, seen)
+        for child_name in signals
+        if isinstance(child_name, str) and child_name in spec.signal.rules
+    ]
+    if any(child_type == "event" for child_type in child_types):
+        return "event"
+    return "level"
+
+
 def _require_optimizer_column(field_name: str, value: object, available_columns: set[str]) -> list[dict]:
     if not _is_non_empty_string(value):
         return [_optimizer_param_error(f"{field_name} is required and must be a non-empty string")]
@@ -545,22 +615,32 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "fee_min_negative", "fee_min must not be negative"))
 
     # --- Validation ---
-    if not spec.validation.test_period or len(spec.validation.test_period) < 2:
+    train_period_len = len(spec.validation.train_period)
+    test_period_len = len(spec.validation.test_period)
+    if not spec.validation.test_period or test_period_len < 2:
         errors.append(
             _err("fatal", "oos_missing", "validation.test_period is missing — no out-of-sample validation period")
         )
-    if spec.validation.required_oos and (not spec.validation.test_period or not spec.validation.train_period):
+    if spec.validation.train_period and train_period_len != 2:
         errors.append(
-            _err("fatal", "oos_incomplete", "required_oos=true but train_period or test_period missing")
+            _err("fatal", "validation_period_length", "validation.train_period must contain exactly two dates")
         )
-    if spec.validation.test_period and len(spec.validation.test_period) >= 2:
+    if spec.validation.test_period and test_period_len != 2:
+        errors.append(
+            _err("fatal", "validation_period_length", "validation.test_period must contain exactly two dates")
+        )
+    if spec.validation.required_oos and (train_period_len != 2 or test_period_len != 2):
+        errors.append(
+            _err("fatal", "oos_incomplete", "required_oos=true but train_period or test_period is incomplete")
+        )
+    if test_period_len == 2:
         test_start = _parse_date(spec.validation.test_period[0])
         test_end = _parse_date(spec.validation.test_period[1])
         if test_start is None or test_end is None or test_start > test_end:
             errors.append(
                 _err("fatal", "validation_period_order", "validation.test_period must satisfy start <= end")
             )
-        if spec.validation.train_period and len(spec.validation.train_period) >= 2:
+        if train_period_len == 2:
             train_start = _parse_date(spec.validation.train_period[0])
             train_end = _parse_date(spec.validation.train_period[1])
             if train_start is None or train_end is None or train_start > train_end:
@@ -618,6 +698,8 @@ def validate(spec: StrategySpec) -> ValidationResult:
 
     errors.extend(_validate_derived_column_names(spec))
     errors.extend(_validate_signal_column_references(spec))
+    errors.extend(_validate_terminal_signal_rules(spec))
+    errors.extend(_validate_composite_lifecycle_rules(spec))
     errors.extend(_validate_optimizer_params(spec))
 
     # --- Future-data bias: Peak signal ---

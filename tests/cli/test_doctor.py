@@ -5,6 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from oxq.cli.doctor import _check_data
 from oxq.cli.main import main
 
 
@@ -39,3 +40,14 @@ def test_doctor_json_reports_missing_workspace_fix(monkeypatch, tmp_path) -> Non
     assert payload["checks"]["agent"]["status"] == "ok"
     assert payload["checks"]["workspace"]["status"] == "missing"
     assert "oxq research init" in payload["fixes"]
+
+
+def test_doctor_data_check_uses_market_data_directory(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    (home / ".oxq/data").mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = _check_data()
+
+    assert result["status"] == "warn"
+    assert result["path"].endswith(".oxq/data/market")

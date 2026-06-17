@@ -23,11 +23,31 @@ def test_decision_watchlists_when_promote_oos_metric_is_unavailable() -> None:
     assert decision == "WATCHLIST"
 
 
+def test_decision_watchlists_when_promote_oos_metric_is_below_threshold() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}}},
+        metrics={"oos_sharpe_ratio": 0.1},
+    )
+
+    assert decision == "WATCHLIST"
+
+
 def test_decision_does_not_fallback_when_oos_metric_is_explicitly_unavailable() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
         spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}}},
         metrics={"oos_sharpe_ratio": None, "sharpe_ratio": 99.0},
+    )
+
+    assert decision == "WATCHLIST"
+
+
+def test_decision_does_not_fallback_when_oos_metric_is_missing() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}}},
+        metrics={"sharpe_ratio": 99.0},
     )
 
     assert decision == "WATCHLIST"

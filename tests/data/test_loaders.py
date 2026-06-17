@@ -36,6 +36,23 @@ def test_explicit_dir_overrides_env(tmp_path: Path, monkeypatch) -> None:
     assert result == tmp_path / "explicit"
 
 
+def test_resolve_expands_explicit_user_and_env_paths(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OXQ_TEST_DATA", str(tmp_path / "expanded"))
+
+    result = resolve_data_dir(Path("$OXQ_TEST_DATA/market"))
+
+    assert result == tmp_path / "expanded" / "market"
+
+
+def test_resolve_expands_env_data_root(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("OXQ_TEST_ROOT", str(tmp_path / "root"))
+    monkeypatch.setenv("OXQ_DATA_DIR", "$OXQ_TEST_ROOT/data")
+
+    result = resolve_data_dir()
+
+    assert result == tmp_path / "root" / "data" / "market"
+
+
 def test_yfinance_downloader_satisfies_protocol() -> None:
     downloader: Downloader = YFinanceDownloader()
     assert isinstance(downloader, Downloader)
