@@ -4,6 +4,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from oxq.cli.agent import _upgrade_source
 from oxq.cli.main import main
 
 
@@ -67,3 +68,26 @@ def test_agent_upgrade_skips_locally_modified_skill(monkeypatch, tmp_path) -> No
     assert "local edit" in installed.read_text(encoding="utf-8")
     assert "new workflow" not in installed.read_text(encoding="utf-8")
     assert "modified" in result.output
+
+
+def test_upgrade_source_uses_safe_cache_path_for_path_like_ref(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    source = tmp_path / "cloned"
+    _write_source(source, "from git")
+    clone_destinations: list[Path] = []
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr("oxq.cli.agent.resolve_source_root", lambda _path: source)
+
+    def fake_run(cmd, check):
+        assert check is True
+        clone_destinations.append(Path(cmd[-1]).resolve())
+
+    monkeypatch.setattr("oxq.cli.agent.subprocess.run", fake_run)
+
+    result = _upgrade_source(None, "https://example.invalid/repo.git", "..")
+
+    cache_root = (home / ".config/open-xquant/cache/open-xquant").resolve()
+    assert result == source
+    assert clone_destinations
+    assert clone_destinations[0].is_relative_to(cache_root)
+    assert clone_destinations[0] != cache_root.parent

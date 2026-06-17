@@ -126,6 +126,22 @@ def test_engine_run_rejects_unsupported_fill_price_mode(sample_data_dir) -> None
     assert "Unsupported fill_price_mode" in result["error"]
 
 
+def test_engine_run_rejects_next_open_without_calendar(sample_data_dir) -> None:
+    _build_full_strategy()
+
+    result = engine_run(
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
+        data_dir=str(sample_data_dir),
+        fill_price_mode="next_open",
+        market_calendar=None,
+    )
+
+    assert "market_calendar is required" in result["error"]
+
+
 def test_engine_run_passes_market_calendar_to_provider_and_broker(monkeypatch, sample_data_dir) -> None:
     captured: dict[str, object] = {}
 

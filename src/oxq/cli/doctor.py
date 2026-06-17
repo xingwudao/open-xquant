@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +24,11 @@ def doctor(as_json: bool, fix: bool) -> None:
     """Check CLI, Agent, workspace, data, and optional dependency readiness."""
 
     if fix and not (Path.cwd() / ".open-xquant" / "workspace.yaml").exists():
-        initialize_workspace(Path.cwd())
+        if as_json:
+            with redirect_stdout(StringIO()):
+                initialize_workspace(Path.cwd())
+        else:
+            initialize_workspace(Path.cwd())
     payload = _doctor_payload()
     if as_json:
         click.echo(json.dumps(payload, indent=2, sort_keys=True))

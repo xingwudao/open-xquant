@@ -256,10 +256,16 @@ def _parse_data(raw: dict) -> DataSection:
 def _parse_signal(raw: dict) -> SignalSection:
     indicators = {}
     for name, defn in raw.get("indicators", {}).items():
-        indicators[name] = IndicatorDef(type=defn.get("type", ""), params=defn.get("params", {}))
+        indicators[name] = IndicatorDef(
+            type=defn.get("type", ""),
+            params=_parse_params(defn.get("params", {}), f"signal.indicators.{name}.params"),
+        )
     rules = {}
     for name, defn in raw.get("rules", {}).items():
-        rules[name] = SignalRuleDef(type=defn.get("type", ""), params=defn.get("params", {}))
+        rules[name] = SignalRuleDef(
+            type=defn.get("type", ""),
+            params=_parse_params(defn.get("params", {}), f"signal.rules.{name}.params"),
+        )
     return SignalSection(
         signal_time=raw.get("signal_time", "close_t"),
         indicators=indicators,
@@ -270,7 +276,7 @@ def _parse_signal(raw: dict) -> SignalSection:
 def _parse_portfolio(raw: dict) -> PortfolioSection:
     return PortfolioSection(
         type=raw.get("type", "EqualWeight"),
-        params=raw.get("params", {}),
+        params=_parse_params(raw.get("params", {}), "portfolio.params"),
     )
 
 
@@ -355,6 +361,14 @@ def _parse_date_list(value: object, field_name: str) -> list[str]:
         else:
             raise ValueError(f"{field_name} must be a list of date strings")
     return parsed
+
+
+def _parse_params(value: object, field_name: str) -> dict[str, Any]:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{field_name} must be a mapping")
+    return value
 
 
 def _parse_float(value: object, field_name: str) -> float:

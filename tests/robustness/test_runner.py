@@ -60,3 +60,46 @@ def test_run_robustness_handles_unavailable_baseline_sharpe(monkeypatch, tmp_pat
     cost_test = next(test for test in result["tests"] if test["name"] == "cost_x2")
     assert cost_test["status"] == "warn"
     assert cost_test["baseline_sharpe"] is None
+
+
+def test_run_robustness_returns_error_for_corrupt_metrics(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="corrupt_metrics", hypothesis="corrupt metrics should not crash")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text("{not-json", encoding="utf-8")
+
+    result = run_robustness(tmp_path)
+
+    assert result["status"] == "error"
+    assert "metrics.json is invalid JSON" in result["message"]
+
+
+def test_run_robustness_returns_error_for_non_object_metrics(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="list_metrics", hypothesis="metrics schema should be an object")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text("[]", encoding="utf-8")
+
+    result = run_robustness(tmp_path)
+
+    assert result["status"] == "error"
+    assert result["message"] == "metrics.json must be a JSON object"
+
+
+def test_run_robustness_returns_error_for_non_object_environment(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="list_env", hypothesis="environment schema should be an object")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 1.0}), encoding="utf-8")
+    (tmp_path / "environment.json").write_text("[]", encoding="utf-8")
+
+    result = run_robustness(tmp_path)
+
+    assert result["status"] == "error"
+    assert result["message"] == "environment.json must be a JSON object"

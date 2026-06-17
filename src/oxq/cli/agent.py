@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shlex
 import shutil
@@ -646,7 +647,11 @@ def _current_commit(source_root: Path) -> str:
 def _upgrade_source(from_local: str | None, repo: str, git_ref: str) -> Path:
     if from_local:
         return resolve_source_root(from_local)
-    cache = config_dir() / "cache" / "open-xquant" / git_ref.replace("/", "_")
+    cache_root = config_dir() / "cache" / "open-xquant"
+    cache_key = hashlib.sha256(f"{repo}\0{git_ref}".encode()).hexdigest()[:16]
+    cache = (cache_root / cache_key).resolve()
+    if not cache.is_relative_to(cache_root.resolve()):
+        raise click.ClickException("Invalid upgrade cache path")
     if cache.exists():
         shutil.rmtree(cache)
     cache.parent.mkdir(parents=True, exist_ok=True)

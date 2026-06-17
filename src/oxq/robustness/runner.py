@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+from typing import Any
 
 from oxq.spec.compiler import compile_run
 from oxq.spec.schema import CostSection, StrategySpec
@@ -40,14 +41,18 @@ def run_robustness(run_dir: str | Path) -> dict:
         return {"status": "error", "tests": [], "message": "run directory missing spec or metrics"}
 
     spec = StrategySpec.from_yaml(str(spec_path))
-    baseline_metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    baseline_metrics, error = _read_json_object(metrics_path, "metrics.json")
+    if error is not None:
+        return {"status": "error", "tests": [], "message": error}
     baseline_sharpe = _finite_float(baseline_metrics.get("sharpe_ratio"))
 
     # Preserve the effective data directory from the original run
     env_path = run_path / "environment.json"
     data_dir = None
     if env_path.exists():
-        env = json.loads(env_path.read_text(encoding="utf-8"))
+        env, error = _read_json_object(env_path, "environment.json")
+        if error is not None:
+            return {"status": "error", "tests": [], "message": error}
         data_dir = env.get("data_dir")
 
     # --- Test 1: Cost x2 ---
@@ -133,6 +138,16 @@ def run_robustness(run_dir: str | Path) -> dict:
         status = "robust"
 
     return {"status": status, "tests": tests, "baseline_sharpe": baseline_sharpe}
+
+
+def _read_json_object(path: Path, name: str) -> tuple[dict[str, Any], str | None]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return {}, f"{name} is invalid JSON: {exc}"
+    if not isinstance(value, dict):
+        return {}, f"{name} must be a JSON object"
+    return value, None
 
 
 def _finite_float(value: object) -> float | None:

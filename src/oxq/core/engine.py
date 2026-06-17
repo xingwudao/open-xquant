@@ -376,8 +376,15 @@ class Engine:
                     cancel_market_orders = getattr(broker, "cancel_market_orders", None)
                     if callable(cancel_market_orders):
                         cancel_market_orders(sym, "BUY", reason="exit_sell_submitted")
+                        cancel_market_orders(sym, "SELL", reason="exit_sell_submitted")
                     else:
-                        broker.cancel_orders(sym, side="BUY")
+                        for managed in broker.get_open_orders(sym):
+                            if managed.order.order_type != "market":
+                                continue
+                            if managed.order.side not in {"BUY", "SELL"}:
+                                continue
+                            managed.status = "canceled"
+                            managed.status_reason = "exit_sell_submitted"
                     broker.submit_order(Order(symbol=sym, side="SELL", shares=sell_shares, currency=portfolio.currency))
 
             # ── Step 8: Broker executes exit orders ───────────────────
@@ -530,18 +537,28 @@ def _apply_fill(portfolio: Portfolio, fill: Fill) -> bool:
                 avg_cost=fill.filled_price,
                 )
     elif order.side == "SELL":
+        if symbol not in portfolio.positions:
+            logger.warning("Rejecting SELL fill for %s with no position", symbol)
+            return False
+        old = portfolio.positions[symbol]
+        if order.shares > old.shares:
+            logger.warning(
+                "Rejecting SELL fill for %s: shares=%s exceeds position=%s",
+                symbol,
+                order.shares,
+                old.shares,
+            )
+            return False
         portfolio.cash += cost - fill.fee
-        if symbol in portfolio.positions:
-            old = portfolio.positions[symbol]
-            remaining = old.shares - order.shares
-            if remaining <= 0:
-                del portfolio.positions[symbol]
-            else:
-                portfolio.positions[symbol] = Position(
-                    symbol=symbol,
-                    shares=remaining,
-                    avg_cost=old.avg_cost,
-                )
+        remaining = old.shares - order.shares
+        if remaining <= 0:
+            del portfolio.positions[symbol]
+        else:
+            portfolio.positions[symbol] = Position(
+                symbol=symbol,
+                shares=remaining,
+                avg_cost=old.avg_cost,
+            )
     return True
 
 

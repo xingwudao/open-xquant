@@ -78,6 +78,67 @@ validation:
         StrategySpec.from_yaml(spec_path)
 
 
+def test_from_yaml_normalizes_null_params_to_empty_mapping(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: null_params
+research:
+  hypothesis: null params should not crash validation
+signal:
+  indicators:
+    sma:
+      type: SMA
+      params: null
+  rules:
+    threshold:
+      type: Threshold
+      params: null
+portfolio:
+  type: EqualWeight
+  params: null
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.signal.indicators["sma"].params == {}
+    assert spec.signal.rules["threshold"].params == {}
+    assert spec.portfolio.params == {}
+    assert validate(spec).status == "fail"
+
+
+def test_from_yaml_rejects_non_mapping_params(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: bad_params
+research:
+  hypothesis: params must be mappings
+signal:
+  indicators:
+    sma:
+      type: SMA
+      params: ["period", 5]
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="signal.indicators.sma.params"):
+        StrategySpec.from_yaml(spec_path)
+
+
 def test_from_yaml_coerces_quoted_point_in_time_false(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(

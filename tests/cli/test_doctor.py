@@ -42,6 +42,21 @@ def test_doctor_json_reports_missing_workspace_fix(monkeypatch, tmp_path) -> Non
     assert "oxq research init" in payload["fixes"]
 
 
+def test_doctor_json_fix_outputs_only_json(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    work = tmp_path / "work"
+    work.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["doctor", "--json", "--fix"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["checks"]["workspace"]["status"] == "ok"
+    assert (work / ".open-xquant" / "workspace.yaml").exists()
+
+
 def test_doctor_data_check_uses_market_data_directory(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     (home / ".oxq/data").mkdir(parents=True)

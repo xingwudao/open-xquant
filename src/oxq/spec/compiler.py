@@ -425,6 +425,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
         "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
         "trades.csv": _hash_file(run_dir / "trades.csv"),
+        "positions.csv": _hash_file(run_dir / "positions.csv"),
         "orders.csv": _hash_file(run_dir / "orders.csv"),
         "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
     }

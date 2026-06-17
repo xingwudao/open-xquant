@@ -225,6 +225,102 @@ def test_apply_fill_sell() -> None:
     assert "AAPL" not in portfolio.positions
 
 
+def test_apply_fill_rejects_oversell() -> None:
+    portfolio = Portfolio(
+        cash=Decimal("50000"),
+        positions={"AAPL": Position(symbol="AAPL", shares=100, avg_cost=Decimal("150"))},
+    )
+    fill = Fill(
+        order=Order(symbol="AAPL", side="SELL", shares=101),
+        filled_price=Decimal("160"),
+        filled_at="2024-03-01",
+    )
+
+    assert _apply_fill(portfolio, fill) is False
+    assert portfolio.cash == Decimal("50000")
+    assert portfolio.positions["AAPL"].shares == 100
+
+
+def test_apply_fill_rejects_sell_without_position() -> None:
+    portfolio = Portfolio(cash=Decimal("50000"))
+    fill = Fill(
+        order=Order(symbol="AAPL", side="SELL", shares=100),
+        filled_price=Decimal("160"),
+        filled_at="2024-03-01",
+    )
+
+    assert _apply_fill(portfolio, fill) is False
+    assert portfolio.cash == Decimal("50000")
+    assert "AAPL" not in portfolio.positions
+
+
+def test_next_open_exit_replaces_pending_market_sell() -> None:
+    class CashOptimizer:
+        def optimize(self, signals, indicators):  # noqa: ANN001, ANN201
+            return {"CASH": 1.0}
+
+    class AlwaysExitRule:
+        name = "AlwaysExitRule"
+
+        def evaluate(self, symbol, row, portfolio, prices=None):  # noqa: ANN001, ANN201
+            if symbol in portfolio.positions:
+                return RuleResult(target_positions={symbol: 0.0})
+            return RuleResult()
+
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAPL": pd.DataFrame(
+            {
+                "open": [100.0, 110.0],
+                "high": [101.0, 111.0],
+                "low": [99.0, 109.0],
+                "close": [100.0, 110.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    strategy = Strategy(
+        name="pending_sell_exit",
+        universe=StaticUniverse(("AAPL",)),
+        signals={},
+        portfolio=CashOptimizer(),
+    )
+    broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+    engine = Engine()
+    engine.setup(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=broker,
+        start="2024-01-02",
+        end="2024-01-03",
+        initial_cash=0,
+        rules=[AlwaysExitRule()],
+    )
+    engine._portfolio = Portfolio(  # noqa: SLF001
+        cash=Decimal("0"),
+        currency="CNY",
+        positions={"AAPL": Position(symbol="AAPL", shares=100, avg_cost=Decimal("100"))},
+    )
+
+    engine.step(dates[0])
+    sell_orders = [order for order in broker.get_all_orders() if order.order.side == "SELL"]
+    assert [order.status for order in sell_orders] == ["canceled", "open"]
+
+    engine.step(dates[1])
+
+    sell_trades = [trade for trade in engine.result.trades if trade.order.side == "SELL"]
+    filled_sell_orders = [
+        order
+        for order in broker.get_all_orders()
+        if order.order.side == "SELL" and order.status == "filled"
+    ]
+    assert len(sell_trades) == 1
+    assert len(filled_sell_orders) == 1
+    assert engine.result.portfolio.cash == Decimal("11000")
+    assert "AAPL" not in engine.result.portfolio.positions
+
+
 def test_engine_sets_dataframe_attrs() -> None:
     """Engine should set timezone and currency attrs on DataFrames."""
     data = _make_trending_data()

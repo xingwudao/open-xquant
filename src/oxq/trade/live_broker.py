@@ -138,6 +138,20 @@ class LiveBroker:
             self._client.cancel_order(managed.id)
         return self._order_book.cancel_orders(symbol, side)
 
+    def cancel_market_orders(self, symbol: str, side: str | None = None, reason: str = "canceled") -> list[ManagedOrder]:
+        """Cancel open market orders for a symbol via Alpaca."""
+        canceled: list[ManagedOrder] = []
+        for managed in self._order_book.get_open_orders(symbol):
+            if managed.order.order_type != "market":
+                continue
+            if side is not None and managed.order.side != side:
+                continue
+            self._client.cancel_order(managed.id)
+            managed.status = "canceled"
+            managed.status_reason = reason
+            canceled.append(managed)
+        return canceled
+
     def cap_pending_sells(self, symbol: str, max_shares: int) -> None:
         """Cap pending sell orders to at most *max_shares*.
 

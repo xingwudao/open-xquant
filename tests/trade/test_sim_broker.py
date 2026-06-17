@@ -537,6 +537,20 @@ class TestFillPriceMode:
         assert fills[0].filled_price == Decimal("102")
         assert fills[0].filled_at == dates[1].isoformat()
 
+    def test_next_open_without_current_date_uses_close_bar_as_submission_time(self):
+        mktdata, dates = self._make_mktdata()
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+
+        broker.on_bar_close(mktdata, dates[0])
+        assert broker.get_fills() == []
+        broker.on_bar_open(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].filled_price == Decimal("102")
+        assert fills[0].filled_at == dates[1].isoformat()
+
     def test_next_high_mode_is_rejected(self):
         """NEXT_HIGH is not causal for market-order backtests."""
         with pytest.raises(ValueError, match="NEXT_HIGH"):

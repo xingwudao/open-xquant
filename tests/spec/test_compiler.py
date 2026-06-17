@@ -136,7 +136,11 @@ def test_reproducibility_audit_fails_when_parent_digest_mismatches(tmp_path) -> 
         },
     )
 
-    _write_artifacts(spec, result, tmp_path, Engine())
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    result.mktdata["SPY"].to_parquet(data_dir / "SPY.parquet")
+
+    _write_artifacts(spec, result, tmp_path, Engine(), effective_data_dir=str(data_dir))
     (tmp_path.parent / "run_digests.jsonl").write_text(
         json.dumps({"run_id": tmp_path.name, "artifact_hashes": "sha256:badbadbadbadbadb"}) + "\n",
         encoding="utf-8",
@@ -148,6 +152,36 @@ def test_reproducibility_audit_fails_when_parent_digest_mismatches(tmp_path) -> 
     digest_check = next(check for check in audit["checks"] if check["id"] == "run_digest")
     assert digest_check["status"] == "fail"
     assert digest_check["severity"] == "fatal"
+
+
+def test_reproducibility_audit_fails_when_positions_artifact_is_tampered(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="positions_hash", hypothesis="positions artifacts are audited")
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0, 1.0],
+                    "high": [1.0, 1.0, 1.0],
+                    "low": [1.0, 1.0, 1.0],
+                    "close": [1.0, 1.0, 1.0],
+                    "volume": [1, 1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+
+    _write_artifacts(spec, result, tmp_path, Engine())
+    (tmp_path / "positions.csv").write_text("symbol,shares,avg_cost\nSPY,999,1.0\n", encoding="utf-8")
+
+    audit = audit_reproducibility(tmp_path)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "positions_hash" and check["status"] == "fail" for check in audit["checks"])
 
 
 def test_reproducibility_audit_fails_when_parent_digest_is_corrupt(tmp_path) -> None:

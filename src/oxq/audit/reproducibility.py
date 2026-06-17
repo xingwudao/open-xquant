@@ -113,6 +113,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         **required_artifact_hashes,
         "strategy_spec.yaml": "strategy_spec_file_hash",
         "environment.json": "environment_hash",
+        "positions.csv": "positions_hash",
         "orders.csv": "orders_hash",
     }
     try:

@@ -48,6 +48,8 @@ def engine_run(
     if fill_price_mode is not None and fill_price_mode not in supported_fill_modes:
         valid = ", ".join(sorted(supported_fill_modes))
         return {"error": f"Unsupported fill_price_mode '{fill_price_mode}'. Valid: {valid}"}
+    if fill_price_mode == "next_open" and not market_calendar:
+        return {"error": "market_calendar is required when fill_price_mode='next_open'"}
 
     # Use symbols param as override; otherwise use strategy's universe
     if symbols:

@@ -170,14 +170,12 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
         return "REJECT"
 
     if bias_audit.get("fatal_count", 0) > 0:
-        reject_if = decision_policy.get("reject_if", {})
-        if reject_if.get("fatal_audit_findings", True):
-            return "REJECT"
+        return "REJECT"
 
     reject_if = decision_policy.get("reject_if", {})
     # OOS policy thresholds require OOS-only metrics.
     policy_oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio")
-    max_dd = _finite_metric(metrics, "oos_max_drawdown", "max_drawdown")
+    max_dd = _finite_metric(metrics, "oos_max_drawdown")
 
     if "oos_sharpe_lt" in reject_if:
         threshold = _as_finite_float(reject_if["oos_sharpe_lt"])
