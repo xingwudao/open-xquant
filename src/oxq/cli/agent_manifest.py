@@ -57,7 +57,7 @@ def read_yaml_file(path: Path) -> dict[str, Any]:
 def write_yaml_file(path: Path, payload: dict[str, Any]) -> None:
     import yaml
 
-    write_text_file(path, yaml.safe_dump(payload, sort_keys=False))
+    write_text_file(path, yaml.safe_dump(payload, sort_keys=False, width=1000))
 
 
 def _markers(marker: str) -> tuple[str, str]:

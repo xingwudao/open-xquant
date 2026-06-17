@@ -178,13 +178,38 @@ uv run oxq agent upgrade --all-targets --from-local . --yes
 本文档。用户直接给策略想法后，你先检查当前目录：
 
 ```bash
-uv run oxq doctor --json
+cat ~/.config/open-xquant/agent.yaml
+```
+
+读取 `preferred_runner`，后续把文档里的 `uv run oxq` 替换成这个 runner。
+例如，如果它是：
+
+```yaml
+preferred_runner: uv run --project /path/to/open-xquant oxq
+```
+
+则在当前研究目录运行：
+
+```bash
+uv run --project /path/to/open-xquant oxq doctor --json
+```
+
+如果 `agent.yaml` 缺失或 runner 失败，读取：
+
+```bash
+cat ~/.config/open-xquant/agent-install.json
+```
+
+使用其中的 `source.path`：
+
+```bash
+uv run --project "<source.path>" oxq doctor --json
 ```
 
 如果 workspace 缺失，初始化当前目录：
 
 ```bash
-uv run oxq research init
+uv run --project "<source.path>" oxq research init
 ```
 
 这会创建：
@@ -652,13 +677,15 @@ print(metrics["sharpe_ratio"])
 
 `uv run oxq --help` 失败：
 
-- 确认当前目录包含 `pyproject.toml`。
-- 运行 `uv sync --extra yfinance`。
-- 如果不用 `uv`，确认当前 Python 环境已安装 `open-xquant`。
+- 如果当前目录不是 open-xquant 源码目录，不要搜索其他源码副本。
+- 读取 `~/.config/open-xquant/agent.yaml` 的 `preferred_runner`。
+- 如果缺失，读取 `~/.config/open-xquant/agent-install.json` 的 `source.path`。
+- 在研究目录中运行 `uv run --project "<source.path>" oxq --help`。
+- 只有在 open-xquant 源码目录内，才运行 `uv sync --extra yfinance`。
 
 `oxq doctor --json` 提示 workspace missing：
 
-- 在当前研究目录运行 `uv run oxq research init`。
+- 在当前研究目录运行 `<preferred_runner> research init`。
 - 不要把新研究产物写进无 workspace 标记的随机目录。
 
 `oxq agent status` 提示技能缺失：

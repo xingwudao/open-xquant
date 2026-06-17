@@ -5,6 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
+from oxq.cli.agent_manifest import read_yaml_file
 from oxq.cli.main import main
 
 
@@ -52,6 +53,29 @@ def test_agent_install_all_targets_writes_managed_skills(monkeypatch, tmp_path) 
     manifest = home / ".config/open-xquant/agent-install.json"
     targets = json.loads(manifest.read_text(encoding="utf-8"))["targets"]
     assert set(targets) == {"codex", "opencode", "claude-code", "cursor", "openclaw"}
+
+
+def test_agent_install_writes_cross_directory_runner(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    raw_config = (home / ".config/open-xquant/agent.yaml").read_text(encoding="utf-8")
+    config = read_yaml_file(home / ".config/open-xquant/agent.yaml")
+    assert config["preferred_runner"] == f"uv run --project {source.resolve()} oxq"
+    assert f"preferred_runner: uv run --project {source.resolve()} oxq" in raw_config
+
+    instructions = (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
+    assert "agent.yaml" in instructions
+    assert "agent-install.json" in instructions
+    assert "uv run --project <source.path> oxq" in instructions
 
 
 def test_agent_status_json_reports_installed_targets(monkeypatch, tmp_path) -> None:

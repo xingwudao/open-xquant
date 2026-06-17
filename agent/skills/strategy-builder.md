@@ -18,6 +18,23 @@ an auditable research run.
 - Prefer current stable CLI behavior before SDK customization.
 - Stop when `oxq spec validate` fails.
 - Do not present an unaudited backtest as a research result.
+- Resolve the open-xquant runner before the first command. In command examples
+  below, `uv run oxq` means the resolved runner.
+
+## Runner Resolution
+
+In a new research directory, `uv run oxq` may fail because open-xquant is
+installed as long-lived Agent capability, not as a package in that directory.
+Before running commands:
+
+1. Read `~/.config/open-xquant/agent.yaml`.
+2. Use `preferred_runner` in place of `uv run oxq`.
+3. If it is missing or fails, read `~/.config/open-xquant/agent-install.json`,
+   take `source.path`, and use `uv run --project <source.path> oxq`.
+
+Keep the shell in the user's research directory. Do not search the user's home
+directory for unrelated open-xquant checkouts, and do not switch to a different
+source tree just because it contains an `agent/skills/` directory.
 
 ## Current Stable Spec Path
 

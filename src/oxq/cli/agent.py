@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shlex
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -71,7 +72,16 @@ parameter tuning, audit, robustness, report, broker connectivity, or live
 trading, use the installed open-xquant skills.
 
 If the current directory has no `.open-xquant/workspace.yaml`, run
-`oxq research init` before creating strategy artifacts.
+`<preferred runner> research init` before creating strategy artifacts.
+
+Before running open-xquant commands in a new directory:
+- Read `~/.config/open-xquant/agent.yaml`.
+- Use `preferred_runner` in place of `oxq` or `uv run oxq`.
+- If that is missing or fails, read
+  `~/.config/open-xquant/agent-install.json` and run
+  `uv run --project <source.path> oxq ...`.
+- Keep the shell in the user's research directory. Do not search unrelated
+  home directories for another open-xquant checkout.
 
 Default workflow:
 `strategy_spec.yaml` -> validate -> backtest -> audit -> robustness -> report."""
@@ -84,7 +94,16 @@ parameter tuning, audit, robustness, report, broker connectivity, or live
 trading, use the installed open-xquant skills.
 
 If the current directory has no `.open-xquant/workspace.yaml`, run
-`oxq research init` before creating strategy artifacts.
+`<preferred runner> research init` before creating strategy artifacts.
+
+Before running open-xquant commands in a new directory:
+- Read `~/.config/open-xquant/agent.yaml`.
+- Use `preferred_runner` in place of `oxq` or `uv run oxq`.
+- If that is missing or fails, read
+  `~/.config/open-xquant/agent-install.json` and run
+  `uv run --project <source.path> oxq ...`.
+- Keep the shell in the user's research directory. Do not search unrelated
+  home directories for another open-xquant checkout.
 
 If this project has an `AGENTS.md`, also read it when it is relevant to
 open-xquant work."""
@@ -137,7 +156,7 @@ def install(target: str | None, all_targets: bool, from_local: str | None, dry_r
         manifest["targets"][target_id] = target_state
         installed.append(target_id)
 
-    _ensure_agent_config(dry_run=dry_run, installed_targets=installed)
+    _ensure_agent_config(dry_run=dry_run, installed_targets=installed, source_root=source_root)
     if not dry_run:
         write_json_file(manifest_path(), manifest)
     click.echo("Installed open-xquant agent support: " + ", ".join(installed))
@@ -242,6 +261,7 @@ def upgrade(
         manifest["updated_at"] = _now()
         manifest["source"] = _source_metadata(source_root, "local" if from_local else "git")
         write_json_file(manifest_path(), manifest)
+    _ensure_agent_config(dry_run=dry_run, installed_targets=updated, source_root=source_root)
     click.echo("Upgrade complete: " + ", ".join(updated))
 
 
@@ -528,14 +548,30 @@ def _load_agent_config() -> dict[str, Any]:
     return merged
 
 
-def _ensure_agent_config(dry_run: bool, installed_targets: list[str]) -> None:
+def _ensure_agent_config(
+    dry_run: bool,
+    installed_targets: list[str],
+    source_root: Path | None = None,
+) -> None:
     config = _load_agent_config()
     existing = config.get("installed_targets")
     target_set = set(existing if isinstance(existing, list) else [])
     target_set.update(installed_targets)
     config["installed_targets"] = sorted(target_set)
+    if source_root is not None and _should_update_preferred_runner(config.get("preferred_runner")):
+        config["preferred_runner"] = _project_runner(source_root)
     if not dry_run:
         write_yaml_file(agent_config_path(), config)
+
+
+def _should_update_preferred_runner(value: Any) -> bool:
+    if value in (None, "", "uv run oxq"):
+        return True
+    return isinstance(value, str) and value.startswith("uv run --project ") and value.endswith(" oxq")
+
+
+def _project_runner(source_root: Path) -> str:
+    return f"uv run --project {shlex.quote(str(source_root.resolve()))} oxq"
 
 
 def _status_payload() -> dict[str, Any]:
