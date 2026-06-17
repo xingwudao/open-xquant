@@ -7,6 +7,9 @@ from pathlib import Path
 import click
 import yaml
 
+from oxq.cli.agent import agent as agent_group
+from oxq.cli.doctor import doctor
+from oxq.cli.research import research as research_group
 from oxq.spec.schema import StrategySpec
 from oxq.spec.validator import validate as validate_spec
 
@@ -297,3 +300,8 @@ def run_robustness_cmd(run_dir: str, as_json: bool):
             click.echo(f"  [{t['status'].upper()}] {icon} {t['name']}: {t.get('message', '')}")
             if "baseline_sharpe" in t:
                 click.echo(f"         Baseline: {t['baseline_sharpe']:.4f} → Perturbed: {t['perturbed_sharpe']:.4f}")
+
+
+main.add_command(agent_group)
+main.add_command(doctor)
+main.add_command(research_group)

@@ -16,6 +16,8 @@ idea -> strategy_spec.yaml -> validate -> backtest
 
 完成本文档后，你应该能够：
 
+- 为用户的长期 Agent 环境安装 open-xquant skills。
+- 在新研究目录中自动初始化轻量 workspace。
 - 使用 `oxq` CLI 完成最小闭环。
 - 根据用户意图选择合适的 `agent/skills/*.md`。
 - 在缺数据、校验失败、审计失败时给出明确处理路径。
@@ -104,12 +106,112 @@ test -f pyproject.toml && test -d src/oxq && echo "open-xquant repo"
 
 ---
 
-## 3. 安装方式
+## 3. 一次性长期能力安装
+
+用户第一次把本文档交给你时，先完成长期 Agent 安装。这样用户以后
+进入新研究目录时，可以直接输入策略想法，不需要再次粘贴本文档。
+
+支持的目标 Agent：
+
+- Codex
+- OpenCode
+- Claude Code
+- Cursor
+- OpenClaw
+
+在 `open-xquant` 仓库根目录运行：
+
+```bash
+uv run oxq agent install --all-targets --yes
+uv run oxq agent status
+```
+
+如果只安装当前用户正在使用的 Agent，可以指定目标：
+
+```bash
+uv run oxq agent install --target codex --yes
+uv run oxq agent install --target opencode --yes
+uv run oxq agent install --target claude-code --yes
+uv run oxq agent install --target cursor --yes
+uv run oxq agent install --target openclaw --yes
+```
+
+安装会写入各 Agent 官方支持的长期能力位置：
+
+- Codex: `~/.agents/skills/` 和 `${CODEX_HOME:-~/.codex}/AGENTS.md`
+- OpenCode: `~/.config/opencode/skills/` 和
+  `~/.config/opencode/AGENTS.md`
+- Claude Code: `~/.claude/skills/` 和 `~/.claude/CLAUDE.md`
+- Cursor: `~/.cursor/skills/`
+- OpenClaw: `~/.openclaw/skills/`
+
+卸载长期能力：
+
+```bash
+uv run oxq agent uninstall --all-targets --yes
+```
+
+从 GitHub 更新长期能力：
+
+```bash
+uv run oxq agent upgrade --all-targets --yes
+```
+
+如果正在本地开发仓库中更新：
+
+```bash
+uv run oxq agent upgrade --all-targets --from-local . --yes
+```
+
+安全边界：
+
+- `uninstall` 只删除 manifest 记录且带 managed marker 的 skill 目录。
+- 不删除 `~/.oxq/data`。
+- 不删除任何研究目录、`runs/`、`reports/` 或 `experiments.jsonl`。
+
+---
+
+## 4. 新研究目录复用流程
+
+如果用户已经完成过长期能力安装，下一次来到新目录时，不需要再次阅读
+本文档。用户直接给策略想法后，你先检查当前目录：
+
+```bash
+uv run oxq doctor --json
+```
+
+如果 workspace 缺失，初始化当前目录：
+
+```bash
+uv run oxq research init
+```
+
+这会创建：
+
+```text
+.open-xquant/workspace.yaml
+AGENTS.md
+strategy_specs/
+runs/
+reports/
+experiments.jsonl
+```
+
+之后直接进入策略流程：
+
+```text
+idea -> strategy_spec.yaml -> validate -> backtest
+     -> audit -> robustness -> report -> experiment
+```
+
+---
+
+## 5. 安装方式
 
 推荐 Agent 在仓库根目录使用 `uv`。根目录是包含 `pyproject.toml`
 的目录。
 
-### 3.1 已经在 open-xquant 仓库内
+### 5.1 已经在 open-xquant 仓库内
 
 ```bash
 uv sync --extra yfinance
@@ -122,7 +224,7 @@ uv run oxq --help
 Usage: oxq [OPTIONS] COMMAND [ARGS]...
 ```
 
-### 3.2 需要临时安装 open-xquant
+### 5.2 需要临时安装 open-xquant
 
 ```bash
 git clone https://github.com/xingwudao/open-xquant /tmp/open-xquant
@@ -131,7 +233,7 @@ uv sync --extra yfinance
 uv run oxq --help
 ```
 
-### 3.3 不使用 uv 的环境
+### 5.3 不使用 uv 的环境
 
 ```bash
 python -m pip install -e ".[yfinance]"
@@ -146,7 +248,7 @@ oxq --help
 
 ---
 
-## 4. 准备行情数据
+## 6. 准备行情数据
 
 `oxq backtest run` 默认读取本地 parquet 数据，不会自动下载行情。
 干净环境下，缺少数据会看到类似错误：
@@ -188,7 +290,7 @@ PY
 
 ---
 
-## 5. 最小工作流验证
+## 7. 最小工作流验证
 
 以下命令只验证环境和主流程。不要把结果当作投资建议。
 
@@ -253,7 +355,7 @@ uv run oxq experiment add "$RUN_DIR" \
 
 ---
 
-## 6. 用户任务路由
+## 8. 用户任务路由
 
 当用户提出请求时，先选择对应 skill，再执行 CLI 或 SDK。
 Skill 文件位于 `agent/skills/`。
@@ -331,12 +433,30 @@ Skill 文件位于 `agent/skills/`。
 
 ---
 
-## 7. CLI 速查
+## 9. CLI 速查
 
 查看入口：
 
 ```bash
 uv run oxq --help
+```
+
+长期 Agent 能力：
+
+```bash
+uv run oxq agent install --all-targets --yes
+uv run oxq agent status
+uv run oxq agent status --json
+uv run oxq agent upgrade --all-targets --yes
+uv run oxq agent uninstall --all-targets --yes
+```
+
+研究目录：
+
+```bash
+uv run oxq research init
+uv run oxq doctor
+uv run oxq doctor --json
 ```
 
 创建 spec：
@@ -395,7 +515,7 @@ uv run oxq experiment add runs/<run_id>/ --registry experiments.jsonl
 
 ---
 
-## 8. Spec 最小模板
+## 10. Spec 最小模板
 
 如果 `oxq spec init` 生成模板后需要人工补齐，优先保持这个安全形态：
 
@@ -481,7 +601,7 @@ validation:
 
 ---
 
-## 9. SDK 使用原则
+## 11. SDK 使用原则
 
 优先使用 CLI。只有在这些场景进入 SDK：
 
@@ -527,13 +647,23 @@ print(metrics["sharpe_ratio"])
 
 ---
 
-## 10. 失败处理
+## 12. 失败处理
 
 `uv run oxq --help` 失败：
 
 - 确认当前目录包含 `pyproject.toml`。
 - 运行 `uv sync --extra yfinance`。
 - 如果不用 `uv`，确认当前 Python 环境已安装 `open-xquant`。
+
+`oxq doctor --json` 提示 workspace missing：
+
+- 在当前研究目录运行 `uv run oxq research init`。
+- 不要把新研究产物写进无 workspace 标记的随机目录。
+
+`oxq agent status` 提示技能缺失：
+
+- 运行 `uv run oxq agent install --repair --yes`。
+- 如果是从 GitHub 更新，运行 `uv run oxq agent upgrade --all-targets`。
 
 `ModuleNotFoundError: yfinance`：
 
@@ -573,7 +703,7 @@ print(metrics["sharpe_ratio"])
 
 ---
 
-## 11. 给用户的最低门槛话术
+## 13. 给用户的最低门槛话术
 
 当用户只给一句策略想法时，你可以这样推进：
 
@@ -602,7 +732,7 @@ print(metrics["sharpe_ratio"])
 
 ---
 
-## 12. 参考入口
+## 14. 参考入口
 
 - 架构说明：`docs/architecture.md`
 - 人类快速入门：`docs/quickstart.md`
@@ -614,7 +744,7 @@ print(metrics["sharpe_ratio"])
 
 ---
 
-## 13. 红线
+## 15. 红线
 
 - 不跳过 `oxq spec validate`。
 - 不用零手续费或零滑点做正式结论。
