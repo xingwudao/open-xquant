@@ -1,103 +1,61 @@
 ---
 name: component-creator
-description: Navigate component creation — check if a component exists in the registry, or route to the appropriate creation sub-skill
-tools_required: []
+description: >-
+  Route open-xquant component creation requests after checking the registry;
+  use when users ask for a new Indicator, Signal, Rule, or PortfolioOptimizer.
 ---
 
-## Your Role
+# Component Creator
 
-You are a component creation navigator for open-xquant. Your job is to:
+You decide whether a new component is actually needed, then route to the
+correct creation skill.
 
-1. Determine what type of component the user or Agent needs.
-2. Check whether that component already exists in the registry.
-3. If it exists, report it. If not, route to the correct creation sub-skill.
+Do not write component code in this navigator skill.
 
-You do **NOT** write code, run tests, or register components. You only navigate.
+## Step 1: Classify The Request
 
----
+Choose one component type:
 
-## Supported Component Types
+- Indicator: numeric time-series computation from market or factor data
+- Signal: boolean or categorical trading intent
+- PortfolioOptimizer: target portfolio weights from signals or indicators
+- Rule: bar-by-bar trading constraint, hold, or exit action
 
-| Type | Protocol | When to use |
-|------|----------|-------------|
-| **Indicator** | `Indicator` | Numerical time-series computation (e.g., RSI, GARCH, Hurst) |
-| **Signal** | `Signal` | Boolean/categorical trading intent (e.g., Crossover, Threshold) |
-| **PortfolioOptimizer** | `PortfolioOptimizer` | Weight allocation from signals/indicators (e.g., EqualWeight, RiskParity) |
-| **Rule** | `Rule` | Bar-by-bar pre/post-trade constraints (e.g., StopLoss, MaxHoldings) |
+If the request could fit more than one type, ask the user to clarify. For
+example, "momentum" can be an Indicator, while "buy when momentum is positive"
+is a Signal.
 
----
+## Step 2: Check Existing Registry
 
-## Phase 1: Determine Component Type
-
-From the user or Agent request, identify which of the 4 component types is needed.
-
-**Decision guide:**
-
-- Does it compute a numeric series from market data? → **Indicator**
-- Does it produce a buy/sell/hold decision? → **Signal**
-- Does it allocate portfolio weights across assets? → **PortfolioOptimizer**
-- Does it enforce a trading constraint (position limits, stop-loss, etc.)? → **Rule**
-
-If the request is ambiguous or could fit multiple types, **ask the user to clarify** before proceeding. Do not guess.
-
----
-
-## Phase 2: Check Registry
-
-Run the appropriate Python one-liner to check if the component already exists:
-
-**Indicator:**
 ```bash
-uv run python -c "import oxq; print(oxq.list_indicators())"
+uv run python - <<'PY'
+import oxq
+
+print("Indicators:", sorted(oxq.list_indicators()))
+print("Signals:", sorted(oxq.list_signals()))
+print("Portfolios:", sorted(oxq.list_portfolio_optimizers()))
+print("Rules:", sorted(oxq.list_rules()))
+PY
 ```
 
-**Signal:**
-```bash
-uv run python -c "import oxq; print(oxq.list_signals())"
-```
+Search for exact and near matches. If a component already exists, report the
+existing name and stop unless the user explicitly needs different behavior.
 
-**PortfolioOptimizer:**
-```bash
-uv run python -c "import oxq; print(oxq.list_portfolio_optimizers())"
-```
+## Step 3: Route
 
-**Rule:**
-```bash
-uv run python -c "import oxq; print(oxq.list_rules())"
-```
+Load exactly one sub-skill:
 
-Search the output for the requested component name or similar names (e.g., the user asks for "GARCH" and `GarchVolatility` already exists).
+- Indicator: `agent/skills/create-indicator.md`
+- Signal: `agent/skills/create-signal.md`
+- PortfolioOptimizer: `agent/skills/create-portfolio-optimizer.md`
+- Rule: `agent/skills/create-rule.md`
 
----
-
-## Phase 3: Route
-
-### Found
-
-Report to the user:
-
-> This component already exists as `{Name}`. You can use it directly via `oxq.list_indicators()['{Name}']`.
-
-Then **stop**. Do not invoke a sub-skill.
-
-### Not Found
-
-Route to the appropriate creation sub-skill:
-
-| Component Type | Sub-skill to invoke |
-|----------------|---------------------|
-| Indicator | `create-indicator` |
-| Signal | `create-signal` |
-| PortfolioOptimizer | `create-portfolio-optimizer` |
-| Rule | `create-rule` |
-
-Hand off completely to the sub-skill. It will handle code generation, validation, and registration.
-
----
+Tell the sub-skill the component type, requested behavior, desired name if
+given, and any user constraints.
 
 ## Red Lines
 
-- **Never write code yourself** — always delegate to sub-skills
-- **Never skip the registry check** — always check before creating
-- **Never register components** — sub-skills handle registration
-- **Never guess the component type** — ask if ambiguous
+- Do not skip the registry check.
+- Do not create a component because the user used a different synonym.
+- Do not guess formulas, thresholds, or risk logic.
+- Do not route to multiple component creation skills at once.

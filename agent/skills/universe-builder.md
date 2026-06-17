@@ -1,55 +1,69 @@
 ---
 name: universe-builder
-description: 指导 Agent 在 strategy_spec.yaml 中定义标的池
+description: >-
+  Define open-xquant strategy universes and explain survivorship/PIT
+  constraints; use when users choose symbols, indexes, dynamic filters, or
+  tradable pools.
 ---
 
-## 你的角色
+# Universe Builder
 
-你是一个 Universe 构建助手，帮助用户在 `strategy_spec.yaml` 中定义标的池。
+You help the user define the tradable symbol pool.
 
-## Spec YAML 配置
+## Current Stable Spec Path
+
+The audited CLI compiler currently supports:
 
 ```yaml
 universe:
-  type: static              # static / index / filter
-  symbols: ["SPY", "QQQ"]   # 标的列表
-  point_in_time: false      # 是否使用 Point-in-Time 成分股
-  survivorship_bias_policy: warn  # warn / ignore
+  type: static
+  symbols: ["SPY", "QQQ"]
+  point_in_time: false
+  survivorship_bias_policy: warn
 ```
 
-## 三种 Universe 类型
+Treat `index` and `filter` universe as SDK or future/extended paths unless you
+verify a specific runtime path supports them.
 
-| 类型 | YAML | 适用场景 |
-|------|------|----------|
-| `static` | `symbols: ["SPY", "QQQ"]` | 固定标的池 |
-| `index` | `index: "CSI300"` | 指数成分股（future） |
-| `filter` | SDK 编程 | 基于条件动态筛选 |
+## Required Checks
 
-## 关键约束
+Before validating or backtesting:
 
-- `static` + `point_in_time: false` → validator **warning**（幸存者偏差风险）
-- 如果标的池存在幸存者偏差，在 report 中必须标注
+- ensure `symbols` is not empty
+- reject unsafe symbols containing `/`, `\`, `.`, `..`, or absolute paths
+- make sure local parquet data exists for every symbol
+- make benchmark symbols available in the same data directory
+- explain survivorship risk when `point_in_time: false`
 
-## SDK 级别配置（编程使用）
+Check local data:
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+
+data_dir = Path("/path/to/parquet")
+symbols = ["SPY", "QQQ"]
+missing = [s for s in symbols if not (data_dir / f"{s}.parquet").exists()]
+print("missing:", missing)
+PY
+```
+
+## SDK Path
+
+Use SDK only when the user explicitly needs dynamic universe logic:
 
 ```python
 from oxq.universe.static import StaticUniverse
-from oxq.universe.filter import FilterUniverse
 
-# 固定标的
-u = StaticUniverse(("SPY", "QQQ", "IWM"))
-
-# 动态过滤（基于 mktdata + 条件）
-u = FilterUniverse(
-    base=("SPY", "QQQ", "IWM", "GLD"),
-    filters=[...],
-    mktdata=mktdata,
-)
+universe = StaticUniverse(("SPY", "QQQ", "IWM"))
 ```
 
-参考：`examples/modules/02_data_and_universe.py`
+If using `FilterUniverse` or `IndexUniverse`, read the implementation and tests
+first, then state that this is outside the current audited CLI spec path.
 
-## 红线
+## Red Lines
 
-- **不承诺 Point-in-Time**：如不使用 PIT 成分股，必须声明 `point_in_time: false`
-- **静态池 + 长期回测 = 幸存者偏差**：必须产生 warning
+- Do not promise point-in-time index membership unless the data source proves it.
+- Do not hide survivorship warnings.
+- Do not mix unrelated markets or calendars in one spec without explaining the
+  data and currency implications.

@@ -1,72 +1,97 @@
 ---
 name: data-explorer
-description: 指导 Agent 探索和准备行情数据及宏观因子数据
+description: >-
+  Inspect, download, and validate open-xquant market, macro, and financial
+  data; use before backtests, factor studies, or any task that depends on local
+  parquet data.
 ---
 
-## 你的角色
+# Data Explorer
 
-你是一个数据探索助手，帮助用户检查本地数据、下载缺失数据和验证数据质量。
+You prepare data before research. Do not assume data exists or is complete.
 
-## 工作流 A：行情数据
+## Market Data
 
-### 1. 检查本地数据
+List local parquet files:
 
-```python
-from oxq.data.market import LocalMarketDataProvider
-market = LocalMarketDataProvider()
-# 查看 data/ 目录下的 .parquet 文件
+```bash
+uv run python - <<'PY'
+from oxq.tools.data import list_symbols
+print(list_symbols(data_dir="/path/to/market"))
+PY
 ```
 
-### 2. 下载数据
+Inspect one symbol:
 
-```python
+```bash
+uv run python - <<'PY'
+from oxq.tools.data import inspect_symbol
+print(inspect_symbol("SPY", data_dir="/path/to/market"))
+PY
+```
+
+Download with `yfinance`:
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
 from oxq.data.loaders import YFinanceDownloader
-dl = YFinanceDownloader()
-dl.download(symbol="SPY", start="2020-01-01", end="2024-12-31")
+
+data_dir = Path("/tmp/oxq_agent_data")
+YFinanceDownloader().download_many(
+    symbols=["SPY", "QQQ"],
+    start="2018-01-01",
+    end="2026-01-01",
+    dest_dir=data_dir,
+)
+print(data_dir)
+PY
 ```
 
-美股用 `YFinanceDownloader`，A 股用 `AkShareDownloader`。
+For A-share market bars, use `AkShareDownloader` and install the `akshare`
+extra first.
 
-### 3. 数据质量检查
+## Required Data Shape
 
-```python
-bars = market.get_bars("SPY", "2020-01-01", "2024-12-31")
-print(f"Rows: {len(bars)}")
-print(f"NaN in close: {bars['close'].isna().sum()}")
-print(f"Date range: {bars.index[0]} → {bars.index[-1]}")
-print(f"Columns: {list(bars.columns)}")
-```
+Every market parquet must have:
 
-## 工作流 B：宏观因子
+- file name `<SYMBOL>.parquet`
+- tz-aware `DatetimeIndex`
+- columns `open`, `high`, `low`, `close`, `volume`
+- enough history for indicator warmup and train/test periods
 
-```python
-from oxq.data.factors import WorldBankDownloader
-dl = WorldBankDownloader()
-dl.download(indicator="NY.GDP.MKTP.CD")  # GDP
-dl.download(indicator="FP.CPI.TOTL")      # CPI
-```
+If `LocalMarketDataProvider` says `No data for '<SYMBOL>'`, stop and fix data
+or ask the user for a valid `--data-dir`.
 
-### 检查因子数据
+## Macro Data
+
+Use `WorldBankFetcher` with indicator name, year range, and countries:
 
 ```python
 from oxq.data.factors import WorldBankFetcher
+
 fetcher = WorldBankFetcher()
-data = fetcher.fetch("NY.GDP.MKTP.CD")
-print(data.head())
+gdp = fetcher.fetch(
+    target="gdp",
+    start="2018",
+    end="2024",
+    countries=["USA", "CHN"],
+)
 ```
 
-参考：`examples/modules/02_data_and_universe.py`
+Available macro aliases include `gdp`, `gdp_per_capita`, `gdp_growth`, and
+`cpi`.
 
-## 决策指南
+## Financial Data
 
-| 情况 | 动作 |
-|------|------|
-| 数据缺失 | 下载 → 检查日期范围 |
-| 数据不完整（NaN） | 缩小日期范围或更换标的 |
-| 多个标的 | 对齐日期，处理不同步的交易日历 |
-| A 股需要中文名 | `oxq.core.aliases.resolve_alias("市净率")` |
+For A-share fundamentals, use `EastMoneyFetcher` through the factor data layer
+and verify available fields before screening. Network and provider coverage can
+fail; report provider errors directly.
 
-## 红线
+## Red Lines
 
-- **不假设数据完整**：每批数据必须先 inspect 再使用
-- **不混用数据源**：同一回测只用一种数据源
+- Do not run a formal backtest on unknown or missing data.
+- Do not mix data providers inside one run unless the user approves and the
+  report states it.
+- Do not treat generated mock data or demo downloads as production research
+  evidence.

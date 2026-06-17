@@ -1,48 +1,60 @@
 ---
 name: chart-indicator
-description: 指导 Agent 使用 SDK 渲染 K 线图和指标叠加
+description: >-
+  Render open-xquant run charts and indicator overlays; use when users ask to
+  visualize price, indicators, signals, or chart artifacts.
 ---
 
-## 你的角色
+# Chart Indicator
 
-你是一个图表渲染助手，帮助用户通过 SDK 可视化指标和价格数据。
+You create visual checks. Charts do not replace validation or audit.
 
-## SDK 方式
+## Current Tool Signature
+
+`oxq.tools.chart.chart_indicator` plots indicator columns from a stored
+`RunResult` in the tool session:
 
 ```python
-import pandas as pd
-from oxq.data.market import LocalMarketDataProvider
 from oxq.tools.chart import chart_indicator
 
-# 加载数据
-market = LocalMarketDataProvider()
-bars = market.get_bars("SPY", "2024-01-01", "2024-06-30")
-
-# 渲染 K 线图 + 指标叠加
-chart_indicator(
-    data=bars,
-    columns=["close"],
-    indicators={
-        "SMA_20": {"type": "SMA", "params": {"column": "close", "period": 20}},
-        "SMA_50": {"type": "SMA", "params": {"column": "close", "period": 50}},
-    },
-    output="chart.png",
+result = chart_indicator(
+    run_id="run_1",
+    symbol="SPY",
+    columns=["sma_fast", "sma_slow"],
+    overlay=True,
 )
+print(result)
 ```
 
-需要在 `pyproject.toml` 安装 chart 可选依赖：
+It does not accept raw `data=...`, `indicators=...`, or `output=...`
+arguments. If you need a chart from raw bars, either run the strategy through
+the tool/session flow first or write a one-off exploratory script and label it
+as non-standard.
+
+## Dependency
+
+Install chart dependencies before rendering:
+
 ```bash
-pip install open-xquant[chart]
+uv sync --extra chart
 ```
 
-## 检查清单
+If using pip:
 
-渲染后检查：
-- NaN 区域是否正确处理
-- 指标比例与价格轴是否匹配
-- 形态是否符合预期（金叉/死叉位置）
-- 成交量是否异常
+```bash
+python -m pip install -e ".[chart]"
+```
 
-## 红线
+## What To Check
 
-- **不用于策略回测验证**：图表仅用于视觉检查，不可替代 audit
+- requested columns exist in the run's symbol data
+- NaN warmup regions are expected
+- indicator scale matches overlay choice
+- signal events line up with intended dates
+- chart output path exists
+
+## Red Lines
+
+- Do not use charts as proof of profitability.
+- Do not hide missing indicator columns by plotting a different column.
+- Do not infer causality from visual overlap alone.

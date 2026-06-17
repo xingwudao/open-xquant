@@ -1,239 +1,131 @@
 ---
 name: create-portfolio-optimizer
-description: Create a new PortfolioOptimizer component following the 4-phase flow — design, code, validate, register
-tools_required: []
+description: >-
+  Create a new open-xquant PortfolioOptimizer with weight-invariant tests and
+  registry wiring; use after component-creator confirms no existing optimizer
+  satisfies the allocation request.
 ---
 
-## Your Role
+# Create PortfolioOptimizer
 
-Component creation agent for PortfolioOptimizers. Follow the 4-phase flow exactly.
+You create allocation logic that returns target weights.
 
-**Core principles:**
+## Scope
 
-- Weights MUST always sum to 1.0 (including CASH if needed) — this is a hard invariant
-- Empty or invalid input MUST return `{"CASH": 1.0}` — never return an empty dict
-- Follow existing code patterns exactly — study examples before writing
-- Maximum 3 retry attempts on failure, then escalate
+Default built-in paths:
 
----
+- source: `src/oxq/portfolio/{snake_name}.py`
+- tests: `tests/portfolio/test_{snake_name}.py`
+- package export: `src/oxq/portfolio/__init__.py`
+- built-in registry: `src/oxq/core/registry.py`
 
-## Phase 1: DESIGN — Self-check
+Existing built-ins live in `src/oxq/portfolio/optimizers.py`; read that file
+before choosing whether to add a new module or extend the existing built-in
+module. Prefer a new module for a new component unless project maintainers ask
+otherwise.
 
-1. Read 2 existing optimizers as few-shot references:
-   - Always read `EqualWeightOptimizer` and `TopNRankingOptimizer` from `src/oxq/portfolio/optimizers.py`
-   - If the new optimizer is risk-based, also read `RiskParityOptimizer` from the same file
-2. Read the Protocol from `src/oxq/core/types.py` — PortfolioOptimizer requires `name: str` and `optimize(self, signals: dict[str, pd.DataFrame], indicators: dict[str, pd.DataFrame]) -> dict[str, float]`
-3. Output design intent (**DO NOT wait for confirmation**, continue autonomously):
+## Phase 1: Read Existing Patterns
 
-> **Proposed Optimizer: `{ClassName}`**
-> - Allocation logic (how weights are calculated)
-> - Parameters (constructor args with defaults)
-> - What inputs it uses (signals, indicators, or both)
-> - Fallback behavior (what to return when no valid inputs)
+Read before editing:
 
-This serves as an audit record, not a checkpoint.
+- `src/oxq/core/types.py`
+- `src/oxq/portfolio/optimizers.py`
+- one existing test in `tests/portfolio/`
+- `src/oxq/portfolio/__init__.py`
+- the portfolio registration block in `src/oxq/core/registry.py`
 
----
+## Phase 2: Define Behavior
 
-## Phase 2: CODE — Generate
+State before coding:
 
-### Optimizer file
+- allocation formula
+- constructor parameters
+- whether it reads `signals`, `indicators`, or both
+- required indicator columns
+- fallback when no valid inputs exist
+- whether weights can include `CASH`
+- max/min weight constraints
 
-Write optimizer to `{target_dir}/portfolio/{snake_name}.py`.
+Ask the user if allocation logic is ambiguous.
 
-Follow this template (match existing code style exactly):
+## Phase 3: Test First
+
+Write tests with deterministic DataFrames:
+
+- protocol compliance with `PortfolioOptimizer`
+- empty input returns `{"CASH": 1.0}`
+- weights sum to `1.0`
+- multi-symbol behavior
+- hand-calculated allocation
+- invalid or NaN input behavior
+- `name` value
+
+Run the new test and confirm the missing implementation fails before coding.
+
+```bash
+uv run pytest tests/portfolio/test_{snake_name}.py -v
+```
+
+## Phase 4: Implement
+
+Skeleton:
 
 ```python
-"""<Descriptive name> portfolio optimizer."""
+"""Short description portfolio optimizer."""
 
 from __future__ import annotations
 
 import pandas as pd
 
 
-class {ClassName}:
-    """<One-line description>.
+class ClassName:
+    """Short allocation description."""
 
-    <Allocation logic explanation>
-    """
-
-    name: str = "{ClassName}"
-
-    def __init__(self, <params>) -> None:
-        self.<param> = <param>
+    name = "ClassName"
 
     def optimize(
         self,
         signals: dict[str, pd.DataFrame],
         indicators: dict[str, pd.DataFrame],
     ) -> dict[str, float]:
-        """Return target weights summing to 1.0."""
-        if not signals:
-            return {"CASH": 1.0}
-
-        # Compute raw weights
+        """Return target weights that sum to 1.0."""
         ...
-
-        # Normalize so weights sum to 1.0 (use CASH for remainder)
-        ...
-
-        return weights
 ```
 
 Rules:
-- Prefer numpy, pandas, stdlib. If a third-party library is required, use try/except import and add to `pyproject.toml` optional-dependencies (see create-indicator.md Dependency Handling)
-- Match existing code style exactly (docstrings, type hints, spacing)
-- Every code path must return weights that sum to 1.0
-- Every code path with no valid data must return `{"CASH": 1.0}`
 
-### Test file
+- every path returns a non-empty dict
+- invalid input returns `{"CASH": 1.0}`
+- weights must sum to `1.0`
+- include `CASH` for unused capital
+- do not mutate input DataFrames
+- use only latest available row unless design says otherwise
 
-Write test to `{target_dir}/tests/portfolio/test_{snake_name}.py`.
+## Phase 5: Register
 
-The test file **must** include all 6 test cases:
+For a built-in component:
 
-```python
-"""Tests for {ClassName} portfolio optimizer."""
+- import it in `src/oxq/portfolio/__init__.py`
+- add it to `__all__`
+- add it to `_load_builtins()` in `src/oxq/core/registry.py`
 
-import pandas as pd
-import pytest
+Verify:
 
-from oxq.core.types import PortfolioOptimizer
-from {module}.portfolio.{snake_name} import {ClassName}
-
-
-def _make_signals(symbols: list[str]) -> dict[str, pd.DataFrame]:
-    dates = pd.bdate_range("2024-01-01", periods=5)
-    return {
-        sym: pd.DataFrame(
-            {"signal": [1.0] * 5},
-            index=dates,
-        )
-        for sym in symbols
-    }
-
-
-def _make_indicators(data: dict[str, dict[str, list[float]]]) -> dict[str, pd.DataFrame]:
-    dates = pd.bdate_range("2024-01-01", periods=5)
-    return {
-        sym: pd.DataFrame(cols, index=dates)
-        for sym, cols in data.items()
-    }
-
-
-def test_{snake_name}_satisfies_protocol() -> None:
-    # Note: if constructor has required args, pass them here
-    assert isinstance({ClassName}(<required_args>), PortfolioOptimizer)
-
-
-def test_{snake_name}_weights_sum_to_one() -> None:
-    optimizer = {ClassName}(<args>)
-    signals = _make_signals(["AAPL", "GOOGL", "MSFT"])
-    indicators = _make_indicators(...)
-    weights = optimizer.optimize(signals, indicators)
-    assert sum(weights.values()) == pytest.approx(1.0)
-
-
-def test_{snake_name}_multi_symbol() -> None:
-    # At least 3 symbols input
-    optimizer = {ClassName}(<args>)
-    signals = _make_signals(["AAPL", "GOOGL", "MSFT"])
-    indicators = _make_indicators(...)
-    weights = optimizer.optimize(signals, indicators)
-    assert sum(weights.values()) == pytest.approx(1.0)
-    assert len(weights) >= 1
-
-
-def test_{snake_name}_empty_signals() -> None:
-    optimizer = {ClassName}(<args>)
-    weights = optimizer.optimize({}, {})
-    assert weights == {"CASH": 1.0}
-
-
-def test_{snake_name}_hand_calculated() -> None:
-    # Hand-calculated weight for a specific scenario
-    # NEVER copy values from code output — compute by hand
-    ...
-    assert weights["AAPL"] == pytest.approx(<hand_calculated_value>)
-    assert sum(weights.values()) == pytest.approx(1.0)
-
-
-def test_{snake_name}_has_name() -> None:
-    assert {ClassName}(<required_args>).name == "{ClassName}"
-```
-
-### Naming conventions
-
-- Class: PascalCase (e.g., `MomentumWeightOptimizer`)
-- File: snake_case (e.g., `momentum_weight_optimizer.py`)
-- `name` attr: same as class name
-
----
-
-## Phase 3: VALIDATE — Three-layer verification
-
-Run each check in order. All three must pass before proceeding to Phase 4.
-
-**Layer 1 — Import check:**
 ```bash
-uv run python -c "from {module}.portfolio.{snake_name} import {ClassName}; print('Import OK')"
+uv run python - <<'PY'
+import oxq
+assert "ClassName" in oxq.list_portfolio_optimizers()
+print("registered")
+PY
+uv run pytest tests/portfolio/test_{snake_name}.py -v
 ```
 
-**Layer 2 — Protocol check:**
-```bash
-uv run python -c "from oxq.core.types import PortfolioOptimizer; from {module}.portfolio.{snake_name} import {ClassName}; assert isinstance({ClassName}(<required_args>), PortfolioOptimizer); print('Protocol OK')"
-```
-
-**Layer 3 — Unit test:**
-```bash
-uv run pytest {target_dir}/tests/portfolio/test_{snake_name}.py -v
-```
-
-**On failure:** read the error, fix the code or test, retry. Maximum 3 retries total across all layers. After 3 failed retries: report the error with full traceback, suggest what might be wrong, and ask the user for help.
-
----
-
-## Phase 4: REGISTER — Dynamic registration
-
-1. Register and verify:
-```bash
-uv run python -c "import oxq; from {module}.portfolio.{snake_name} import {ClassName}; oxq.register_portfolio_optimizer({ClassName}); assert '{ClassName}' in oxq.list_portfolio_optimizers(); print('Registration OK')"
-```
-
-2. Report success:
-
-> **Created PortfolioOptimizer: `{ClassName}`**
-> - Source: `{target_dir}/portfolio/{snake_name}.py`
-> - Test: `{target_dir}/tests/portfolio/test_{snake_name}.py`
-> - Usage:
->   ```python
->   import oxq
->   from {module}.portfolio.{snake_name} import {ClassName}
->   oxq.register_portfolio_optimizer({ClassName})
->   weights = {ClassName}(<args>).optimize(signals, indicators)
->   ```
-
----
+Run engine-level tests when optimizer behavior changes order generation.
 
 ## Red Lines
 
-- **Never skip design output (Phase 1)** — it is the audit record
-- **Never register before validation passes** — Phase 4 requires Phase 3 green
-- **Never modify existing optimizers** — only create new ones
-- **Third-party deps must be optional** — use try/except import, add to `pyproject.toml` optional-dependencies
-- **Never exceed 3 retries** — escalate to user
-- **Never guess allocation logic** — if unsure, ask the user
-- **Weights MUST sum to 1.0** — this is a hard invariant; every code path must guarantee it
-- **Empty/invalid input MUST return `{"CASH": 1.0}`** — never return an empty dict
-
----
-
-## Error Handling Table
-
-| Error | Action |
-|-------|--------|
-| Import fails | Check file path, class name, syntax errors |
-| Protocol check fails | Ensure `name` attr exists and `optimize` signature matches `(self, signals: dict[str, pd.DataFrame], indicators: dict[str, pd.DataFrame]) -> dict[str, float]` |
-| Test fails | Read error message, fix code or test, retry |
-| Registration fails | Check import path, verify `oxq.register_portfolio_optimizer` is callable |
-| Weights don't sum to 1.0 | Fix allocation logic — ensure normalization step or CASH remainder covers the gap |
+- Do not return weights that sum above or below `1.0`.
+- Do not return an empty dict.
+- Do not ignore invalid data silently; fall back to `CASH` or exclude the
+  symbol deliberately.
+- Do not register before invariant tests pass.

@@ -1,70 +1,108 @@
 ---
 name: rule-builder
-description: 指导 Agent 配置交易规则（风控熔断、止损止盈、退出条件）并在 spec 回测中使用
+description: >-
+  Configure and reason about open-xquant trading rules, exits, risk holds, and
+  rebalance limits; use when the user asks for stop loss, take profit, drawdown
+  guards, holding limits, or rule components.
 ---
 
-## 你的角色
+# Rule Builder
 
-你是一个交易规则配置助手，帮助用户在 `strategy_spec.yaml` 和回测命令中配置规则。
+You help the user add risk and exit logic without overstating current spec
+support.
 
-**核心原则：**
-- 规则分为 Pre-trade（回测前检查）和 Post-trade（回测后监控）
-- 规则在 `oxq backtest run` 时通过 SDK 传入，或写入 spec 的 rules 配置
-- 同一个策略可以在不同规则组合下测试
+## Current Execution Model
 
-## 规则分类
+Rules are Python objects passed to `Engine.run(..., rules=[...])` or added by
+the spec compiler internally. The audited CLI spec path does not currently
+support a generic top-level `rules:` YAML section or `oxq backtest run --rules`.
 
-| 时机 | 规则 | 作用 |
-|------|------|------|
-| Pre-trade | `MaxDrawdownRisk` | 回撤超限 → 清仓冻结 |
-| Pre-trade | `DailyLossLimitRisk` | 日亏损超限 → 冻结交易 |
-| Pre-trade | `MaxHoldingsRule` | 持仓数达上限 → 阻止新开仓 |
-| Pre-trade | `RebalanceFrequencyRule` | 调仓频率限制 |
-| Post-trade | `StopLossRule` | 亏损超阈值 → 卖出 |
-| Post-trade | `TakeProfitRule` | 盈利超阈值 → 卖出 |
-| Post-trade | `TrailingStopRule` | 从最高点回落 → 卖出 |
-| Post-trade | `ExitRule` | 指标交叉 → 卖出 |
+In current `Engine.step()`:
 
-## 在 Spec 中配置 Rules
+- pre-trade rule effects consumed: `RuleResult.weights`, `RuleResult.hold`
+- post-trade rule effects consumed: `RuleResult.target_positions`
+- declared but not currently consumed by `Engine`: `RuleResult.constraints`
 
-```yaml
-# strategy_spec.yaml
-rules:
-  pre_trade:
-    - type: MaxDrawdownRisk
-      params: { max_drawdown: 0.15 }
-    - type: RebalanceFrequencyRule
-      params: { interval_days: 5 }
-  post_trade:
-    - type: StopLossRule
-      params: { threshold: 0.05 }
-    - type: TakeProfitRule
-      params: { threshold: 0.20 }
-    - type: TrailingStopRule
-      params: { trail_pct: 0.05 }
-    - type: ExitRule
-      params: { fast: sma_fast, slow: sma_slow }
-```
+Do not tell the user that a `constraints` field will affect execution unless
+you have verified the engine path being used consumes it.
 
-## 回测
+## Built-in Rules
+
+Inspect the live registry:
 
 ```bash
-oxq backtest run strategy_spec.yaml --out runs/auto
+uv run python - <<'PY'
+import oxq
+print(sorted(oxq.list_rules()))
+PY
 ```
 
-规则会在回测引擎中逐 bar 执行。
+Common built-ins:
 
-## 组合建议
+- `ExitRule`
+- `StopLossRule`
+- `TakeProfitRule`
+- `TrailingStopRule`
+- `MaxDrawdownRisk`
+- `DailyLossLimitRisk`
+- `MaxHoldingsRule`
+- `RebalanceFrequencyRule`
+- `BlacklistRule`
 
-| 策略类型 | Pre-trade | Post-trade |
-|---------|-----------|------------|
-| 趋势跟踪 | `MaxDrawdownRisk`, `RebalanceFrequencyRule` | `TrailingStopRule` |
-| 均值回归 | `DailyLossLimitRisk` | `StopLossRule`, `TakeProfitRule` |
-| 动量轮动 | `MaxHoldingsRule`, `RebalanceFrequencyRule` | `StopLossRule` |
-| SMA 交叉 | `MaxDrawdownRisk` | `ExitRule`, `StopLossRule` |
+## Safe CLI Path
 
-## 红线
+For `Crossover` specs, `compile_run()` automatically adds `ExitRule` using the
+declared `fast` and `slow` columns. For rebalance throttling, use:
 
-- **止损必须有**：任何实盘策略至少配置一个止损规则
-- **不修改已验证的 spec**：规则配置不应导致 spec 重新 validate
-- **回测后必须审计**：`oxq audit research runs/<run_id>/`
+```yaml
+execution:
+  rebalance:
+    frequency: daily
+    interval_days: 5
+```
+
+For other rules, use SDK execution until generic rule YAML support exists.
+
+## SDK Pattern
+
+```python
+from oxq.core import Engine
+from oxq.rules import StopLossRule, TakeProfitRule
+
+engine = Engine()
+result = engine.run(
+    strategy=strategy,
+    market=market,
+    broker=broker,
+    start="2020-01-01",
+    end="2024-12-31",
+    rules=[
+        StopLossRule(threshold=0.05),
+        TakeProfitRule(threshold=0.20),
+    ],
+)
+```
+
+After SDK runs, make sure the user still gets equivalent artifacts or a clear
+statement that the run is exploratory rather than the standard CLI artifact
+pipeline.
+
+## When A New Rule Is Needed
+
+Load `agent/skills/component-creator.md`, then route to
+`agent/skills/create-rule.md`.
+
+Before creating a rule, confirm:
+
+- pre-trade or post-trade category
+- trigger condition
+- exact `RuleResult` field to use
+- whether internal state is required
+- how it will be tested with hand-crafted portfolio and bar data
+
+## Red Lines
+
+- Do not document unsupported YAML `rules:` as working CLI behavior.
+- Do not claim `constraints` changes execution unless verified in code.
+- Do not mutate `Portfolio` inside `evaluate()`.
+- Do not treat a stop-loss rule as a substitute for research audit.

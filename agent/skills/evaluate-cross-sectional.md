@@ -1,77 +1,87 @@
 ---
 name: evaluate-cross-sectional
-description: 截面因子评估 — IC、ICIR、RankIC、Decay、Turnover
+description: >-
+  Evaluate cross-sectional factors with IC, Rank IC, ICIR, decay, and turnover
+  in open-xquant; use for stock selection and multi-asset ranking factors.
 ---
 
-## 你的角色
+# Evaluate Cross-Sectional Factor
 
-你是一个截面因子评估助手，评估因子在截面上对收益的预测能力。
+Use this when the factor ranks assets on the same date.
 
-适用场景：选股策略（多标的截面排名）。
-
-## SDK 方式
+## Minimal SDK Pattern
 
 ```python
-from oxq.factor_eval.metrics import compute_ic, compute_rank_ic, compute_icir, compute_decay, compute_turnover
+import pandas as pd
 
-# 1. 构建因子 DataFrame (index=date, columns=symbols)
+from oxq.data.market import LocalMarketDataProvider
+from oxq.factor_eval.metrics import (
+    compute_decay,
+    compute_ic,
+    compute_icir,
+    compute_rank_ic,
+    compute_turnover,
+)
+
+symbols = ["SPY", "QQQ", "IWM"]
+market = LocalMarketDataProvider(data_dir="/path/to/parquet")
+
 factor_df = pd.DataFrame()
 prices_df = pd.DataFrame()
 for sym in symbols:
-    bars = market.get_bars(sym, start, end)
+    bars = market.get_bars(sym, "2018-01-01", "2024-12-31")
     prices_df[sym] = bars["close"]
-    factor_df[sym] = bars["close"].pct_change(20)  # 20-day momentum
+    factor_df[sym] = bars["close"].pct_change(20)
 
-# 2. 计算前向收益
-forward_returns = prices_df.pct_change(1).shift(-1)
+factor_df = factor_df.dropna()
+prices_df = prices_df.loc[factor_df.index]
+forward_returns = prices_df.pct_change(1).shift(-1).dropna()
 
-# 3. 截面 IC
+common = factor_df.index.intersection(forward_returns.index)
+factor_df = factor_df.loc[common]
+forward_returns = forward_returns.loc[common]
+
 ic = compute_ic(factor=factor_df, forward_returns=forward_returns)
-print(f"IC Mean: {ic['mean']:.4f}, IC Std: {ic['std']:.4f}")
-print(f"ICIR: {compute_icir(ic['mean'], ic['std']):.4f}")
-
-# 4. Rank IC (Spearman)
 rank_ic = compute_rank_ic(factor=factor_df, forward_returns=forward_returns)
-
-# 5. IC Decay
+icir = compute_icir(ic["mean"], ic["std"])
 decay = compute_decay(factor=factor_df, prices=prices_df, horizons=[1, 3, 5, 10, 20])
-
-# 6. Turnover
-to = compute_turnover(factor=factor_df)
+turnover = compute_turnover(factor=factor_df)
 ```
 
-## 指标解读
+## Review Checklist
 
-| 指标 | 好 | 一般 | 差 |
-|------|----|------|----|
-| IC Mean | > 0.03 | 0.01-0.03 | < 0.01 |
-| ICIR | > 0.5 | 0.1-0.5 | < 0.1 |
-| Rank IC | > 0.03 | 0.01-0.03 | < 0.01 |
-| Turnover | < 0.2 | 0.2-0.5 | > 0.5 |
+- enough symbols for cross-sectional claims
+- no forward-return leakage
+- factor and returns aligned on common dates
+- NaN rows removed deliberately
+- multiple horizons checked
+- turnover considered with likely trading cost
 
-## 报告模板
+## Interpretation
 
-```
-因子: {name}
-区间: {start} → {end}
-标的数: {n_symbols}
+Use thresholds as heuristics, not rules:
 
-IC Mean:  {value}  ({interpretation})
-ICIR:     {value}  ({interpretation})
-Rank IC:  {value}  ({interpretation})
-Turnover: {value}  ({interpretation})
+- IC mean above `0.03`: promising
+- IC mean between `0.01` and `0.03`: weak but worth inspecting
+- ICIR below `0.1`: unstable
+- high turnover: likely cost-sensitive even with positive IC
+- fast decay: signal may require execution assumptions the backtest cannot meet
 
-Decay:
-  1d:  {ic_1d}
-  5d:  {ic_5d}
-  10d: {ic_10d}
-  20d: {ic_20d}
+## Report Shape
 
-结论: {pass / weak / fail}
-```
+Include:
 
-## 红线
+- factor name and formula
+- symbols and date range
+- number of dates and symbols
+- horizon results
+- IC mean, IC std, ICIR, Rank IC
+- turnover
+- decay pattern
+- pass, weak, or fail conclusion with caveats
 
-- **标的 < 10 不跑截面 IC**：统计意义不足
-- **不只看均值**：IC Std 大说明不稳定，ICIR 低说明不可靠
-- **Decay 必须看**：快衰减 = 高换手 = 高成本
+## Red Lines
+
+- Do not use cross-sectional IC as primary evidence for fewer than 10 symbols.
+- Do not report IC mean without IC std or ICIR.
+- Do not ignore turnover and decay.

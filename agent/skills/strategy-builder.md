@@ -1,69 +1,70 @@
 ---
 name: strategy-builder
-description: 指导 Agent 使用 strategy_spec.yaml 构建量化策略（Universe + Signal + Portfolio）
+description: >-
+  Build and validate open-xquant strategy_spec.yaml files from user strategy
+  ideas; use for new strategy design, spec edits, and audited CLI backtest
+  workflows.
 ---
 
-## 你的角色
+# Strategy Builder
 
-你是一个量化策略构建助手，遵循声明式 spec 工作流，引导用户从假设出发构建可测试的策略 spec 文件。
+You convert a user strategy idea into a validated `strategy_spec.yaml` and
+an auditable research run.
 
-**核心原则：**
-- 不替用户编造假设、约束或目标
-- 策略的唯一来源是 `strategy_spec.yaml` 文件
-- 每一步都需要用户确认后才继续
+## Ground Rules
 
-**架构：`strategy_spec.yaml` 是唯一真源。**
+- Treat `strategy_spec.yaml` as the single source of truth.
+- Do not invent the user's hypothesis, universe, cost, dates, or objective.
+- Prefer current stable CLI behavior before SDK customization.
+- Stop when `oxq spec validate` fails.
+- Do not present an unaudited backtest as a research result.
 
-## Phase 0：业务约束
+## Current Stable Spec Path
 
-开始前明确以下约束：
+Use this path first:
 
-- **初始资金**：回测起始资金（默认 100,000）
-- **品种范围**：交易哪些标的？
-- **交易频率**：日频 / 周频
-- **交易成本**：手续费率、滑点率（必须 > 0）
+- `universe.type: static`
+- `data.provider: local`
+- `market.calendar: XNYS`
+- `signal.signal_time: close_t`
+- `execution.trade_time: next_open`
+- `execution.fill_price_mode: next_open`
+- positive `cost.fee_rate`
+- positive `cost.slippage_rate`
+- `portfolio.type: EqualWeight` when `signal.rules` is present
 
-## Phase 1：基准与目标
+Do not promise these are directly supported by the audited CLI compiler:
 
-引导用户设定可量化的目标：
+- `index` or `filter` universe
+- non-`local` data provider in `oxq backtest run`
+- multiple `Crossover` rules in one spec
+- `Peak` signal for causal audited backtests
+- `Timestamp` `month_end` or `quarter_end`
+- signal rules combined with non-`EqualWeight` portfolio
+- arbitrary rules declared under a top-level `rules:` YAML section
 
-| 指标 | 说明 |
-|------|------|
-| total_return | 总收益率 |
-| sharpe_ratio | 夏普比率 |
-| max_drawdown | 最大回撤 |
-| calmar_ratio | 卡玛比率 |
-| sortino_ratio | 索提诺比率 |
+## Phase 0: Confirm Constraints
 
-## Phase 2：假设
+Ask for or confirm:
 
-引导用户提出 5 要素可测试假设：
+- tradable symbols
+- train and test periods
+- initial cash
+- fee rate and slippage rate
+- benchmark
+- success metric
+- exit or risk requirement
 
-1. **什么信号** — 触发条件
-2. **什么品种** — 交易标的
-3. **什么方向** — 买入/卖出
-4. **为什么有效** — 逻辑依据
-5. **什么时候退出** — 退出条件
+If the user wants a quick demo, state that it is an environment check, not an
+investment conclusion.
 
-## Phase 3：创建 Spec
+## Phase 1: Create Spec
 
 ```bash
-oxq spec init "<你的策略想法>" --out strategy_spec.yaml
+uv run oxq spec init "<strategy idea>" --out strategy_spec.yaml
 ```
 
-然后编辑 `strategy_spec.yaml`，填入以下关键字段。
-
-### 3.1 Universe（标的池）
-
-```yaml
-universe:
-  type: static
-  symbols: ["SPY", "QQQ"]
-```
-
-类型：`static`（固定列表）、`index`（指数成分）、`filter`（条件过滤）。
-
-### 3.2 Signal（信号 + 指标）
+Edit the generated spec. Keep the safe timing model:
 
 ```yaml
 signal:
@@ -79,102 +80,103 @@ signal:
     golden_cross:
       type: Crossover
       params: { fast: sma_fast, slow: sma_slow }
-```
 
-信号类型：`Crossover`、`Threshold`、`Comparison`、`Formula`、`Composite`、`Peak`、`Timestamp`。
-
-指标类型：`SMA`、`EMA`、`RSI`、`MACDLine`、`MACDSignal`、`MACDHistogram`、`ROC`、`PPO`、`CCI`、`Momentum`、`NdayReturn`、`BollingerUpper`、`BollingerLower`、`ATR`、`RollingVolatility`、`OBV`、`VWAP`、`MFI`、`ADX`、`AROON`、`StochK`、`LogReturn`、`RollingMDD`、`Ratio`。
-
-### 3.3 Portfolio（组合优化）
-
-```yaml
-portfolio:
-  type: EqualWeight
-```
-
-| 类型 | 说明 | 关键参数 |
-|------|------|----------|
-| `EqualWeight` | 等权分配 | — |
-| `RiskParity` | 波动率倒数加权 | `volatility_col` |
-| `Kelly` | 凯利公式 | `win_rate_col`, `avg_win_col`, `avg_loss_col` |
-| `TopNRanking` | 排名取 Top N | `score_col`, `n`, `filter_negative` |
-
-### 3.4 Execution（执行配置）
-
-```yaml
 execution:
   trade_time: next_open
   fill_price_mode: next_open
   initial_cash: 100000
-```
 
-**重要：`trade_time` 和 `signal_time` 不能同时为 `close_t`**（同根 K 线未来函数）。
-
-### 3.5 Cost（成本 — 必须 > 0）
-
-```yaml
 cost:
   fee_rate: 0.001
   slippage_rate: 0.001
 ```
 
-零成本模型会被 validator 拒绝。
-
-### 3.6 Benchmark & Validation（基准 & 验证）
-
-```yaml
-benchmark:
-  symbols: ["SPY"]
-
-validation:
-  train_period: ["2018-01-01", "2021-12-31"]
-  test_period: ["2022-01-01", "2025-12-31"]
-  required_oos: true
-```
-
-### 3.7 Rules（可选 — 风控熔断、止损止盈）
-
-```yaml
-# 规则在回测时通过 oxq backtest run --rules 传入
-# 可用规则: ExitRule, StopLossRule, TakeProfitRule,
-#          TrailingStopRule, MaxDrawdownRisk, DailyLossLimitRisk,
-#          MaxHoldingsRule, RebalanceFrequencyRule
-```
-
-## Phase 4：验证 Spec
+For non-SMA strategies, inspect the registry before choosing names:
 
 ```bash
-oxq spec validate strategy_spec.yaml
+uv run python - <<'PY'
+import oxq
+print("Indicators:", sorted(oxq.list_indicators()))
+print("Signals:", sorted(oxq.list_signals()))
+print("Portfolios:", sorted(oxq.list_portfolio_optimizers()))
+PY
 ```
 
-必须 PASS（无 fatal error）。常见 fatal：
-- `hypothesis` 为空
-- `signal_time=close_t` 且 `trade_time=close_t`
-- `fee_rate=0` 或 `slippage_rate=0`
-- 缺少 `test_period`（无样本外验证）
-
-## Phase 5：编译 & 回测
+## Phase 2: Validate
 
 ```bash
-oxq strategy compile strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --out runs/auto
+uv run oxq spec validate strategy_spec.yaml
 ```
 
-回测完成后进入审计和报告流程。参考 skill：`quant-audit`、`quant-report`。
+Fatal issues to fix before continuing:
 
-## 决策指南
+- empty `research.hypothesis`
+- unsupported universe or data provider
+- missing local data semantics
+- same-bar signal and fill timing
+- zero or negative fee/slippage
+- missing OOS test period
+- train/test period overlap
+- signal parameter references an unknown column
+- compiler dry-run failure
 
-| 用户意图 | 动作 |
-|---------|------|
-| "构建均线策略" | 从 Phase 0 开始 |
-| "修改参数" | 编辑 `strategy_spec.yaml` → `oxq spec validate` |
-| "加止损/风控" | 在 spec 中添加 rules 配置 |
-| "查看完整示例" | `uv run python examples/strategies/spec_validation_demo.py` |
-| "回测" | Phase 5：`oxq backtest run` |
+Warnings are not fatal, but must be reported later.
 
-## 红线
+## Phase 3: Prepare Data
 
-- **不替用户做决定**：假设、目标、约束必须由用户提供或确认
-- **不跳过 validate**：spec 未通过验证不能进入回测
-- **不手动编码策略**：所有策略通过 `strategy_spec.yaml` 声明
-- **不允许零成本模型**
+`oxq backtest run` reads local parquet files. If data is missing, prepare it
+or ask the user for a data directory.
+
+```bash
+uv run python - <<'PY'
+from pathlib import Path
+from oxq.data.loaders import YFinanceDownloader
+
+data_dir = Path("/tmp/oxq_agent_data")
+YFinanceDownloader().download_many(
+    symbols=["SPY"],
+    start="2018-01-01",
+    end="2026-01-01",
+    dest_dir=data_dir,
+)
+print(data_dir)
+PY
+```
+
+Use `--data-dir /path/to/parquet` when the data is not in the default
+`~/.oxq/data/market` directory.
+
+## Phase 4: Compile And Backtest
+
+```bash
+uv run oxq strategy compile strategy_spec.yaml
+uv run oxq backtest run strategy_spec.yaml --data-dir /path/to/parquet --out runs/auto
+```
+
+Capture the printed run directory. If needed:
+
+```bash
+RUN_DIR=$(find runs -mindepth 2 -maxdepth 2 -type d | sort | tail -1)
+echo "$RUN_DIR"
+```
+
+## Phase 5: Audit And Report
+
+```bash
+uv run oxq audit reproducibility "$RUN_DIR"
+uv run oxq audit research "$RUN_DIR"
+uv run oxq robustness run "$RUN_DIR"
+uv run oxq report write "$RUN_DIR"
+uv run oxq experiment add "$RUN_DIR"
+```
+
+If research audit has fatal findings, mark the strategy rejected. If robustness
+returns `WARN`, keep the warning in the final report.
+
+## Red Lines
+
+- Do not skip validation.
+- Do not run formal research on missing or unconfirmed data.
+- Do not use zero-cost assumptions.
+- Do not edit a validated spec after seeing results just to improve metrics.
+- Do not recommend paper or live trading without audit and report artifacts.

@@ -1,56 +1,70 @@
 ---
 name: factor-screening
-description: 指导 Agent 使用 SDK 进行因子筛选（下载财务数据、合并且筛选）
+description: >-
+  Screen symbols with open-xquant price, financial, and custom factors; use
+  when users ask for value, quality, momentum, or multi-factor candidate lists.
 ---
 
-## 你的角色
+# Factor Screening
 
-你是一个因子筛选助手，帮助用户下载财务数据和行情数据，合并后进行因子筛选。
+You build candidate lists from data. Screening is not a backtest.
 
-## SDK 方式
+## Confirm Inputs
 
-```python
-from oxq.data.loaders import YFinanceDownloader
-from oxq.data.market import LocalMarketDataProvider
-from oxq.core.registry import list_indicators
+Ask for:
 
-# 1. 下载行情数据
-dl = YFinanceDownloader()
-for sym in ["AAPL", "MSFT", "GOOGL"]:
-    dl.download(symbol=sym, start="2020-01-01", end="2024-12-31")
+- market and symbols
+- factor definitions
+- rebalance date or date range
+- thresholds or ranking rules
+- required data provider
+- how to handle missing values
 
-# 2. 加载并计算因子
-market = LocalMarketDataProvider()
-indicators = list_indicators()
+## Inspect Available Indicators
 
-for sym in symbols:
-    bars = market.get_bars(sym, "2020-01-01", "2024-12-31")
-    pe = indicators["PE"]().compute(bars)
-    pb = indicators["PB"]().compute(bars)
-    roe = indicators["ROEChange"]().compute(bars)
-
-# 3. 筛选条件
-# 合并所有因子到 DataFrame，按条件筛选
-mask = (pe_series < 20) & (pb_series < 3) & (roe_series > 0.15)
-candidates = mask[mask].index
+```bash
+uv run python - <<'PY'
+import oxq
+print(sorted(oxq.list_indicators()))
+PY
 ```
 
-参考：`examples/strategies/factor_screen.py`
+Financial indicator classes include names such as `PE`, `PB`, `BP`, `EP`,
+`ROEChange`, `NetProfitMargin`, `AccrualRatio`, `CashFlowRatio`, `MarketCap`,
+`TurnoverRate`, and `PowerRatio`. Verify required input columns before
+computing them.
 
-## 可用财务指标
+## Price-Based Screening Pattern
 
-`PE`、`PB`、`BP`、`EP`、`ROEChange`、`NetProfitMargin`、`AccrualRatio`、`CashFlowRatio`、`MarketCap`、`TurnoverRate`、`PowerRatio`
+```python
+import pandas as pd
 
-## 筛选模式
+from oxq.data.market import LocalMarketDataProvider
+from oxq.indicators import NdayReturn, RollingVolatility
 
-| 模式 | 方法 |
-|------|------|
-| 百分位筛选 | `factor.rank(pct=True) < 0.2` (取前 20%) |
-| 绝对值筛选 | `factor < threshold` |
-| 多因子合成 | `score = rank(mom) + rank(pe) + rank(roe)` |
+symbols = ["AAPL", "MSFT", "GOOGL"]
+market = LocalMarketDataProvider(data_dir="/path/to/parquet")
 
-## 红线
+rows = []
+for sym in symbols:
+    bars = market.get_bars(sym, "2020-01-01", "2024-12-31")
+    momentum = NdayReturn().compute(bars, column="close", period=60).iloc[-1]
+    volatility = RollingVolatility().compute(bars, column="close", period=20).iloc[-1]
+    rows.append({"symbol": sym, "momentum_60": momentum, "vol_20": volatility})
 
-- **不只用单因子**：单因子筛选不稳定，至少 2-3 个因子合成
-- **不忽略数据缺失**：NaN 在筛选中会产生假阳性/假阴性
-- **中国 A 股用 AkShare，美股用 YFinance**：不混淆数据源
+screen = pd.DataFrame(rows).dropna()
+screen["score"] = screen["momentum_60"].rank(pct=True) - screen["vol_20"].rank(pct=True)
+candidates = screen.sort_values("score", ascending=False).head(10)
+```
+
+## Financial Screening
+
+For financial fields, use the factor data layer and inspect returned columns.
+Do not assume all financial indicators can compute from OHLCV bars alone.
+
+## Red Lines
+
+- Do not call a screened list a validated strategy.
+- Do not ignore missing factor values.
+- Do not mix A-share and US data providers in one score without explaining it.
+- Do not use future financial statement publication dates.

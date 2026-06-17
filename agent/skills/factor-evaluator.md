@@ -1,48 +1,53 @@
 ---
 name: factor-evaluator
-description: 路由 skill — 根据策略类型分派到截面评估或时序评估子 skill
+description: >-
+  Route open-xquant factor evaluation tasks to cross-sectional or time-series
+  workflows; use when users ask whether a factor predicts returns.
 ---
 
-## 你的角色
+# Factor Evaluator
 
-你是一个因子评估路由器，根据策略类型决定使用截面评估还是时序评估。
+You decide which factor evaluation workflow to use.
 
-## Phase 0：明确意图
+## Ask First
 
-1. 策略是选股型（stock-picking）还是择时/轮动型（rotation/timing）？
-2. 有多少标的？（样本量要求见下表）
-3. 关注的预测周期是多久？
+Confirm:
 
-## 路由规则
+- factor definition
+- symbols
+- date range
+- forward return horizons
+- whether the question is stock selection or timing
+- data source and missing-data treatment
 
-| 策略类型 | 评估方式 | 加载 skill |
-|----------|---------|-----------|
-| 选股（截面排名） | 截面评估 (IC, RankIC, ICIR) | `evaluate-cross-sectional` |
-| 择时/轮动（时序预测） | 时序评估 (Hit Rate, Decay, P/L) | `evaluate-time-series` |
+## Route
 
-## 样本量指南
+Use `agent/skills/evaluate-cross-sectional.md` when:
 
-| 标的数量 | 截面 IC 可靠性 |
-|----------|--------------|
-| < 10 | 不可靠 — 用时序评估 |
-| 10-30 | 可用但谨慎 |
-| > 30 | 可靠 |
+- the user ranks many assets on each date
+- the goal is IC, Rank IC, ICIR, decay, or turnover
+- there are enough symbols for cross-sectional statistics
 
-## 数据准备
+Use `agent/skills/evaluate-time-series.md` when:
 
-```python
-from oxq.data.loaders import YFinanceDownloader
-# 下载所有标的的行情数据
-for sym in symbols:
-    YFinanceDownloader().download(symbol=sym, start="...", end="...")
-```
+- the user evaluates one asset or a small rotation set
+- the question is directional timing
+- hit rate, P/L ratio, decay curve, or tearsheet is more relevant
 
-## 红线
+Rule of thumb:
 
-- **标的 < 10 不跑截面 IC**：改用时序评估
-- **不跳过因子预处理**：T+1 偏移、涨跌停标记、停牌标记
-- **多周期评估**：至少跑 3 个 forward period（1d, 5d, 20d）
+- fewer than 10 symbols: avoid cross-sectional IC as primary evidence
+- 10 to 30 symbols: use IC cautiously
+- more than 30 symbols: cross-sectional IC is more defensible
 
-## SDK 参考
+## Data Requirements
 
-`examples/modules/08_factor_eval.py` — 完整因子评估示例（IC, RankIC, Decay, Turnover, Tearsheet）
+Build factor values and forward returns with aligned indexes. Do not let
+same-day execution leak into forward returns. For formal reports, state the
+horizon, date alignment, and excluded rows.
+
+## Red Lines
+
+- Do not evaluate a factor without forward-return alignment.
+- Do not run only one horizon when the user is making a research claim.
+- Do not hide low sample size or high turnover.
