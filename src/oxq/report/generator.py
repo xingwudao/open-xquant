@@ -254,7 +254,10 @@ def _load_execution_assumptions(run_path: Path) -> dict | None:
     assumptions_path = run_path / "execution_assumptions.json"
     if not assumptions_path.exists():
         return None
-    assumptions = json.loads(assumptions_path.read_text(encoding="utf-8"))
+    try:
+        assumptions = json.loads(assumptions_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError):
+        return None
     return assumptions if isinstance(assumptions, dict) else None
 
 

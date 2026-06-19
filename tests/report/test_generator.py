@@ -153,6 +153,17 @@ def test_report_generation_does_not_fail_without_execution_assumptions(tmp_path)
     assert "### Execution Assumptions" not in report
 
 
+def test_report_generation_ignores_malformed_execution_assumptions(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "execution_assumptions.json").write_text("{not-json", encoding="utf-8")
+
+    report = generate_report(run_dir)
+
+    assert "# Research Report: report_execution_assumptions" in report
+    assert "## 5. Backtest Metrics" in report
+    assert "### Execution Assumptions" not in report
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="report_execution_assumptions",
