@@ -894,6 +894,7 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         tz = getattr(pd.Timestamp(result.equity_curve[0][0]), "tz", None) if result.equity_curve else None
         test_start = pd.Timestamp(test[0], tz=tz)
         test_end = pd.Timestamp(test[1], tz=tz) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+        activity_trades = _filter_trades_by_window(result.trades, start=test_start, end=test_end, tz=tz)
         metric_curve = _window_equity_curve(
             result.equity_curve,
             start=test_start,
@@ -902,7 +903,6 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         )
         if len(metric_curve) >= 2:
             metric_result = _run_result_for_equity_curve(result, metric_curve)
-            activity_trades = _filter_trades_by_window(result.trades, start=test_start, end=test_end, tz=tz)
         else:
             metric_diagnostics.append("evaluation_window=oos unavailable: OOS equity curve has fewer than 2 points")
 

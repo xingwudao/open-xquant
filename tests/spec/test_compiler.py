@@ -1406,7 +1406,14 @@ def test_metrics_evaluation_window_oos_unavailable_does_not_use_full_window() ->
     dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")
     result = RunResult(
         portfolio=Portfolio(cash=Decimal("150000")),
-        trades=[],
+        trades=[
+            Fill(
+                order=Order(symbol="AAA", side="BUY", shares=1),
+                filled_price=Decimal("1"),
+                filled_at=dates[1].isoformat(),
+                fee=Decimal("2"),
+            )
+        ],
         equity_curve=[(date, value) for date, value in zip(dates, [100000.0, 125000.0, 150000.0])],
         mktdata={},
     )
@@ -1418,6 +1425,8 @@ def test_metrics_evaluation_window_oos_unavailable_does_not_use_full_window() ->
     assert metrics["total_return"] is None
     assert metrics["annualized_return"] is None
     assert metrics["sharpe_ratio"] is None
+    assert metrics["trade_count"] == 0
+    assert metrics["cost_paid"] == pytest.approx(0.0)
 
 
 def test_metrics_evaluation_window_oos_unavailable_for_short_full_run() -> None:
