@@ -87,11 +87,22 @@ class RebalanceDef:
 
 
 @dataclass
+class LotSizeConfig:
+    default: int = 1
+    by_symbol: dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
 class ExecutionSection:
     trade_time: str = "next_open"
     fill_price_mode: str = "next_open"
     rebalance: RebalanceDef = field(default_factory=RebalanceDef)
     lot_size: int = 1
+    order_timing: str = ""
+    price_bar: str = ""
+    price_type: str = ""
+    lot_size_config: LotSizeConfig = field(default_factory=LotSizeConfig)
+    cash_annual_return: float = 0.0
     initial_cash: float = 100_000.0
 
 
@@ -283,6 +294,7 @@ def _parse_portfolio(raw: dict) -> PortfolioSection:
 def _parse_execution(raw: dict) -> ExecutionSection:
     rebalance_raw = raw.get("rebalance", {})
     rebalance_frequency = rebalance_raw.get("frequency", "daily")
+    lot_size = _parse_int(raw.get("lot_size", 1), "execution.lot_size")
     return ExecutionSection(
         trade_time=raw.get("trade_time", "next_open"),
         fill_price_mode=raw.get("fill_price_mode", "next_open"),
@@ -293,9 +305,30 @@ def _parse_execution(raw: dict) -> ExecutionSection:
                 "execution.rebalance.interval_days",
             ),
         ),
-        lot_size=_parse_int(raw.get("lot_size", 1), "execution.lot_size"),
+        lot_size=lot_size,
+        order_timing=raw.get("order_timing", ""),
+        price_bar=raw.get("price_bar", ""),
+        price_type=raw.get("price_type", ""),
+        lot_size_config=_parse_lot_size_config(raw.get("lot_size_config"), lot_size),
+        cash_annual_return=_parse_float(raw.get("cash_annual_return", 0.0), "execution.cash_annual_return"),
         initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),
     )
+
+
+def _parse_lot_size_config(raw: object, fallback_lot_size: int) -> LotSizeConfig:
+    if raw is None:
+        return LotSizeConfig(default=fallback_lot_size)
+    if not isinstance(raw, dict):
+        raise ValueError("execution.lot_size_config must be a mapping")
+    default = _parse_int(raw.get("default", fallback_lot_size), "execution.lot_size_config.default")
+    by_symbol_raw = raw.get("by_symbol", {})
+    if not isinstance(by_symbol_raw, dict):
+        raise ValueError("execution.lot_size_config.by_symbol must be a mapping")
+    by_symbol = {
+        str(symbol): _parse_int(value, f"execution.lot_size_config.by_symbol.{symbol}")
+        for symbol, value in by_symbol_raw.items()
+    }
+    return LotSizeConfig(default=default, by_symbol=by_symbol)
 
 
 def _parse_cost(raw: dict) -> CostSection:
