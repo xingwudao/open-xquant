@@ -138,6 +138,7 @@ class MetricsSection:
     annualization_days: int = 252
     calmar_denominator: str = "max_drawdown"
     evaluation_window: str = "full"
+    _explicit_fields: set[str] = field(default_factory=set, repr=False, compare=False, metadata={"serialize": False})
 
 
 @dataclass
@@ -403,6 +404,7 @@ def _parse_metrics(raw: object) -> MetricsSection:
             "metrics.calmar_denominator",
         ),
         evaluation_window=_parse_str(raw.get("evaluation_window", profile_defaults["evaluation_window"]), "metrics.evaluation_window"),
+        _explicit_fields=set(raw.keys()),
     )
 
 

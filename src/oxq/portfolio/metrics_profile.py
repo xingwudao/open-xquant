@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 def compute_profile_metrics(result: RunResult, config: MetricsSection, *, run_id: str) -> dict[str, Any]:
     """Compute backtest metrics using the requested metrics profile assumptions."""
+    config = _normalize_profile_defaults(config)
     assumptions = metric_assumptions(config)
     metrics = {
         "run_id": run_id,
@@ -25,25 +26,13 @@ def compute_profile_metrics(result: RunResult, config: MetricsSection, *, run_id
     if config.return_type == "log":
         metrics.update(_log_return_metrics(result, config))
     else:
-        metrics.update({
-            "total_return": result.total_return(),
-            "max_drawdown": result.max_drawdown(),
-        })
-        days = config.annualization_days
-        metrics.update(
-            {
-                "annualized_return": result.annualized_return(days),
-                "annualized_volatility": result.annualized_volatility(days),
-                "sharpe_ratio": _simple_sharpe_ratio(_values(result.equity_curve), config.risk_free_rate, days),
-                "sortino_ratio": result.sortino_ratio(config.risk_free_rate, days),
-                "calmar_ratio": result.calmar_ratio(days),
-            }
-        )
+        metrics.update(_simple_return_metrics(result, config))
     return metrics
 
 
 def metric_assumptions(config: MetricsSection) -> dict[str, Any]:
     """Return serializable metric assumptions for artifacts and reports."""
+    config = _normalize_profile_defaults(config)
     return {
         "return_type": config.return_type,
         "risk_free_rate": config.risk_free_rate,
@@ -58,22 +47,73 @@ def compute_equity_curve_metrics(
     config: MetricsSection,
 ) -> dict[str, float | None]:
     """Compute profile-aware metrics for a standalone equity-curve slice."""
+    config = _normalize_profile_defaults(config)
     if config.return_type == "log":
         return _log_curve_metrics(equity_curve, config)
     return _simple_curve_metrics(equity_curve, config)
 
 
+def _normalize_profile_defaults(config: MetricsSection) -> MetricsSection:
+    defaults = _profile_defaults(config.profile)
+    if not defaults:
+        return config
+    explicit_fields = set(getattr(config, "_explicit_fields", set()))
+    values = {
+        "risk_free_rate": config.risk_free_rate,
+        "return_type": config.return_type,
+        "annualization_days": config.annualization_days,
+        "calmar_denominator": config.calmar_denominator,
+        "evaluation_window": config.evaluation_window,
+    }
+    changed = False
+    for field_name, default_value in defaults.items():
+        if field_name not in explicit_fields and values[field_name] != default_value:
+            values[field_name] = default_value
+            changed = True
+    if not changed:
+        return config
+    return type(config)(profile=config.profile, _explicit_fields=explicit_fields, **values)
+
+
+def _profile_defaults(profile: str) -> dict[str, object]:
+    if profile == "xquant_production":
+        return {
+            "risk_free_rate": 0.02,
+            "return_type": "log",
+            "annualization_days": 252,
+            "calmar_denominator": "max_drawdown",
+            "evaluation_window": "full",
+        }
+    return {}
+
+
+def _unavailable_curve_metrics() -> dict[str, None]:
+    return {
+        "total_return": None,
+        "annualized_return": None,
+        "annualized_volatility": None,
+        "max_drawdown": None,
+        "sharpe_ratio": None,
+        "calmar_ratio": None,
+    }
+
+
+def _simple_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, float | None]:
+    values = _values(result.equity_curve)
+    if len(values) < 2 or np.any(values <= 0):
+        metrics = _unavailable_curve_metrics()
+        metrics["sortino_ratio"] = None
+        return metrics
+    days = config.annualization_days
+    metrics = _simple_curve_metrics(result.equity_curve, config)
+    metrics["sortino_ratio"] = result.sortino_ratio(config.risk_free_rate, days)
+    return metrics
+
+
 def _simple_curve_metrics(equity_curve: list[tuple[object, float]], config: MetricsSection) -> dict[str, float | None]:
     values = _values(equity_curve)
-    if len(values) < 2 or values[0] <= 0 or np.any(values[:-1] <= 0):
-        return {
-            "total_return": None,
-            "annualized_return": None,
-            "annualized_volatility": None,
-            "max_drawdown": None,
-            "sharpe_ratio": None,
-            "calmar_ratio": None,
-        }
+    if len(values) < 2 or np.any(values <= 0):
+        return _unavailable_curve_metrics()
     result = RunResult(
         portfolio=Portfolio(cash=Decimal(str(values[-1]))),
         trades=[],
@@ -93,15 +133,9 @@ def _simple_curve_metrics(equity_curve: list[tuple[object, float]], config: Metr
 def _log_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, float | None]:
     curve_metrics = _log_curve_metrics(result.equity_curve, config)
     if curve_metrics["annualized_return"] is None:
-        return {
-            "total_return": None,
-            "annualized_return": None,
-            "annualized_volatility": None,
-            "max_drawdown": None,
-            "sharpe_ratio": None,
-            "sortino_ratio": None,
-            "calmar_ratio": None,
-        }
+        metrics = _unavailable_curve_metrics()
+        metrics["sortino_ratio"] = None
+        return metrics
     return {
         "total_return": curve_metrics["total_return"],
         "annualized_return": curve_metrics["annualized_return"],
@@ -116,14 +150,7 @@ def _log_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, 
 def _log_curve_metrics(equity_curve: list[tuple[object, float]], config: MetricsSection) -> dict[str, float | None]:
     values = _values(equity_curve)
     if len(values) < 2 or values[0] <= 0 or np.any(values <= 0):
-        return {
-            "total_return": None,
-            "annualized_return": None,
-            "annualized_volatility": None,
-            "max_drawdown": None,
-            "sharpe_ratio": None,
-            "calmar_ratio": None,
-        }
+        return _unavailable_curve_metrics()
     returns = np.diff(np.log(values))
     max_drawdown = _max_drawdown(values)
     annualized_return = float(np.mean(returns) * config.annualization_days)
@@ -177,9 +204,9 @@ def _sharpe_ratio(returns: np.ndarray, risk_free_rate: float, annualization_days
     return float(excess / std * np.sqrt(annualization_days))
 
 
-def _simple_sharpe_ratio(values: np.ndarray, risk_free_rate: float, annualization_days: int) -> float:
-    if len(values) < 2 or np.any(values[:-1] <= 0):
-        return 0.0
+def _simple_sharpe_ratio(values: np.ndarray, risk_free_rate: float, annualization_days: int) -> float | None:
+    if len(values) < 2 or np.any(values <= 0):
+        return None
     returns = np.diff(values) / values[:-1]
     return _sharpe_ratio(returns, risk_free_rate, annualization_days)
 

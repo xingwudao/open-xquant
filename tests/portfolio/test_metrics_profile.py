@@ -84,6 +84,44 @@ def test_log_profile_keeps_invalid_equity_metrics_unavailable() -> None:
     assert metrics["calmar_ratio"] is None
 
 
+def test_simple_profile_keeps_invalid_sharpe_unavailable() -> None:
+    result = _make_result([100.0, 0.0, 101.0])
+
+    metrics = compute_profile_metrics(result, MetricsSection(), run_id="run-1")
+
+    assert metrics["total_return"] is None
+    assert metrics["annualized_return"] is None
+    assert metrics["annualized_volatility"] is None
+    assert metrics["max_drawdown"] is None
+    assert metrics["sharpe_ratio"] is None
+    assert metrics["sortino_ratio"] is None
+    assert metrics["calmar_ratio"] is None
+
+
+def test_simple_profile_keeps_negative_endpoint_slice_unavailable() -> None:
+    result = _make_result([100.0, -1.0])
+
+    metrics = compute_profile_metrics(result, MetricsSection(), run_id="run-1")
+
+    assert metrics["annualized_return"] is None
+    assert metrics["sharpe_ratio"] is None
+
+
+def test_in_memory_xquant_profile_applies_profile_defaults() -> None:
+    values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
+    result = _make_result(values.tolist())
+    config = MetricsSection()
+    config.profile = "xquant_production"
+
+    metrics = compute_profile_metrics(result, config, run_id="run-1")
+
+    log_returns = np.diff(np.log(values))
+    expected_sharpe = float((np.mean(log_returns) - 0.02 / 252) / np.std(log_returns) * np.sqrt(252))
+    assert metrics["metric_assumptions"]["return_type"] == "log"
+    assert metrics["metric_assumptions"]["risk_free_rate"] == 0.02
+    assert metrics["sharpe_ratio"] == pytest.approx(expected_sharpe)
+
+
 def test_risk_free_rate_affects_simple_profile_sharpe() -> None:
     values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
     result = _make_result(values.tolist())

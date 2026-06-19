@@ -9,6 +9,7 @@ from oxq.report.generator import (
     _format_float,
     _format_money,
     _format_percent,
+    _format_validation_classification_lines,
     generate_report,
 )
 from oxq.spec.schema import StrategySpec
@@ -109,6 +110,19 @@ def test_metric_formatters_render_unavailable_values_as_na() -> None:
     assert _format_percent(float("nan")) == "N/A"
     assert _format_float(None) == "N/A"
     assert _format_money(None) == "N/A"
+
+
+def test_validation_classification_reports_unclassified_failures() -> None:
+    lines = _format_validation_classification_lines(
+        {
+            "status": "fail",
+            "errors": [{"severity": "fatal", "check": "metrics_profile_unsupported", "dimensions": []}],
+            "warnings": [],
+        }
+    )
+
+    assert "- **status**: fail" in lines
+    assert "- **unclassified**: fatal:metrics_profile_unsupported" in lines
 
 
 def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) -> None:

@@ -330,7 +330,11 @@ def _format_is_oos_metric_lines(metrics: dict) -> list[str]:
 def _format_validation_classification_lines(validation_result: dict) -> list[str]:
     findings = list(validation_result.get("errors", [])) + list(validation_result.get("warnings", []))
     dimensions = ("causal", "executable", "conservative", "production_consistent")
-    lines: list[str] = []
+    lines: list[str] = [f"- **status**: {validation_result.get('status', 'unknown')}"]
+    unclassified = [finding for finding in findings if not finding.get("dimensions")]
+    if unclassified:
+        labels = ", ".join(f"{finding.get('severity', 'unknown')}:{finding.get('check', 'unknown')}" for finding in unclassified)
+        lines.append(f"- **unclassified**: {labels}")
     for dimension in dimensions:
         matching = [finding for finding in findings if dimension in finding.get("dimensions", [])]
         if not matching:
