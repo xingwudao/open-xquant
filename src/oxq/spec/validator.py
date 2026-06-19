@@ -324,8 +324,8 @@ def _is_non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
-def _has_explicit_execution_fields(spec: StrategySpec) -> bool:
-    return all((spec.execution.order_timing, spec.execution.price_bar, spec.execution.price_type))
+def _has_any_explicit_execution_field(spec: StrategySpec) -> bool:
+    return any((spec.execution.order_timing, spec.execution.price_bar, spec.execution.price_type))
 
 
 def _missing_signal_param(rule_name: str, param_name: str) -> dict:
@@ -528,8 +528,8 @@ def validate(spec: StrategySpec) -> ValidationResult:
     # --- Execution ---
     if not spec.execution.trade_time:
         errors.append(_err("fatal", "trade_time_missing", "execution.trade_time is missing — cannot determine fill timing"))
-    has_explicit_execution_fields = _has_explicit_execution_fields(spec)
-    if not spec.execution.fill_price_mode and not has_explicit_execution_fields:
+    has_any_explicit_execution_field = _has_any_explicit_execution_field(spec)
+    if not spec.execution.fill_price_mode and not has_any_explicit_execution_field:
         errors.append(_err("fatal", "fill_price_mode_missing", "execution.fill_price_mode is missing"))
     if not isinstance(spec.execution.lot_size, int) or isinstance(spec.execution.lot_size, bool) or spec.execution.lot_size <= 0:
         errors.append(_err("fatal", "lot_size_invalid", "execution.lot_size must be a positive integer"))
@@ -551,7 +551,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "initial_cash_invalid", "execution.initial_cash must be a positive finite number"))
 
     effective_execution = None
-    if spec.execution.fill_price_mode or has_explicit_execution_fields:
+    if spec.execution.fill_price_mode or has_any_explicit_execution_field:
         try:
             effective_execution = derive_execution_semantics(spec.execution)
         except ValueError as exc:
@@ -565,7 +565,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
             )
 
     # Validate fill mode against known values
-    valid_fill_modes = frozenset({"close", "next_open", "mid"})
+    valid_fill_modes = frozenset({"close", "next_open", "mid", "avg"})
     if spec.execution.fill_price_mode and spec.execution.fill_price_mode not in valid_fill_modes:
         errors.append(
             _err(
@@ -624,7 +624,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
     if not finite_costs:
         errors.append(_err("fatal", "cost_model_invalid", "cost fields must be finite numbers"))
     elif spec.cost.fee_rate <= 0.0 and spec.cost.slippage_rate <= 0.0:
-        if has_explicit_execution_fields:
+        if has_any_explicit_execution_field:
             warnings.append(
                 _err(
                     "warning",

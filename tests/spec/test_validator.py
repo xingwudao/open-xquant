@@ -555,6 +555,36 @@ def test_validate_warns_for_next_session_mid_explicit_execution_conservatism() -
     assert warning["dimensions"] == ["conservative"]
 
 
+def test_validate_warns_for_next_session_close_explicit_execution_conservatism() -> None:
+    spec = StrategySpec.template(strategy_id="next_close", hypothesis="next-session close is causal but optimistic")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_close"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "close"
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    warning = _finding(result.warnings, "execution_conservatism")
+    assert warning["dimensions"] == ["conservative"]
+
+
+def test_validate_warns_for_next_session_avg_explicit_execution_conservatism() -> None:
+    spec = StrategySpec.template(strategy_id="next_avg", hypothesis="next-session avg is causal but optimistic")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_avg"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "avg"
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    warning = _finding(result.warnings, "execution_conservatism")
+    assert warning["dimensions"] == ["conservative"]
+
+
 def test_validate_does_not_warn_for_next_session_open_explicit_execution() -> None:
     spec = StrategySpec.template(strategy_id="next_open_explicit", hypothesis="next open is conservative")
     spec.execution.fill_price_mode = ""
@@ -610,6 +640,19 @@ def test_validate_reports_invalid_derived_execution_semantics() -> None:
     assert error["dimensions"] == ["executable"]
 
 
+def test_validate_reports_partial_explicit_execution_as_invalid_semantics() -> None:
+    spec = StrategySpec.template(strategy_id="partial_execution", hypothesis="partial explicit fields are invalid")
+    spec.execution.fill_price_mode = ""
+    spec.execution.order_timing = "next_session_open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    checks = {error["check"] for error in result.errors}
+    assert "execution_semantics_invalid" in checks
+    assert "fill_price_mode_missing" not in checks
+
+
 def test_validate_warns_for_zero_cost_with_explicit_replay_style_execution() -> None:
     spec = StrategySpec.template(strategy_id="zero_cost_replay", hypothesis="zero costs may be replay-style")
     spec.cost.fee_rate = 0.0
@@ -625,6 +668,52 @@ def test_validate_warns_for_zero_cost_with_explicit_replay_style_execution() -> 
     assert result.status == "pass"
     warning = _finding(result.warnings, "cost_model_zero")
     assert set(warning["dimensions"]) == {"conservative", "production_consistent"}
+
+
+def test_validate_rejects_zero_cost_without_explicit_execution_fields() -> None:
+    spec = StrategySpec.template(strategy_id="zero_cost_legacy", hypothesis="legacy zero costs are missing costs")
+    spec.cost.fee_rate = 0.0
+    spec.cost.slippage_rate = 0.0
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "cost_model_missing" for error in result.errors)
+
+
+def test_validate_rejects_zero_fee_even_with_explicit_execution_fields() -> None:
+    spec = StrategySpec.template(strategy_id="zero_fee", hypothesis="fee must be positive unless all costs are replay zero")
+    spec.cost.fee_rate = 0.0
+    spec.cost.slippage_rate = 0.001
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "fee_missing" for error in result.errors)
+
+
+def test_validate_rejects_zero_slippage_even_with_explicit_execution_fields() -> None:
+    spec = StrategySpec.template(
+        strategy_id="zero_slippage",
+        hypothesis="slippage must be positive unless all costs are replay zero",
+    )
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.0
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "slippage_missing" for error in result.errors)
 
 
 def test_validate_rejects_unsupported_signal_time() -> None:
