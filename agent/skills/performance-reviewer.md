@@ -38,10 +38,12 @@ Read trades and equity only after confirming `metrics.json` exists.
 1. Reproducibility audit status.
 2. Research audit fatal findings.
 3. Research audit warnings.
-4. Robustness status.
-5. OOS trade count and test-period coverage.
-6. Return, Sharpe, drawdown, and benchmark comparison.
-7. Whether the report decision is justified.
+4. Metrics profile and metric assumptions.
+5. Execution assumptions, calendar, lot size, and cash return.
+6. Robustness status, including IS/OOS diff, perturbation, and regimes.
+7. OOS trade count and test-period coverage.
+8. Return, Sharpe, drawdown, and benchmark comparison.
+9. Whether the report decision is justified.
 
 ## Decision Language
 
@@ -67,6 +69,8 @@ If comparing multiple runs, normalize:
 - same time period
 - same benchmark
 - same fee and slippage assumptions
+- same metrics profile and metric assumptions
+- same execution price, calendar, lot size, and cash return assumptions
 - same universe
 
 ## Red Lines

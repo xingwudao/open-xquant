@@ -21,8 +21,15 @@ signal:
 execution:
   trade_time: next_open
   fill_price_mode: next_open
+  order_timing: next_session_open
+  price_bar: next_session
+  price_type: open
   initial_cash: 100000
   lot_size: 1
+  lot_size_config:
+    default: 1
+    by_symbol: {}
+  cash_annual_return: 0.0
   rebalance:
     frequency: daily
     interval_days: 1
@@ -37,10 +44,20 @@ Validator constraints:
 
 - `signal_time=close_t` with `trade_time=close_t` is fatal.
 - `fill_price_mode=close` or `mid` with `signal_time=close_t` is fatal.
-- `fee_rate <= 0` is fatal.
-- `slippage_rate <= 0` is fatal.
+- Legacy `trade_time` / `fill_price_mode` must agree with explicit
+  `order_timing` / `price_bar` / `price_type` when both are present.
+- Negative `fee_rate` or `slippage_rate` is fatal.
+- Zero fee and zero slippage are fatal unless the spec declares explicit
+  execution semantics for a replay-style validation run; preserve the warning.
 - `lot_size` must be a positive integer.
+- `lot_size_config.default` and each `by_symbol` override must be positive
+  integers.
 - `initial_cash` must be positive and finite.
+- `cash_annual_return` must be finite.
+
+Supported audited calendars are `XNYS`, `ARCX`, `XSHG`, and `XSHE`.
+Use `lot_size_config.default: 100` for A-share examples unless the user gives
+symbol-specific overrides.
 
 ## Cost Defaults Are Not Conclusions
 
@@ -75,3 +92,5 @@ broker = SimBroker(
 - Do not call a result tradable unless execution costs were explicit.
 - Do not compare two strategies with different cost assumptions without
   highlighting the difference.
+- Do not compare two strategies with different fill price, calendar, lot size,
+  or cash return assumptions without highlighting the difference.

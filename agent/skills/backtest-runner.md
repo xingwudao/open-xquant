@@ -18,5 +18,9 @@ idea -> spec init -> spec validate -> strategy compile -> backtest
      -> reproducibility audit -> research audit -> robustness -> report
 ```
 
+The redirected workflow inherits current runtime assumptions from
+`strategy-builder.md`, including explicit execution semantics, metrics
+profiles, supported calendars, and robustness artifacts.
+
 If the user already has a validated spec, skip the idea-building phases in
 `strategy-builder.md` and run only the compile/backtest/audit/report steps.

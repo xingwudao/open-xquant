@@ -85,7 +85,12 @@ Before running open-xquant commands in a new directory:
   home directories for another open-xquant checkout.
 
 Default workflow:
-`strategy_spec.yaml` -> validate -> backtest -> audit -> robustness -> report."""
+`strategy_spec.yaml` -> validate -> backtest -> audit -> robustness -> report.
+
+Stable spec fields include explicit execution assumptions
+(`order_timing`, `price_bar`, `price_type`, `cash_annual_return`,
+`lot_size_config`), supported calendars (`XNYS`, `ARCX`, `XSHG`, `XSHE`),
+and metrics profiles (`open_xquant_default`, `xquant_production`)."""
 
 
 CLAUDE_AGENT_BLOCK = """## open-xquant
@@ -107,7 +112,12 @@ Before running open-xquant commands in a new directory:
   home directories for another open-xquant checkout.
 
 If this project has an `AGENTS.md`, also read it when it is relevant to
-open-xquant work."""
+open-xquant work.
+
+Stable spec fields include explicit execution assumptions
+(`order_timing`, `price_bar`, `price_type`, `cash_annual_return`,
+`lot_size_config`), supported calendars (`XNYS`, `ARCX`, `XSHG`, `XSHE`),
+and metrics profiles (`open_xquant_default`, `xquant_production`)."""
 
 
 @click.group()

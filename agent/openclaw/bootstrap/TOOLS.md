@@ -112,7 +112,7 @@ Data sources: YFinance (US equities), AkShare (A-shares), WorldBank (macro facto
 
 | Command | Description |
 |----------|-------------|
-| `oxq robustness run <run_dir>` | Run cost x2 perturbation, IS/OOS comparison, parameter perturbation check |
+| `oxq robustness run <run_dir>` | Run cost stress, IS/OOS comparison, parameter perturbation, and regime analysis |
 
 ### report (1 command)
 
@@ -194,6 +194,13 @@ pip install open-xquant[live]                    # Alpaca live trading
 pip install open-xquant[chart]                   # chart visualization
 ```
 
+For a source checkout used by agents or contributors, install the complete
+optional dependency set before first full workflow verification:
+
+```bash
+uv sync --all-extras
+```
+
 ---
 
 ## Examples
@@ -220,8 +227,12 @@ Located in `examples/` within the repo:
 ## Research Output Conventions
 
 - Research specs: `strategy_spec.yaml` (version-controlled)
-- Backtest results: `runs/<timestamp>_<strategy_id>/` (10 fixed artifacts)
+- Backtest results: `runs/<timestamp>_<strategy_id>/` with standard artifacts,
+  including metrics, equity, trades, orders, positions, execution assumptions,
+  and artifact hashes when generated
 - Audit results: run `oxq audit research` and `oxq audit reproducibility`
+- Robustness results: `robustness.json` with cost stress, IS/OOS,
+  parameter perturbation, and regime analysis when configured
 - Experiment registry: `experiments.jsonl`
 - Reproducibility check: re-run with identical spec + data before recording any result
 

@@ -62,10 +62,15 @@ idea -> strategy_spec.yaml -> validate -> backtest
 - `uv run oxq ...` 或已安装环境中的 `oxq ...`。
 - `static` universe。
 - `local` data provider，也就是本地 parquet 行情文件。
-- `XNYS` 市场日历。
+- `XNYS`、`ARCX`、`XSHG`、`XSHE` 市场日历。
 - `signal_time: close_t`。
 - `execution.trade_time: next_open`。
 - `execution.fill_price_mode: next_open`。
+- 显式执行语义：`execution.order_timing`、`price_bar`、`price_type`。
+- 现金收益和交易单位：`execution.cash_annual_return`、
+  `execution.lot_size_config`。
+- 评估口径：`metrics.profile`、`risk_free_rate`、`return_type`、
+  `annualization_days`、`calmar_denominator`、`evaluation_window`。
 - `EqualWeight` 组合。
 - `SMA`、`Crossover` 等注册表中的内置指标和信号。
 - 回测后的 reproducibility audit、research audit、robustness、report。
@@ -595,16 +600,36 @@ portfolio:
 execution:
   trade_time: next_open
   fill_price_mode: next_open
+  order_timing: next_session_open
+  price_bar: next_session
+  price_type: open
   rebalance:
     frequency: daily
     interval_days: 1
   lot_size: 1
+  lot_size_config:
+    default: 1
+    by_symbol: {}
   initial_cash: 100000
+  cash_annual_return: 0.0
 
 cost:
   fee_rate: 0.001
   fee_min: 0.0
   slippage_rate: 0.001
+
+metrics:
+  profile: open_xquant_default
+  risk_free_rate: 0.0
+  return_type: simple
+  annualization_days: 252
+  calmar_denominator: max_drawdown
+  evaluation_window: full
+
+robustness:
+  cost_multiplier: [1.0, 2.0]
+  parameter_perturbation: {}
+  regime_analysis: false
 
 benchmark:
   symbols: ["SPY"]
@@ -620,11 +645,17 @@ validation:
 - `research.hypothesis` 为空。
 - `universe.type` 不是 `static`。
 - `data.provider` 不是 `local`。
-- `market.calendar` 不是 `XNYS`。
+- `market.calendar` 不是 `XNYS`、`ARCX`、`XSHG` 或 `XSHE`。
 - `signal.signal_time` 不是 `close_t`。
-- `execution.trade_time` 和 `fill_price_mode` 不匹配。
+- `execution.trade_time` / `fill_price_mode` 与显式
+  `order_timing` / `price_bar` / `price_type` 不匹配。
 - `close_t` 信号使用同根 K 线成交价。
-- `fee_rate <= 0` 或 `slippage_rate <= 0`。
+- `execution.lot_size_config` 不是正整数配置。
+- `metrics.profile` 或 metrics 假设不受支持。
+- `fee_rate < 0` 或 `slippage_rate < 0`。
+- 未声明显式 execution 语义时使用零成本。
+- 显式 execution replay 场景下双零成本不是 fatal，但必须作为 warning
+  保留在报告中。
 - 缺少 `validation.test_period`。
 - `train_period` 和 `test_period` 重叠。
 - 信号参数引用了不存在的指标列。
@@ -733,6 +764,7 @@ print(metrics["sharpe_ratio"])
 `robustness run` 返回 `WARN`：
 
 - 检查是否未配置参数扰动或 regime analysis。
+- 检查 `robustness.json` 是否记录 IS/OOS diff、参数扰动和分段统计。
 - 在报告中保留 fragile/warn 信息。
 - 不要只引用 baseline Sharpe。
 

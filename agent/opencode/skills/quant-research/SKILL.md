@@ -40,14 +40,16 @@ oxq experiment add runs/<run_id>/
 
 ## Quality Gates
 
-| Gate | Check | Action on Failure |
-|------|-------|-------------------|
-| Spec Validation | All P0 checks pass | Fix spec and re-validate |
-| Backtest | Run completes without error | Debug and re-run |
-| Reproducibility Audit | All hashes match | Investigate inconsistency |
-| Research Bias Audit | No fatal findings | REJECT or fix spec |
-| Robustness | Cost x2 doesn't destroy Sharpe | Flag as fragile |
-| Report | Executive decision issued | Document decision |
+- Spec validation: all fatal checks pass; fix spec and re-validate on failure.
+- Assumptions: metrics profile, execution assumptions, calendar, lot size,
+  costs, and cash return are explicit; do not compare runs without matching
+  assumptions.
+- Backtest: run completes without error; debug and re-run on failure.
+- Reproducibility audit: hashes match; investigate inconsistency.
+- Research bias audit: no fatal findings; reject or fix spec on fatal findings.
+- Robustness: review cost stress, IS/OOS diff, parameter perturbation, and
+  regime analysis; flag fragile, warning, or error statuses.
+- Report: executive decision issued; document decision and limitations.
 
 ## Critical Rules
 

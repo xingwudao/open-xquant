@@ -16,6 +16,9 @@ executive decision.
 - Any fatal audit finding → **REJECT**
 - No fatal but significant warnings or fragile robustness → **WATCHLIST**
 - Passes all audits with acceptable robustness → **PAPER TRADING CANDIDATE**
+- A run with missing or untrusted robustness artifacts cannot be promoted.
+- Report the metrics profile, metric assumptions, and execution assumptions
+  when they materially affect comparisons.
 
 ## Rules
 

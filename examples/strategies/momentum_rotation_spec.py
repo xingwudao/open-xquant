@@ -68,12 +68,25 @@ spec.portfolio.params = {"score_col": "momentum_20", "n": 1, "filter_negative": 
 # Execution: weekly, next_open fill
 spec.execution.trade_time = "next_open"
 spec.execution.fill_price_mode = "next_open"
+spec.execution.order_timing = "next_session_open"
+spec.execution.price_bar = "next_session"
+spec.execution.price_type = "open"
 spec.execution.initial_cash = 100_000
 spec.execution.rebalance.interval_days = 5
+spec.execution.cash_annual_return = 0.0
+spec.execution.lot_size_config.default = 1
 
 # Costs
 spec.cost.fee_rate = 0.001
 spec.cost.slippage_rate = 0.001
+
+# Metrics profile
+spec.metrics.profile = "open_xquant_default"
+spec.metrics.risk_free_rate = 0.0
+spec.metrics.return_type = "simple"
+spec.metrics.annualization_days = 252
+spec.metrics.calmar_denominator = "max_drawdown"
+spec.metrics.evaluation_window = "full"
 
 # Validation
 spec.benchmark.symbols = ["SPY"]

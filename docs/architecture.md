@@ -319,11 +319,26 @@ execution:
     frequency: "weekly"
   trade_time: "next_open"
   fill_price_mode: "next_open"
+  order_timing: "next_session_open"
+  price_bar: "next_session"
+  price_type: "open"
   initial_cash: 100000
+  cash_annual_return: 0.0
+  lot_size_config:
+    default: 1
+    by_symbol: {}
 
 cost:
   fee_rate: 0.001
   slippage_rate: 0.001
+
+metrics:
+  profile: open_xquant_default
+  risk_free_rate: 0.0
+  return_type: simple
+  annualization_days: 252
+  calmar_denominator: max_drawdown
+  evaluation_window: full
 
 benchmark:
   symbols: ["SPY"]
@@ -361,6 +376,10 @@ P0 校验规则：
 | signal_time 缺失 | fatal | 无法判断是否未来函数 |
 | trade_time 缺失 | fatal | 无法判断成交时点 |
 | signal_time=close_t 且 trade_time=close_t | fatal | 同根 K 线生成并成交 |
+| execution 语义冲突 | fatal | legacy 与显式执行字段不一致 |
+| market calendar 不支持 | fatal | 非受支持交易日历 |
+| lot_size_config 非法 | fatal | 交易单位不可执行 |
+| metrics profile 非法 | fatal | 指标口径不可解释 |
 | cost 缺失 | fatal | 默认零成本不可接受 |
 | slippage 缺失 | fatal | 默认零滑点不可接受 |
 | validation.test_period 缺失 | fatal | 无样本外验证 |
@@ -421,6 +440,9 @@ P0 稳健性测试四类：
 2. 手续费与滑点加倍
 3. 核心参数轻微扰动
 4. 市场状态分段分析
+
+输出 `robustness.json`，用于报告和实验比较。报告不应只复述
+baseline Sharpe，而应保留 fragile、warn 和 error 状态。
 
 命令：`oxq robustness run runs/<run_id>/`
 

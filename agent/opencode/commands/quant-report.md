@@ -16,8 +16,10 @@ Generate a research report with executive decision.
 
 ## Decision Scale
 
-| Decision | Criteria |
-|----------|----------|
-| **REJECT** | Fatal audit findings |
-| **WATCHLIST** | Warnings but no fatal issues |
-| **PAPER TRADING CANDIDATE** | All audits pass, robustness acceptable |
+- **REJECT**: fatal audit findings, invalid artifacts, or missing OOS evidence
+- **WATCHLIST**: warnings, weak robustness, or incomplete robustness artifacts
+- **PAPER TRADING CANDIDATE**: audits pass, robustness acceptable, and the
+  metrics/execution assumptions are explicit
+
+Include metrics profile, execution assumptions, and robustness highlights when
+present.

@@ -94,6 +94,11 @@ cv_result = cv.cross_validate(
 - tiny parameter changes destroy performance
 - selected configuration has very few trades
 
+Before comparing parameter sets, normalize metrics profile, annualization,
+risk-free rate, execution price, market calendar, lot size, costs, and cash
+return assumptions. Use the robustness runner's parameter perturbation and
+IS/OOS metric diff outputs when they are available.
+
 ## Red Lines
 
 - Do not report "best parameters" without OOS validation.

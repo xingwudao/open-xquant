@@ -40,7 +40,8 @@ def spec_init(description: str, out: str = "strategy_spec.yaml") -> dict[str, An
 @registry.tool(
     name="spec_validate",
     description="Validate a strategy spec file against P0 rules. "
-    "Checks hypothesis, universe, signal timing, execution lag, costs, OOS period, and benchmark. "
+    "Checks hypothesis, universe, signal timing, execution semantics, supported calendar, "
+    "costs, OOS period, metrics profile, and benchmark. "
     "Returns status (pass/fail), errors, warnings, and spec_hash.",
 )
 def spec_validate(spec_file: str) -> dict[str, Any]:

@@ -42,10 +42,17 @@ Use this path first:
 
 - `universe.type: static`
 - `data.provider: local`
-- `market.calendar: XNYS`
+- `market.calendar: XNYS`, `ARCX`, `XSHG`, or `XSHE`
 - `signal.signal_time: close_t`
 - `execution.trade_time: next_open`
 - `execution.fill_price_mode: next_open`
+- explicit execution semantics:
+  `execution.order_timing: next_session_open`,
+  `execution.price_bar: next_session`,
+  `execution.price_type: open`
+- `execution.cash_annual_return` and `execution.lot_size_config`
+- `metrics.profile: open_xquant_default` unless the user asks for another
+  supported metrics profile
 - positive `cost.fee_rate`
 - positive `cost.slippage_rate`
 - `portfolio.type: EqualWeight` when `signal.rules` is present
@@ -101,11 +108,31 @@ signal:
 execution:
   trade_time: next_open
   fill_price_mode: next_open
+  order_timing: next_session_open
+  price_bar: next_session
+  price_type: open
   initial_cash: 100000
+  cash_annual_return: 0.0
+  lot_size_config:
+    default: 1
+    by_symbol: {}
 
 cost:
   fee_rate: 0.001
   slippage_rate: 0.001
+
+metrics:
+  profile: open_xquant_default
+  risk_free_rate: 0.0
+  return_type: simple
+  annualization_days: 252
+  calmar_denominator: max_drawdown
+  evaluation_window: full
+
+robustness:
+  cost_multiplier: [1.0, 2.0]
+  parameter_perturbation: {}
+  regime_analysis: false
 ```
 
 For non-SMA strategies, inspect the registry before choosing names:
@@ -129,9 +156,15 @@ Fatal issues to fix before continuing:
 
 - empty `research.hypothesis`
 - unsupported universe or data provider
+- unsupported market calendar
 - missing local data semantics
 - same-bar signal and fill timing
-- zero or negative fee/slippage
+- conflicting legacy and explicit execution semantics
+- invalid lot-size configuration
+- unsupported metrics profile or metric assumption
+- negative fee/slippage
+- zero fee/slippage unless this is an explicit replay-style validation spec;
+  preserve the warning when zero costs are accepted
 - missing OOS test period
 - train/test period overlap
 - signal parameter references an unknown column
@@ -188,7 +221,9 @@ uv run oxq experiment add "$RUN_DIR"
 ```
 
 If research audit has fatal findings, mark the strategy rejected. If robustness
-returns `WARN`, keep the warning in the final report.
+returns `WARN`, keep the warning in the final report. When `robustness.json`
+exists, summarize cost stress, IS/OOS metric diff, parameter perturbation, and
+regime analysis instead of only quoting baseline Sharpe.
 
 ## Red Lines
 

@@ -114,8 +114,14 @@ benchmark 用 SPY。
 
 - `strategy_spec.yaml`
 - `runs/<run_id>/metrics.json`
+- `runs/<run_id>/execution_assumptions.json`
 - `runs/<run_id>/equity_curve.csv`
+- `runs/<run_id>/benchmark_curve.csv`，如果配置了 benchmark。
 - `runs/<run_id>/trades.csv`
+- `runs/<run_id>/orders.csv`
+- `runs/<run_id>/positions.csv`
+- `runs/<run_id>/artifact_hashes.json`
+- `runs/<run_id>/robustness.json`
 - `runs/<run_id>/research_report.md`
 - 可复现性审计结果。
 - 研究偏差审计结果。
@@ -125,8 +131,11 @@ Agent 的最终回答应该明确区分：
 
 - 环境验证是否成功。
 - spec 校验是否通过。
+- 使用了什么 metrics profile 和指标口径。
+- 使用了什么成交价格、交易日历、交易单位和现金收益假设。
 - 审计是否有 fatal 或 warning。
 - 稳健性检查是否为 `PASS`、`WARN` 或 `FAIL`。
+- IS/OOS、参数扰动和 regime 分段是否暴露了脆弱性。
 - 策略是候选、观察、拒绝，还是仅用于演示。
 
 不要接受只有收益率、没有审计和报告路径的结论。

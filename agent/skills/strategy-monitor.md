@@ -19,8 +19,10 @@ A valid CLI run should contain:
 - `environment.json`
 - `data_manifest.json`
 - `artifact_hashes.json`
+- `execution_assumptions.json`
 - `metrics.json`
 - `equity_curve.csv`
+- `benchmark_curve.csv` when benchmarks are available
 - `trades.csv`
 - `positions.csv`
 - `orders.csv`
@@ -55,6 +57,17 @@ uv run oxq robustness run runs/<run_id>/
 
 `WARN` can mean robustness is incomplete, not that the command failed. Preserve
 warnings such as missing parameter perturbation or regime analysis.
+
+When `robustness.json` exists, inspect and report:
+
+- cost stress results
+- IS/OOS metric diff
+- parameter perturbation results
+- regime segmented statistics
+- any fragile, warning, or error status
+
+Do not promote a run when robustness artifacts are missing, untracked, or fail
+reproducibility checks.
 
 ## Report And Experiment Log
 

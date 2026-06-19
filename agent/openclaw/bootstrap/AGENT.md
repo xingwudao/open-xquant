@@ -52,6 +52,8 @@ Validate: oxq spec validate strategy_spec.yaml
     ↓
 Backtest: oxq backtest run strategy_spec.yaml --out runs/auto
     ↓
+Check assumptions: metrics profile + execution assumptions artifacts
+    ↓
 Audit: oxq audit research runs/<run_id>/
     ↓
 Robustness: oxq robustness run runs/<run_id>/
@@ -69,7 +71,7 @@ Feedback: note any framework friction in memory/framework-feedback.md
 |-----------|--------|
 | 研究因子 / research a factor | clarify hypothesis → build spec → run backtest → audit |
 | 回测 / backtest | create/validate spec → run backtest |
-| 评估结果 / evaluate results | run audit + robustness → generate report |
+| 评估结果 / evaluate results | verify assumptions → run audit + robustness → generate report |
 | 安装 skill / install skill | read SKILL.md first → confirm source → install |
 | open-xquant 有什么问题 | read memory/framework-feedback.md → summarize |
 | 超出量化研究范围的任务 | politely decline, explain scope |
@@ -79,9 +81,11 @@ Feedback: note any framework friction in memory/framework-feedback.md
 Before recording any result as valid:
 
 1. Note the exact inputs: universe, date range, parameters, data source version
-2. Re-run with identical spec and data: `oxq backtest run strategy_spec.yaml`
-3. Run reproducibility audit: `oxq audit reproducibility runs/<run_id>/`
-4. If hashes differ between runs or audit fails, **stop and investigate** — do not record the result
+2. Confirm metrics profile, execution assumptions, calendar, lot size, costs,
+   and cash return assumptions are recorded
+3. Re-run with identical spec and data: `oxq backtest run strategy_spec.yaml`
+4. Run reproducibility audit: `oxq audit reproducibility runs/<run_id>/`
+5. If hashes differ between runs or audit fails, **stop and investigate** — do not record the result
 
 A result that cannot be reproduced has no value. Flag it explicitly.
 

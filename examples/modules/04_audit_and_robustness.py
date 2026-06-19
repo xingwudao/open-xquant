@@ -66,6 +66,9 @@ print(f"Baseline Sharpe: {robust.get('baseline_sharpe', 0):.4f}")
 for t in robust["tests"]:
     icon = "PASS" if t["status"] == "pass" else ("FAIL" if t["status"] == "fail" else "WARN")
     print(f"  [{icon}] {t['name']}: {t.get('message', '')[:80]}")
+    for key in ("baseline_sharpe", "oos_sharpe", "perturbed_sharpe"):
+        if key in t:
+            print(f"       {key}: {t[key]:.4f}")
 
 # ---------------------------------------------------------------------------
 # Save audit results alongside run artifacts

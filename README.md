@@ -74,7 +74,9 @@ open-xquant 采用 **Agentic Quant Research Kernel** 的设计哲学——它是
 ```
 oxq spec init "策略想法"
   → oxq spec validate strategy_spec.yaml
+  → oxq strategy compile strategy_spec.yaml
   → oxq backtest run strategy_spec.yaml
+  → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
   → oxq report write runs/<run_id>/
@@ -152,11 +154,11 @@ open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Rese
 - 因子评估 (IC, ICIR, decay, turnover, tearsheet)
 - 参数优化 (grid search, walk-forward, cross-validation)
 - 可观测性 (tracing, audit, monitoring, experiment log)
-
-进行中：
 - Strategy Spec (schema, validator, compiler)
 - Audit System (reproducibility + research bias)
-- Robustness Runner
+- Runtime execution assumptions (calendar, fill price, lot size, cash return)
+- Metrics profiles (`open_xquant_default`, `xquant_production`)
+- Robustness Runner (cost stress, IS/OOS diff, parameter perturbation, regimes)
 - Research Report Generator
 - OpenCode 集成
 
@@ -240,7 +242,9 @@ Every research run produces fixed-structure artifacts — metrics, trades, equit
 ```
 oxq spec init "strategy idea"
   → oxq spec validate strategy_spec.yaml
+  → oxq strategy compile strategy_spec.yaml
   → oxq backtest run strategy_spec.yaml
+  → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
   → oxq report write runs/<run_id>/
@@ -316,11 +320,11 @@ Completed:
 - Factor evaluation (IC, ICIR, decay, turnover, tearsheet)
 - Parameter optimization (grid search, walk-forward, cross-validation)
 - Observability (tracing, audit, monitoring, experiment log)
-
-In Progress:
 - Strategy Spec (schema, validator, compiler)
 - Audit System (reproducibility + research bias)
-- Robustness Runner
+- Runtime execution assumptions (calendar, fill price, lot size, cash return)
+- Metrics profiles (`open_xquant_default`, `xquant_production`)
+- Robustness Runner (cost stress, IS/OOS diff, parameter perturbation, regimes)
 - Research Report Generator
 - OpenCode integration
 
