@@ -131,6 +131,16 @@ class ValidationSection:
 
 
 @dataclass
+class MetricsSection:
+    profile: str = "open_xquant_default"
+    risk_free_rate: float = 0.0
+    return_type: str = "simple"
+    annualization_days: int = 252
+    calmar_denominator: str = "max_drawdown"
+    evaluation_window: str = "full"
+
+
+@dataclass
 class RobustnessSection:
     cost_multiplier: list[float] = field(default_factory=list)
     parameter_perturbation: dict[str, list[float | int]] = field(default_factory=dict)
@@ -166,6 +176,7 @@ class StrategySpec:
     cost: CostSection = field(default_factory=CostSection)
     benchmark: BenchmarkSection = field(default_factory=BenchmarkSection)
     validation: ValidationSection = field(default_factory=ValidationSection)
+    metrics: MetricsSection = field(default_factory=MetricsSection)
     robustness: RobustnessSection = field(default_factory=RobustnessSection)
     decision_policy: DecisionPolicy = field(default_factory=DecisionPolicy)
 
@@ -208,6 +219,7 @@ class StrategySpec:
             cost=_parse_cost(raw.get("cost", {})),
             benchmark=_parse_benchmark(raw.get("benchmark", {})),
             validation=_parse_validation(raw.get("validation", {})),
+            metrics=_parse_metrics(raw.get("metrics", {})),
             robustness=_parse_robustness(raw.get("robustness", {})),
             decision_policy=_parse_decision_policy(raw.get("decision_policy", {})),
         )
@@ -233,6 +245,7 @@ class StrategySpec:
                 test_period=["2022-01-01", "2025-12-31"],
                 required_oos=True,
             ),
+            metrics=MetricsSection(),
         )
 
 
@@ -369,6 +382,44 @@ def _parse_validation(raw: dict) -> ValidationSection:
         test_period=_parse_date_list(raw.get("test_period", []), "validation.test_period"),
         required_oos=_parse_bool(raw.get("required_oos", False), "validation.required_oos"),
     )
+
+
+def _parse_metrics(raw: object) -> MetricsSection:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("metrics must be a mapping")
+    profile = _parse_str(raw.get("profile", "open_xquant_default"), "metrics.profile")
+    profile_defaults = _metrics_profile_defaults(profile)
+    return MetricsSection(
+        profile=profile,
+        risk_free_rate=_parse_float(raw.get("risk_free_rate", profile_defaults["risk_free_rate"]), "metrics.risk_free_rate"),
+        return_type=_parse_str(raw.get("return_type", profile_defaults["return_type"]), "metrics.return_type"),
+        annualization_days=_parse_int(raw.get("annualization_days", profile_defaults["annualization_days"]), "metrics.annualization_days"),
+        calmar_denominator=_parse_str(
+            raw.get("calmar_denominator", profile_defaults["calmar_denominator"]),
+            "metrics.calmar_denominator",
+        ),
+        evaluation_window=_parse_str(raw.get("evaluation_window", profile_defaults["evaluation_window"]), "metrics.evaluation_window"),
+    )
+
+
+def _metrics_profile_defaults(profile: str) -> dict[str, object]:
+    if profile == "xquant_production":
+        return {
+            "risk_free_rate": 0.02,
+            "return_type": "log",
+            "annualization_days": 252,
+            "calmar_denominator": "max_drawdown",
+            "evaluation_window": "full",
+        }
+    return {
+        "risk_free_rate": 0.0,
+        "return_type": "simple",
+        "annualization_days": 252,
+        "calmar_denominator": "max_drawdown",
+        "evaluation_window": "full",
+    }
 
 
 def _parse_robustness(raw: dict) -> RobustnessSection:

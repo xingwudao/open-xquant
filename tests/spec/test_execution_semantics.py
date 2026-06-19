@@ -7,6 +7,36 @@ from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 
 
+def test_missing_metrics_section_defaults_to_open_xquant_profile(tmp_path: Path) -> None:
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: metrics_default
+research:
+  hypothesis: missing metrics should use the open xquant profile
+universe:
+  type: static
+  symbols: [SPY]
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2021-01-01", "2021-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.metrics.profile == "open_xquant_default"
+    assert spec.metrics.risk_free_rate == 0.0
+    assert spec.metrics.return_type == "simple"
+    assert spec.metrics.annualization_days == 252
+    assert spec.metrics.calmar_denominator == "max_drawdown"
+    assert spec.metrics.evaluation_window == "full"
+
+
 def test_parse_execution_cash_return_and_lot_size_config(tmp_path: Path) -> None:
     spec_path = tmp_path / "strategy.yaml"
     spec_path.write_text(

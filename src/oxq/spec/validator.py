@@ -386,6 +386,58 @@ def _validate_lot_size_config(spec: StrategySpec) -> list[dict]:
     return errors
 
 
+def _validate_metrics(spec: StrategySpec) -> list[dict]:
+    errors: list[dict] = []
+    supported_profiles = frozenset({"open_xquant_default", "xquant_production"})
+    if spec.metrics.profile not in supported_profiles:
+        errors.append(
+            _err(
+                "fatal",
+                "metrics_profile_unsupported",
+                f"metrics.profile={spec.metrics.profile} is not supported. "
+                f"Valid: {', '.join(sorted(supported_profiles))}",
+            )
+        )
+
+    supported_return_types = frozenset({"simple", "log"})
+    if spec.metrics.return_type not in supported_return_types:
+        errors.append(
+            _err(
+                "fatal",
+                "metrics_return_type_unsupported",
+                f"metrics.return_type={spec.metrics.return_type} is not supported. "
+                f"Valid: {', '.join(sorted(supported_return_types))}",
+            )
+        )
+
+    if not _is_finite_real_number(spec.metrics.risk_free_rate):
+        errors.append(_err("fatal", "metrics_risk_free_rate_invalid", "metrics.risk_free_rate must be a finite number"))
+
+    if not _is_positive_int(spec.metrics.annualization_days):
+        errors.append(_err("fatal", "metrics_annualization_days_invalid", "metrics.annualization_days must be a positive integer"))
+
+    if spec.metrics.calmar_denominator != "max_drawdown":
+        errors.append(
+            _err(
+                "fatal",
+                "metrics_calmar_denominator_unsupported",
+                "metrics.calmar_denominator must be max_drawdown",
+            )
+        )
+
+    supported_windows = frozenset({"full", "oos"})
+    if spec.metrics.evaluation_window not in supported_windows:
+        errors.append(
+            _err(
+                "fatal",
+                "metrics_evaluation_window_unsupported",
+                f"metrics.evaluation_window={spec.metrics.evaluation_window} is not supported. "
+                f"Valid: {', '.join(sorted(supported_windows))}",
+            )
+        )
+    return errors
+
+
 def _missing_signal_param(rule_name: str, param_name: str) -> dict:
     return _err(
         "fatal",
@@ -779,6 +831,9 @@ def validate(spec: StrategySpec) -> ValidationResult:
                     "data.min_start_date must be earlier than or equal to the first requested validation date",
                 )
             )
+
+    # --- Metrics ---
+    errors.extend(_validate_metrics(spec))
 
     # --- Benchmark ---
     if not spec.benchmark.symbols:

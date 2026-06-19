@@ -10,6 +10,88 @@ def _finding(findings: list[dict], check: str) -> dict:
     return next(finding for finding in findings if finding["check"] == check)
 
 
+def test_validate_accepts_supported_metrics_profile(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: metrics_profile_supported
+research:
+  hypothesis: metric assumptions should be explicit
+market:
+  calendar: XNYS
+universe:
+  type: static
+  symbols: [SPY]
+data:
+  provider: local
+  price_adjustment: adjusted
+  required_columns: [open, high, low, close, volume]
+signal:
+  signal_time: close_t
+portfolio:
+  type: EqualWeight
+execution:
+  trade_time: next_open
+  fill_price_mode: next_open
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  train_period: ["2020-01-01", "2020-12-31"]
+  test_period: ["2021-01-01", "2021-12-31"]
+  required_oos: true
+metrics:
+  profile: xquant_production
+  risk_free_rate: 0.02
+  return_type: log
+  annualization_days: 252
+  calmar_denominator: max_drawdown
+  evaluation_window: oos
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    result = validate(spec)
+
+    assert result.status == "pass"
+    assert spec.metrics.profile == "xquant_production"
+    assert spec.metrics.risk_free_rate == 0.02
+    assert spec.metrics.return_type == "log"
+    assert spec.metrics.annualization_days == 252
+    assert spec.metrics.calmar_denominator == "max_drawdown"
+    assert spec.metrics.evaluation_window == "oos"
+
+
+def test_validate_rejects_unknown_metrics_profile(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: metrics_profile_unknown
+research:
+  hypothesis: unknown metric profiles should fail validation
+universe:
+  type: static
+  symbols: [SPY]
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2021-01-01", "2021-12-31"]
+metrics:
+  profile: unsupported_profile
+""",
+        encoding="utf-8",
+    )
+
+    result = validate(StrategySpec.from_yaml(spec_path))
+
+    assert result.status == "fail"
+    assert any(error["check"] == "metrics_profile_unsupported" for error in result.errors)
+
+
 def test_validate_rejects_reversed_test_period() -> None:
     spec = StrategySpec.template(strategy_id="bad_dates", hypothesis="date ranges must be ordered")
     spec.validation.test_period = ["2024-12-31", "2024-01-01"]
