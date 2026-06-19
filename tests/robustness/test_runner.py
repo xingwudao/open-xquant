@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import yaml
 
@@ -60,6 +61,62 @@ def test_run_robustness_handles_unavailable_baseline_sharpe(monkeypatch, tmp_pat
     cost_test = next(test for test in result["tests"] if test["name"] == "cost_x2")
     assert cost_test["status"] == "warn"
     assert cost_test["baseline_sharpe"] is None
+
+
+def test_run_robustness_compares_perturbed_metrics_artifact(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="profile_sharpe", hypothesis="robustness should compare artifact sharpe")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 1.2}), encoding="utf-8")
+
+    class FakeResult:
+        def sharpe_ratio(self) -> float:
+            return 99.0
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.7}), encoding="utf-8")
+        return FakeResult(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    cost_test = next(test for test in result["tests"] if test["name"] == "cost_x2")
+    assert cost_test["baseline_sharpe"] == 1.2
+    assert cost_test["perturbed_sharpe"] == 0.7
+
+
+def test_run_robustness_does_not_fallback_to_legacy_sharpe(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="missing_perturbed_sharpe", hypothesis="robustness uses artifact semantics")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 1.2}), encoding="utf-8")
+
+    class FakeResult:
+        def sharpe_ratio(self) -> float:
+            return 99.0
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": None}), encoding="utf-8")
+        return FakeResult(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    cost_test = next(test for test in result["tests"] if test["name"] == "cost_x2")
+    assert cost_test["status"] == "warn"
+    assert cost_test["perturbed_sharpe"] is None
 
 
 def test_run_robustness_returns_error_for_corrupt_metrics(tmp_path) -> None:

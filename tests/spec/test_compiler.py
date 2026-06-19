@@ -12,7 +12,7 @@ import oxq.audit.reproducibility as reproducibility
 import oxq.spec.compiler as compiler
 from oxq.audit.reproducibility import _hash_json_file, audit_reproducibility
 from oxq.core.engine import Engine
-from oxq.core.types import Order, Portfolio
+from oxq.core.types import Fill, Order, Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.portfolio.orderbook import ManagedOrder
 from oxq.spec.compiler import _build_metrics, _build_optimizer, _write_artifacts, compile_run, compile_strategy
@@ -1322,6 +1322,64 @@ def test_metrics_evaluation_window_oos_uses_oos_top_level_values() -> None:
     assert metrics["sharpe_ratio"] == pytest.approx(metrics["oos_sharpe_ratio"])
     assert metrics["is_total_return"] == pytest.approx(0.1)
     assert metrics["oos_total_return"] == pytest.approx(0.331)
+
+
+def test_oos_metrics_respect_test_period_end() -> None:
+    spec = StrategySpec.template(strategy_id="oos_metric_end", hypothesis="oos metrics should stop at test end")
+    spec.validation.train_period = ["2024-01-01", "2024-01-02"]
+    spec.validation.test_period = ["2024-01-03", "2024-01-05"]
+    dates = pd.bdate_range("2024-01-01", periods=6, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("300000")),
+        trades=[
+            Fill(
+                order=Order(symbol="AAA", side="BUY", shares=1),
+                filled_price=Decimal("1"),
+                filled_at=dates[2].isoformat(),
+            ),
+            Fill(
+                order=Order(symbol="AAA", side="SELL", shares=1),
+                filled_price=Decimal("1"),
+                filled_at=dates[5].isoformat(),
+            ),
+        ],
+        equity_curve=[
+            (dates[0], 100000.0),
+            (dates[1], 100000.0),
+            (dates[2], 110000.0),
+            (dates[3], 121000.0),
+            (dates[4], 133100.0),
+            (dates[5], 300000.0),
+        ],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    assert metrics["oos_total_return"] == pytest.approx(0.331)
+    assert metrics["oos_trade_count"] == 1
+
+
+def test_metrics_evaluation_window_oos_unavailable_does_not_use_full_window() -> None:
+    spec = StrategySpec.template(strategy_id="oos_metric_missing", hypothesis="oos metrics should not fall back")
+    spec.validation.train_period = ["2024-01-01", "2024-01-02"]
+    spec.validation.test_period = ["2024-01-10", "2024-01-12"]
+    spec.metrics.evaluation_window = "oos"
+    dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("150000")),
+        trades=[],
+        equity_curve=[(date, value) for date, value in zip(dates, [100000.0, 125000.0, 150000.0])],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    assert metrics["metric_assumptions"]["evaluation_window"] == "oos"
+    assert metrics["metric_diagnostics"] == ["evaluation_window=oos unavailable: OOS equity curve has fewer than 2 points"]
+    assert metrics["total_return"] is None
+    assert metrics["annualized_return"] is None
+    assert metrics["sharpe_ratio"] is None
 
 
 def test_oos_metrics_include_test_start_baseline() -> None:

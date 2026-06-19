@@ -888,15 +888,27 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
     """Build metrics dict including OOS-only metrics when test_period is defined."""
     test = spec.validation.test_period
     metric_result = result
+    metric_diagnostics: list[str] = []
     if spec.metrics.evaluation_window == "oos" and test and len(test) >= 2 and len(result.equity_curve) > 1:
         first_dt = result.equity_curve[0][0]
         tz = getattr(pd.Timestamp(first_dt), "tz", None)
         test_start = pd.Timestamp(test[0], tz=tz)
-        metric_curve = _window_equity_curve(result.equity_curve, start=test_start, include_previous_baseline=True)
+        test_end = pd.Timestamp(test[1], tz=tz) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+        metric_curve = _window_equity_curve(
+            result.equity_curve,
+            start=test_start,
+            end=test_end,
+            include_previous_baseline=True,
+        )
         if len(metric_curve) >= 2:
             metric_result = _run_result_for_equity_curve(result, metric_curve)
+        else:
+            metric_diagnostics.append("evaluation_window=oos unavailable: OOS equity curve has fewer than 2 points")
 
     base = compute_profile_metrics(metric_result, spec.metrics, run_id=run_id)
+    if metric_diagnostics:
+        _clear_top_level_profile_metrics(base)
+        base["metric_diagnostics"] = metric_diagnostics
     base.update({
         "strategy_id": spec.strategy_id,
         "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
@@ -927,7 +939,13 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         first_dt = result.equity_curve[0][0]
         tz = getattr(pd.Timestamp(first_dt), "tz", None)
         test_start = pd.Timestamp(test[0], tz=tz)
-        oos_curve = _window_equity_curve(result.equity_curve, start=test_start, include_previous_baseline=True)
+        test_end = pd.Timestamp(test[1], tz=tz) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
+        oos_curve = _window_equity_curve(
+            result.equity_curve,
+            start=test_start,
+            end=test_end,
+            include_previous_baseline=True,
+        )
         if len(oos_curve) >= 2:
             oos_metrics = compute_equity_curve_metrics(oos_curve, spec.metrics)
             base["oos_sharpe_ratio"] = oos_metrics["sharpe_ratio"]
@@ -937,10 +955,27 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
             base["oos_annualized_volatility"] = oos_metrics["annualized_volatility"]
             base["oos_calmar_ratio"] = oos_metrics["calmar_ratio"]
             # Filter OOS trades
-            oos_trades = [f for f in result.trades if _to_timestamp(f.filled_at, tz=tz) >= test_start]
+            oos_trades = [
+                f
+                for f in result.trades
+                if test_start <= _to_timestamp(f.filled_at, tz=tz) <= test_end
+            ]
             base["oos_trade_count"] = len(oos_trades)
 
     return base
+
+
+def _clear_top_level_profile_metrics(metrics: dict[str, Any]) -> None:
+    for key in (
+        "total_return",
+        "annualized_return",
+        "annualized_volatility",
+        "max_drawdown",
+        "sharpe_ratio",
+        "sortino_ratio",
+        "calmar_ratio",
+    ):
+        metrics[key] = None
 
 
 def _window_equity_curve(
