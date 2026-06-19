@@ -13,6 +13,7 @@ from oxq.audit.reproducibility import audit_reproducibility
 from oxq.audit.research_bias import audit_research
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
+from oxq.spec.validator import validate
 
 
 def generate_report(run_dir: str | Path) -> str:
@@ -24,6 +25,7 @@ def generate_report(run_dir: str | Path) -> str:
     execution_assumptions = _load_execution_assumptions(run_path)
     repro_audit = audit_reproducibility(run_dir)
     bias_audit = audit_research(run_dir)
+    validation_result = validate(spec)
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
@@ -78,6 +80,10 @@ def generate_report(run_dir: str | Path) -> str:
     # 5. Backtest Metrics
     lines.append("## 5. Backtest Metrics")
     lines.append("")
+    lines.append("### Metrics Profile")
+    lines.append("")
+    lines.extend(_format_metric_assumption_lines(metrics, spec))
+    lines.append("")
     lines.append("| Metric | Value |")
     lines.append("|--------|-------|")
     lines.append(f"| Total Return | {_format_percent(metrics.get('total_return'))} |")
@@ -90,6 +96,13 @@ def generate_report(run_dir: str | Path) -> str:
     lines.append(f"| Trade Count | {metrics.get('trade_count', 0)} |")
     lines.append(f"| Cost Paid | {_format_money(metrics.get('cost_paid'))} |")
     lines.append("")
+    if _has_oos_metrics(metrics):
+        lines.append("### IS/OOS Metrics")
+        lines.append("")
+        lines.append("| Metric | Value |")
+        lines.append("|--------|-------|")
+        lines.extend(_format_oos_metric_lines(metrics))
+        lines.append("")
 
     # 6. Benchmark Comparison
     lines.append("## 6. Benchmark Comparison")
@@ -121,6 +134,10 @@ def generate_report(run_dir: str | Path) -> str:
     for c in bias_audit["checks"]:
         icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
         lines.append(f"- [{c['severity'].upper()}] {icon} **{c['id']}**: {c['message']}")
+    lines.append("")
+    lines.append("### Validation Classification")
+    lines.append("")
+    lines.extend(_format_validation_classification_lines(validation_result.to_dict()))
     lines.append("")
 
     # 9. Robustness Tests
@@ -249,6 +266,66 @@ def _format_float(value: object) -> str:
 def _format_money(value: object) -> str:
     parsed = _as_finite_float(value)
     return "N/A" if parsed is None else f"${parsed:.2f}"
+
+
+def _format_metric_assumption_lines(metrics: dict, spec: StrategySpec) -> list[str]:
+    profile = metrics.get("metrics_profile") or spec.metrics.profile
+    assumptions = metrics.get("metric_assumptions")
+    if not isinstance(assumptions, dict):
+        assumptions = {
+            "return_type": spec.metrics.return_type,
+            "risk_free_rate": spec.metrics.risk_free_rate,
+            "annualization_days": spec.metrics.annualization_days,
+            "calmar_denominator": spec.metrics.calmar_denominator,
+            "evaluation_window": spec.metrics.evaluation_window,
+        }
+    lines = [f"- **Profile**: {_format_assumption_value(profile)}"]
+    for key in ("return_type", "risk_free_rate", "annualization_days", "calmar_denominator", "evaluation_window"):
+        value = assumptions.get(key)
+        formatted = _format_percent(value) if key == "risk_free_rate" else _format_assumption_value(value)
+        lines.append(f"- **{key}**: {formatted}")
+    if profile != "open_xquant_default":
+        lines.append("- **Note**: Non-default metrics profile; compare results only against runs using the same assumptions.")
+    return lines
+
+
+def _has_oos_metrics(metrics: dict) -> bool:
+    return any(key in metrics for key in (
+        "oos_total_return",
+        "oos_annualized_return",
+        "oos_annualized_volatility",
+        "oos_max_drawdown",
+        "oos_sharpe_ratio",
+        "oos_calmar_ratio",
+        "oos_trade_count",
+    ))
+
+
+def _format_oos_metric_lines(metrics: dict) -> list[str]:
+    rows = [
+        ("OOS Total Return", _format_percent(metrics.get("oos_total_return"))),
+        ("OOS Annualized Return", _format_percent(metrics.get("oos_annualized_return"))),
+        ("OOS Annualized Volatility", _format_percent(metrics.get("oos_annualized_volatility"))),
+        ("OOS Max Drawdown", _format_percent(metrics.get("oos_max_drawdown"))),
+        ("OOS Sharpe Ratio", _format_float(metrics.get("oos_sharpe_ratio"))),
+        ("OOS Calmar Ratio", _format_float(metrics.get("oos_calmar_ratio"))),
+        ("OOS Trade Count", str(metrics.get("oos_trade_count", "N/A"))),
+    ]
+    return [f"| {name} | {value} |" for name, value in rows]
+
+
+def _format_validation_classification_lines(validation_result: dict) -> list[str]:
+    findings = list(validation_result.get("errors", [])) + list(validation_result.get("warnings", []))
+    dimensions = ("causal", "executable", "conservative", "production_consistent")
+    lines: list[str] = []
+    for dimension in dimensions:
+        matching = [finding for finding in findings if dimension in finding.get("dimensions", [])]
+        if not matching:
+            lines.append(f"- **{dimension}**: pass")
+            continue
+        labels = ", ".join(f"{finding.get('severity', 'unknown')}:{finding.get('check', 'unknown')}" for finding in matching)
+        lines.append(f"- **{dimension}**: {labels}")
+    return lines
 
 
 def _load_execution_assumptions(run_path: Path) -> dict | None:

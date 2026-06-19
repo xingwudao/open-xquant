@@ -185,6 +185,75 @@ def test_report_summary_uses_effective_execution_fill_mode(tmp_path) -> None:
     assert "- **Execution**: next_open trade, next_close fill" in report
 
 
+def test_report_includes_metric_assumptions_oos_and_validation_classification(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_metric_assumptions",
+        hypothesis="report metric assumptions when present",
+    )
+    spec.metrics.profile = "xquant_production"
+    spec.metrics.risk_free_rate = 0.02
+    spec.metrics.return_type = "log"
+    spec.metrics.annualization_days = 252
+    spec.metrics.calmar_denominator = "max_drawdown"
+    spec.metrics.evaluation_window = "full"
+    spec.validation.train_period = ["2020-01-01", "2020-12-31"]
+    spec.validation.test_period = ["2021-01-01", "2021-12-31"]
+    spec.validation.required_oos = True
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps(
+            {
+                "run_id": "report-run",
+                "metrics_profile": "xquant_production",
+                "metric_assumptions": {
+                    "return_type": "log",
+                    "risk_free_rate": 0.02,
+                    "annualization_days": 252,
+                    "calmar_denominator": "max_drawdown",
+                    "evaluation_window": "full",
+                },
+                "trade_count": 12,
+                "oos_trade_count": 4,
+                "max_drawdown": -0.05,
+                "oos_max_drawdown": -0.03,
+                "oos_total_return": 0.04,
+                "oos_annualized_return": 0.08,
+                "oos_annualized_volatility": 0.12,
+                "oos_sharpe_ratio": 1.23,
+                "oos_calmar_ratio": 2.67,
+                "total_return": 0.1,
+                "annualized_return": 0.08,
+                "annualized_volatility": 0.12,
+                "sharpe_ratio": 1.1,
+                "sortino_ratio": 1.4,
+                "calmar_ratio": 1.6,
+                "cost_paid": 3.0,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "### Metrics Profile" in report
+    assert "- **Profile**: xquant_production" in report
+    assert "- **return_type**: log" in report
+    assert "- **risk_free_rate**: 2.00%" in report
+    assert "- **annualization_days**: 252" in report
+    assert "- **calmar_denominator**: max_drawdown" in report
+    assert "- **evaluation_window**: full" in report
+    assert "Non-default metrics profile" in report
+    assert "### IS/OOS Metrics" in report
+    assert "| OOS Sharpe Ratio | 1.23 |" in report
+    assert "| OOS Calmar Ratio | 2.67 |" in report
+    assert "### Validation Classification" in report
+    assert "- **conservative**:" in report
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="report_execution_assumptions",
