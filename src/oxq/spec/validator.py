@@ -696,7 +696,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
     if not finite_costs:
         errors.append(_err("fatal", "cost_model_invalid", "cost fields must be finite numbers"))
     elif spec.cost.fee_rate <= 0.0 and spec.cost.slippage_rate <= 0.0:
-        if has_any_explicit_execution_field:
+        if spec.cost.fee_rate == 0.0 and spec.cost.slippage_rate == 0.0 and has_any_explicit_execution_field:
             warnings.append(
                 _err(
                     "warning",

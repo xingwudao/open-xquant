@@ -172,7 +172,14 @@ class StrategySpec:
     def compute_hash(self) -> str:
         """Compute sha256 hash of the spec for reproducibility tracking."""
         self.execution.normalize_lot_size_config()
-        canonical = json.dumps(_dataclass_to_canonical_dict(self), sort_keys=True, default=str)
+        canonical_obj = _dataclass_to_canonical_dict(self)
+        if (
+            any((self.execution.order_timing, self.execution.price_bar, self.execution.price_type))
+            and self.execution.fill_price_mode == "next_open"
+            and not self.execution._fill_price_mode_explicit
+        ):
+            canonical_obj["execution"]["fill_price_mode"] = ""
+        canonical = json.dumps(canonical_obj, sort_keys=True, default=str)
         return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
     def to_dict(self) -> dict[str, Any]:

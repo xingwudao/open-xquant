@@ -163,6 +163,21 @@ def test_programmatic_explicit_execution_treats_default_fill_mode_as_absent() ->
     assert effective.compatibility_source == "explicit_fields"
 
 
+def test_programmatic_explicit_execution_hash_round_trips(tmp_path: Path) -> None:
+    spec = StrategySpec.template(strategy_id="programmatic_hash", hypothesis="explicit hash round trip")
+    spec.execution.order_timing = "next_session_close"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "close"
+    original_hash = spec.compute_hash()
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=True), encoding="utf-8")
+
+    reparsed = StrategySpec.from_yaml(spec_path)
+
+    assert derive_execution_semantics(reparsed.execution).fill_price_mode == "next_close"
+    assert reparsed.compute_hash() == original_hash
+
+
 def test_yaml_explicit_execution_can_omit_legacy_fill_price_mode(tmp_path: Path) -> None:
     spec_path = tmp_path / "strategy.yaml"
     spec_path.write_text(

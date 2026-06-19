@@ -132,6 +132,16 @@ def audit_research(run_dir: str | Path) -> dict:
             f"signal_time=close_t and fill_price_mode={fill_price_mode} — "
             "filled at same-bar price",
         ))
+    elif (
+        signal_time == "close_t"
+        and effective_execution is not None
+        and effective_execution.price_bar == "next_session"
+        and effective_execution.price_type in {"close", "mid", "avg"}
+    ):
+        checks.append(_finding(
+            "execution_conservatism", "fail", "warning",
+            f"next-session {effective_execution.price_type} fills are causal but not conservative",
+        ))
     else:
         checks.append(_finding("execution_lag", "pass", "info", "signal/trade timing is reasonable"))
 
@@ -140,7 +150,7 @@ def audit_research(run_dir: str | Path) -> dict:
     slippage_rate = spec.cost.slippage_rate
     fee_min = spec.cost.fee_min
     if fee_rate <= 0 and slippage_rate <= 0:
-        if has_valid_explicit_execution:
+        if fee_rate == 0 and slippage_rate == 0 and has_valid_explicit_execution:
             checks.append(_finding(
                 "cost_model",
                 "fail",

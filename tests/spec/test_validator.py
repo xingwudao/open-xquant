@@ -812,6 +812,23 @@ def test_validate_rejects_zero_cost_without_explicit_execution_fields() -> None:
     assert any(error["check"] == "cost_model_missing" for error in result.errors)
 
 
+def test_validate_rejects_negative_costs_with_explicit_execution_fields() -> None:
+    spec = StrategySpec.template(strategy_id="negative_explicit_costs", hypothesis="negative costs are invalid")
+    spec.cost.fee_rate = -0.001
+    spec.cost.slippage_rate = -0.001
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "cost_model_missing" for error in result.errors)
+    assert not any(warning["check"] == "cost_model_zero" for warning in result.warnings)
+
+
 def test_validate_rejects_zero_fee_even_with_explicit_execution_fields() -> None:
     spec = StrategySpec.template(strategy_id="zero_fee", hypothesis="fee must be positive unless all costs are replay zero")
     spec.cost.fee_rate = 0.0
