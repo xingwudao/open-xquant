@@ -578,14 +578,7 @@ def _dataclass_to_dict(obj: Any) -> Any:
     from dataclasses import MISSING, fields, is_dataclass
 
     if isinstance(obj, MetricsSection) and obj.profile != "open_xquant_default":
-        return {
-            "profile": obj.profile,
-            "risk_free_rate": obj.risk_free_rate,
-            "return_type": obj.return_type,
-            "annualization_days": obj.annualization_days,
-            "calmar_denominator": obj.calmar_denominator,
-            "evaluation_window": obj.evaluation_window,
-        }
+        return _effective_metrics_dict(obj)
 
     if is_dataclass(obj):
         result = {}
@@ -615,6 +608,9 @@ def _dataclass_to_canonical_dict(obj: Any) -> Any:
     """Recursively convert dataclass to a complete canonical dict."""
     from dataclasses import fields, is_dataclass
 
+    if isinstance(obj, MetricsSection) and obj.profile != "open_xquant_default":
+        return _effective_metrics_dict(obj)
+
     if is_dataclass(obj):
         result = {}
         for f in fields(obj):
@@ -627,3 +623,22 @@ def _dataclass_to_canonical_dict(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _dataclass_to_canonical_dict(v) for k, v in obj.items()}
     return obj
+
+
+def _effective_metrics_dict(obj: MetricsSection) -> dict[str, Any]:
+    defaults = _metrics_profile_defaults(obj.profile)
+    explicit_fields = set(getattr(obj, "_explicit_fields", set()))
+    return {
+        "profile": obj.profile,
+        "risk_free_rate": obj.risk_free_rate if "risk_free_rate" in explicit_fields else defaults["risk_free_rate"],
+        "return_type": obj.return_type if "return_type" in explicit_fields else defaults["return_type"],
+        "annualization_days": obj.annualization_days
+        if "annualization_days" in explicit_fields
+        else defaults["annualization_days"],
+        "calmar_denominator": obj.calmar_denominator
+        if "calmar_denominator" in explicit_fields
+        else defaults["calmar_denominator"],
+        "evaluation_window": obj.evaluation_window
+        if "evaluation_window" in explicit_fields
+        else defaults["evaluation_window"],
+    }

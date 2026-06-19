@@ -99,6 +99,23 @@ metrics:
     assert reparsed.metrics.return_type == "simple"
 
 
+def test_xquant_metrics_profile_only_serializes_effective_defaults(tmp_path: Path) -> None:
+    spec = StrategySpec.template(strategy_id="metrics_xquant_profile_only", hypothesis="profile-only metrics serialize defaults")
+    spec.metrics.profile = "xquant_production"
+    out_path = tmp_path / "round_trip.yaml"
+
+    serialized = spec.to_dict()
+    out_path.write_text(yaml.safe_dump(serialized, sort_keys=True), encoding="utf-8")
+    reparsed = StrategySpec.from_yaml(out_path)
+
+    assert serialized["metrics"]["risk_free_rate"] == 0.02
+    assert serialized["metrics"]["return_type"] == "log"
+    assert reparsed.metrics.profile == "xquant_production"
+    assert reparsed.metrics.risk_free_rate == 0.02
+    assert reparsed.metrics.return_type == "log"
+    assert reparsed.compute_hash() == spec.compute_hash()
+
+
 def test_default_metrics_do_not_change_legacy_spec_hash() -> None:
     spec = StrategySpec.template(strategy_id="legacy_hash", hypothesis="default metrics should preserve legacy hash")
     spec.execution.normalize_lot_size_config()
