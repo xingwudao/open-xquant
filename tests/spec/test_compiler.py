@@ -854,19 +854,34 @@ def test_compile_run_rejects_invalid_specs_before_execution(tmp_path) -> None:
         compile_run(spec, out_dir=tmp_path)
 
 
-def test_compile_run_explicit_only_next_open_instantiates_next_open_broker(tmp_path, monkeypatch) -> None:
-    spec = StrategySpec.template(strategy_id="explicit_next_open", hypothesis="explicit execution reaches broker")
+@pytest.mark.parametrize(
+    ("order_timing", "price_type", "expected_fill_price_mode"),
+    [
+        ("next_session_open", "open", compiler.FillPriceMode.NEXT_OPEN),
+        ("next_session_close", "close", compiler.FillPriceMode.NEXT_CLOSE),
+        ("next_session_mid", "mid", compiler.FillPriceMode.NEXT_MID),
+        ("next_session_avg", "avg", compiler.FillPriceMode.NEXT_AVG),
+    ],
+)
+def test_compile_run_explicit_next_session_modes_instantiate_matching_broker(
+    tmp_path,
+    monkeypatch,
+    order_timing,
+    price_type,
+    expected_fill_price_mode,
+) -> None:
+    spec = StrategySpec.template(strategy_id=f"explicit_{price_type}", hypothesis="explicit execution reaches broker")
     spec.execution.fill_price_mode = ""
     spec.execution.trade_time = "next_open"
-    spec.execution.order_timing = "next_session_open"
+    spec.execution.order_timing = order_timing
     spec.execution.price_bar = "next_session"
-    spec.execution.price_type = "open"
+    spec.execution.price_type = price_type
     data_dir = tmp_path / "data"
     data_dir.mkdir()
 
     class BrokerProbe:
         def __init__(self, *args, **kwargs) -> None:
-            assert kwargs["fill_price_mode"] == compiler.FillPriceMode.NEXT_OPEN
+            assert kwargs["fill_price_mode"] == expected_fill_price_mode
             raise RuntimeError("broker probe complete")
 
     monkeypatch.setattr(compiler, "SimBroker", BrokerProbe)
