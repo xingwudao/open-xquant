@@ -173,12 +173,18 @@ def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, An
         for name, value in degradation.items()
         if value is not None and value > 0.5
     }
-    if oos_sharpe is not None and oos_sharpe < 0:
+    policy_breaches = _reject_policy_breaches(spec, oos_metrics)
+    if policy_breaches:
+        status = "fail"
+    elif oos_sharpe is not None and oos_sharpe < 0:
         status = "fail"
     elif material_degradations:
         status = "warn"
     else:
         status = "pass"
+    message = f"Compared IS {train[0]} to {train[1]} with OOS {test[0]} to {test[1]}"
+    if policy_breaches:
+        message += f"; breached reject policy: {policy_breaches}"
     return {
         "name": "is_oos_comparison",
         "status": status,
@@ -187,8 +193,24 @@ def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, An
         "is": is_metrics,
         "oos": oos_metrics,
         "degradation": degradation,
-        "message": f"Compared IS {train[0]} to {train[1]} with OOS {test[0]} to {test[1]}",
+        "message": message,
     }
+
+
+def _reject_policy_breaches(spec: StrategySpec, oos_metrics: dict[str, float | None]) -> list[str]:
+    reject_if = spec.decision_policy.reject_if
+    breaches: list[str] = []
+    if "oos_sharpe_lt" in reject_if:
+        threshold = _finite_float(reject_if["oos_sharpe_lt"])
+        oos_sharpe = oos_metrics["sharpe_ratio"]
+        if threshold is not None and oos_sharpe is not None and threshold > oos_sharpe:
+            breaches.append("oos_sharpe_lt")
+    if "max_drawdown_lt" in reject_if:
+        threshold = _finite_float(reject_if["max_drawdown_lt"])
+        max_drawdown = oos_metrics["max_drawdown"]
+        if threshold is not None and max_drawdown is not None and threshold > max_drawdown:
+            breaches.append("max_drawdown_lt")
+    return breaches
 
 
 def _split_metrics(metrics: dict[str, Any], prefix: str) -> dict[str, float | None]:
@@ -235,6 +257,13 @@ def _run_parameter_perturbations(
                 "target": target,
                 "status": "error",
                 "message": f"robustness.parameter_perturbation.{target} must be a list of values",
+            })
+            continue
+        if not values:
+            results.append({
+                "target": target,
+                "status": "warn",
+                "message": f"robustness.parameter_perturbation.{target} must include at least one value",
             })
             continue
         for value in values:

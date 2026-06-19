@@ -53,6 +53,40 @@ def test_artifact_spec_hash_matches_serialized_spec(tmp_path) -> None:
     assert audit["status"] == "pass"
 
 
+def test_write_artifacts_persists_benchmark_curve(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="benchmark_artifact", hypothesis="benchmark prices should be reusable")
+    spec.benchmark.symbols = ["SPY"]
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0, 1.0],
+                    "high": [1.0, 1.0, 1.0],
+                    "low": [1.0, 1.0, 1.0],
+                    "close": [1.0, 1.0, 1.0],
+                    "volume": [1, 1, 1],
+                },
+                index=dates,
+            )
+        },
+        benchmark_prices={"SPY": pd.Series([100.0, 110.0, 105.0], index=dates)},
+    )
+
+    _write_artifacts(spec, result, tmp_path, Engine())
+
+    benchmark = pd.read_csv(tmp_path / "benchmark_curve.csv")
+    hashes = json.loads((tmp_path / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert benchmark.to_dict(orient="list") == {
+        "date": [str(dates[0]), str(dates[1]), str(dates[2])],
+        "value": [100.0, 110.0, 105.0],
+    }
+    assert "benchmark_curve.csv" in hashes
+
+
 def test_reproducibility_audit_allows_self_contained_run_without_parent_digest(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="self_contained", hypothesis="run directories are portable")
     dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")

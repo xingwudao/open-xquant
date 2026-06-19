@@ -99,6 +99,28 @@ def test_decision_watchlists_warn_robustness_before_promotion() -> None:
     assert decision == "WATCHLIST"
 
 
+def test_decision_promotes_when_robustness_warns_only_for_unconfigured_checks() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0, "max_drawdown_gte": -0.2}}},
+        metrics={"oos_sharpe_ratio": 2.0, "oos_max_drawdown": -0.05},
+        repro_audit={"status": "pass"},
+        robustness_result={
+            "status": "warn",
+            "tests": [
+                {
+                    "name": "parameter_perturbation",
+                    "status": "warn",
+                    "message": "No parameter perturbation targets configured in spec",
+                },
+                {"name": "regime_analysis", "status": "warn", "message": "Regime analysis not configured"},
+            ],
+        },
+    )
+
+    assert decision == "PAPER TRADING CANDIDATE"
+
+
 def test_decision_does_not_fallback_when_oos_metric_is_explicitly_unavailable() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},

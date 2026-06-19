@@ -224,7 +224,7 @@ def _determine_decision(
         if threshold is None or max_dd is None or threshold > max_dd:
             return "REJECT"
 
-    if robustness_result and robustness_result.get("status") == "warn":
+    if _has_actionable_robustness_warning(robustness_result):
         return "WATCHLIST"
 
     promote_if = decision_policy.get("promote_if", {})
@@ -247,6 +247,37 @@ def _determine_decision(
         return "WATCHLIST"
 
     return "PAPER TRADING CANDIDATE"
+
+
+def _has_actionable_robustness_warning(robustness_result: dict | None) -> bool:
+    if not robustness_result or robustness_result.get("status") != "warn":
+        return False
+    tests = robustness_result.get("tests")
+    if not isinstance(tests, list):
+        return True
+    for test in tests:
+        if not isinstance(test, dict):
+            return True
+        if test.get("status") not in {"warn", "fail", "error"}:
+            continue
+        if _is_unconfigured_robustness_warning(test):
+            continue
+        return True
+    return False
+
+
+def _is_unconfigured_robustness_warning(test: dict) -> bool:
+    if test.get("status") != "warn":
+        return False
+    name = test.get("name")
+    message = str(test.get("message", ""))
+    return (
+        name == "parameter_perturbation"
+        and message == "No parameter perturbation targets configured in spec"
+    ) or (
+        name == "regime_analysis"
+        and message == "Regime analysis not configured"
+    )
 
 
 def _finite_metric(metrics: dict, primary: str, fallback: str | None = None) -> float | None:

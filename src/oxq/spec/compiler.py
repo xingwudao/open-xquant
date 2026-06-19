@@ -395,6 +395,8 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     equity_rows = [{"date": str(d), "value": v} for d, v in result.equity_curve]
     pd.DataFrame(equity_rows).to_csv(run_dir / "equity_curve.csv", index=False)
 
+    benchmark_curve_path = _write_benchmark_curve_artifact(spec, result, run_dir)
+
     # trades.csv
     trade_rows = [
         {
@@ -449,6 +451,8 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "orders.csv": _hash_file(run_dir / "orders.csv"),
         "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
     }
+    if benchmark_curve_path is not None:
+        artifact_hashes["benchmark_curve.csv"] = _hash_file(benchmark_curve_path)
     (run_dir / "artifact_hashes.json").write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
     _append_run_digest(run_dir, _hash_json_file(run_dir / "artifact_hashes.json"))
 
@@ -466,6 +470,26 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
             )
             + "\n"
         )
+
+
+def _write_benchmark_curve_artifact(spec: StrategySpec, result: RunResult, run_dir: Path) -> Path | None:
+    symbol = next((item for item in spec.benchmark.symbols if item in result.benchmark_prices), None)
+    if symbol is None and result.benchmark_prices:
+        symbol = next(iter(result.benchmark_prices))
+    if symbol is None:
+        return None
+
+    series = result.benchmark_prices[symbol]
+    if series.empty:
+        return None
+    values = pd.to_numeric(series, errors="coerce").dropna()
+    if values.empty:
+        return None
+
+    rows = [{"date": str(date), "value": float(value)} for date, value in values.sort_index().items()]
+    path = run_dir / "benchmark_curve.csv"
+    pd.DataFrame(rows).to_csv(path, index=False)
+    return path
 
 
 def _build_execution_assumptions(spec: StrategySpec) -> dict[str, Any]:

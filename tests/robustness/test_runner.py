@@ -292,6 +292,42 @@ def test_is_oos_comparison_warns_when_zero_is_drawdown_degrades(monkeypatch, tmp
     assert comparison["degradation"]["max_drawdown"] == 1.0
 
 
+def test_is_oos_comparison_fails_when_reject_policy_is_breached(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="is_oos_reject_policy", hypothesis="reject thresholds should affect robustness")
+    spec.decision_policy.reject_if = {"oos_sharpe_lt": 0.5, "max_drawdown_lt": -0.2}
+    _write_run_inputs(
+        tmp_path,
+        spec,
+        {
+            "sharpe_ratio": 1.0,
+            "is_total_return": 0.5,
+            "is_sharpe_ratio": 1.0,
+            "is_max_drawdown": -0.1,
+            "is_calmar_ratio": 5.0,
+            "oos_total_return": 0.45,
+            "oos_sharpe_ratio": 0.1,
+            "oos_max_drawdown": -0.5,
+            "oos_calmar_ratio": 4.0,
+        },
+    )
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.9}), encoding="utf-8")
+        return object(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    comparison = next(test for test in result["tests"] if test["name"] == "is_oos_comparison")
+    assert comparison["status"] == "fail"
+    assert "oos_sharpe_lt" in comparison["message"]
+    assert "max_drawdown_lt" in comparison["message"]
+
+
 def test_parameter_perturbation_reruns_one_at_a_time(monkeypatch, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="perturb_once", hypothesis="robustness should perturb independently")
     spec.signal.indicators["mom"] = IndicatorDef(type="Momentum", params={"period": 10})
@@ -371,8 +407,31 @@ def test_parameter_perturbation_warns_when_all_targets_are_empty(monkeypatch, tm
     perturbation = next(test for test in result["tests"] if test["name"] == "parameter_perturbation")
     assert compile_calls == 1
     assert perturbation["status"] == "warn"
-    assert perturbation["results"] == []
-    assert "No parameter perturbation reruns were executed" in perturbation["message"]
+    assert perturbation["results"][0]["target"] == "mom.period"
+    assert "must include at least one value" in perturbation["results"][0]["message"]
+
+
+def test_parameter_perturbation_warns_for_empty_target_among_valid_targets(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="perturb_mixed_empty", hypothesis="partial empty perturbations should warn")
+    spec.signal.indicators["mom"] = IndicatorDef(type="Momentum", params={"period": 10})
+    spec.robustness.parameter_perturbation = {"mom.period": [20], "empty.period": []}
+    _write_run_inputs(tmp_path, spec, {"sharpe_ratio": 1.0})
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.8}), encoding="utf-8")
+        return object(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    perturbation = next(test for test in result["tests"] if test["name"] == "parameter_perturbation")
+    assert perturbation["status"] == "warn"
+    assert any(item["target"] == "mom.period" and item["status"] == "pass" for item in perturbation["results"])
+    assert any(item["target"] == "empty.period" and item["status"] == "warn" for item in perturbation["results"])
 
 
 def test_parameter_perturbation_reports_scalar_target_error(monkeypatch, tmp_path) -> None:
