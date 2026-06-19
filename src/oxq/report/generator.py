@@ -224,6 +224,9 @@ def _determine_decision(
         if threshold is None or max_dd is None or threshold > max_dd:
             return "REJECT"
 
+    if robustness_result and robustness_result.get("status") == "warn":
+        return "WATCHLIST"
+
     promote_if = decision_policy.get("promote_if", {})
     # Only check thresholds that are explicitly configured
     promote_checks: list[bool] = []
@@ -239,9 +242,6 @@ def _determine_decision(
         promote_checks.append(threshold <= max_dd)
     if promote_if:
         return "PAPER TRADING CANDIDATE" if promote_checks and all(promote_checks) else "WATCHLIST"
-
-    if robustness_result and robustness_result.get("status") == "warn":
-        return "WATCHLIST"
 
     if bias_audit.get("warning_count", 0) > 0:
         return "WATCHLIST"

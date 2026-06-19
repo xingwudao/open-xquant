@@ -19,6 +19,8 @@ from oxq.portfolio.metrics_profile import compute_equity_curve_metrics
 from oxq.spec.compiler import compile_run
 from oxq.spec.schema import CostSection, StrategySpec
 
+_BENCHMARK_CURVE_FILES = ("benchmark_curve.csv", "benchmark_equity_curve.csv", "benchmark_prices.csv")
+
 
 def run_robustness(run_dir: str | Path) -> dict:
     """Run P0 robustness tests on a backtest run.
@@ -205,8 +207,10 @@ def _higher_is_better_degradation(in_sample: float | None, out_of_sample: float 
 
 
 def _drawdown_degradation(in_sample: float | None, out_of_sample: float | None) -> float | None:
-    if in_sample is None or out_of_sample is None or in_sample == 0:
+    if in_sample is None or out_of_sample is None:
         return None
+    if in_sample == 0:
+        return 1.0 if out_of_sample != 0 else 0.0
     return round((abs(out_of_sample) - abs(in_sample)) / abs(in_sample), 6)
 
 
@@ -359,26 +363,14 @@ def _analyze_regimes(spec: StrategySpec, run_path: Path) -> dict[str, Any]:
             "message": "equity_curve.csv not found — cannot compute regime metrics",
         }
 
-    try:
-        equity = pd.read_csv(equity_path)
-    except Exception as exc:
+    equity, error = _read_curve_csv(equity_path, "equity_curve.csv")
+    if error is not None:
         return {
             "name": "regime_analysis",
             "status": "warn",
-            "message": f"equity_curve.csv could not be read: {exc}",
-        }
-    required_columns = {"date", "value"}
-    if not required_columns.issubset(equity.columns):
-        return {
-            "name": "regime_analysis",
-            "status": "warn",
-            "message": "equity_curve.csv must contain date and value columns",
+            "message": error,
         }
 
-    equity = equity.loc[:, ["date", "value"]].copy()
-    equity["date"] = pd.to_datetime(equity["date"], errors="coerce").dt.date
-    equity["value"] = pd.to_numeric(equity["value"], errors="coerce")
-    equity = equity.dropna(subset=["date", "value"]).sort_values("date").reset_index(drop=True)
     if len(equity) < 2:
         return {
             "name": "regime_analysis",
@@ -386,26 +378,69 @@ def _analyze_regimes(spec: StrategySpec, run_path: Path) -> dict[str, Any]:
             "message": "equity_curve.csv needs at least two valid rows for regime metrics",
         }
 
-    returns = equity["value"].pct_change().fillna(0.0)
-    abs_returns = returns.abs()
+    strategy_returns = equity["value"].pct_change().fillna(0.0)
+    reference, regime_source = _regime_reference_curve(spec, run_path, equity)
+    regime_returns = reference["value"].pct_change().fillna(0.0)
+    abs_returns = regime_returns.abs()
     median_abs_return = float(abs_returns.median())
     masks = {
-        "uptrend": returns > 0,
-        "downtrend": returns <= 0,
+        "uptrend": regime_returns > 0,
+        "downtrend": regime_returns <= 0,
         "high_vol": abs_returns >= median_abs_return,
         "low_vol": abs_returns < median_abs_return,
     }
     trade_counts = _read_trade_date_counts(run_path / "trades.csv")
     regimes = {
-        name: _regime_bucket(equity, returns, mask, spec, trade_counts)
+        name: _regime_bucket(equity, strategy_returns, mask, spec, trade_counts)
         for name, mask in masks.items()
     }
     return {
         "name": "regime_analysis",
         "status": "pass",
+        "regime_source": regime_source,
         "regimes": regimes,
-        "message": "Computed realized up/down trend and high/low volatility regime metrics",
+        "message": f"Computed realized regime metrics using {regime_source} segmentation",
     }
+
+
+def _read_curve_csv(path: Path, name: str) -> tuple[pd.DataFrame, str | None]:
+    try:
+        curve = pd.read_csv(path)
+    except Exception as exc:
+        return pd.DataFrame(), f"{name} could not be read: {exc}"
+    required_columns = {"date", "value"}
+    if not required_columns.issubset(curve.columns):
+        return pd.DataFrame(), f"{name} must contain date and value columns"
+
+    curve = curve.loc[:, ["date", "value"]].copy()
+    curve["date"] = pd.to_datetime(curve["date"], errors="coerce").dt.date
+    curve["value"] = pd.to_numeric(curve["value"], errors="coerce")
+    curve = curve.dropna(subset=["date", "value"]).sort_values("date").reset_index(drop=True)
+    return curve, None
+
+
+def _regime_reference_curve(spec: StrategySpec, run_path: Path, equity: pd.DataFrame) -> tuple[pd.DataFrame, str]:
+    if spec.benchmark.symbols:
+        for filename in _BENCHMARK_CURVE_FILES:
+            benchmark_path = run_path / filename
+            if not benchmark_path.exists():
+                continue
+            benchmark, error = _read_curve_csv(benchmark_path, filename)
+            if error is not None or len(benchmark) < 2:
+                continue
+            aligned = _align_curve_to_equity_dates(equity, benchmark)
+            if aligned is not None:
+                return aligned, "benchmark"
+    return equity, "strategy_equity"
+
+
+def _align_curve_to_equity_dates(equity: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame | None:
+    aligned = equity.loc[:, ["date"]].merge(reference, on="date", how="left")
+    aligned["value"] = aligned["value"].ffill()
+    aligned = aligned.dropna(subset=["value"]).reset_index(drop=True)
+    if len(aligned) != len(equity) or aligned["value"].nunique(dropna=True) < 2:
+        return None
+    return aligned
 
 
 def _regime_bucket(

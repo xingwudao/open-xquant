@@ -87,6 +87,18 @@ def test_decision_rejects_fragile_robustness_result() -> None:
     assert decision == "REJECT"
 
 
+def test_decision_watchlists_warn_robustness_before_promotion() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0, "max_drawdown_gte": -0.2}}},
+        metrics={"oos_sharpe_ratio": 2.0, "oos_max_drawdown": -0.05},
+        repro_audit={"status": "pass"},
+        robustness_result={"status": "warn"},
+    )
+
+    assert decision == "WATCHLIST"
+
+
 def test_decision_does_not_fallback_when_oos_metric_is_explicitly_unavailable() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
