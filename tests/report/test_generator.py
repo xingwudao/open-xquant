@@ -1,6 +1,17 @@
 from __future__ import annotations
 
-from oxq.report.generator import _determine_decision, _format_float, _format_money, _format_percent
+import json
+
+import yaml
+
+from oxq.report.generator import (
+    _determine_decision,
+    _format_float,
+    _format_money,
+    _format_percent,
+    generate_report,
+)
+from oxq.spec.schema import StrategySpec
 
 
 def test_decision_rejects_when_reject_oos_metric_is_unavailable() -> None:
@@ -98,3 +109,79 @@ def test_metric_formatters_render_unavailable_values_as_na() -> None:
     assert _format_percent(float("nan")) == "N/A"
     assert _format_float(None) == "N/A"
     assert _format_money(None) == "N/A"
+
+
+def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "execution_assumptions.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "calendar": "XSHE",
+                "runtime_calendar": "XSHG",
+                "order_timing": "next_session_open",
+                "price_bar": "next_session",
+                "price_type": "open",
+                "fill_price_mode": "next_open",
+                "cash_annual_return": 0.025,
+                "lot_size": 1,
+                "lot_size_config": {"default": 100, "by_symbol": {"SPY": 10}},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "### Execution Assumptions" in report
+    assert "- **order_timing**: next_session_open" in report
+    assert "- **price_bar**: next_session" in report
+    assert "- **price_type**: open" in report
+    assert "- **fill_price_mode**: next_open" in report
+    assert "- **cash_annual_return**: 2.50%" in report
+    assert "- **default_lot_size**: 100" in report
+    assert "- **calendar**: XSHE" in report
+    assert "- **runtime_calendar**: XSHG" in report
+
+
+def test_report_generation_does_not_fail_without_execution_assumptions(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+
+    report = generate_report(run_dir)
+
+    assert "# Research Report: report_execution_assumptions" in report
+    assert "### Execution Assumptions" not in report
+
+
+def _write_report_run(tmp_path):
+    spec = StrategySpec.template(
+        strategy_id="report_execution_assumptions",
+        hypothesis="report execution assumptions when present",
+    )
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps(
+            {
+                "run_id": "report-run",
+                "trade_count": 12,
+                "oos_trade_count": 12,
+                "max_drawdown": -0.05,
+                "oos_max_drawdown": -0.05,
+                "oos_sharpe_ratio": 1.2,
+                "total_return": 0.1,
+                "annualized_return": 0.08,
+                "annualized_volatility": 0.12,
+                "sharpe_ratio": 1.1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return run_dir
