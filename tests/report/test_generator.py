@@ -218,6 +218,12 @@ def test_report_includes_metric_assumptions_oos_and_validation_classification(tm
                 },
                 "trade_count": 12,
                 "oos_trade_count": 4,
+                "is_total_return": 0.06,
+                "is_annualized_return": 0.12,
+                "is_annualized_volatility": 0.10,
+                "is_max_drawdown": -0.02,
+                "is_sharpe_ratio": 1.45,
+                "is_calmar_ratio": 6.0,
                 "max_drawdown": -0.05,
                 "oos_max_drawdown": -0.03,
                 "oos_total_return": 0.04,
@@ -248,6 +254,8 @@ def test_report_includes_metric_assumptions_oos_and_validation_classification(tm
     assert "- **evaluation_window**: full" in report
     assert "Non-default metrics profile" in report
     assert "### IS/OOS Metrics" in report
+    assert "| IS Sharpe Ratio | 1.45 |" in report
+    assert "| IS Calmar Ratio | 6.00 |" in report
     assert "| OOS Sharpe Ratio | 1.23 |" in report
     assert "| OOS Calmar Ratio | 2.67 |" in report
     assert "### Validation Classification" in report

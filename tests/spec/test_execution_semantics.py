@@ -37,6 +37,38 @@ validation:
     assert spec.metrics.evaluation_window == "full"
 
 
+def test_profile_only_xquant_production_uses_profile_defaults(tmp_path: Path) -> None:
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: metrics_xquant_defaults
+research:
+  hypothesis: profile selection should apply profile defaults
+universe:
+  type: static
+  symbols: [SPY]
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2021-01-01", "2021-12-31"]
+metrics:
+  profile: xquant_production
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.metrics.profile == "xquant_production"
+    assert spec.metrics.risk_free_rate == 0.02
+    assert spec.metrics.return_type == "log"
+    assert spec.metrics.annualization_days == 252
+    assert spec.metrics.calmar_denominator == "max_drawdown"
+    assert spec.metrics.evaluation_window == "full"
+
+
 def test_parse_execution_cash_return_and_lot_size_config(tmp_path: Path) -> None:
     spec_path = tmp_path / "strategy.yaml"
     spec_path.write_text(

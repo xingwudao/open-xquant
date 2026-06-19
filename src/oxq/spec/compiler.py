@@ -886,7 +886,17 @@ def _get_version() -> str:
 
 def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[str, Any]:
     """Build metrics dict including OOS-only metrics when test_period is defined."""
-    base = compute_profile_metrics(result, spec.metrics, run_id=run_id)
+    test = spec.validation.test_period
+    metric_result = result
+    if spec.metrics.evaluation_window == "oos" and test and len(test) >= 2 and len(result.equity_curve) > 1:
+        first_dt = result.equity_curve[0][0]
+        tz = getattr(pd.Timestamp(first_dt), "tz", None)
+        test_start = pd.Timestamp(test[0], tz=tz)
+        metric_curve = _window_equity_curve(result.equity_curve, start=test_start, include_previous_baseline=True)
+        if len(metric_curve) >= 2:
+            metric_result = _run_result_for_equity_curve(result, metric_curve)
+
+    base = compute_profile_metrics(metric_result, spec.metrics, run_id=run_id)
     base.update({
         "strategy_id": spec.strategy_id,
         "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
@@ -896,21 +906,29 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
     })
 
     # Compute OOS-only metrics when test_period is defined
-    test = spec.validation.test_period
+    train = spec.validation.train_period
+    if train and len(train) >= 2 and len(result.equity_curve) > 1:
+        first_dt = result.equity_curve[0][0]
+        tz = getattr(pd.Timestamp(first_dt), "tz", None)
+        train_start = pd.Timestamp(train[0], tz=tz)
+        train_end = pd.Timestamp(train[1], tz=tz)
+        is_curve = _window_equity_curve(result.equity_curve, start=train_start, end=train_end, include_previous_baseline=True)
+        if len(is_curve) >= 2:
+            is_metrics = compute_equity_curve_metrics(is_curve, spec.metrics)
+            base["is_sharpe_ratio"] = is_metrics["sharpe_ratio"]
+            base["is_total_return"] = is_metrics["total_return"]
+            base["is_max_drawdown"] = is_metrics["max_drawdown"]
+            base["is_annualized_return"] = is_metrics["annualized_return"]
+            base["is_annualized_volatility"] = is_metrics["annualized_volatility"]
+            base["is_calmar_ratio"] = is_metrics["calmar_ratio"]
+
     if test and len(test) >= 2 and len(result.equity_curve) > 1:
         # Use first equity curve date's tz to match timezone-aware timestamps
         first_dt = result.equity_curve[0][0]
         tz = getattr(pd.Timestamp(first_dt), "tz", None)
         test_start = pd.Timestamp(test[0], tz=tz)
-        equity_points = [(pd.Timestamp(d), v) for d, v in result.equity_curve]
-        pre_test_values = [v for d, v in equity_points if d < test_start]
-        oos_values = [v for d, v in equity_points if d >= test_start]
-        if pre_test_values:
-            oos_values.insert(0, pre_test_values[-1])
-        if len(oos_values) >= 2:
-            oos_curve = [(d, v) for d, v in equity_points if d >= test_start]
-            if pre_test_values:
-                oos_curve.insert(0, (test_start - pd.Timedelta(nanoseconds=1), pre_test_values[-1]))
+        oos_curve = _window_equity_curve(result.equity_curve, start=test_start, include_previous_baseline=True)
+        if len(oos_curve) >= 2:
             oos_metrics = compute_equity_curve_metrics(oos_curve, spec.metrics)
             base["oos_sharpe_ratio"] = oos_metrics["sharpe_ratio"]
             base["oos_total_return"] = oos_metrics["total_return"]
@@ -923,3 +941,31 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
             base["oos_trade_count"] = len(oos_trades)
 
     return base
+
+
+def _window_equity_curve(
+    equity_curve: list[tuple[object, float]],
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp | None = None,
+    include_previous_baseline: bool = False,
+) -> list[tuple[pd.Timestamp, float]]:
+    equity_points = [(pd.Timestamp(d), v) for d, v in equity_curve]
+    window = [(d, v) for d, v in equity_points if d >= start and (end is None or d <= end)]
+    if include_previous_baseline:
+        previous = [(d, v) for d, v in equity_points if d < start]
+        if previous:
+            window.insert(0, (start - pd.Timedelta(nanoseconds=1), previous[-1][1]))
+    return window
+
+
+def _run_result_for_equity_curve(result: RunResult, equity_curve: list[tuple[object, float]]) -> RunResult:
+    return RunResult(
+        portfolio=result.portfolio,
+        trades=result.trades,
+        equity_curve=equity_curve,
+        mktdata=result.mktdata,
+        benchmark_prices=result.benchmark_prices,
+        snapshots=result.snapshots,
+        orders=result.orders,
+    )

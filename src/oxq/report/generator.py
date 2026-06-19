@@ -96,12 +96,12 @@ def generate_report(run_dir: str | Path) -> str:
     lines.append(f"| Trade Count | {metrics.get('trade_count', 0)} |")
     lines.append(f"| Cost Paid | {_format_money(metrics.get('cost_paid'))} |")
     lines.append("")
-    if _has_oos_metrics(metrics):
+    if _has_is_oos_metrics(metrics):
         lines.append("### IS/OOS Metrics")
         lines.append("")
         lines.append("| Metric | Value |")
         lines.append("|--------|-------|")
-        lines.extend(_format_oos_metric_lines(metrics))
+        lines.extend(_format_is_oos_metric_lines(metrics))
         lines.append("")
 
     # 6. Benchmark Comparison
@@ -289,8 +289,14 @@ def _format_metric_assumption_lines(metrics: dict, spec: StrategySpec) -> list[s
     return lines
 
 
-def _has_oos_metrics(metrics: dict) -> bool:
+def _has_is_oos_metrics(metrics: dict) -> bool:
     return any(key in metrics for key in (
+        "is_total_return",
+        "is_annualized_return",
+        "is_annualized_volatility",
+        "is_max_drawdown",
+        "is_sharpe_ratio",
+        "is_calmar_ratio",
         "oos_total_return",
         "oos_annualized_return",
         "oos_annualized_volatility",
@@ -301,8 +307,14 @@ def _has_oos_metrics(metrics: dict) -> bool:
     ))
 
 
-def _format_oos_metric_lines(metrics: dict) -> list[str]:
+def _format_is_oos_metric_lines(metrics: dict) -> list[str]:
     rows = [
+        ("IS Total Return", _format_percent(metrics.get("is_total_return"))),
+        ("IS Annualized Return", _format_percent(metrics.get("is_annualized_return"))),
+        ("IS Annualized Volatility", _format_percent(metrics.get("is_annualized_volatility"))),
+        ("IS Max Drawdown", _format_percent(metrics.get("is_max_drawdown"))),
+        ("IS Sharpe Ratio", _format_float(metrics.get("is_sharpe_ratio"))),
+        ("IS Calmar Ratio", _format_float(metrics.get("is_calmar_ratio"))),
         ("OOS Total Return", _format_percent(metrics.get("oos_total_return"))),
         ("OOS Annualized Return", _format_percent(metrics.get("oos_annualized_return"))),
         ("OOS Annualized Volatility", _format_percent(metrics.get("oos_annualized_volatility"))),

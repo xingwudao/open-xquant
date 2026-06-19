@@ -1296,6 +1296,34 @@ def test_metrics_json_records_profile_assumptions() -> None:
     )
 
 
+def test_metrics_evaluation_window_oos_uses_oos_top_level_values() -> None:
+    spec = StrategySpec.template(strategy_id="oos_metric_window", hypothesis="top-level metrics can use oos window")
+    spec.validation.train_period = ["2024-01-01", "2024-01-02"]
+    spec.validation.test_period = ["2024-01-03", "2024-01-05"]
+    spec.metrics.evaluation_window = "oos"
+    dates = pd.bdate_range("2024-01-01", periods=5, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("150000")),
+        trades=[],
+        equity_curve=[
+            (dates[0], 100000.0),
+            (dates[1], 110000.0),
+            (dates[2], 121000.0),
+            (dates[3], 133100.0),
+            (dates[4], 146410.0),
+        ],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    assert metrics["total_return"] == pytest.approx(metrics["oos_total_return"])
+    assert metrics["annualized_return"] == pytest.approx(metrics["oos_annualized_return"])
+    assert metrics["sharpe_ratio"] == pytest.approx(metrics["oos_sharpe_ratio"])
+    assert metrics["is_total_return"] == pytest.approx(0.1)
+    assert metrics["oos_total_return"] == pytest.approx(0.331)
+
+
 def test_oos_metrics_include_test_start_baseline() -> None:
     spec = StrategySpec.template(strategy_id="oos_baseline", hypothesis="oos metrics include first test-day move")
     spec.validation.train_period = ["2024-01-01", "2024-01-02"]
