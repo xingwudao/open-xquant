@@ -229,6 +229,13 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
         pct = params.get("pct", 0.10)
         if not _is_finite_number(pct) or not 0.0 < float(pct) <= 1.0:
             errors.append(_optimizer_param_error("portfolio.params.pct must be in (0, 1]"))
+    elif spec.portfolio.type == "SignalPosition":
+        signal_col = params.get("signal_col")
+        if signal_col not in available_columns and signal_col not in spec.signal.rules:
+            errors.append(_optimizer_param_error("portfolio.params.signal_col must reference a signal rule"))
+        weight = params.get("weight", 1.0)
+        if not _is_finite_number(weight) or not 0.0 < float(weight) <= 1.0:
+            errors.append(_optimizer_param_error("portfolio.params.weight must be in (0, 1]"))
 
     return errors
 
@@ -846,7 +853,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
             _err("warning", "parameter_count", f"signal indicators have {param_count} total params — risk of overfitting")
         )
 
-    if spec.signal.rules and spec.portfolio.type not in {"EqualWeight"}:
+    if spec.signal.rules and spec.portfolio.type not in {"EqualWeight", "SignalPosition"}:
         errors.append(
             _err(
                 "fatal",

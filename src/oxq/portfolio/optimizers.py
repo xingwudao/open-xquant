@@ -186,3 +186,40 @@ class PctEquityOptimizer:
         weights: dict[str, float] = {symbol: self.pct for symbol in signals}
         weights["CASH"] = 1.0 - total_pct
         return weights
+
+
+class SignalPositionOptimizer:
+    """Map BUY / SELL / HOLD signals to target weights."""
+
+    name: str = "SignalPosition"
+
+    def __init__(self, signal_col: str, weight: float = 1.0) -> None:
+        self.signal_col = signal_col
+        self.weight = weight
+        self._invested: dict[str, bool] = {}
+
+    def optimize(
+        self,
+        signals: dict[str, pd.DataFrame],
+        indicators: dict[str, pd.DataFrame],
+    ) -> dict[str, float]:
+        weights: dict[str, float] = {}
+        for symbol, df in indicators.items():
+            if self.signal_col not in df.columns:
+                continue
+            value = float(df[self.signal_col].iloc[-1])
+            if pd.isna(value):
+                value = -1.0
+            if value > 0:
+                self._invested[symbol] = True
+            elif value == 0:
+                self._invested[symbol] = False
+            if self._invested.get(symbol, False):
+                weights[symbol] = self.weight
+
+        if not weights:
+            return {"CASH": 1.0}
+        total = sum(weights.values())
+        if total < 1.0:
+            weights["CASH"] = 1.0 - total
+        return weights

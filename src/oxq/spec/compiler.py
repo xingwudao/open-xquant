@@ -416,6 +416,24 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     ]
     pd.DataFrame(pos_rows).to_csv(run_dir / "positions.csv", index=False)
 
+    # target_weights.csv — per-bar optimizer output for external alignment.
+    target_rows = []
+    for snapshot in result.snapshots:
+        symbols = set(snapshot.target_weights) | set(snapshot.adjusted_weights)
+        for symbol in sorted(symbols):
+            target_rows.append(
+                {
+                    "date": snapshot.date.isoformat(),
+                    "symbol": symbol,
+                    "target_weight": float(snapshot.target_weights.get(symbol, 0.0)),
+                    "adjusted_weight": float(snapshot.adjusted_weights.get(symbol, 0.0)),
+                }
+            )
+    pd.DataFrame(
+        target_rows,
+        columns=["date", "symbol", "target_weight", "adjusted_weight"],
+    ).to_csv(run_dir / "target_weights.csv", index=False)
+
     # orders.csv
     order_rows = _build_order_rows(result)
     order_columns = [
@@ -446,6 +464,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
         "trades.csv": _hash_file(run_dir / "trades.csv"),
         "positions.csv": _hash_file(run_dir / "positions.csv"),
+        "target_weights.csv": _hash_file(run_dir / "target_weights.csv"),
         "orders.csv": _hash_file(run_dir / "orders.csv"),
         "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
     }
