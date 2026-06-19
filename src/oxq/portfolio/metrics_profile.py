@@ -151,7 +151,7 @@ def _stable_simple_curve_metrics(
     config: MetricsSection,
 ) -> dict[str, float | None] | None:
     values = _values(equity_curve)
-    if len(values) < 2 or values[0] <= 0 or values[-1] <= 0 or np.all(values > 0):
+    if len(values) < 2 or values[0] <= 0 or values[-1] < 0 or np.all(values > 0):
         return None
     result = RunResult(
         portfolio=Portfolio(cash=Decimal(str(values[-1]))),

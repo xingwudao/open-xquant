@@ -1420,6 +1420,28 @@ def test_metrics_evaluation_window_oos_unavailable_does_not_use_full_window() ->
     assert metrics["sharpe_ratio"] is None
 
 
+def test_metrics_evaluation_window_oos_unavailable_for_short_full_run() -> None:
+    spec = StrategySpec.template(strategy_id="oos_metric_short", hypothesis="short runs should not fall back")
+    spec.validation.train_period = ["2024-01-01", "2024-01-02"]
+    spec.validation.test_period = ["2024-01-10", "2024-01-12"]
+    spec.metrics.evaluation_window = "oos"
+    dates = pd.bdate_range("2024-01-01", periods=1, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0)],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    assert metrics["metric_assumptions"]["evaluation_window"] == "oos"
+    assert metrics["metric_diagnostics"] == ["evaluation_window=oos unavailable: OOS equity curve has fewer than 2 points"]
+    assert metrics["total_return"] is None
+    assert metrics["annualized_return"] is None
+    assert metrics["sharpe_ratio"] is None
+
+
 def test_oos_metrics_include_test_start_baseline() -> None:
     spec = StrategySpec.template(strategy_id="oos_baseline", hypothesis="oos metrics include first test-day move")
     spec.validation.train_period = ["2024-01-01", "2024-01-02"]

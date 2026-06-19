@@ -890,9 +890,8 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
     metric_result = result
     metric_diagnostics: list[str] = []
     activity_trades = result.trades
-    if spec.metrics.evaluation_window == "oos" and test and len(test) >= 2 and len(result.equity_curve) > 1:
-        first_dt = result.equity_curve[0][0]
-        tz = getattr(pd.Timestamp(first_dt), "tz", None)
+    if spec.metrics.evaluation_window == "oos" and test and len(test) >= 2:
+        tz = getattr(pd.Timestamp(result.equity_curve[0][0]), "tz", None) if result.equity_curve else None
         test_start = pd.Timestamp(test[0], tz=tz)
         test_end = pd.Timestamp(test[1], tz=tz) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
         metric_curve = _window_equity_curve(

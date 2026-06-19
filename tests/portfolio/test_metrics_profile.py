@@ -114,6 +114,20 @@ def test_default_profile_preserves_stable_metrics_when_equity_touches_zero() -> 
     assert metrics["calmar_ratio"] == pytest.approx(result.calmar_ratio())
 
 
+def test_default_profile_preserves_complete_loss_simple_metrics() -> None:
+    result = _make_result([100.0, 0.0])
+
+    metrics = compute_profile_metrics(result, MetricsSection(), run_id="run-1")
+
+    assert metrics["total_return"] == pytest.approx(-1.0)
+    assert metrics["annualized_return"] == pytest.approx(-1.0)
+    assert metrics["annualized_volatility"] is None
+    assert metrics["max_drawdown"] == pytest.approx(-1.0)
+    assert metrics["sharpe_ratio"] is None
+    assert metrics["sortino_ratio"] is None
+    assert metrics["calmar_ratio"] == pytest.approx(-1.0)
+
+
 def test_simple_profile_keeps_negative_endpoint_slice_unavailable() -> None:
     result = _make_result([100.0, -1.0])
 
