@@ -100,6 +100,17 @@ def _unavailable_curve_metrics() -> dict[str, None]:
 
 def _simple_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, float | None]:
     values = _values(result.equity_curve)
+    if len(values) < 2 and config.profile == "open_xquant_default":
+        days = config.annualization_days
+        return {
+            "total_return": result.total_return(),
+            "annualized_return": result.annualized_return(days),
+            "annualized_volatility": result.annualized_volatility(days),
+            "max_drawdown": result.max_drawdown(),
+            "sharpe_ratio": result.sharpe_ratio(days),
+            "sortino_ratio": result.sortino_ratio(config.risk_free_rate, days),
+            "calmar_ratio": result.calmar_ratio(days),
+        }
     if len(values) < 2 or np.any(values <= 0):
         metrics = _unavailable_curve_metrics()
         metrics["sortino_ratio"] = None

@@ -45,6 +45,22 @@ def test_open_xquant_default_profile_matches_existing_run_result_metrics() -> No
     assert metrics["calmar_ratio"] == pytest.approx(result.calmar_ratio())
 
 
+@pytest.mark.parametrize("values", [[], [100.0]])
+def test_open_xquant_default_profile_preserves_short_run_zero_metrics(values: list[float]) -> None:
+    result = _make_result(values)
+
+    metrics = compute_profile_metrics(result, MetricsSection(), run_id="run-1")
+
+    assert metrics["metrics_profile"] == "open_xquant_default"
+    assert metrics["total_return"] == 0.0
+    assert metrics["annualized_return"] == 0.0
+    assert metrics["annualized_volatility"] == 0.0
+    assert metrics["max_drawdown"] == 0.0
+    assert metrics["sharpe_ratio"] == 0.0
+    assert metrics["sortino_ratio"] == 0.0
+    assert metrics["calmar_ratio"] == 0.0
+
+
 def test_xquant_production_profile_uses_log_returns_and_risk_free_rate() -> None:
     values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
     result = _make_result(values.tolist())
