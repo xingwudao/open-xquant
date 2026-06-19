@@ -105,6 +105,13 @@ class ExecutionSection:
     cash_annual_return: float = 0.0
     initial_cash: float = 100_000.0
 
+    def __post_init__(self) -> None:
+        self.normalize_lot_size_config()
+
+    def normalize_lot_size_config(self) -> None:
+        if self.lot_size_config == LotSizeConfig():
+            self.lot_size_config.default = self.lot_size
+
 
 @dataclass
 class CostSection:
@@ -168,11 +175,13 @@ class StrategySpec:
         """Compute sha256 hash of the spec for reproducibility tracking."""
         from dataclasses import asdict
 
+        self.execution.normalize_lot_size_config()
         canonical = json.dumps(asdict(self), sort_keys=True, default=str)
         return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a nested dict suitable for YAML output."""
+        self.execution.normalize_lot_size_config()
         return _dataclass_to_dict(self)
 
     @classmethod
@@ -306,9 +315,9 @@ def _parse_execution(raw: dict) -> ExecutionSection:
             ),
         ),
         lot_size=lot_size,
-        order_timing=raw.get("order_timing", ""),
-        price_bar=raw.get("price_bar", ""),
-        price_type=raw.get("price_type", ""),
+        order_timing=_parse_str(raw.get("order_timing", ""), "execution.order_timing"),
+        price_bar=_parse_str(raw.get("price_bar", ""), "execution.price_bar"),
+        price_type=_parse_str(raw.get("price_type", ""), "execution.price_type"),
         lot_size_config=_parse_lot_size_config(raw.get("lot_size_config"), lot_size),
         cash_annual_return=_parse_float(raw.get("cash_annual_return", 0.0), "execution.cash_annual_return"),
         initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),
@@ -401,6 +410,12 @@ def _parse_params(value: object, field_name: str) -> dict[str, Any]:
         return {}
     if not isinstance(value, dict):
         raise ValueError(f"{field_name} must be a mapping")
+    return value
+
+
+def _parse_str(value: object, field_name: str) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"{field_name} must be a string")
     return value
 
 

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+import yaml
 
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
@@ -62,6 +63,45 @@ benchmark:
     assert spec.execution.lot_size_config.by_symbol == {"SPY": 1}
 
 
+def test_programmatic_lot_size_round_trip_keeps_hash_stable(tmp_path: Path) -> None:
+    spec = StrategySpec.template(strategy_id="lot_size_round_trip", hypothesis="round trip")
+    spec.execution.lot_size = 100
+    original_hash = spec.compute_hash()
+
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=True), encoding="utf-8")
+
+    reparsed = StrategySpec.from_yaml(spec_path)
+
+    assert reparsed.execution.lot_size == 100
+    assert reparsed.execution.lot_size_config.default == 100
+    assert reparsed.compute_hash() == original_hash
+
+
+@pytest.mark.parametrize(
+    ("field_name", "message"),
+    [
+        ("order_timing", "execution.order_timing must be a string"),
+        ("price_bar", "execution.price_bar must be a string"),
+        ("price_type", "execution.price_type must be a string"),
+    ],
+)
+def test_explicit_execution_fields_must_be_strings(tmp_path: Path, field_name: str, message: str) -> None:
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(
+        f"""
+schema_version: "0.1"
+strategy_id: invalid_execution_field
+execution:
+  {field_name}: [invalid]
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=message):
+        StrategySpec.from_yaml(spec_path)
+
+
 def test_derive_legacy_next_open_execution_semantics() -> None:
     spec = StrategySpec.template(strategy_id="legacy", hypothesis="legacy mapping")
     effective = derive_execution_semantics(spec.execution)
@@ -73,7 +113,8 @@ def test_derive_legacy_next_open_execution_semantics() -> None:
     assert effective.compatibility_source == "legacy_fill_price_mode"
 
 
-def test_derive_explicit_execution_semantics() -> None:
+def test_helper_derives_explicit_execution_semantics_without_legacy_fill_mode() -> None:
+    # Validator support for explicit-only specs is added in a later task.
     spec = StrategySpec.template(strategy_id="explicit", hypothesis="explicit mapping")
     spec.execution.order_timing = "next_session_close"
     spec.execution.price_bar = "next_session"
