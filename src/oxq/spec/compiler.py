@@ -30,6 +30,7 @@ from oxq.data.loaders import resolve_data_dir
 from oxq.data.market import LocalMarketDataProvider
 from oxq.market_calendar import normalize_exchange_calendar
 from oxq.portfolio.analytics import RunResult
+from oxq.portfolio.metrics_profile import compute_equity_curve_metrics, compute_profile_metrics
 from oxq.rules.constraint import RebalanceFrequencyRule
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
@@ -885,21 +886,14 @@ def _get_version() -> str:
 
 def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[str, Any]:
     """Build metrics dict including OOS-only metrics when test_period is defined."""
-    base = {
+    base = compute_profile_metrics(result, spec.metrics, run_id=run_id)
+    base.update({
         "strategy_id": spec.strategy_id,
-        "run_id": run_id,
-        "total_return": result.total_return(),
-        "annualized_return": result.annualized_return(),
-        "annualized_volatility": result.annualized_volatility(),
-        "max_drawdown": result.max_drawdown(),
-        "sharpe_ratio": result.sharpe_ratio(),
-        "sortino_ratio": result.sortino_ratio(),
-        "calmar_ratio": result.calmar_ratio(),
         "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
         "trade_count": len(result.trades),
         "cost_paid": float(sum(float(f.fee) for f in result.trades)),
         "slippage_paid": None,  # Not measurable without raw-vs-slipped fill price tracking
-    }
+    })
 
     # Compute OOS-only metrics when test_period is defined
     test = spec.validation.test_period
@@ -914,25 +908,16 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         if pre_test_values:
             oos_values.insert(0, pre_test_values[-1])
         if len(oos_values) >= 2:
-            oos_array = np.array(oos_values, dtype=float)
-            denominators = oos_array[:-1]
-            if oos_array[0] <= 0 or np.any(denominators <= 0):
-                base["oos_sharpe_ratio"] = None
-                base["oos_total_return"] = None
-                base["oos_max_drawdown"] = None
-            else:
-                oos_returns = np.diff(oos_array) / denominators
-                oos_sharpe = (
-                    float(np.mean(oos_returns) / np.std(oos_returns) * np.sqrt(252))
-                    if np.std(oos_returns) > 0
-                    else 0.0
-                )
-                oos_return = (oos_values[-1] - oos_values[0]) / oos_values[0]
-                peak = np.maximum.accumulate(oos_array)
-                oos_max_dd = float(np.min((oos_array - peak) / peak))
-                base["oos_sharpe_ratio"] = oos_sharpe
-                base["oos_total_return"] = oos_return
-                base["oos_max_drawdown"] = oos_max_dd
+            oos_curve = [(d, v) for d, v in equity_points if d >= test_start]
+            if pre_test_values:
+                oos_curve.insert(0, (test_start - pd.Timedelta(nanoseconds=1), pre_test_values[-1]))
+            oos_metrics = compute_equity_curve_metrics(oos_curve, spec.metrics)
+            base["oos_sharpe_ratio"] = oos_metrics["sharpe_ratio"]
+            base["oos_total_return"] = oos_metrics["total_return"]
+            base["oos_max_drawdown"] = oos_metrics["max_drawdown"]
+            base["oos_annualized_return"] = oos_metrics["annualized_return"]
+            base["oos_annualized_volatility"] = oos_metrics["annualized_volatility"]
+            base["oos_calmar_ratio"] = oos_metrics["calmar_ratio"]
             # Filter OOS trades
             oos_trades = [f for f in result.trades if _to_timestamp(f.filled_at, tz=tz) >= test_start]
             base["oos_trade_count"] = len(oos_trades)

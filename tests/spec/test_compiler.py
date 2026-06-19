@@ -4,6 +4,7 @@ import hashlib
 import json
 from decimal import Decimal
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -1233,6 +1234,66 @@ def test_metrics_json_sanitizes_non_finite_values(tmp_path) -> None:
     assert "NaN" not in metrics_text
     assert "Infinity" not in metrics_text
     json.loads(metrics_text)
+
+
+def test_default_metrics_profile_preserves_existing_values() -> None:
+    spec = StrategySpec.template(strategy_id="default_metrics_profile", hypothesis="default profile keeps current formulas")
+    dates = pd.bdate_range("2024-01-01", periods=6, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("105000")),
+        trades=[],
+        equity_curve=[(date, value) for date, value in zip(dates, [100000.0, 102000.0, 99000.0, 103000.0, 97000.0, 105000.0])],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    assert metrics["metrics_profile"] == "open_xquant_default"
+    assert metrics["metric_assumptions"] == {
+        "return_type": "simple",
+        "risk_free_rate": 0.0,
+        "annualization_days": 252,
+        "calmar_denominator": "max_drawdown",
+        "evaluation_window": "full",
+    }
+    assert metrics["annualized_return"] == pytest.approx(result.annualized_return())
+    assert metrics["annualized_volatility"] == pytest.approx(result.annualized_volatility())
+    assert metrics["sharpe_ratio"] == pytest.approx(result.sharpe_ratio())
+    assert metrics["calmar_ratio"] == pytest.approx(result.calmar_ratio())
+
+
+def test_metrics_json_records_profile_assumptions() -> None:
+    spec = StrategySpec.template(strategy_id="xquant_metrics_profile", hypothesis="metrics profile should affect artifacts")
+    spec.metrics.profile = "xquant_production"
+    spec.metrics.risk_free_rate = 0.02
+    spec.metrics.return_type = "log"
+    spec.metrics.annualization_days = 252
+    spec.metrics.calmar_denominator = "max_drawdown"
+    spec.metrics.evaluation_window = "full"
+    dates = pd.bdate_range("2024-01-01", periods=6, tz="UTC")
+    values = np.array([100000.0, 102000.0, 101000.0, 106000.0, 104000.0, 109000.0])
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("109000")),
+        trades=[],
+        equity_curve=[(date, value) for date, value in zip(dates, values)],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    log_returns = np.diff(np.log(values))
+    assert metrics["metrics_profile"] == "xquant_production"
+    assert metrics["metric_assumptions"] == {
+        "return_type": "log",
+        "risk_free_rate": 0.02,
+        "annualization_days": 252,
+        "calmar_denominator": "max_drawdown",
+        "evaluation_window": "full",
+    }
+    assert metrics["annualized_return"] == pytest.approx(float(np.mean(log_returns) * 252))
+    assert metrics["sharpe_ratio"] == pytest.approx(
+        float((np.mean(log_returns) - 0.02 / 252) / np.std(log_returns) * np.sqrt(252))
+    )
 
 
 def test_oos_metrics_include_test_start_baseline() -> None:
