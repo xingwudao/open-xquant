@@ -13,6 +13,8 @@ from typing import Any
 
 import yaml
 
+_UNSET = object()
+
 
 def make_strategy_id(description: str, max_length: int = 50) -> str:
     """Create a validator-safe strategy_id from free-form text."""
@@ -130,7 +132,7 @@ class ValidationSection:
     required_oos: bool = False
 
 
-@dataclass
+@dataclass(init=False)
 class MetricsSection:
     profile: str = "open_xquant_default"
     risk_free_rate: float = 0.0
@@ -139,6 +141,52 @@ class MetricsSection:
     calmar_denominator: str = "max_drawdown"
     evaluation_window: str = "full"
     _explicit_fields: set[str] = field(default_factory=set, repr=False, compare=False, metadata={"serialize": False})
+
+    def __init__(
+        self,
+        profile: str = "open_xquant_default",
+        risk_free_rate: Any = _UNSET,
+        return_type: Any = _UNSET,
+        annualization_days: Any = _UNSET,
+        calmar_denominator: Any = _UNSET,
+        evaluation_window: Any = _UNSET,
+        _explicit_fields: set[str] | None = None,
+    ) -> None:
+        provided_fields = {"profile"} if profile != "open_xquant_default" else set()
+        values = {
+            "risk_free_rate": 0.0,
+            "return_type": "simple",
+            "annualization_days": 252,
+            "calmar_denominator": "max_drawdown",
+            "evaluation_window": "full",
+        }
+        for name, value in (
+            ("risk_free_rate", risk_free_rate),
+            ("return_type", return_type),
+            ("annualization_days", annualization_days),
+            ("calmar_denominator", calmar_denominator),
+            ("evaluation_window", evaluation_window),
+        ):
+            if value is not _UNSET:
+                values[name] = value
+                provided_fields.add(name)
+
+        object.__setattr__(self, "profile", profile)
+        for name, value in values.items():
+            object.__setattr__(self, name, value)
+        object.__setattr__(self, "_explicit_fields", set(_explicit_fields) if _explicit_fields is not None else provided_fields)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name in {
+            "profile",
+            "risk_free_rate",
+            "return_type",
+            "annualization_days",
+            "calmar_denominator",
+            "evaluation_window",
+        } and hasattr(self, "_explicit_fields"):
+            self._explicit_fields.add(name)
 
 
 @dataclass

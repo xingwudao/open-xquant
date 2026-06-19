@@ -122,6 +122,21 @@ def test_in_memory_xquant_profile_applies_profile_defaults() -> None:
     assert metrics["sharpe_ratio"] == pytest.approx(expected_sharpe)
 
 
+def test_in_memory_xquant_profile_preserves_programmatic_overrides() -> None:
+    values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
+    result = _make_result(values.tolist())
+    config = MetricsSection()
+    config.profile = "xquant_production"
+    config.return_type = "simple"
+    config.risk_free_rate = 0.0
+
+    metrics = compute_profile_metrics(result, config, run_id="run-1")
+
+    assert metrics["metric_assumptions"]["return_type"] == "simple"
+    assert metrics["metric_assumptions"]["risk_free_rate"] == 0.0
+    assert metrics["sharpe_ratio"] == pytest.approx(result.sharpe_ratio())
+
+
 def test_risk_free_rate_affects_simple_profile_sharpe() -> None:
     values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
     result = _make_result(values.tolist())
