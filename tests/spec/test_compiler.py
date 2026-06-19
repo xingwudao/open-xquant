@@ -314,6 +314,14 @@ def test_missing_ratio_treats_non_midnight_daily_rows_as_sessions(tmp_path) -> N
     assert manifest["data_fingerprints"]["SPY"]["row_count"] == 2
 
 
+@pytest.mark.parametrize("calendar", ["XNYS", "ARCX", "XSHG", "XSHE"])
+def test_exchange_calendar_sessions_accepts_supported_calendar_names(calendar: str) -> None:
+    sessions = compiler._exchange_calendar_sessions(pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-05"), calendar)
+
+    assert sessions is not None
+    assert len(sessions) > 0
+
+
 def test_data_fingerprint_covers_non_midnight_daily_row_values() -> None:
     expected_index = pd.DatetimeIndex(["2024-01-02", "2024-01-03"], tz="UTC")
     dates = pd.to_datetime(["2024-01-02 21:00", "2024-01-03 21:00"], utc=True)

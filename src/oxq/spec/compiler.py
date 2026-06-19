@@ -45,6 +45,10 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
     "next_mid": FillPriceMode.NEXT_MID,
     "next_avg": FillPriceMode.NEXT_AVG,
 }
+EXCHANGE_CALENDAR_ALIASES = {
+    # exchange_calendars does not expose XSHE; use the shared mainland China session calendar.
+    "XSHE": "XSHG",
+}
 
 # Signals that fire on a single bar and should latch once triggered.
 # NOTE: Peak is excluded because its implementation uses shift(-i)
@@ -545,7 +549,7 @@ def _exchange_calendar_sessions(start: pd.Timestamp, end: pd.Timestamp, calendar
     except ImportError:
         return None
     try:
-        cal = xcals.get_calendar(calendar)
+        cal = xcals.get_calendar(EXCHANGE_CALENDAR_ALIASES.get(calendar, calendar))
         sessions = cal.sessions_in_range(start.date(), end.date())
     except Exception:
         return None

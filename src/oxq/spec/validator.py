@@ -12,6 +12,9 @@ from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 
 
+SUPPORTED_MARKET_CALENDARS = frozenset({"XNYS", "ARCX", "XSHG", "XSHE"})
+
+
 @dataclass
 class ValidationResult:
     """Result of validating a strategy spec."""
@@ -492,12 +495,13 @@ def validate(spec: StrategySpec) -> ValidationResult:
         )
 
     # --- Market ---
-    if spec.market.calendar != "XNYS":
+    if spec.market.calendar not in SUPPORTED_MARKET_CALENDARS:
         errors.append(
             _err(
                 "fatal",
                 "market_calendar_unsupported",
                 f"market.calendar={spec.market.calendar} is not supported by the audited local compiler",
+                ["executable"],
             )
         )
 

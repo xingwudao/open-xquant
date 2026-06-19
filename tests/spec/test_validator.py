@@ -500,14 +500,25 @@ def test_validate_rejects_unsupported_data_provider() -> None:
     assert any(error["check"] == "data_provider_unsupported" for error in result.errors)
 
 
-def test_validate_rejects_unsupported_market_calendar() -> None:
+@pytest.mark.parametrize("calendar", ["XNYS", "ARCX", "XSHG", "XSHE"])
+def test_validate_accepts_supported_market_calendars(calendar: str) -> None:
+    spec = StrategySpec.template(strategy_id=f"calendar_{calendar.lower()}", hypothesis="supported calendars compile")
+    spec.market.calendar = calendar
+
+    result = validate(spec)
+
+    assert not any(error["check"] == "market_calendar_unsupported" for error in result.errors)
+
+
+def test_validate_rejects_unknown_market_calendar() -> None:
     spec = StrategySpec.template(strategy_id="bad_calendar", hypothesis="calendar must resolve deterministically")
     spec.market.calendar = "BAD"
 
     result = validate(spec)
 
     assert result.status == "fail"
-    assert any(error["check"] == "market_calendar_unsupported" for error in result.errors)
+    error = _finding(result.errors, "market_calendar_unsupported")
+    assert error["dimensions"] == ["executable"]
 
 
 def test_from_yaml_rejects_fractional_integer_fields(tmp_path) -> None:
