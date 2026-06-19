@@ -75,6 +75,64 @@ def test_decision_watchlists_when_promote_oos_metric_is_below_threshold() -> Non
     assert decision == "WATCHLIST"
 
 
+def test_decision_rejects_fragile_robustness_result() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={},
+        metrics={},
+        repro_audit={"status": "pass"},
+        robustness_result={"status": "fragile"},
+    )
+
+    assert decision == "REJECT"
+
+
+def test_decision_rejects_unverified_robustness_result() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={},
+        metrics={},
+        repro_audit={"status": "fail", "checks": [{"id": "robustness_hash", "status": "fail"}]},
+        robustness_result={"status": "robust"},
+    )
+
+    assert decision == "REJECT"
+
+
+def test_decision_watchlists_warn_robustness_before_promotion() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0, "max_drawdown_gte": -0.2}}},
+        metrics={"oos_sharpe_ratio": 2.0, "oos_max_drawdown": -0.05},
+        repro_audit={"status": "pass"},
+        robustness_result={"status": "warn"},
+    )
+
+    assert decision == "WATCHLIST"
+
+
+def test_decision_promotes_when_robustness_warns_only_for_unconfigured_checks() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0, "max_drawdown_gte": -0.2}}},
+        metrics={"oos_sharpe_ratio": 2.0, "oos_max_drawdown": -0.05},
+        repro_audit={"status": "pass"},
+        robustness_result={
+            "status": "warn",
+            "tests": [
+                {
+                    "name": "parameter_perturbation",
+                    "status": "warn",
+                    "message": "No parameter perturbation targets configured in spec",
+                },
+                {"name": "regime_analysis", "status": "warn", "message": "Regime analysis not configured"},
+            ],
+        },
+    )
+
+    assert decision == "PAPER TRADING CANDIDATE"
+
+
 def test_decision_does_not_fallback_when_oos_metric_is_explicitly_unavailable() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
@@ -296,6 +354,130 @@ def test_report_missing_metric_assumptions_uses_legacy_defaults(tmp_path) -> Non
     assert "- **return_type**: simple" in report
     assert "- **risk_free_rate**: 0.00%" in report
     assert "Non-default metrics profile" not in report
+
+
+def test_report_includes_robustness_artifact_summary(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "robustness.json").write_text(
+        json.dumps(
+            {
+                "status": "warn",
+                "baseline_sharpe": 1.1,
+                "tests": [
+                    {
+                        "name": "cost_x2",
+                        "status": "pass",
+                        "baseline_sharpe": 1.1,
+                        "perturbed_sharpe": 0.9,
+                        "message": "costs are stable",
+                    },
+                    {
+                        "name": "parameter_perturbation",
+                        "status": "warn",
+                        "results": [
+                            {"target": "mom.period", "status": "pass"},
+                            {"target": "missing.period", "status": "error"},
+                        ],
+                        "message": "Ran 2 one-at-a-time parameter perturbations",
+                    },
+                    {
+                        "name": "regime_analysis",
+                        "status": "pass",
+                        "regimes": {
+                            "uptrend": {"date_count": 3, "trade_count": 1},
+                            "downtrend": {"date_count": 2, "trade_count": 1},
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "**Status**: WARN" in report
+    assert "- [PASS] **cost_x2**: costs are stable" in report
+    assert "- **Parameter perturbation results**: pass=1, error=1" in report
+    assert "- **Regimes**: uptrend (dates=3, trades=1), downtrend (dates=2, trades=1)" in report
+
+
+def test_report_rejects_fragile_robustness_result(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_fragile_robustness",
+        hypothesis="fragile robustness should block promotion",
+    )
+    spec.universe.point_in_time = True
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+    spec.validation.train_period = ["2023-01-01", "2023-12-31"]
+    spec.validation.test_period = ["2024-01-01", "2024-12-31"]
+    spec.validation.required_oos = True
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps(
+            {
+                "run_id": "report-run",
+                "trade_count": 12,
+                "oos_trade_count": 12,
+                "max_drawdown": -0.05,
+                "oos_max_drawdown": -0.05,
+                "oos_sharpe_ratio": 1.2,
+                "total_return": 0.1,
+                "annualized_return": 0.08,
+                "annualized_volatility": 0.12,
+                "sharpe_ratio": 1.1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "robustness.json").write_text(
+        json.dumps({"status": "fragile", "baseline_sharpe": 1.1, "tests": []}),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "## 1. Executive Decision\n\n**REJECT**" in report
+
+
+def test_report_does_not_trust_unhashed_robustness_artifact(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:unused"}), encoding="utf-8")
+    (run_dir / "robustness.json").write_text(
+        json.dumps({"status": "robust", "baseline_sharpe": 1.1, "tests": []}),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "## 1. Executive Decision\n\n**REJECT**" in report
+    assert "**Status**: ROBUST" not in report
+
+
+def test_report_regime_only_config_does_not_claim_no_robustness_tests(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_regime_only_robustness",
+        hypothesis="regime-only robustness config should be described consistently",
+    )
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    spec.robustness.regime_analysis = True
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "- Regime analysis: enabled" in report
+    assert "(No robustness tests configured)" not in report
 
 
 def _write_report_run(tmp_path):

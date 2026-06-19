@@ -118,16 +118,36 @@ def _check_data() -> dict[str, Any]:
 
 
 def _check_deps() -> dict[str, Any]:
-    missing = [
+    core_modules = ("pandas", "numpy", "pyarrow", "yaml", "click", "exchange_calendars")
+    optional_modules = {
+        "yfinance": "uv sync --extra yfinance",
+        "akshare": "uv sync --extra akshare",
+        "scipy": "uv sync --extra scipy",
+        "matplotlib": "uv sync --extra chart",
+        "mplfinance": "uv sync --extra chart",
+        "httpx": "uv sync --extra live",
+        "socksio": "uv sync --extra live",
+        "websockets": "uv sync --extra live",
+        "tabulate": "uv sync --extra dev",
+    }
+    missing_core = [
         module
-        for module in ("yfinance", "mplfinance", "httpx", "websockets")
+        for module in core_modules
         if importlib.util.find_spec(module) is None
     ]
-    fixes = []
-    if "mplfinance" in missing:
-        fixes.append("uv sync --extra chart")
-    if "httpx" in missing or "websockets" in missing:
-        fixes.append("uv sync --extra live")
-    if "yfinance" in missing:
-        fixes.append("uv sync --extra yfinance")
-    return {"status": "ok" if not missing else "warn", "missing": missing, "fixes": fixes}
+    missing_optional = sorted(
+        module
+        for module in optional_modules
+        if importlib.util.find_spec(module) is None
+    )
+    fixes = sorted({optional_modules[module] for module in missing_optional})
+    if missing_core:
+        fixes.insert(0, "uv sync --all-extras")
+    status = "fail" if missing_core else ("warn" if missing_optional else "ok")
+    return {
+        "status": status,
+        "missing": missing_core + missing_optional,
+        "missing_core": missing_core,
+        "missing_optional": missing_optional,
+        "fixes": fixes,
+    }

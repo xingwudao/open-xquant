@@ -149,6 +149,18 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                     }
                 else:
                     required_hashes = required_artifact_hashes
+                optional_artifact_hashes = {
+                    "benchmark_curve.csv": "benchmark_hash",
+                    "benchmark_equity_curve.csv": "benchmark_equity_hash",
+                    "benchmark_prices.csv": "benchmark_prices_hash",
+                    "robustness.json": "robustness_hash",
+                }
+                for artifact_name, check_id in optional_artifact_hashes.items():
+                    if artifact_name in expected_hashes or (run_path / artifact_name).exists():
+                        required_hashes = {
+                            **required_hashes,
+                            artifact_name: check_id,
+                        }
                 missing_hash_keys = sorted(set(required_hashes).difference(expected_hashes))
             except (TypeError, ValueError):
                 checks.append(_check("artifact_hashes", False, "fatal", "artifact_hashes.json has invalid schema_version"))

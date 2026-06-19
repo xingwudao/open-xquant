@@ -17,7 +17,6 @@ from oxq.factor_eval.preprocessing import (
     mark_limit_days,
     mark_suspension_days,
 )
-from oxq.factor_eval.tearsheet import generate_tearsheet
 from oxq.tools import session
 from oxq.tools._coerce import coerce_compute_params
 from oxq.tools.registry import registry
@@ -240,6 +239,17 @@ def factor_evaluate_ts(
         bundle.market_state = market_state.dropna()
 
     # -- Generate tearsheet -----------------------------------------------------
+    try:
+        from oxq.factor_eval.tearsheet import generate_tearsheet
+    except ImportError as exc:
+        return {
+            "error": (
+                "factor_evaluate_ts requires the chart/scipy optional dependencies. "
+                "Install them with: uv sync --extra chart --extra scipy"
+            ),
+            "detail": str(exc),
+        }
+
     tearsheet = generate_tearsheet(
         bundle=bundle,
         forward_periods=forward_periods,

@@ -24,12 +24,13 @@ def generate_report(run_dir: str | Path) -> str:
     metrics = json.loads((run_path / "metrics.json").read_text(encoding="utf-8"))
     execution_assumptions = _load_execution_assumptions(run_path)
     repro_audit = audit_reproducibility(run_dir)
+    robustness_result = _load_verified_robustness_result(run_path, repro_audit)
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
-    decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit)
+    decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit, robustness_result)
 
     lines: list[str] = []
     lines.append(f"# Research Report: {strategy_id}")
@@ -143,13 +144,20 @@ def generate_report(run_dir: str | Path) -> str:
     # 9. Robustness Tests
     lines.append("## 9. Robustness Tests")
     lines.append("")
-    if spec.robustness.cost_multiplier:
+    if robustness_result is not None:
+        lines.extend(_format_robustness_result_lines(robustness_result))
+    elif spec.robustness.cost_multiplier:
         lines.append(f"- Cost multiplier scenarios: {spec.robustness.cost_multiplier}")
-    if spec.robustness.parameter_perturbation:
+    if robustness_result is None and spec.robustness.parameter_perturbation:
         lines.append(f"- Parameter perturbation: {list(spec.robustness.parameter_perturbation.keys())}")
-    if spec.robustness.regime_analysis:
+    if robustness_result is None and spec.robustness.regime_analysis:
         lines.append("- Regime analysis: enabled")
-    if not spec.robustness.cost_multiplier and not spec.robustness.parameter_perturbation:
+    if (
+        robustness_result is None
+        and not spec.robustness.cost_multiplier
+        and not spec.robustness.parameter_perturbation
+        and not spec.robustness.regime_analysis
+    ):
         lines.append("(No robustness tests configured)")
     lines.append("")
 
@@ -186,12 +194,23 @@ def generate_report(run_dir: str | Path) -> str:
     return "\n".join(lines)
 
 
-def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_audit: dict | None = None) -> str:
+def _determine_decision(
+    bias_audit: dict,
+    spec_dict: dict,
+    metrics: dict,
+    repro_audit: dict | None = None,
+    robustness_result: dict | None = None,
+) -> str:
     """Determine the executive decision based on audit results and decision policy."""
     decision_policy = spec_dict.get("decision_policy", {})
 
     if repro_audit and repro_audit.get("status") == "fail":
         return "REJECT"
+
+    if robustness_result:
+        robustness_status = robustness_result.get("status")
+        if robustness_status in {"error", "fragile"}:
+            return "REJECT"
 
     if bias_audit.get("fatal_count", 0) > 0:
         return "REJECT"
@@ -209,6 +228,9 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
         threshold = _as_finite_float(reject_if["max_drawdown_lt"])
         if threshold is None or max_dd is None or threshold > max_dd:
             return "REJECT"
+
+    if _has_actionable_robustness_warning(robustness_result):
+        return "WATCHLIST"
 
     promote_if = decision_policy.get("promote_if", {})
     # Only check thresholds that are explicitly configured
@@ -230,6 +252,37 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
         return "WATCHLIST"
 
     return "PAPER TRADING CANDIDATE"
+
+
+def _has_actionable_robustness_warning(robustness_result: dict | None) -> bool:
+    if not robustness_result or robustness_result.get("status") != "warn":
+        return False
+    tests = robustness_result.get("tests")
+    if not isinstance(tests, list):
+        return True
+    for test in tests:
+        if not isinstance(test, dict):
+            return True
+        if test.get("status") not in {"warn", "fail", "error"}:
+            continue
+        if _is_unconfigured_robustness_warning(test):
+            continue
+        return True
+    return False
+
+
+def _is_unconfigured_robustness_warning(test: dict) -> bool:
+    if test.get("status") != "warn":
+        return False
+    name = test.get("name")
+    message = str(test.get("message", ""))
+    return (
+        name == "parameter_perturbation"
+        and message == "No parameter perturbation targets configured in spec"
+    ) or (
+        name == "regime_analysis"
+        and message == "Regime analysis not configured"
+    )
 
 
 def _finite_metric(metrics: dict, primary: str, fallback: str | None = None) -> float | None:
@@ -347,13 +400,92 @@ def _format_validation_classification_lines(validation_result: dict) -> list[str
 
 def _load_execution_assumptions(run_path: Path) -> dict | None:
     assumptions_path = run_path / "execution_assumptions.json"
-    if not assumptions_path.exists():
+    return _load_json_object(assumptions_path)
+
+
+def _load_verified_robustness_result(run_path: Path, repro_audit: dict) -> dict | None:
+    robustness_path = run_path / "robustness.json"
+    if not robustness_path.exists():
+        return None
+
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    if artifact_hashes_path.exists():
+        artifact_hashes = _load_json_object(artifact_hashes_path)
+        if not artifact_hashes or "robustness.json" not in artifact_hashes:
+            return None
+        checks = repro_audit.get("checks", [])
+        if not any(
+            isinstance(check, dict)
+            and check.get("id") == "robustness_hash"
+            and check.get("status") == "pass"
+            for check in checks
+        ):
+            return None
+
+    return _load_json_object(robustness_path)
+
+
+def _load_json_object(path: Path) -> dict | None:
+    if not path.exists():
         return None
     try:
-        assumptions = json.loads(assumptions_path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
-    return assumptions if isinstance(assumptions, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+def _format_robustness_result_lines(result: dict) -> list[str]:
+    lines = [f"**Status**: {str(result.get('status', 'unknown')).upper()}"]
+    baseline_sharpe = result.get("baseline_sharpe")
+    if baseline_sharpe is not None:
+        lines.append(f"- **Baseline Sharpe**: {_format_float(baseline_sharpe)}")
+    tests = result.get("tests")
+    if not isinstance(tests, list):
+        lines.append("- Robustness artifact does not contain a tests list.")
+        return lines
+    for test in tests:
+        if not isinstance(test, dict):
+            continue
+        name = _format_assumption_value(test.get("name"))
+        status = str(test.get("status", "unknown")).upper()
+        message = _format_assumption_value(test.get("message"))
+        lines.append(f"- [{status}] **{name}**: {message}")
+        if "baseline_sharpe" in test or "perturbed_sharpe" in test:
+            lines.append(
+                "- **Sharpe comparison**: "
+                f"{_format_float(test.get('baseline_sharpe'))} -> {_format_float(test.get('perturbed_sharpe'))}"
+            )
+        if isinstance(test.get("results"), list):
+            lines.append(f"- **Parameter perturbation results**: {_summarize_status_counts(test['results'])}")
+        if isinstance(test.get("regimes"), dict):
+            lines.append(f"- **Regimes**: {_summarize_regimes(test['regimes'])}")
+    return lines
+
+
+def _summarize_status_counts(results: list) -> str:
+    counts: dict[str, int] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "unknown"))
+        counts[status] = counts.get(status, 0) + 1
+    if not counts:
+        return "N/A"
+    ordered = [status for status in ("pass", "warn", "fail", "error") if status in counts]
+    ordered.extend(status for status in sorted(counts) if status not in ordered)
+    return ", ".join(f"{status}={counts[status]}" for status in ordered)
+
+
+def _summarize_regimes(regimes: dict) -> str:
+    chunks: list[str] = []
+    for name, bucket in regimes.items():
+        if not isinstance(bucket, dict):
+            continue
+        chunks.append(
+            f"{name} (dates={bucket.get('date_count', 'N/A')}, trades={bucket.get('trade_count', 'N/A')})"
+        )
+    return ", ".join(chunks) if chunks else "N/A"
 
 
 def _effective_fill_price_mode(spec: StrategySpec) -> str:

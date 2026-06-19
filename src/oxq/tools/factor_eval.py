@@ -9,14 +9,6 @@ import pandas as pd
 
 from oxq.core.registry import list_indicators
 from oxq.data.loaders import resolve_data_dir
-from oxq.factor_eval import (
-    compute_decay,
-    compute_ic,
-    compute_icir,
-    compute_rank_ic,
-    compute_ts_ic,
-    compute_turnover,
-)
 from oxq.tools._coerce import coerce_compute_params
 from oxq.tools.registry import registry
 
@@ -43,6 +35,24 @@ def factor_evaluate(
     min_obs: int = 3,
 ) -> dict[str, Any]:
     """Evaluate an indicator as a predictive factor."""
+    try:
+        from oxq.factor_eval.metrics import (
+            compute_decay,
+            compute_ic,
+            compute_icir,
+            compute_rank_ic,
+            compute_ts_ic,
+            compute_turnover,
+        )
+    except ImportError as exc:
+        return {
+            "error": (
+                "factor_evaluate requires scipy. "
+                "Install it with: uv sync --extra scipy"
+            ),
+            "detail": str(exc),
+        }
+
     if decay_horizons is None:
         decay_horizons = [1, 5, 10, 20]
 
