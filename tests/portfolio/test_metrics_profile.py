@@ -69,6 +69,20 @@ def test_xquant_production_profile_uses_log_returns_and_risk_free_rate() -> None
     assert metrics["sharpe_ratio"] != pytest.approx(result.sharpe_ratio())
 
 
+def test_risk_free_rate_affects_simple_profile_sharpe() -> None:
+    values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
+    result = _make_result(values.tolist())
+    no_risk_free = compute_profile_metrics(result, MetricsSection(risk_free_rate=0.0), run_id="run-1")
+    with_risk_free = compute_profile_metrics(result, MetricsSection(risk_free_rate=0.02), run_id="run-1")
+
+    simple_returns = np.diff(values) / values[:-1]
+    expected = float((np.mean(simple_returns) - 0.02 / 252) / np.std(simple_returns) * np.sqrt(252))
+
+    assert no_risk_free["sharpe_ratio"] == pytest.approx(result.sharpe_ratio())
+    assert with_risk_free["sharpe_ratio"] == pytest.approx(expected)
+    assert with_risk_free["sharpe_ratio"] != pytest.approx(no_risk_free["sharpe_ratio"])
+
+
 def test_annualization_days_affects_profile_metrics() -> None:
     result = _make_result([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
     standard = compute_profile_metrics(result, MetricsSection(annualization_days=252), run_id="run-1")

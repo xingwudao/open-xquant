@@ -4,13 +4,15 @@ from __future__ import annotations
 
 import math
 from decimal import Decimal
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
-from oxq.spec.schema import MetricsSection
+
+if TYPE_CHECKING:
+    from oxq.spec.schema import MetricsSection
 
 
 def compute_profile_metrics(result: RunResult, config: MetricsSection, *, run_id: str) -> dict[str, Any]:
@@ -31,7 +33,7 @@ def compute_profile_metrics(result: RunResult, config: MetricsSection, *, run_id
             {
                 "annualized_return": result.annualized_return(days),
                 "annualized_volatility": result.annualized_volatility(days),
-                "sharpe_ratio": result.sharpe_ratio(days),
+                "sharpe_ratio": _simple_sharpe_ratio(_values(result.equity_curve), config.risk_free_rate, days),
                 "sortino_ratio": result.sortino_ratio(config.risk_free_rate, days),
                 "calmar_ratio": result.calmar_ratio(days),
             }
@@ -82,7 +84,7 @@ def _simple_curve_metrics(equity_curve: list[tuple[object, float]], config: Metr
         "annualized_return": result.annualized_return(config.annualization_days),
         "annualized_volatility": result.annualized_volatility(config.annualization_days),
         "max_drawdown": result.max_drawdown(),
-        "sharpe_ratio": result.sharpe_ratio(config.annualization_days),
+        "sharpe_ratio": _simple_sharpe_ratio(values, config.risk_free_rate, config.annualization_days),
         "calmar_ratio": result.calmar_ratio(config.annualization_days),
     }
 
@@ -160,6 +162,13 @@ def _sharpe_ratio(returns: np.ndarray, risk_free_rate: float, annualization_days
         return 0.0
     excess = np.mean(returns) - risk_free_rate / annualization_days
     return float(excess / std * np.sqrt(annualization_days))
+
+
+def _simple_sharpe_ratio(values: np.ndarray, risk_free_rate: float, annualization_days: int) -> float:
+    if len(values) < 2 or np.any(values[:-1] <= 0):
+        return 0.0
+    returns = np.diff(values) / values[:-1]
+    return _sharpe_ratio(returns, risk_free_rate, annualization_days)
 
 
 def _max_drawdown(values: np.ndarray) -> float:
