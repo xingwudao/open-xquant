@@ -30,7 +30,7 @@ def generate_report(run_dir: str | Path) -> str:
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
-    decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit)
+    decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit, robustness_result)
 
     lines: list[str] = []
     lines.append(f"# Research Report: {strategy_id}")
@@ -189,12 +189,23 @@ def generate_report(run_dir: str | Path) -> str:
     return "\n".join(lines)
 
 
-def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_audit: dict | None = None) -> str:
+def _determine_decision(
+    bias_audit: dict,
+    spec_dict: dict,
+    metrics: dict,
+    repro_audit: dict | None = None,
+    robustness_result: dict | None = None,
+) -> str:
     """Determine the executive decision based on audit results and decision policy."""
     decision_policy = spec_dict.get("decision_policy", {})
 
     if repro_audit and repro_audit.get("status") == "fail":
         return "REJECT"
+
+    if robustness_result:
+        robustness_status = robustness_result.get("status")
+        if robustness_status in {"error", "fragile"}:
+            return "REJECT"
 
     if bias_audit.get("fatal_count", 0) > 0:
         return "REJECT"
@@ -228,6 +239,9 @@ def _determine_decision(bias_audit: dict, spec_dict: dict, metrics: dict, repro_
         promote_checks.append(threshold <= max_dd)
     if promote_if:
         return "PAPER TRADING CANDIDATE" if promote_checks and all(promote_checks) else "WATCHLIST"
+
+    if robustness_result and robustness_result.get("status") == "warn":
+        return "WATCHLIST"
 
     if bias_audit.get("warning_count", 0) > 0:
         return "WATCHLIST"

@@ -75,6 +75,18 @@ def test_decision_watchlists_when_promote_oos_metric_is_below_threshold() -> Non
     assert decision == "WATCHLIST"
 
 
+def test_decision_rejects_fragile_robustness_result() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={},
+        metrics={},
+        repro_audit={"status": "pass"},
+        robustness_result={"status": "fragile"},
+    )
+
+    assert decision == "REJECT"
+
+
 def test_decision_does_not_fallback_when_oos_metric_is_explicitly_unavailable() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
@@ -342,6 +354,49 @@ def test_report_includes_robustness_artifact_summary(tmp_path) -> None:
     assert "- [PASS] **cost_x2**: costs are stable" in report
     assert "- **Parameter perturbation results**: pass=1, error=1" in report
     assert "- **Regimes**: uptrend (dates=3, trades=1), downtrend (dates=2, trades=1)" in report
+
+
+def test_report_rejects_fragile_robustness_result(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_fragile_robustness",
+        hypothesis="fragile robustness should block promotion",
+    )
+    spec.universe.point_in_time = True
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+    spec.validation.train_period = ["2023-01-01", "2023-12-31"]
+    spec.validation.test_period = ["2024-01-01", "2024-12-31"]
+    spec.validation.required_oos = True
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps(
+            {
+                "run_id": "report-run",
+                "trade_count": 12,
+                "oos_trade_count": 12,
+                "max_drawdown": -0.05,
+                "oos_max_drawdown": -0.05,
+                "oos_sharpe_ratio": 1.2,
+                "total_return": 0.1,
+                "annualized_return": 0.08,
+                "annualized_volatility": 0.12,
+                "sharpe_ratio": 1.1,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "robustness.json").write_text(
+        json.dumps({"status": "fragile", "baseline_sharpe": 1.1, "tests": []}),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "## 1. Executive Decision\n\n**REJECT**" in report
 
 
 def _write_report_run(tmp_path):

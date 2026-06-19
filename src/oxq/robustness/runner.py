@@ -166,10 +166,14 @@ def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, An
         "max_drawdown": _drawdown_degradation(is_metrics["max_drawdown"], oos_metrics["max_drawdown"]),
     }
     oos_sharpe = oos_metrics["sharpe_ratio"]
-    sharpe_degradation = degradation["sharpe_ratio"]
+    material_degradations = {
+        name: value
+        for name, value in degradation.items()
+        if value is not None and value > 0.5
+    }
     if oos_sharpe is not None and oos_sharpe < 0:
         status = "fail"
-    elif sharpe_degradation is not None and sharpe_degradation > 0.5:
+    elif material_degradations:
         status = "warn"
     else:
         status = "pass"
@@ -222,6 +226,13 @@ def _run_parameter_perturbations(
 
     results: list[dict[str, Any]] = []
     for target, values in perturbations.items():
+        if not isinstance(values, list):
+            results.append({
+                "target": target,
+                "status": "error",
+                "message": f"robustness.parameter_perturbation.{target} must be a list of values",
+            })
+            continue
         for value in values:
             perturbed_spec = copy.deepcopy(spec)
             try:
@@ -248,13 +259,20 @@ def _run_parameter_perturbations(
         status = "fail"
     elif "warn" in statuses or "error" in statuses:
         status = "warn"
+    elif not results:
+        status = "warn"
     else:
         status = "pass"
+    message = (
+        "No parameter perturbation reruns were executed"
+        if not results
+        else f"Ran {len(results)} one-at-a-time parameter perturbations"
+    )
     return {
         "name": "parameter_perturbation",
         "status": status,
         "results": results,
-        "message": f"Ran {len(results)} one-at-a-time parameter perturbations",
+        "message": message,
     }
 
 
@@ -377,9 +395,9 @@ def _analyze_regimes(spec: StrategySpec, run_path: Path) -> dict[str, Any]:
         "high_vol": abs_returns >= median_abs_return,
         "low_vol": abs_returns < median_abs_return,
     }
-    trade_dates = _read_trade_dates(run_path / "trades.csv")
+    trade_counts = _read_trade_date_counts(run_path / "trades.csv")
     regimes = {
-        name: _regime_bucket(equity, mask, spec, trade_dates)
+        name: _regime_bucket(equity, returns, mask, spec, trade_counts)
         for name, mask in masks.items()
     }
     return {
@@ -392,31 +410,45 @@ def _analyze_regimes(spec: StrategySpec, run_path: Path) -> dict[str, Any]:
 
 def _regime_bucket(
     equity: pd.DataFrame,
+    returns: pd.Series,
     mask: pd.Series,
     spec: StrategySpec,
-    trade_dates: set[Any],
+    trade_counts: dict[Any, int],
 ) -> dict[str, Any]:
     segment = equity.loc[mask, ["date", "value"]]
     dates = set(segment["date"].tolist())
-    metrics = compute_equity_curve_metrics(list(segment.itertuples(index=False, name=None)), spec.metrics)
+    selected_returns = returns.loc[mask]
+    curve = _equity_curve_from_returns(selected_returns)
+    metrics = compute_equity_curve_metrics(curve, spec.metrics)
     return {
         "date_count": int(len(segment)),
-        "trade_count": int(len(dates & trade_dates)),
+        "trade_count": int(sum(trade_counts.get(date, 0) for date in dates)),
         **{key: _round_metric(_finite_float(value)) for key, value in metrics.items()},
     }
 
 
-def _read_trade_dates(path: Path) -> set[Any]:
+def _equity_curve_from_returns(returns: pd.Series) -> list[tuple[int, float]]:
+    values = [1.0]
+    for value in returns.tolist():
+        parsed = _finite_float(value)
+        if parsed is None:
+            continue
+        values.append(values[-1] * (1.0 + parsed))
+    return list(enumerate(values))
+
+
+def _read_trade_date_counts(path: Path) -> dict[Any, int]:
     if not path.exists():
-        return set()
+        return {}
     try:
         trades = pd.read_csv(path)
     except Exception:
-        return set()
+        return {}
     if "filled_at" not in trades.columns:
-        return set()
+        return {}
     dates = pd.to_datetime(trades["filled_at"], errors="coerce").dt.date.dropna()
-    return set(dates.tolist())
+    counts = dates.value_counts()
+    return {date: int(count) for date, count in counts.items()}
 
 
 def _finite_float(value: object) -> float | None:
