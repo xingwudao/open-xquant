@@ -8,11 +8,9 @@ from datetime import date
 
 import pandas as pd
 
+from oxq.market_calendar import is_supported_market_calendar
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
-
-
-SUPPORTED_MARKET_CALENDARS = frozenset({"XNYS", "ARCX", "XSHG", "XSHE"})
 
 
 @dataclass
@@ -495,7 +493,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         )
 
     # --- Market ---
-    if spec.market.calendar not in SUPPORTED_MARKET_CALENDARS:
+    if not is_supported_market_calendar(spec.market.calendar):
         errors.append(
             _err(
                 "fatal",

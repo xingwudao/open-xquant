@@ -945,6 +945,32 @@ def test_compile_run_uses_spec_market_currency(tmp_path) -> None:
     assert {fill.order.currency for fill in result.trades} <= {"USD"}
 
 
+def test_compile_run_accepts_xshe_calendar_alias_and_preserves_manifest_calendar(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="xshe_calendar", hypothesis="XSHE aliases for runtime calendar resolution")
+    spec.market.calendar = "XSHE"
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03"], utc=True)
+    pd.DataFrame(
+        {
+            "open": [1.0, 2.0],
+            "high": [1.0, 2.0],
+            "low": [1.0, 2.0],
+            "close": [1.0, 2.0],
+            "volume": [100, 100],
+        },
+        index=dates,
+    ).to_parquet(data_dir / "SPY.parquet")
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    manifest = json.loads((run_dir / "data_manifest.json").read_text(encoding="utf-8"))
+    assert manifest["calendar"] == "XSHE"
+
+
 def test_compile_run_expires_pending_buy_for_latched_sparse_symbol_missing_next_open(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="sparse_latch", hypothesis="latched sparse symbols do not duplicate buys")
     spec.universe.symbols = ["AAA", "BBB"]

@@ -8,6 +8,7 @@ from enum import Enum
 import pandas as pd
 
 from oxq.core.types import Fill, Order
+from oxq.market_calendar import normalize_exchange_calendar
 from oxq.portfolio.orderbook import ManagedOrder, OrderBook
 from oxq.trade.fees import FeeModel
 from oxq.trade.slippage import SlippageModel
@@ -73,7 +74,7 @@ class SimBroker:
         self._fee_model = fee_model
         self._slippage_model = slippage_model
         self._fill_price_mode = fill_price_mode
-        self._market_calendar = market_calendar
+        self._market_calendar = normalize_exchange_calendar(market_calendar) if market_calendar else None
         self._order_book = OrderBook()
         self._pending_market: list[ManagedOrder] = []
         self._fills: list[Fill] = []

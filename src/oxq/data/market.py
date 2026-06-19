@@ -7,6 +7,7 @@ import pandas as pd
 
 from oxq.core.errors import SymbolNotFoundError
 from oxq.data.loaders import resolve_data_dir
+from oxq.market_calendar import normalize_exchange_calendar
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +18,7 @@ class LocalMarketDataProvider:
     def __init__(self, data_dir: Path | None = None, currency: str | None = None, calendar: str | None = None) -> None:
         self._data_dir = resolve_data_dir(data_dir)
         self._currency = currency
-        self._calendar = calendar
+        self._calendar = normalize_exchange_calendar(calendar) if calendar else None
 
     def get_bars(self, symbol: str, start: str, end: str) -> pd.DataFrame:
         path = self._symbol_path(symbol)

@@ -28,6 +28,7 @@ from oxq.core.strategy import Strategy
 from oxq.core.types import PortfolioOptimizer, Signal
 from oxq.data.loaders import resolve_data_dir
 from oxq.data.market import LocalMarketDataProvider
+from oxq.market_calendar import normalize_exchange_calendar
 from oxq.portfolio.analytics import RunResult
 from oxq.rules.constraint import RebalanceFrequencyRule
 from oxq.spec.execution import derive_execution_semantics
@@ -44,10 +45,6 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
     "mid": FillPriceMode.MID,
     "next_mid": FillPriceMode.NEXT_MID,
     "next_avg": FillPriceMode.NEXT_AVG,
-}
-EXCHANGE_CALENDAR_ALIASES = {
-    # exchange_calendars does not expose XSHE; use the shared mainland China session calendar.
-    "XSHE": "XSHG",
 }
 
 # Signals that fire on a single bar and should latch once triggered.
@@ -240,7 +237,8 @@ def compile_run(
     # Data provider — use spec.data.data_dir as fallback
     _data_dir = data_dir or (spec.data.data_dir or None)
     data_path = resolve_data_dir(Path(_data_dir) if _data_dir else None).resolve()
-    market = LocalMarketDataProvider(data_dir=data_path, currency=spec.market.currency, calendar=spec.market.calendar)
+    runtime_calendar = normalize_exchange_calendar(spec.market.calendar)
+    market = LocalMarketDataProvider(data_dir=data_path, currency=spec.market.currency, calendar=runtime_calendar)
 
     # Broker with fee/slippage from spec
     fee_model = PercentageFee(rate=Decimal(str(spec.cost.fee_rate)), min_fee=Decimal(str(spec.cost.fee_min)))
@@ -254,7 +252,7 @@ def compile_run(
         fee_model=fee_model,
         slippage_model=slippage_model,
         fill_price_mode=fill_mode,
-        market_calendar=spec.market.calendar,
+        market_calendar=runtime_calendar,
     )
 
     # Determine date range
@@ -549,7 +547,7 @@ def _exchange_calendar_sessions(start: pd.Timestamp, end: pd.Timestamp, calendar
     except ImportError:
         return None
     try:
-        cal = xcals.get_calendar(EXCHANGE_CALENDAR_ALIASES.get(calendar, calendar))
+        cal = xcals.get_calendar(normalize_exchange_calendar(calendar))
         sessions = cal.sessions_in_range(start.date(), end.date())
     except Exception:
         return None

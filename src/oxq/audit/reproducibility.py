@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from oxq.market_calendar import normalize_exchange_calendar
+
 
 def audit_reproducibility(run_dir: str | Path) -> dict:
     """Verify that a backtest run's core outputs are consistent.
@@ -342,7 +344,7 @@ def _align_to_calendar_sessions(df: pd.DataFrame, calendar: object, start: objec
         return df
     import exchange_calendars as xcals
 
-    cal = xcals.get_calendar(calendar)
+    cal = xcals.get_calendar(normalize_exchange_calendar(calendar))
     sessions = cal.sessions_in_range(pd.Timestamp(start).date(), pd.Timestamp(end).date())
     return _select_frame_for_session_fingerprint(df, pd.DatetimeIndex(sessions))
 
