@@ -16,7 +16,7 @@ from typing import Any
 import pandas as pd
 
 from oxq.portfolio.metrics_profile import compute_equity_curve_metrics
-from oxq.spec.compiler import compile_run
+from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, compile_run
 from oxq.spec.schema import CostSection, StrategySpec
 
 _BENCHMARK_CURVE_FILES = ("benchmark_curve.csv", "benchmark_equity_curve.csv", "benchmark_prices.csv")
@@ -152,10 +152,14 @@ def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, An
     ]
     policy_breaches = _reject_policy_breaches(spec, oos_metrics)
     if missing:
-        status = "fail" if policy_breaches else "warn"
+        oos_sharpe = oos_metrics["sharpe_ratio"]
+        negative_oos_sharpe = oos_sharpe is not None and oos_sharpe < 0
+        status = "fail" if policy_breaches or negative_oos_sharpe else "warn"
         message = f"IS/OOS metrics unavailable or non-finite: {missing}"
         if policy_breaches:
             message += f"; breached reject policy: {policy_breaches}"
+        if negative_oos_sharpe:
+            message += "; negative OOS Sharpe"
         return {
             "name": "is_oos_comparison",
             "status": status,
@@ -542,10 +546,23 @@ def _slugify(value: str) -> str:
 
 
 def _write_robustness_artifact(run_path: Path, result: dict[str, Any]) -> None:
-    (run_path / "robustness.json").write_text(
+    artifact_path = run_path / "robustness.json"
+    artifact_path.write_text(
         json.dumps(result, indent=2, allow_nan=False) + "\n",
         encoding="utf-8",
     )
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    if not artifact_hashes_path.exists():
+        return
+    try:
+        artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(artifact_hashes, dict):
+        return
+    artifact_hashes["robustness.json"] = _hash_file(artifact_path)
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
+    _append_run_digest(run_path, _hash_json_file(artifact_hashes_path))
 
 
 def _clone_spec_with_cost_multiplier(spec: StrategySpec, multiplier: float) -> StrategySpec:

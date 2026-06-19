@@ -473,23 +473,21 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
 
 
 def _write_benchmark_curve_artifact(spec: StrategySpec, result: RunResult, run_dir: Path) -> Path | None:
-    symbol = next((item for item in spec.benchmark.symbols if item in result.benchmark_prices), None)
-    if symbol is None and result.benchmark_prices:
-        symbol = next(iter(result.benchmark_prices))
-    if symbol is None:
-        return None
+    preferred_symbols = [item for item in spec.benchmark.symbols if item in result.benchmark_prices]
+    fallback_symbols = [item for item in result.benchmark_prices if item not in preferred_symbols]
+    for symbol in [*preferred_symbols, *fallback_symbols]:
+        series = result.benchmark_prices[symbol]
+        if series.empty:
+            continue
+        values = pd.to_numeric(series, errors="coerce").dropna()
+        if values.empty:
+            continue
 
-    series = result.benchmark_prices[symbol]
-    if series.empty:
-        return None
-    values = pd.to_numeric(series, errors="coerce").dropna()
-    if values.empty:
-        return None
-
-    rows = [{"date": str(date), "value": float(value)} for date, value in values.sort_index().items()]
-    path = run_dir / "benchmark_curve.csv"
-    pd.DataFrame(rows).to_csv(path, index=False)
-    return path
+        rows = [{"date": str(date), "value": float(value)} for date, value in values.sort_index().items()]
+        path = run_dir / "benchmark_curve.csv"
+        pd.DataFrame(rows).to_csv(path, index=False)
+        return path
+    return None
 
 
 def _build_execution_assumptions(spec: StrategySpec) -> dict[str, Any]:

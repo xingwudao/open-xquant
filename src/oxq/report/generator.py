@@ -152,7 +152,12 @@ def generate_report(run_dir: str | Path) -> str:
         lines.append(f"- Parameter perturbation: {list(spec.robustness.parameter_perturbation.keys())}")
     if robustness_result is None and spec.robustness.regime_analysis:
         lines.append("- Regime analysis: enabled")
-    if robustness_result is None and not spec.robustness.cost_multiplier and not spec.robustness.parameter_perturbation:
+    if (
+        robustness_result is None
+        and not spec.robustness.cost_multiplier
+        and not spec.robustness.parameter_perturbation
+        and not spec.robustness.regime_analysis
+    ):
         lines.append("(No robustness tests configured)")
     lines.append("")
 

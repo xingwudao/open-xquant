@@ -87,6 +87,18 @@ def test_decision_rejects_fragile_robustness_result() -> None:
     assert decision == "REJECT"
 
 
+def test_decision_rejects_unverified_robustness_result() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={},
+        metrics={},
+        repro_audit={"status": "fail", "checks": [{"id": "robustness_hash", "status": "fail"}]},
+        robustness_result={"status": "robust"},
+    )
+
+    assert decision == "REJECT"
+
+
 def test_decision_watchlists_warn_robustness_before_promotion() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
@@ -431,6 +443,27 @@ def test_report_rejects_fragile_robustness_result(tmp_path) -> None:
     report = generate_report(run_dir)
 
     assert "## 1. Executive Decision\n\n**REJECT**" in report
+
+
+def test_report_regime_only_config_does_not_claim_no_robustness_tests(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_regime_only_robustness",
+        hypothesis="regime-only robustness config should be described consistently",
+    )
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    spec.robustness.regime_analysis = True
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "- Regime analysis: enabled" in report
+    assert "(No robustness tests configured)" not in report
 
 
 def _write_report_run(tmp_path):

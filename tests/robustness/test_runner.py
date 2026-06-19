@@ -1,12 +1,18 @@
 from __future__ import annotations
 
 import json
+from decimal import Decimal
 from pathlib import Path
 
+import pandas as pd
 import yaml
 
+from oxq.audit.reproducibility import audit_reproducibility
+from oxq.core.engine import Engine
+from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.robustness.runner import _clone_spec_with_cost_multiplier, run_robustness
+from oxq.spec.compiler import _write_artifacts
 from oxq.spec.schema import IndicatorDef, StrategySpec
 
 
@@ -188,6 +194,49 @@ def test_run_robustness_writes_robustness_json(monkeypatch, tmp_path) -> None:
     assert json.loads(artifact.read_text(encoding="utf-8")) == result
 
 
+def test_run_robustness_hashes_robustness_json_for_reproducibility(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(
+        strategy_id="robustness_hash",
+        hypothesis="robustness artifacts should be reproducible",
+    )
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0, 1.0],
+                    "high": [1.0, 1.0, 1.0],
+                    "low": [1.0, 1.0, 1.0],
+                    "close": [1.0, 1.0, 1.0],
+                    "volume": [1, 1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    _write_artifacts(spec, result, tmp_path, Engine())
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.9}), encoding="utf-8")
+        return object(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    run_robustness(tmp_path)
+    (tmp_path / "robustness.json").write_text(json.dumps({"status": "robust", "tests": []}), encoding="utf-8")
+
+    audit = audit_reproducibility(tmp_path)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "robustness_hash" and check["status"] == "fail" for check in audit["checks"])
+
+
 def test_is_oos_comparison_uses_metrics_json_numeric_values(monkeypatch, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="is_oos_values", hypothesis="robustness should compare split metrics")
     _write_run_inputs(
@@ -364,6 +413,42 @@ def test_is_oos_comparison_applies_reject_policy_when_is_metrics_missing(monkeyp
     assert comparison["status"] == "fail"
     assert "oos_sharpe_lt" in comparison["message"]
     assert "max_drawdown_lt" in comparison["message"]
+
+
+def test_is_oos_comparison_fails_negative_oos_sharpe_when_is_metrics_missing(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(
+        strategy_id="is_oos_negative_oos_missing_is",
+        hypothesis="negative OOS Sharpe should fail even with partial split metrics",
+    )
+    _write_run_inputs(
+        tmp_path,
+        spec,
+        {
+            "sharpe_ratio": 1.0,
+            "is_total_return": 0.5,
+            "is_sharpe_ratio": 1.0,
+            "is_max_drawdown": -0.1,
+            "oos_total_return": -0.1,
+            "oos_sharpe_ratio": -0.2,
+            "oos_max_drawdown": -0.2,
+            "oos_calmar_ratio": -0.5,
+        },
+    )
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.9}), encoding="utf-8")
+        return object(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    comparison = next(test for test in result["tests"] if test["name"] == "is_oos_comparison")
+    assert comparison["status"] == "fail"
+    assert "negative OOS Sharpe" in comparison["message"]
 
 
 def test_parameter_perturbation_reruns_one_at_a_time(monkeypatch, tmp_path) -> None:
