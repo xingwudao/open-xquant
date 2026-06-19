@@ -23,8 +23,8 @@ def generate_report(run_dir: str | Path) -> str:
     spec_dict = yaml.safe_load((run_path / "strategy_spec.yaml").read_text(encoding="utf-8")) or {}
     metrics = json.loads((run_path / "metrics.json").read_text(encoding="utf-8"))
     execution_assumptions = _load_execution_assumptions(run_path)
-    robustness_result = _load_json_object(run_path / "robustness.json")
     repro_audit = audit_reproducibility(run_dir)
+    robustness_result = _load_verified_robustness_result(run_path, repro_audit)
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
 
@@ -401,6 +401,28 @@ def _format_validation_classification_lines(validation_result: dict) -> list[str
 def _load_execution_assumptions(run_path: Path) -> dict | None:
     assumptions_path = run_path / "execution_assumptions.json"
     return _load_json_object(assumptions_path)
+
+
+def _load_verified_robustness_result(run_path: Path, repro_audit: dict) -> dict | None:
+    robustness_path = run_path / "robustness.json"
+    if not robustness_path.exists():
+        return None
+
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    if artifact_hashes_path.exists():
+        artifact_hashes = _load_json_object(artifact_hashes_path)
+        if not artifact_hashes or "robustness.json" not in artifact_hashes:
+            return None
+        checks = repro_audit.get("checks", [])
+        if not any(
+            isinstance(check, dict)
+            and check.get("id") == "robustness_hash"
+            and check.get("status") == "pass"
+            for check in checks
+        ):
+            return None
+
+    return _load_json_object(robustness_path)
 
 
 def _load_json_object(path: Path) -> dict | None:

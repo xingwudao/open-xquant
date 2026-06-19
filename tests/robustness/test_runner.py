@@ -12,7 +12,7 @@ from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.robustness.runner import _clone_spec_with_cost_multiplier, run_robustness
-from oxq.spec.compiler import _write_artifacts
+from oxq.spec.compiler import _hash_file, _write_artifacts
 from oxq.spec.schema import IndicatorDef, StrategySpec
 
 
@@ -583,6 +583,33 @@ def test_parameter_perturbation_reports_scalar_target_error(monkeypatch, tmp_pat
     assert "must be a list" in perturbation["results"][0]["message"]
 
 
+def test_parameter_perturbation_rejects_non_finite_values(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="perturb_non_finite", hypothesis="non-finite values should be structured errors")
+    spec.signal.indicators["mom"] = IndicatorDef(type="Momentum", params={"period": 10})
+    spec.robustness.parameter_perturbation = {"mom.period": [float("nan"), float("inf")]}
+    _write_run_inputs(tmp_path, spec, {"sharpe_ratio": 1.0})
+    compile_calls = 0
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        nonlocal compile_calls
+        del data_dir
+        compile_calls += 1
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.8}), encoding="utf-8")
+        return object(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    perturbation = next(test for test in result["tests"] if test["name"] == "parameter_perturbation")
+    assert compile_calls == 1
+    assert perturbation["status"] == "error"
+    assert all(item["status"] == "error" for item in perturbation["results"])
+    assert all("must be finite" in item["message"] for item in perturbation["results"])
+
+
 def test_regime_analysis_returns_all_buckets(monkeypatch, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="regimes", hypothesis="regime analysis should segment realized behavior")
     spec.robustness.regime_analysis = True
@@ -701,6 +728,10 @@ def test_regime_analysis_segments_by_benchmark_when_artifact_exists(monkeypatch,
             ("2022-01-04", 110),
         ],
     )
+    (tmp_path / "artifact_hashes.json").write_text(
+        json.dumps({"benchmark_curve.csv": _hash_file(tmp_path / "benchmark_curve.csv")}),
+        encoding="utf-8",
+    )
 
     def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
         del data_dir
@@ -716,6 +747,46 @@ def test_regime_analysis_segments_by_benchmark_when_artifact_exists(monkeypatch,
     regime = next(test for test in result["tests"] if test["name"] == "regime_analysis")
     assert regime["regime_source"] == "benchmark"
     assert regime["regimes"]["uptrend"]["date_count"] == 2
+
+
+def test_regime_analysis_ignores_untracked_benchmark_artifact(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="untracked_benchmark", hypothesis="untracked benchmark files should not drive regimes")
+    spec.benchmark.symbols = ["SPY"]
+    spec.robustness.regime_analysis = True
+    _write_run_inputs(tmp_path, spec, {"sharpe_ratio": 1.0})
+    _write_equity_curve(
+        tmp_path,
+        [
+            ("2022-01-01", 100),
+            ("2022-01-02", 100),
+            ("2022-01-03", 100),
+            ("2022-01-04", 100),
+        ],
+    )
+    _write_benchmark_curve(
+        tmp_path,
+        [
+            ("2022-01-01", 100),
+            ("2022-01-02", 110),
+            ("2022-01-03", 100),
+            ("2022-01-04", 110),
+        ],
+    )
+    (tmp_path / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:unused"}), encoding="utf-8")
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.9}), encoding="utf-8")
+        return object(), out_path
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+
+    result = run_robustness(tmp_path)
+
+    regime = next(test for test in result["tests"] if test["name"] == "regime_analysis")
+    assert regime["regime_source"] == "strategy_equity"
 
 
 def _write_run_inputs(tmp_path: Path, spec: StrategySpec, metrics: dict) -> None:

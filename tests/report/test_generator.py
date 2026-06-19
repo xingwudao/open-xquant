@@ -445,6 +445,20 @@ def test_report_rejects_fragile_robustness_result(tmp_path) -> None:
     assert "## 1. Executive Decision\n\n**REJECT**" in report
 
 
+def test_report_does_not_trust_unhashed_robustness_artifact(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:unused"}), encoding="utf-8")
+    (run_dir / "robustness.json").write_text(
+        json.dumps({"status": "robust", "baseline_sharpe": 1.1, "tests": []}),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "## 1. Executive Decision\n\n**REJECT**" in report
+    assert "**Status**: ROBUST" not in report
+
+
 def test_report_regime_only_config_does_not_claim_no_robustness_tests(tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
     spec = StrategySpec.template(

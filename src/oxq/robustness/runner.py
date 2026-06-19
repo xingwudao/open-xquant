@@ -275,6 +275,14 @@ def _run_parameter_perturbations(
             })
             continue
         for value in values:
+            if _is_non_finite_number(value):
+                results.append({
+                    "target": target,
+                    "value": str(value),
+                    "status": "error",
+                    "message": f"robustness.parameter_perturbation.{target} values must be finite",
+                })
+                continue
             perturbed_spec = copy.deepcopy(spec)
             try:
                 _apply_perturbation(perturbed_spec, target, value)
@@ -462,6 +470,8 @@ def _regime_reference_curve(spec: StrategySpec, run_path: Path, equity: pd.DataF
             benchmark_path = run_path / filename
             if not benchmark_path.exists():
                 continue
+            if not _artifact_hash_matches(run_path, filename):
+                continue
             benchmark, error = _read_curve_csv(benchmark_path, filename)
             if error is not None or len(benchmark) < 2:
                 continue
@@ -531,6 +541,32 @@ def _finite_float(value: object) -> float | None:
     except (TypeError, ValueError):
         return None
     return parsed if math.isfinite(parsed) else None
+
+
+def _is_non_finite_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return False
+    return not math.isfinite(float(value))
+
+
+def _artifact_hash_matches(run_path: Path, filename: str) -> bool:
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    if not artifact_hashes_path.exists():
+        return False
+    try:
+        artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    if not isinstance(artifact_hashes, dict):
+        return False
+    expected = artifact_hashes.get(filename)
+    if not isinstance(expected, str):
+        return False
+    try:
+        actual = _hash_file(run_path / filename)
+    except OSError:
+        return False
+    return actual == expected
 
 
 def _round_metric(value: float | None, digits: int = 6) -> float | None:
