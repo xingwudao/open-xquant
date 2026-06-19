@@ -631,6 +631,18 @@ def test_validate_rejects_next_high_and_next_low_fill_modes() -> None:
     assert "execution_semantics_invalid" not in checks
 
 
+@pytest.mark.parametrize("fill_price_mode", ["next_close", "next_mid", "next_avg"])
+def test_validate_accepts_executable_next_session_legacy_fill_modes(fill_price_mode: str) -> None:
+    spec = StrategySpec.template(strategy_id=f"legacy_{fill_price_mode}", hypothesis="legacy executable fill modes work")
+    spec.execution.trade_time = "next_open"
+    spec.execution.fill_price_mode = fill_price_mode
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    assert not any(error["check"] == "fill_price_mode_invalid" for error in result.errors)
+
+
 def test_validate_rejects_trade_time_fill_price_mismatch() -> None:
     spec = StrategySpec.template(strategy_id="mismatch", hypothesis="execution declaration must match fill mode")
     spec.execution.trade_time = "next_open"

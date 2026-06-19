@@ -534,7 +534,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
 
     # Derive execution semantics early so data requirements use effective explicit fields.
     has_any_explicit_execution_field = _has_any_explicit_execution_field(spec)
-    valid_legacy_fill_modes = frozenset({"close", "next_open", "mid"})
+    valid_legacy_fill_modes = frozenset({"close", "mid", "next_avg", "next_close", "next_mid", "next_open"})
     raw_legacy_fill_mode_invalid = (
         bool(spec.execution.fill_price_mode)
         and not has_any_explicit_execution_field
@@ -634,18 +634,22 @@ def validate(spec: StrategySpec) -> ValidationResult:
             )
         )
 
+    effective_fill_price_mode = effective_execution.fill_price_mode if effective_execution is not None else spec.execution.fill_price_mode
     expected_trade_time = {
         "close": "close_t",
         "mid": "close_t",
+        "next_avg": "next_open",
+        "next_close": "next_open",
+        "next_mid": "next_open",
         "next_open": "next_open",
-    }.get(spec.execution.fill_price_mode)
+    }.get(effective_fill_price_mode)
     if expected_trade_time and spec.execution.trade_time != expected_trade_time:
         errors.append(
             _err(
                 "fatal",
                 "execution_timing_mismatch",
                 f"execution.trade_time={spec.execution.trade_time} does not match "
-                f"fill_price_mode={spec.execution.fill_price_mode}; expected {expected_trade_time}",
+                f"fill_price_mode={effective_fill_price_mode}; expected {expected_trade_time}",
             )
         )
 

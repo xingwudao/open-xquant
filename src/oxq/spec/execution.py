@@ -18,6 +18,9 @@ class EffectiveExecution:
 
 _LEGACY_TO_EXPLICIT: dict[str, tuple[str, str, str]] = {
     "next_open": ("next_session_open", "next_session", "open"),
+    "next_close": ("next_session_close", "next_session", "close"),
+    "next_mid": ("next_session_mid", "next_session", "mid"),
+    "next_avg": ("next_session_avg", "next_session", "avg"),
     "close": ("same_session_close", "same_session", "close"),
     "mid": ("same_session_close", "same_session", "mid"),
 }

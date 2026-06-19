@@ -304,9 +304,16 @@ def _parse_execution(raw: dict) -> ExecutionSection:
     rebalance_raw = raw.get("rebalance", {})
     rebalance_frequency = rebalance_raw.get("frequency", "daily")
     lot_size = _parse_int(raw.get("lot_size", 1), "execution.lot_size")
+    order_timing = _parse_str(raw.get("order_timing", ""), "execution.order_timing")
+    price_bar = _parse_str(raw.get("price_bar", ""), "execution.price_bar")
+    price_type = _parse_str(raw.get("price_type", ""), "execution.price_type")
+    fill_price_mode = _parse_str(
+        raw.get("fill_price_mode", "" if any((order_timing, price_bar, price_type)) else "next_open"),
+        "execution.fill_price_mode",
+    )
     return ExecutionSection(
         trade_time=raw.get("trade_time", "next_open"),
-        fill_price_mode=raw.get("fill_price_mode", "next_open"),
+        fill_price_mode=fill_price_mode,
         rebalance=RebalanceDef(
             frequency=rebalance_frequency,
             interval_days=_parse_int(
@@ -315,9 +322,9 @@ def _parse_execution(raw: dict) -> ExecutionSection:
             ),
         ),
         lot_size=lot_size,
-        order_timing=_parse_str(raw.get("order_timing", ""), "execution.order_timing"),
-        price_bar=_parse_str(raw.get("price_bar", ""), "execution.price_bar"),
-        price_type=_parse_str(raw.get("price_type", ""), "execution.price_type"),
+        order_timing=order_timing,
+        price_bar=price_bar,
+        price_type=price_type,
         lot_size_config=_parse_lot_size_config(raw.get("lot_size_config"), lot_size),
         cash_annual_return=_parse_float(raw.get("cash_annual_return", 0.0), "execution.cash_annual_return"),
         initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),

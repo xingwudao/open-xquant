@@ -119,6 +119,36 @@ def test_research_audit_fails_on_negative_costs(tmp_path) -> None:
     assert any(check["id"] == "cost_model" and check["severity"] == "fatal" for check in result["checks"])
 
 
+def test_research_audit_warns_on_zero_cost_with_explicit_replay_execution(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="zero_cost_explicit_replay", hypothesis="zero costs are replay-style")
+    spec.cost.fee_rate = 0.0
+    spec.cost.slippage_rate = 0.0
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({"trade_count": 12, "oos_trade_count": 12, "max_drawdown": -0.1}),
+        encoding="utf-8",
+    )
+    (tmp_path / "data_manifest.json").write_text(
+        json.dumps({"symbols": ["SPY"], "missing_ratio": 0.0}),
+        encoding="utf-8",
+    )
+
+    result = audit_research(tmp_path)
+
+    assert result["status"] == "pass"
+    cost_model = next(check for check in result["checks"] if check["id"] == "cost_model")
+    assert cost_model["status"] == "fail"
+    assert cost_model["severity"] == "warning"
+
+
 def test_research_audit_surfaces_fatal_spec_validation_findings(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="peak_bias", hypothesis="future data signals fail audits")
     spec.signal.rules = {"peak": SignalRuleDef(type="Peak", params={"column": "close"})}

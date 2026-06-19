@@ -16,6 +16,7 @@ from oxq.tools.strategy import (
     strategy_add_signal,
     strategy_create,
 )
+from oxq.trade.sim_broker import FillPriceMode
 
 
 @pytest.fixture(autouse=True)
@@ -178,6 +179,53 @@ def test_engine_run_passes_market_calendar_to_provider_and_broker(monkeypatch, s
 
     assert "error" not in result
     assert captured == {"provider_calendar": "XHKG", "broker_calendar": "XHKG"}
+
+
+@pytest.mark.parametrize(
+    ("fill_price_mode", "expected"),
+    [
+        ("next_close", FillPriceMode.NEXT_CLOSE),
+        ("next_mid", FillPriceMode.NEXT_MID),
+        ("next_avg", FillPriceMode.NEXT_AVG),
+    ],
+)
+def test_engine_run_accepts_next_session_close_modes(monkeypatch, sample_data_dir, fill_price_mode, expected) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeMarketProvider:
+        def __init__(self, data_dir, currency=None, calendar=None) -> None:
+            captured["provider_calendar"] = calendar
+
+    class FakeBroker:
+        def __init__(self, **kwargs) -> None:
+            captured["fill_price_mode"] = kwargs.get("fill_price_mode")
+            captured["broker_calendar"] = kwargs.get("market_calendar")
+
+    def fake_run(self, *args, **kwargs) -> RunResult:
+        return RunResult(
+            portfolio=Portfolio(cash=Decimal("100000")),
+            trades=[],
+            equity_curve=[],
+            mktdata={},
+        )
+
+    monkeypatch.setattr(engine_tools, "LocalMarketDataProvider", FakeMarketProvider)
+    monkeypatch.setattr(engine_tools, "SimBroker", FakeBroker)
+    monkeypatch.setattr(engine_tools.Engine, "run", fake_run)
+    _build_full_strategy()
+
+    result = engine_run(
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
+        data_dir=str(sample_data_dir),
+        fill_price_mode=fill_price_mode,
+        market_calendar="XNYS",
+    )
+
+    assert "error" not in result
+    assert captured == {"provider_calendar": "XNYS", "fill_price_mode": expected, "broker_calendar": "XNYS"}
 
 
 def test_engine_run_through_indicator(sample_data_dir) -> None:

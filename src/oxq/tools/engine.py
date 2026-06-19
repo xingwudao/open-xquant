@@ -36,7 +36,7 @@ def engine_run(
     lot_size: int = 1,
     cash_annual_return: float = 0.0,
     data_start: str | None = None,
-    fill_price_mode: Literal["close", "mid", "next_open"] | None = None,
+    fill_price_mode: Literal["close", "mid", "next_avg", "next_close", "next_mid", "next_open"] | None = None,
     market_calendar: str | None = "XNYS",
 ) -> dict[str, Any]:
     """Run a strategy through the engine and store the result."""
@@ -44,12 +44,13 @@ def engine_run(
     if strat is None:
         return {"error": f"Strategy '{strategy}' not found"}
 
-    supported_fill_modes = {"close", "mid", "next_open"}
+    supported_fill_modes = {"close", "mid", "next_avg", "next_close", "next_mid", "next_open"}
+    next_session_fill_modes = {"next_avg", "next_close", "next_mid", "next_open"}
     if fill_price_mode is not None and fill_price_mode not in supported_fill_modes:
         valid = ", ".join(sorted(supported_fill_modes))
         return {"error": f"Unsupported fill_price_mode '{fill_price_mode}'. Valid: {valid}"}
-    if fill_price_mode == "next_open" and not market_calendar:
-        return {"error": "market_calendar is required when fill_price_mode='next_open'"}
+    if fill_price_mode in next_session_fill_modes and not market_calendar:
+        return {"error": f"market_calendar is required when fill_price_mode='{fill_price_mode}'"}
 
     # Use symbols param as override; otherwise use strategy's universe
     if symbols:
@@ -58,7 +59,7 @@ def engine_run(
         return {"error": "Strategy has no universe set. Use strategy_set_universe first, or pass symbols parameter."}
 
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
-    provider_calendar = market_calendar if fill_price_mode == "next_open" else None
+    provider_calendar = market_calendar if fill_price_mode in next_session_fill_modes else None
     market = LocalMarketDataProvider(path, calendar=provider_calendar)
 
     # Build fee and slippage models from params
@@ -80,7 +81,7 @@ def engine_run(
         broker_kwargs["slippage_model"] = slippage_model
     if fill_price_mode is not None:
         broker_kwargs["fill_price_mode"] = FillPriceMode(fill_price_mode)
-        if fill_price_mode == "next_open":
+        if fill_price_mode in next_session_fill_modes:
             broker_kwargs["market_calendar"] = market_calendar
     broker = SimBroker(**broker_kwargs)
 

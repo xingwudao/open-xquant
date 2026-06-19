@@ -130,6 +130,29 @@ def test_helper_derives_explicit_execution_semantics_without_legacy_fill_mode() 
     assert effective.compatibility_source == "explicit_fields"
 
 
+def test_yaml_explicit_execution_can_omit_legacy_fill_price_mode(tmp_path: Path) -> None:
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: explicit_yaml
+execution:
+  trade_time: next_open
+  order_timing: next_session_close
+  price_bar: next_session
+  price_type: close
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    effective = derive_execution_semantics(spec.execution)
+
+    assert spec.execution.fill_price_mode == ""
+    assert effective.fill_price_mode == "next_close"
+    assert effective.compatibility_source == "explicit_fields"
+
+
 def test_conflicting_execution_semantics_raise_value_error() -> None:
     spec = StrategySpec.template(strategy_id="conflict", hypothesis="conflict")
     spec.execution.fill_price_mode = "next_open"

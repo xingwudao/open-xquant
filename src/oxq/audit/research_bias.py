@@ -11,6 +11,7 @@ import json
 import math
 from pathlib import Path
 
+from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 
 
@@ -107,14 +108,25 @@ def audit_research(run_dir: str | Path) -> dict:
     # --- Execution lag ---
     signal_time = spec.signal.signal_time
     trade_time = spec.execution.trade_time
-    fill_price_mode = spec.execution.fill_price_mode
+    effective_execution = None
+    try:
+        effective_execution = derive_execution_semantics(spec.execution)
+    except ValueError:
+        pass
+    fill_price_mode = effective_execution.fill_price_mode if effective_execution is not None else spec.execution.fill_price_mode
+    has_valid_explicit_execution = effective_execution is not None and any(
+        (spec.execution.order_timing, spec.execution.price_bar, spec.execution.price_type)
+    )
 
     if signal_time == "close_t" and trade_time == "close_t":
         checks.append(_finding(
             "execution_lag", "fail", "fatal",
             "signal_time=close_t and trade_time=close_t — signal generated and filled on same bar",
         ))
-    elif signal_time == "close_t" and fill_price_mode in ("close", "mid"):
+    elif signal_time == "close_t" and effective_execution is not None and (
+        effective_execution.price_bar == "same_session"
+        or effective_execution.order_timing.startswith("same_session")
+    ):
         checks.append(_finding(
             "execution_lag", "fail", "fatal",
             f"signal_time=close_t and fill_price_mode={fill_price_mode} — "
@@ -128,12 +140,20 @@ def audit_research(run_dir: str | Path) -> dict:
     slippage_rate = spec.cost.slippage_rate
     fee_min = spec.cost.fee_min
     if fee_rate <= 0 and slippage_rate <= 0:
-        checks.append(_finding(
-            "cost_model",
-            "fail",
-            "fatal",
-            "fee_rate and slippage_rate must be positive — zero or negative costs are invalid",
-        ))
+        if has_valid_explicit_execution:
+            checks.append(_finding(
+                "cost_model",
+                "fail",
+                "warning",
+                "fee_rate and slippage_rate are zero; acceptable only for declared replay-style validation",
+            ))
+        else:
+            checks.append(_finding(
+                "cost_model",
+                "fail",
+                "fatal",
+                "fee_rate and slippage_rate must be positive — zero or negative costs are invalid",
+            ))
     elif fee_rate <= 0:
         checks.append(_finding("cost_model", "fail", "fatal", "fee_rate must be positive"))
     elif slippage_rate <= 0:

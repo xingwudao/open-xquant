@@ -164,6 +164,27 @@ def test_report_generation_ignores_malformed_execution_assumptions(tmp_path) -> 
     assert "### Execution Assumptions" not in report
 
 
+def test_report_summary_uses_effective_execution_fill_mode(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_explicit_execution",
+        hypothesis="report effective execution summary",
+    )
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_close"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "close"
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "- **Execution**: next_open trade, next_close fill" in report
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="report_execution_assumptions",

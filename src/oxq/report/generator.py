@@ -11,6 +11,7 @@ import yaml
 
 from oxq.audit.reproducibility import audit_reproducibility
 from oxq.audit.research_bias import audit_research
+from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 
 
@@ -57,7 +58,7 @@ def generate_report(run_dir: str | Path) -> str:
     for name, ind in spec.signal.indicators.items():
         lines.append(f"  - {name}: {ind.type} ({ind.params})")
     lines.append(f"- **Portfolio**: {spec.portfolio.type}")
-    lines.append(f"- **Execution**: {spec.execution.trade_time} trade, {spec.execution.fill_price_mode} fill")
+    lines.append(f"- **Execution**: {spec.execution.trade_time} trade, {_effective_fill_price_mode(spec)} fill")
     lines.append("")
 
     # 4. Data and Execution Assumptions
@@ -259,6 +260,13 @@ def _load_execution_assumptions(run_path: Path) -> dict | None:
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
     return assumptions if isinstance(assumptions, dict) else None
+
+
+def _effective_fill_price_mode(spec: StrategySpec) -> str:
+    try:
+        return derive_execution_semantics(spec.execution).fill_price_mode
+    except ValueError:
+        return spec.execution.fill_price_mode
 
 
 def _format_execution_assumption_lines(assumptions: dict) -> list[str]:
