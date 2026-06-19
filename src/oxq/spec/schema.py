@@ -184,6 +184,8 @@ class StrategySpec:
         """Compute sha256 hash of the spec for reproducibility tracking."""
         self.execution.normalize_lot_size_config()
         canonical_obj = _dataclass_to_canonical_dict(self)
+        if self.metrics == MetricsSection():
+            canonical_obj.pop("metrics", None)
         if (
             any((self.execution.order_timing, self.execution.price_bar, self.execution.price_type))
             and self.execution.fill_price_mode == "next_open"
@@ -524,6 +526,16 @@ def _parse_bool(value: object, field_name: str) -> bool:
 def _dataclass_to_dict(obj: Any) -> Any:
     """Recursively convert dataclass to dict for serialization."""
     from dataclasses import MISSING, fields, is_dataclass
+
+    if isinstance(obj, MetricsSection) and obj.profile != "open_xquant_default":
+        return {
+            "profile": obj.profile,
+            "risk_free_rate": obj.risk_free_rate,
+            "return_type": obj.return_type,
+            "annualization_days": obj.annualization_days,
+            "calmar_denominator": obj.calmar_denominator,
+            "evaluation_window": obj.evaluation_window,
+        }
 
     if is_dataclass(obj):
         result = {}

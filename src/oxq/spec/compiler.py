@@ -923,7 +923,7 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         first_dt = result.equity_curve[0][0]
         tz = getattr(pd.Timestamp(first_dt), "tz", None)
         train_start = pd.Timestamp(train[0], tz=tz)
-        train_end = pd.Timestamp(train[1], tz=tz)
+        train_end = pd.Timestamp(train[1], tz=tz) + pd.Timedelta(days=1) - pd.Timedelta(nanoseconds=1)
         is_curve = _window_equity_curve(result.equity_curve, start=train_start, end=train_end, include_previous_baseline=True)
         if len(is_curve) >= 2:
             is_metrics = compute_equity_curve_metrics(is_curve, spec.metrics)

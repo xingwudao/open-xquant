@@ -1,10 +1,12 @@
+import hashlib
+import json
 from pathlib import Path
 
 import pytest
 import yaml
 
 from oxq.spec.execution import derive_execution_semantics
-from oxq.spec.schema import StrategySpec
+from oxq.spec.schema import StrategySpec, _dataclass_to_canonical_dict
 
 
 def test_missing_metrics_section_defaults_to_open_xquant_profile(tmp_path: Path) -> None:
@@ -67,6 +69,45 @@ metrics:
     assert spec.metrics.annualization_days == 252
     assert spec.metrics.calmar_denominator == "max_drawdown"
     assert spec.metrics.evaluation_window == "full"
+
+
+def test_xquant_metrics_explicit_default_overrides_round_trip(tmp_path: Path) -> None:
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: metrics_xquant_override
+research:
+  hypothesis: explicit metrics overrides should survive artifacts
+metrics:
+  profile: xquant_production
+  risk_free_rate: 0.0
+  return_type: simple
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    out_path = tmp_path / "round_trip.yaml"
+    out_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=True), encoding="utf-8")
+    reparsed = StrategySpec.from_yaml(out_path)
+
+    assert spec.to_dict()["metrics"]["risk_free_rate"] == 0.0
+    assert spec.to_dict()["metrics"]["return_type"] == "simple"
+    assert reparsed.metrics.profile == "xquant_production"
+    assert reparsed.metrics.risk_free_rate == 0.0
+    assert reparsed.metrics.return_type == "simple"
+
+
+def test_default_metrics_do_not_change_legacy_spec_hash() -> None:
+    spec = StrategySpec.template(strategy_id="legacy_hash", hypothesis="default metrics should preserve legacy hash")
+    spec.execution.normalize_lot_size_config()
+    legacy_canonical = _dataclass_to_canonical_dict(spec)
+    legacy_canonical.pop("metrics", None)
+    canonical = json.dumps(legacy_canonical, sort_keys=True, default=str)
+    legacy_hash = f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+    assert spec.compute_hash() == legacy_hash
 
 
 def test_parse_execution_cash_return_and_lot_size_config(tmp_path: Path) -> None:

@@ -31,12 +31,18 @@ def test_cost_multiplier_multiplies_minimum_fee() -> None:
     spec.cost.fee_rate = 0.001
     spec.cost.fee_min = 2.5
     spec.cost.slippage_rate = 0.001
+    spec.metrics.profile = "xquant_production"
+    spec.metrics.return_type = "log"
+    spec.metrics.risk_free_rate = 0.02
 
     cloned = _clone_spec_with_cost_multiplier(spec, 2.0)
 
     assert cloned.cost.fee_rate == 0.002
     assert cloned.cost.fee_min == 5.0
     assert cloned.cost.slippage_rate == 0.002
+    assert cloned.metrics.profile == "xquant_production"
+    assert cloned.metrics.return_type == "log"
+    assert cloned.metrics.risk_free_rate == 0.02
 
 
 def test_run_robustness_handles_unavailable_baseline_sharpe(monkeypatch, tmp_path) -> None:

@@ -1324,6 +1324,29 @@ def test_metrics_evaluation_window_oos_uses_oos_top_level_values() -> None:
     assert metrics["oos_total_return"] == pytest.approx(0.331)
 
 
+def test_is_metrics_include_train_period_end_date_with_intraday_timestamps() -> None:
+    spec = StrategySpec.template(strategy_id="is_metric_end", hypothesis="is metrics should include train end date")
+    spec.validation.train_period = ["2024-01-01", "2024-01-03"]
+    spec.validation.test_period = ["2024-01-04", "2024-01-05"]
+    dates = [pd.Timestamp(day, tz="UTC") + pd.Timedelta(hours=16) for day in pd.bdate_range("2024-01-01", periods=5)]
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("133100")),
+        trades=[],
+        equity_curve=[
+            (dates[0], 100000.0),
+            (dates[1], 110000.0),
+            (dates[2], 121000.0),
+            (dates[3], 133100.0),
+            (dates[4], 133100.0),
+        ],
+        mktdata={},
+    )
+
+    metrics = _build_metrics(spec, result, "run_1")
+
+    assert metrics["is_total_return"] == pytest.approx(0.21)
+
+
 def test_oos_metrics_respect_test_period_end() -> None:
     spec = StrategySpec.template(strategy_id="oos_metric_end", hypothesis="oos metrics should stop at test end")
     spec.validation.train_period = ["2024-01-01", "2024-01-02"]

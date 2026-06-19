@@ -269,15 +269,16 @@ def _format_money(value: object) -> str:
 
 
 def _format_metric_assumption_lines(metrics: dict, spec: StrategySpec) -> list[str]:
-    profile = metrics.get("metrics_profile") or spec.metrics.profile
+    del spec
+    profile = metrics.get("metrics_profile") or "open_xquant_default"
     assumptions = metrics.get("metric_assumptions")
     if not isinstance(assumptions, dict):
         assumptions = {
-            "return_type": spec.metrics.return_type,
-            "risk_free_rate": spec.metrics.risk_free_rate,
-            "annualization_days": spec.metrics.annualization_days,
-            "calmar_denominator": spec.metrics.calmar_denominator,
-            "evaluation_window": spec.metrics.evaluation_window,
+            "return_type": "simple",
+            "risk_free_rate": 0.0,
+            "annualization_days": 252,
+            "calmar_denominator": "max_drawdown",
+            "evaluation_window": "full",
         }
     lines = [f"- **Profile**: {_format_assumption_value(profile)}"]
     for key in ("return_type", "risk_free_rate", "annualization_days", "calmar_denominator", "evaluation_window"):

@@ -69,6 +69,21 @@ def test_xquant_production_profile_uses_log_returns_and_risk_free_rate() -> None
     assert metrics["sharpe_ratio"] != pytest.approx(result.sharpe_ratio())
 
 
+def test_log_profile_keeps_invalid_equity_metrics_unavailable() -> None:
+    result = _make_result([100.0, 0.0, 101.0])
+    config = MetricsSection(profile="xquant_production", return_type="log", risk_free_rate=0.02)
+
+    metrics = compute_profile_metrics(result, config, run_id="run-1")
+
+    assert metrics["total_return"] is None
+    assert metrics["annualized_return"] is None
+    assert metrics["annualized_volatility"] is None
+    assert metrics["max_drawdown"] is None
+    assert metrics["sharpe_ratio"] is None
+    assert metrics["sortino_ratio"] is None
+    assert metrics["calmar_ratio"] is None
+
+
 def test_risk_free_rate_affects_simple_profile_sharpe() -> None:
     values = np.array([100.0, 102.0, 101.0, 106.0, 104.0, 109.0])
     result = _make_result(values.tolist())

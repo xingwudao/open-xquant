@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
@@ -22,12 +21,14 @@ def compute_profile_metrics(result: RunResult, config: MetricsSection, *, run_id
         "run_id": run_id,
         "metrics_profile": config.profile,
         "metric_assumptions": assumptions,
-        "total_return": result.total_return(),
-        "max_drawdown": result.max_drawdown(),
     }
     if config.return_type == "log":
         metrics.update(_log_return_metrics(result, config))
     else:
+        metrics.update({
+            "total_return": result.total_return(),
+            "max_drawdown": result.max_drawdown(),
+        })
         days = config.annualization_days
         metrics.update(
             {
@@ -89,14 +90,26 @@ def _simple_curve_metrics(equity_curve: list[tuple[object, float]], config: Metr
     }
 
 
-def _log_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, float]:
+def _log_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, float | None]:
     curve_metrics = _log_curve_metrics(result.equity_curve, config)
+    if curve_metrics["annualized_return"] is None:
+        return {
+            "total_return": None,
+            "annualized_return": None,
+            "annualized_volatility": None,
+            "max_drawdown": None,
+            "sharpe_ratio": None,
+            "sortino_ratio": None,
+            "calmar_ratio": None,
+        }
     return {
-        "annualized_return": _none_to_zero(curve_metrics["annualized_return"]),
-        "annualized_volatility": _none_to_zero(curve_metrics["annualized_volatility"]),
-        "sharpe_ratio": _none_to_zero(curve_metrics["sharpe_ratio"]),
+        "total_return": curve_metrics["total_return"],
+        "annualized_return": curve_metrics["annualized_return"],
+        "annualized_volatility": curve_metrics["annualized_volatility"],
+        "max_drawdown": curve_metrics["max_drawdown"],
+        "sharpe_ratio": curve_metrics["sharpe_ratio"],
         "sortino_ratio": _log_sortino_ratio(result, config),
-        "calmar_ratio": _none_to_zero(curve_metrics["calmar_ratio"]),
+        "calmar_ratio": curve_metrics["calmar_ratio"],
     }
 
 
@@ -175,9 +188,3 @@ def _max_drawdown(values: np.ndarray) -> float:
     peak = np.maximum.accumulate(values)
     drawdown = (values - peak) / peak
     return float(np.min(drawdown))
-
-
-def _none_to_zero(value: float | None) -> float:
-    if value is None or not math.isfinite(value):
-        return 0.0
-    return float(value)

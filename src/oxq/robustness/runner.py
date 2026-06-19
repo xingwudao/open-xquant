@@ -188,6 +188,7 @@ def _clone_spec_with_cost_multiplier(spec: StrategySpec, multiplier: float) -> S
         ),
         benchmark=spec.benchmark,
         validation=spec.validation,
+        metrics=spec.metrics,
         robustness=spec.robustness,
         decision_policy=spec.decision_policy,
     )

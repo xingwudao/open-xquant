@@ -262,6 +262,28 @@ def test_report_includes_metric_assumptions_oos_and_validation_classification(tm
     assert "- **conservative**:" in report
 
 
+def test_report_missing_metric_assumptions_uses_legacy_defaults(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_legacy_metrics",
+        hypothesis="legacy metrics artifacts should not inherit ignored spec metrics",
+    )
+    spec.metrics.profile = "xquant_production"
+    spec.metrics.return_type = "log"
+    spec.metrics.risk_free_rate = 0.02
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "- **Profile**: open_xquant_default" in report
+    assert "- **return_type**: simple" in report
+    assert "- **risk_free_rate**: 0.00%" in report
+    assert "Non-default metrics profile" not in report
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="report_execution_assumptions",
