@@ -5,7 +5,7 @@ from pathlib import Path
 
 from click.testing import CliRunner
 
-from oxq.cli.doctor import _check_data
+from oxq.cli.doctor import _check_data, _check_deps
 from oxq.cli.main import main
 
 
@@ -66,3 +66,38 @@ def test_doctor_data_check_uses_market_data_directory(monkeypatch, tmp_path) -> 
 
     assert result["status"] == "warn"
     assert result["path"].endswith(".oxq/data/market")
+
+
+def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
+    missing = {"pyarrow", "scipy", "matplotlib", "yfinance"}
+
+    def fake_find_spec(module: str):
+        return None if module in missing else object()
+
+    monkeypatch.setattr("importlib.util.find_spec", fake_find_spec)
+
+    result = _check_deps()
+
+    assert result["status"] == "fail"
+    assert "pyarrow" in result["missing_core"]
+    assert "scipy" in result["missing_optional"]
+    assert "matplotlib" in result["missing_optional"]
+    assert "yfinance" in result["missing_optional"]
+    assert "uv sync --all-extras" in result["fixes"]
+
+
+def test_doctor_deps_warns_when_only_optional_missing(monkeypatch) -> None:
+    missing = {"scipy", "mplfinance"}
+
+    def fake_find_spec(module: str):
+        return None if module in missing else object()
+
+    monkeypatch.setattr("importlib.util.find_spec", fake_find_spec)
+
+    result = _check_deps()
+
+    assert result["status"] == "warn"
+    assert result["missing_core"] == []
+    assert result["missing_optional"] == ["mplfinance", "scipy"]
+    assert "uv sync --extra scipy" in result["fixes"]
+    assert "uv sync --extra chart" in result["fixes"]

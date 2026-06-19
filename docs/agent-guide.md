@@ -240,7 +240,7 @@ idea -> strategy_spec.yaml -> validate -> backtest
 ### 5.1 已经在 open-xquant 仓库内
 
 ```bash
-uv sync --extra yfinance
+uv sync --all-extras
 uv run oxq --help
 ```
 
@@ -255,14 +255,14 @@ Usage: oxq [OPTIONS] COMMAND [ARGS]...
 ```bash
 git clone https://github.com/xingwudao/open-xquant /tmp/open-xquant
 cd /tmp/open-xquant
-uv sync --extra yfinance
+uv sync --all-extras
 uv run oxq --help
 ```
 
 ### 5.3 不使用 uv 的环境
 
 ```bash
-python -m pip install -e ".[yfinance]"
+python -m pip install -e ".[yfinance,scipy,chart,live,dev]"
 oxq --help
 ```
 
@@ -271,6 +271,10 @@ oxq --help
 - 如果使用 `pip install -e`，后续命令通常写成 `oxq ...`。
 - 如果使用 `uv sync`，后续命令通常写成 `uv run oxq ...`。
 - 不要混用虚拟环境后假设依赖一定存在。
+- 首次给 Agent 准备完整环境时，优先使用 `uv sync --all-extras`。
+- 如果只需要数据下载、因子评估和图表，最低组合通常是
+  `uv sync --extra yfinance --extra scipy --extra chart`。
+- optional 依赖缺失时，只应禁用对应功能，不应让核心 CLI 或无关工具导入失败。
 
 ---
 
@@ -681,7 +685,8 @@ print(metrics["sharpe_ratio"])
 - 读取 `~/.config/open-xquant/agent.yaml` 的 `preferred_runner`。
 - 如果缺失，读取 `~/.config/open-xquant/agent-install.json` 的 `source.path`。
 - 在研究目录中运行 `uv run --project "<source.path>" oxq --help`。
-- 只有在 open-xquant 源码目录内，才运行 `uv sync --extra yfinance`。
+- 只有在 open-xquant 源码目录内，才运行 `uv sync --all-extras`
+  或其他 `uv sync --extra ...` 安装命令。
 
 `oxq doctor --json` 提示 workspace missing：
 
@@ -693,10 +698,12 @@ print(metrics["sharpe_ratio"])
 - 运行 `uv run oxq agent install --repair --yes`。
 - 如果是从 GitHub 更新，运行 `uv run oxq agent upgrade --all-targets`。
 
-`ModuleNotFoundError: yfinance`：
+`ModuleNotFoundError`：
 
-- 使用 `uv sync --extra yfinance`。
-- 或使用 `python -m pip install -e ".[yfinance]"`。
+- 先运行 `uv run oxq doctor --json` 查看缺失模块和建议 extras。
+- 首次完整安装使用 `uv sync --all-extras`。
+- 只补最小功能时，使用 `uv sync --extra yfinance --extra scipy --extra chart`。
+- 或使用 `python -m pip install -e ".[yfinance,scipy,chart,live,dev]"`。
 
 `No data for '<SYMBOL>'`：
 

@@ -298,6 +298,52 @@ def test_report_missing_metric_assumptions_uses_legacy_defaults(tmp_path) -> Non
     assert "Non-default metrics profile" not in report
 
 
+def test_report_includes_robustness_artifact_summary(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "robustness.json").write_text(
+        json.dumps(
+            {
+                "status": "warn",
+                "baseline_sharpe": 1.1,
+                "tests": [
+                    {
+                        "name": "cost_x2",
+                        "status": "pass",
+                        "baseline_sharpe": 1.1,
+                        "perturbed_sharpe": 0.9,
+                        "message": "costs are stable",
+                    },
+                    {
+                        "name": "parameter_perturbation",
+                        "status": "warn",
+                        "results": [
+                            {"target": "mom.period", "status": "pass"},
+                            {"target": "missing.period", "status": "error"},
+                        ],
+                        "message": "Ran 2 one-at-a-time parameter perturbations",
+                    },
+                    {
+                        "name": "regime_analysis",
+                        "status": "pass",
+                        "regimes": {
+                            "uptrend": {"date_count": 3, "trade_count": 1},
+                            "downtrend": {"date_count": 2, "trade_count": 1},
+                        },
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir)
+
+    assert "**Status**: WARN" in report
+    assert "- [PASS] **cost_x2**: costs are stable" in report
+    assert "- **Parameter perturbation results**: pass=1, error=1" in report
+    assert "- **Regimes**: uptrend (dates=3, trades=1), downtrend (dates=2, trades=1)" in report
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="report_execution_assumptions",

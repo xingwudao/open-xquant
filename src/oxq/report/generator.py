@@ -23,6 +23,7 @@ def generate_report(run_dir: str | Path) -> str:
     spec_dict = yaml.safe_load((run_path / "strategy_spec.yaml").read_text(encoding="utf-8")) or {}
     metrics = json.loads((run_path / "metrics.json").read_text(encoding="utf-8"))
     execution_assumptions = _load_execution_assumptions(run_path)
+    robustness_result = _load_json_object(run_path / "robustness.json")
     repro_audit = audit_reproducibility(run_dir)
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
@@ -143,13 +144,15 @@ def generate_report(run_dir: str | Path) -> str:
     # 9. Robustness Tests
     lines.append("## 9. Robustness Tests")
     lines.append("")
-    if spec.robustness.cost_multiplier:
+    if robustness_result is not None:
+        lines.extend(_format_robustness_result_lines(robustness_result))
+    elif spec.robustness.cost_multiplier:
         lines.append(f"- Cost multiplier scenarios: {spec.robustness.cost_multiplier}")
-    if spec.robustness.parameter_perturbation:
+    if robustness_result is None and spec.robustness.parameter_perturbation:
         lines.append(f"- Parameter perturbation: {list(spec.robustness.parameter_perturbation.keys())}")
-    if spec.robustness.regime_analysis:
+    if robustness_result is None and spec.robustness.regime_analysis:
         lines.append("- Regime analysis: enabled")
-    if not spec.robustness.cost_multiplier and not spec.robustness.parameter_perturbation:
+    if robustness_result is None and not spec.robustness.cost_multiplier and not spec.robustness.parameter_perturbation:
         lines.append("(No robustness tests configured)")
     lines.append("")
 
@@ -347,13 +350,70 @@ def _format_validation_classification_lines(validation_result: dict) -> list[str
 
 def _load_execution_assumptions(run_path: Path) -> dict | None:
     assumptions_path = run_path / "execution_assumptions.json"
-    if not assumptions_path.exists():
+    return _load_json_object(assumptions_path)
+
+
+def _load_json_object(path: Path) -> dict | None:
+    if not path.exists():
         return None
     try:
-        assumptions = json.loads(assumptions_path.read_text(encoding="utf-8"))
+        value = json.loads(path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError, UnicodeDecodeError):
         return None
-    return assumptions if isinstance(assumptions, dict) else None
+    return value if isinstance(value, dict) else None
+
+
+def _format_robustness_result_lines(result: dict) -> list[str]:
+    lines = [f"**Status**: {str(result.get('status', 'unknown')).upper()}"]
+    baseline_sharpe = result.get("baseline_sharpe")
+    if baseline_sharpe is not None:
+        lines.append(f"- **Baseline Sharpe**: {_format_float(baseline_sharpe)}")
+    tests = result.get("tests")
+    if not isinstance(tests, list):
+        lines.append("- Robustness artifact does not contain a tests list.")
+        return lines
+    for test in tests:
+        if not isinstance(test, dict):
+            continue
+        name = _format_assumption_value(test.get("name"))
+        status = str(test.get("status", "unknown")).upper()
+        message = _format_assumption_value(test.get("message"))
+        lines.append(f"- [{status}] **{name}**: {message}")
+        if "baseline_sharpe" in test or "perturbed_sharpe" in test:
+            lines.append(
+                "- **Sharpe comparison**: "
+                f"{_format_float(test.get('baseline_sharpe'))} -> {_format_float(test.get('perturbed_sharpe'))}"
+            )
+        if isinstance(test.get("results"), list):
+            lines.append(f"- **Parameter perturbation results**: {_summarize_status_counts(test['results'])}")
+        if isinstance(test.get("regimes"), dict):
+            lines.append(f"- **Regimes**: {_summarize_regimes(test['regimes'])}")
+    return lines
+
+
+def _summarize_status_counts(results: list) -> str:
+    counts: dict[str, int] = {}
+    for item in results:
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status", "unknown"))
+        counts[status] = counts.get(status, 0) + 1
+    if not counts:
+        return "N/A"
+    ordered = [status for status in ("pass", "warn", "fail", "error") if status in counts]
+    ordered.extend(status for status in sorted(counts) if status not in ordered)
+    return ", ".join(f"{status}={counts[status]}" for status in ordered)
+
+
+def _summarize_regimes(regimes: dict) -> str:
+    chunks: list[str] = []
+    for name, bucket in regimes.items():
+        if not isinstance(bucket, dict):
+            continue
+        chunks.append(
+            f"{name} (dates={bucket.get('date_count', 'N/A')}, trades={bucket.get('trade_count', 'N/A')})"
+        )
+    return ", ".join(chunks) if chunks else "N/A"
 
 
 def _effective_fill_price_mode(spec: StrategySpec) -> str:

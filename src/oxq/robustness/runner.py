@@ -6,11 +6,16 @@ and regime analysis.
 
 from __future__ import annotations
 
+import copy
 import json
 import math
+import re
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
+
+from oxq.portfolio.metrics_profile import compute_equity_curve_metrics
 from oxq.spec.compiler import compile_run
 from oxq.spec.schema import CostSection, StrategySpec
 
@@ -81,47 +86,13 @@ def run_robustness(run_dir: str | Path) -> dict:
         tests.append({"name": "cost_x2", "status": "error", "message": str(e)})
 
     # --- Test 2: IS/OOS comparison ---
-    train = spec.validation.train_period
-    test = spec.validation.test_period
-    if train and test and len(train) >= 2 and len(test) >= 2:
-        tests.append({
-            "name": "is_oos_comparison",
-            "status": "warn",
-            "message": f"IS: {train[0]} to {train[1]}, OOS: {test[0]} to {test[1]} — "
-                       "IS/OOS metrics comparison not yet implemented",
-        })
-    else:
-        tests.append({
-            "name": "is_oos_comparison",
-            "status": "warn",
-            "message": "Train/test periods not fully specified — cannot compare IS/OOS",
-        })
+    tests.append(_compare_is_oos(spec, baseline_metrics))
 
     # --- Test 3: Parameter perturbation — check sensitivity hints from spec ---
-    perturbations = spec.robustness.parameter_perturbation
-    if perturbations:
-        tests.append({
-            "name": "parameter_perturbation",
-            "status": "warn",
-            "message": f"Perturbation targets configured: {list(perturbations.keys())} — "
-                       "re-running with perturbed parameters not yet implemented",
-        })
-    else:
-        tests.append({
-            "name": "parameter_perturbation",
-            "status": "warn",
-            "message": "No parameter perturbation targets configured in spec",
-        })
+    tests.append(_run_parameter_perturbations(spec, run_path, data_dir, baseline_sharpe))
 
     # --- Test 4: Regime analysis ---
-    if spec.robustness.regime_analysis:
-        tests.append({
-            "name": "regime_analysis",
-            "status": "warn",
-            "message": "Regime analysis requested in spec — regime metrics are not yet implemented",
-        })
-    else:
-        tests.append({"name": "regime_analysis", "status": "warn", "message": "Regime analysis not configured"})
+    tests.append(_analyze_regimes(spec, run_path))
 
     # Summary
     failed = [t for t in tests if t["status"] == "fail"]
@@ -137,7 +108,9 @@ def run_robustness(run_dir: str | Path) -> dict:
     else:
         status = "robust"
 
-    return {"status": status, "tests": tests, "baseline_sharpe": baseline_sharpe}
+    result = {"status": status, "tests": tests, "baseline_sharpe": baseline_sharpe}
+    _write_robustness_artifact(run_path, result)
+    return result
 
 
 def _read_json_object(path: Path, name: str) -> tuple[dict[str, Any], str | None]:
@@ -157,6 +130,295 @@ def _read_metric_sharpe(path: Path) -> float | None:
     return _finite_float(metrics.get("sharpe_ratio"))
 
 
+def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, Any]:
+    train = spec.validation.train_period
+    test = spec.validation.test_period
+    if not (train and test and len(train) >= 2 and len(test) >= 2):
+        return {
+            "name": "is_oos_comparison",
+            "status": "warn",
+            "message": "Train/test periods not fully specified — cannot compare IS/OOS",
+        }
+
+    is_metrics = _split_metrics(metrics, "is")
+    oos_metrics = _split_metrics(metrics, "oos")
+    missing = [
+        f"{prefix}_{name}"
+        for prefix, values in (("is", is_metrics), ("oos", oos_metrics))
+        for name, value in values.items()
+        if value is None
+    ]
+    if missing:
+        return {
+            "name": "is_oos_comparison",
+            "status": "warn",
+            "is_period": train,
+            "oos_period": test,
+            "is": is_metrics,
+            "oos": oos_metrics,
+            "message": f"IS/OOS metrics unavailable or non-finite: {missing}",
+        }
+
+    degradation = {
+        "total_return": _higher_is_better_degradation(is_metrics["total_return"], oos_metrics["total_return"]),
+        "sharpe_ratio": _higher_is_better_degradation(is_metrics["sharpe_ratio"], oos_metrics["sharpe_ratio"]),
+        "calmar_ratio": _higher_is_better_degradation(is_metrics["calmar_ratio"], oos_metrics["calmar_ratio"]),
+        "max_drawdown": _drawdown_degradation(is_metrics["max_drawdown"], oos_metrics["max_drawdown"]),
+    }
+    oos_sharpe = oos_metrics["sharpe_ratio"]
+    sharpe_degradation = degradation["sharpe_ratio"]
+    if oos_sharpe is not None and oos_sharpe < 0:
+        status = "fail"
+    elif sharpe_degradation is not None and sharpe_degradation > 0.5:
+        status = "warn"
+    else:
+        status = "pass"
+    return {
+        "name": "is_oos_comparison",
+        "status": status,
+        "is_period": train,
+        "oos_period": test,
+        "is": is_metrics,
+        "oos": oos_metrics,
+        "degradation": degradation,
+        "message": f"Compared IS {train[0]} to {train[1]} with OOS {test[0]} to {test[1]}",
+    }
+
+
+def _split_metrics(metrics: dict[str, Any], prefix: str) -> dict[str, float | None]:
+    return {
+        "total_return": _finite_float(metrics.get(f"{prefix}_total_return")),
+        "sharpe_ratio": _finite_float(metrics.get(f"{prefix}_sharpe_ratio")),
+        "max_drawdown": _finite_float(metrics.get(f"{prefix}_max_drawdown")),
+        "calmar_ratio": _finite_float(metrics.get(f"{prefix}_calmar_ratio")),
+    }
+
+
+def _higher_is_better_degradation(in_sample: float | None, out_of_sample: float | None) -> float | None:
+    if in_sample is None or out_of_sample is None or in_sample == 0:
+        return None
+    return round((in_sample - out_of_sample) / abs(in_sample), 6)
+
+
+def _drawdown_degradation(in_sample: float | None, out_of_sample: float | None) -> float | None:
+    if in_sample is None or out_of_sample is None or in_sample == 0:
+        return None
+    return round((abs(out_of_sample) - abs(in_sample)) / abs(in_sample), 6)
+
+
+def _run_parameter_perturbations(
+    spec: StrategySpec,
+    run_path: Path,
+    data_dir: str | None,
+    baseline_sharpe: float | None,
+) -> dict[str, Any]:
+    perturbations = spec.robustness.parameter_perturbation
+    if not perturbations:
+        return {
+            "name": "parameter_perturbation",
+            "status": "warn",
+            "message": "No parameter perturbation targets configured in spec",
+        }
+
+    results: list[dict[str, Any]] = []
+    for target, values in perturbations.items():
+        for value in values:
+            perturbed_spec = copy.deepcopy(spec)
+            try:
+                _apply_perturbation(perturbed_spec, target, value)
+                value_slug = _slugify(str(value))
+                target_slug = _slugify(target)
+                perturbed_spec.strategy_id = f"{spec.strategy_id}_perturb_{target_slug}_{value_slug}"
+                out_dir = run_path.parent / f"{run_path.name}_perturb_{target_slug}_{value_slug}"
+                _, perturbed_run_dir = compile_run(perturbed_spec, out_dir=str(out_dir), data_dir=data_dir)
+                perturbed_sharpe = _read_metric_sharpe(Path(perturbed_run_dir) / "metrics.json")
+                results.append(_perturbation_result(target, value, baseline_sharpe, perturbed_sharpe, perturbed_run_dir))
+            except Exception as exc:
+                results.append({
+                    "target": target,
+                    "value": value,
+                    "status": "error",
+                    "message": str(exc),
+                })
+
+    statuses = {item["status"] for item in results}
+    if statuses == {"error"}:
+        status = "error"
+    elif "fail" in statuses:
+        status = "fail"
+    elif "warn" in statuses or "error" in statuses:
+        status = "warn"
+    else:
+        status = "pass"
+    return {
+        "name": "parameter_perturbation",
+        "status": status,
+        "results": results,
+        "message": f"Ran {len(results)} one-at-a-time parameter perturbations",
+    }
+
+
+def _perturbation_result(
+    target: str,
+    value: float | int,
+    baseline_sharpe: float | None,
+    perturbed_sharpe: float | None,
+    run_dir: str | Path,
+) -> dict[str, Any]:
+    if baseline_sharpe is None or perturbed_sharpe is None:
+        status = "warn"
+        message = "Sharpe unavailable for parameter perturbation comparison"
+    elif perturbed_sharpe < 0:
+        status = "fail"
+        message = f"Sharpe is negative after perturbing {target} to {value}"
+    elif perturbed_sharpe < baseline_sharpe * 0.5:
+        status = "warn"
+        message = f"Sharpe drops from {baseline_sharpe:.2f} to {perturbed_sharpe:.2f}"
+    else:
+        status = "pass"
+        message = f"Sharpe remains {perturbed_sharpe:.2f} after perturbing {target}"
+    return {
+        "target": target,
+        "value": value,
+        "status": status,
+        "baseline_sharpe": _round_metric(baseline_sharpe),
+        "perturbed_sharpe": _round_metric(perturbed_sharpe),
+        "run_dir": str(run_dir),
+        "message": message,
+    }
+
+
+def _apply_perturbation(spec: StrategySpec, target: str, value: float | int) -> None:
+    parts = target.split(".")
+    if len(parts) == 2 and parts[0] in spec.signal.indicators:
+        indicator = spec.signal.indicators[parts[0]]
+        if parts[1] not in indicator.params:
+            raise ValueError(f"Perturbation target '{target}' not found")
+        indicator.params[parts[1]] = value
+        return
+
+    if parts[:2] == ["signal", "params"] and len(parts) == 3:
+        if len(spec.signal.rules) != 1:
+            raise ValueError("signal.params shorthand requires exactly one signal rule")
+        rule = next(iter(spec.signal.rules.values()))
+        if parts[2] not in rule.params:
+            raise ValueError(f"Perturbation target '{target}' not found")
+        rule.params[parts[2]] = value
+        return
+
+    if len(parts) == 5 and parts[:2] == ["signal", "indicators"] and parts[3] == "params":
+        indicator = spec.signal.indicators.get(parts[2])
+        if indicator is None or parts[4] not in indicator.params:
+            raise ValueError(f"Perturbation target '{target}' not found")
+        indicator.params[parts[4]] = value
+        return
+
+    if len(parts) == 5 and parts[:2] == ["signal", "rules"] and parts[3] == "params":
+        rule = spec.signal.rules.get(parts[2])
+        if rule is None or parts[4] not in rule.params:
+            raise ValueError(f"Perturbation target '{target}' not found")
+        rule.params[parts[4]] = value
+        return
+
+    if len(parts) == 3 and parts[:2] == ["portfolio", "params"]:
+        if parts[2] not in spec.portfolio.params:
+            raise ValueError(f"Perturbation target '{target}' not found")
+        spec.portfolio.params[parts[2]] = value
+        return
+
+    raise ValueError(f"Unsupported perturbation target '{target}'")
+
+
+def _analyze_regimes(spec: StrategySpec, run_path: Path) -> dict[str, Any]:
+    if not spec.robustness.regime_analysis:
+        return {"name": "regime_analysis", "status": "warn", "message": "Regime analysis not configured"}
+
+    equity_path = run_path / "equity_curve.csv"
+    if not equity_path.exists():
+        return {
+            "name": "regime_analysis",
+            "status": "warn",
+            "message": "equity_curve.csv not found — cannot compute regime metrics",
+        }
+
+    try:
+        equity = pd.read_csv(equity_path)
+    except Exception as exc:
+        return {
+            "name": "regime_analysis",
+            "status": "warn",
+            "message": f"equity_curve.csv could not be read: {exc}",
+        }
+    required_columns = {"date", "value"}
+    if not required_columns.issubset(equity.columns):
+        return {
+            "name": "regime_analysis",
+            "status": "warn",
+            "message": "equity_curve.csv must contain date and value columns",
+        }
+
+    equity = equity.loc[:, ["date", "value"]].copy()
+    equity["date"] = pd.to_datetime(equity["date"], errors="coerce").dt.date
+    equity["value"] = pd.to_numeric(equity["value"], errors="coerce")
+    equity = equity.dropna(subset=["date", "value"]).sort_values("date").reset_index(drop=True)
+    if len(equity) < 2:
+        return {
+            "name": "regime_analysis",
+            "status": "warn",
+            "message": "equity_curve.csv needs at least two valid rows for regime metrics",
+        }
+
+    returns = equity["value"].pct_change().fillna(0.0)
+    abs_returns = returns.abs()
+    median_abs_return = float(abs_returns.median())
+    masks = {
+        "uptrend": returns > 0,
+        "downtrend": returns <= 0,
+        "high_vol": abs_returns >= median_abs_return,
+        "low_vol": abs_returns < median_abs_return,
+    }
+    trade_dates = _read_trade_dates(run_path / "trades.csv")
+    regimes = {
+        name: _regime_bucket(equity, mask, spec, trade_dates)
+        for name, mask in masks.items()
+    }
+    return {
+        "name": "regime_analysis",
+        "status": "pass",
+        "regimes": regimes,
+        "message": "Computed realized up/down trend and high/low volatility regime metrics",
+    }
+
+
+def _regime_bucket(
+    equity: pd.DataFrame,
+    mask: pd.Series,
+    spec: StrategySpec,
+    trade_dates: set[Any],
+) -> dict[str, Any]:
+    segment = equity.loc[mask, ["date", "value"]]
+    dates = set(segment["date"].tolist())
+    metrics = compute_equity_curve_metrics(list(segment.itertuples(index=False, name=None)), spec.metrics)
+    return {
+        "date_count": int(len(segment)),
+        "trade_count": int(len(dates & trade_dates)),
+        **{key: _round_metric(_finite_float(value)) for key, value in metrics.items()},
+    }
+
+
+def _read_trade_dates(path: Path) -> set[Any]:
+    if not path.exists():
+        return set()
+    try:
+        trades = pd.read_csv(path)
+    except Exception:
+        return set()
+    if "filled_at" not in trades.columns:
+        return set()
+    dates = pd.to_datetime(trades["filled_at"], errors="coerce").dt.date.dropna()
+    return set(dates.tolist())
+
+
 def _finite_float(value: object) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -167,28 +429,33 @@ def _finite_float(value: object) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _round_metric(value: float | None, digits: int = 6) -> float | None:
+    if value is None:
+        return None
+    return round(value, digits)
+
+
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-zA-Z0-9_.-]+", "_", value).strip("_.-")
+    slug = slug.replace(".", "_")
+    return slug or "value"
+
+
+def _write_robustness_artifact(run_path: Path, result: dict[str, Any]) -> None:
+    (run_path / "robustness.json").write_text(
+        json.dumps(result, indent=2, allow_nan=False) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _clone_spec_with_cost_multiplier(spec: StrategySpec, multiplier: float) -> StrategySpec:
     """Create a copy of spec with costs multiplied."""
-    return StrategySpec(
-        schema_version=spec.schema_version,
-        strategy_id=f"{spec.strategy_id}_cost_x{int(multiplier)}",
-        name=spec.name + f" (cost x{int(multiplier)})",
-        required_oxq_version=spec.required_oxq_version,
-        research=spec.research,
-        market=spec.market,
-        universe=spec.universe,
-        data=spec.data,
-        signal=spec.signal,
-        portfolio=spec.portfolio,
-        execution=spec.execution,
-        cost=CostSection(
-            fee_rate=spec.cost.fee_rate * multiplier,
-            fee_min=spec.cost.fee_min * multiplier,
-            slippage_rate=spec.cost.slippage_rate * multiplier,
-        ),
-        benchmark=spec.benchmark,
-        validation=spec.validation,
-        metrics=spec.metrics,
-        robustness=spec.robustness,
-        decision_policy=spec.decision_policy,
+    cloned = copy.deepcopy(spec)
+    cloned.strategy_id = f"{spec.strategy_id}_cost_x{int(multiplier)}"
+    cloned.name = spec.name + f" (cost x{int(multiplier)})"
+    cloned.cost = CostSection(
+        fee_rate=spec.cost.fee_rate * multiplier,
+        fee_min=spec.cost.fee_min * multiplier,
+        slippage_rate=spec.cost.slippage_rate * multiplier,
     )
+    return cloned
