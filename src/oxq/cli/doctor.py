@@ -118,7 +118,7 @@ def _check_data() -> dict[str, Any]:
 
 
 def _check_deps() -> dict[str, Any]:
-    core_modules = ("pyarrow", "exchange_calendars")
+    core_modules = ("pandas", "numpy", "pyarrow", "yaml", "click", "exchange_calendars")
     optional_modules = {
         "yfinance": "uv sync --extra yfinance",
         "akshare": "uv sync --extra akshare",

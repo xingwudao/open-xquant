@@ -87,6 +87,38 @@ def test_write_artifacts_persists_benchmark_curve(tmp_path) -> None:
     assert "benchmark_curve.csv" in hashes
 
 
+def test_reproducibility_audit_validates_benchmark_curve_hash(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="benchmark_hash", hypothesis="benchmark artifact hashes should be audited")
+    spec.benchmark.symbols = ["SPY"]
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0, 1.0],
+                    "high": [1.0, 1.0, 1.0],
+                    "low": [1.0, 1.0, 1.0],
+                    "close": [1.0, 1.0, 1.0],
+                    "volume": [1, 1, 1],
+                },
+                index=dates,
+            )
+        },
+        benchmark_prices={"SPY": pd.Series([100.0, 110.0, 105.0], index=dates)},
+    )
+
+    _write_artifacts(spec, result, tmp_path, Engine())
+    (tmp_path / "benchmark_curve.csv").write_text("date,value\n2024-01-02 00:00:00+00:00,1.0\n", encoding="utf-8")
+
+    audit = audit_reproducibility(tmp_path)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "benchmark_hash" and check["status"] == "fail" for check in audit["checks"])
+
+
 def test_reproducibility_audit_allows_self_contained_run_without_parent_digest(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="self_contained", hypothesis="run directories are portable")
     dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")

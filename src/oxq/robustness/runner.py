@@ -150,15 +150,20 @@ def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, An
         for name, value in values.items()
         if value is None
     ]
+    policy_breaches = _reject_policy_breaches(spec, oos_metrics)
     if missing:
+        status = "fail" if policy_breaches else "warn"
+        message = f"IS/OOS metrics unavailable or non-finite: {missing}"
+        if policy_breaches:
+            message += f"; breached reject policy: {policy_breaches}"
         return {
             "name": "is_oos_comparison",
-            "status": "warn",
+            "status": status,
             "is_period": train,
             "oos_period": test,
             "is": is_metrics,
             "oos": oos_metrics,
-            "message": f"IS/OOS metrics unavailable or non-finite: {missing}",
+            "message": message,
         }
 
     degradation = {
@@ -173,7 +178,6 @@ def _compare_is_oos(spec: StrategySpec, metrics: dict[str, Any]) -> dict[str, An
         for name, value in degradation.items()
         if value is not None and value > 0.5
     }
-    policy_breaches = _reject_policy_breaches(spec, oos_metrics)
     if policy_breaches:
         status = "fail"
     elif oos_sharpe is not None and oos_sharpe < 0:

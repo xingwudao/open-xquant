@@ -69,7 +69,7 @@ def test_doctor_data_check_uses_market_data_directory(monkeypatch, tmp_path) -> 
 
 
 def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
-    missing = {"pyarrow", "scipy", "matplotlib", "yfinance"}
+    missing = {"pyarrow", "pandas", "numpy", "yaml", "scipy", "matplotlib", "yfinance"}
 
     def fake_find_spec(module: str):
         return None if module in missing else object()
@@ -80,6 +80,9 @@ def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
 
     assert result["status"] == "fail"
     assert "pyarrow" in result["missing_core"]
+    assert "pandas" in result["missing_core"]
+    assert "numpy" in result["missing_core"]
+    assert "yaml" in result["missing_core"]
     assert "scipy" in result["missing_optional"]
     assert "matplotlib" in result["missing_optional"]
     assert "yfinance" in result["missing_optional"]
