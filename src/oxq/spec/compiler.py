@@ -25,7 +25,7 @@ import yaml
 from oxq.core.engine import Engine
 from oxq.core.registry import _INDICATOR_REGISTRY, _PORTFOLIO_OPTIMIZER_REGISTRY, _SIGNAL_REGISTRY
 from oxq.core.strategy import Strategy
-from oxq.core.types import PortfolioOptimizer, Signal
+from oxq.core.types import Fill, PortfolioOptimizer, Signal
 from oxq.data.loaders import resolve_data_dir
 from oxq.data.market import LocalMarketDataProvider
 from oxq.market_calendar import normalize_exchange_calendar
@@ -889,6 +889,7 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
     test = spec.validation.test_period
     metric_result = result
     metric_diagnostics: list[str] = []
+    activity_trades = result.trades
     if spec.metrics.evaluation_window == "oos" and test and len(test) >= 2 and len(result.equity_curve) > 1:
         first_dt = result.equity_curve[0][0]
         tz = getattr(pd.Timestamp(first_dt), "tz", None)
@@ -902,6 +903,7 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
         )
         if len(metric_curve) >= 2:
             metric_result = _run_result_for_equity_curve(result, metric_curve)
+            activity_trades = _filter_trades_by_window(result.trades, start=test_start, end=test_end, tz=tz)
         else:
             metric_diagnostics.append("evaluation_window=oos unavailable: OOS equity curve has fewer than 2 points")
 
@@ -912,8 +914,8 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
     base.update({
         "strategy_id": spec.strategy_id,
         "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
-        "trade_count": len(result.trades),
-        "cost_paid": float(sum(float(f.fee) for f in result.trades)),
+        "trade_count": len(activity_trades),
+        "cost_paid": float(sum(float(f.fee) for f in activity_trades)),
         "slippage_paid": None,  # Not measurable without raw-vs-slipped fill price tracking
     })
 
@@ -954,15 +956,20 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
             base["oos_annualized_return"] = oos_metrics["annualized_return"]
             base["oos_annualized_volatility"] = oos_metrics["annualized_volatility"]
             base["oos_calmar_ratio"] = oos_metrics["calmar_ratio"]
-            # Filter OOS trades
-            oos_trades = [
-                f
-                for f in result.trades
-                if test_start <= _to_timestamp(f.filled_at, tz=tz) <= test_end
-            ]
+            oos_trades = _filter_trades_by_window(result.trades, start=test_start, end=test_end, tz=tz)
             base["oos_trade_count"] = len(oos_trades)
 
     return base
+
+
+def _filter_trades_by_window(
+    trades: list[Fill],
+    *,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    tz: object | None,
+) -> list[Fill]:
+    return [fill for fill in trades if start <= _to_timestamp(fill.filled_at, tz=tz) <= end]
 
 
 def _clear_top_level_profile_metrics(metrics: dict[str, Any]) -> None:

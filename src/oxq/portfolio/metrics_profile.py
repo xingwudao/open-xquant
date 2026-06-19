@@ -112,7 +112,9 @@ def _simple_return_metrics(result: RunResult, config: MetricsSection) -> dict[st
             "calmar_ratio": result.calmar_ratio(days),
         }
     if len(values) < 2 or np.any(values <= 0):
-        metrics = _unavailable_curve_metrics()
+        metrics = _stable_simple_curve_metrics(result.equity_curve, config)
+        if metrics is None:
+            metrics = _unavailable_curve_metrics()
         metrics["sortino_ratio"] = None
         return metrics
     days = config.annualization_days
@@ -124,6 +126,9 @@ def _simple_return_metrics(result: RunResult, config: MetricsSection) -> dict[st
 def _simple_curve_metrics(equity_curve: list[tuple[object, float]], config: MetricsSection) -> dict[str, float | None]:
     values = _values(equity_curve)
     if len(values) < 2 or np.any(values <= 0):
+        metrics = _stable_simple_curve_metrics(equity_curve, config)
+        if metrics is not None:
+            return metrics
         return _unavailable_curve_metrics()
     result = RunResult(
         portfolio=Portfolio(cash=Decimal(str(values[-1]))),
@@ -139,6 +144,29 @@ def _simple_curve_metrics(equity_curve: list[tuple[object, float]], config: Metr
         "sharpe_ratio": _simple_sharpe_ratio(values, config.risk_free_rate, config.annualization_days),
         "calmar_ratio": result.calmar_ratio(config.annualization_days),
     }
+
+
+def _stable_simple_curve_metrics(
+    equity_curve: list[tuple[object, float]],
+    config: MetricsSection,
+) -> dict[str, float | None] | None:
+    values = _values(equity_curve)
+    if len(values) < 2 or values[0] <= 0 or values[-1] <= 0 or np.all(values > 0):
+        return None
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal(str(values[-1]))),
+        trades=[],
+        equity_curve=equity_curve,
+        mktdata={},
+    )
+    metrics = _unavailable_curve_metrics()
+    metrics.update({
+        "total_return": result.total_return(),
+        "annualized_return": result.annualized_return(config.annualization_days),
+        "max_drawdown": result.max_drawdown(),
+        "calmar_ratio": result.calmar_ratio(config.annualization_days),
+    })
+    return metrics
 
 
 def _log_return_metrics(result: RunResult, config: MetricsSection) -> dict[str, float | None]:

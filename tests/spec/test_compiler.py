@@ -1304,7 +1304,20 @@ def test_metrics_evaluation_window_oos_uses_oos_top_level_values() -> None:
     dates = pd.bdate_range("2024-01-01", periods=5, tz="UTC")
     result = RunResult(
         portfolio=Portfolio(cash=Decimal("150000")),
-        trades=[],
+        trades=[
+            Fill(
+                order=Order(symbol="AAA", side="BUY", shares=1),
+                filled_price=Decimal("1"),
+                filled_at=dates[1].isoformat(),
+                fee=Decimal("2"),
+            ),
+            Fill(
+                order=Order(symbol="AAA", side="SELL", shares=1),
+                filled_price=Decimal("1"),
+                filled_at=dates[3].isoformat(),
+                fee=Decimal("3"),
+            ),
+        ],
         equity_curve=[
             (dates[0], 100000.0),
             (dates[1], 110000.0),
@@ -1322,6 +1335,8 @@ def test_metrics_evaluation_window_oos_uses_oos_top_level_values() -> None:
     assert metrics["sharpe_ratio"] == pytest.approx(metrics["oos_sharpe_ratio"])
     assert metrics["is_total_return"] == pytest.approx(0.1)
     assert metrics["oos_total_return"] == pytest.approx(0.331)
+    assert metrics["trade_count"] == 1
+    assert metrics["cost_paid"] == pytest.approx(3.0)
 
 
 def test_is_metrics_include_train_period_end_date_with_intraday_timestamps() -> None:

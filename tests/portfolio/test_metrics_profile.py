@@ -100,18 +100,18 @@ def test_log_profile_keeps_invalid_equity_metrics_unavailable() -> None:
     assert metrics["calmar_ratio"] is None
 
 
-def test_simple_profile_keeps_invalid_sharpe_unavailable() -> None:
+def test_default_profile_preserves_stable_metrics_when_equity_touches_zero() -> None:
     result = _make_result([100.0, 0.0, 101.0])
 
     metrics = compute_profile_metrics(result, MetricsSection(), run_id="run-1")
 
-    assert metrics["total_return"] is None
-    assert metrics["annualized_return"] is None
+    assert metrics["total_return"] == pytest.approx(result.total_return())
+    assert metrics["annualized_return"] == pytest.approx(result.annualized_return())
     assert metrics["annualized_volatility"] is None
-    assert metrics["max_drawdown"] is None
+    assert metrics["max_drawdown"] == pytest.approx(result.max_drawdown())
     assert metrics["sharpe_ratio"] is None
     assert metrics["sortino_ratio"] is None
-    assert metrics["calmar_ratio"] is None
+    assert metrics["calmar_ratio"] == pytest.approx(result.calmar_ratio())
 
 
 def test_simple_profile_keeps_negative_endpoint_slice_unavailable() -> None:
