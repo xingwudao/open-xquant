@@ -118,6 +118,9 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         "positions.csv": "positions_hash",
         "orders.csv": "orders_hash",
     }
+    optional_artifact_hashes = {
+        "execution_assumptions.json": "execution_assumptions_hash",
+    }
     try:
         expected_hashes = json.loads((run_path / "artifact_hashes.json").read_text(encoding="utf-8"))
         valid_hash_manifest = isinstance(expected_hashes, dict)
@@ -163,16 +166,32 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         required_hashes = required_artifact_hashes
 
     if expected_hashes and not missing_hash_keys:
+        hashes_to_check = dict(required_hashes)
+        for fname, check_id in optional_artifact_hashes.items():
+            artifact_exists = (run_path / fname).exists()
+            hash_exists = fname in expected_hashes
+            if artifact_exists and not hash_exists:
+                checks.append(
+                    _check(
+                        "artifact_hashes",
+                        False,
+                        "fatal",
+                        f"artifact_hashes.json missing required keys: ['{fname}']",
+                    )
+                )
+                continue
+            if artifact_exists or hash_exists:
+                hashes_to_check[fname] = check_id
         run_digest_check = _check_run_digest(run_path)
         if run_digest_check is not None:
             checks.append(run_digest_check)
-        for fname, check_id in required_hashes.items():
+        for fname, check_id in hashes_to_check.items():
             try:
                 if fname == "metrics.json":
                     actual = _hash_json_file(run_path / fname, exclude_keys={"run_id"})
                 elif fname == "environment.json":
                     actual = _hash_json_file(run_path / fname, exclude_keys={"run_timestamp"})
-                elif fname == "data_manifest.json":
+                elif fname in {"data_manifest.json", "execution_assumptions.json"}:
                     actual = _hash_json_file(run_path / fname)
                 else:
                     content = (run_path / fname).read_bytes()

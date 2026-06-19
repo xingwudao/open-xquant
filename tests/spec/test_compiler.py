@@ -916,6 +916,58 @@ def test_compile_run_uses_lot_size_config_default(tmp_path, monkeypatch) -> None
     assert captured["lot_size"] == 100
 
 
+def test_compile_run_writes_execution_assumptions_artifact(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="execution_assumptions", hypothesis="execution assumptions are auditable")
+    spec.market.calendar = "XSHE"
+    spec.execution.fill_price_mode = ""
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+    spec.execution.cash_annual_return = 0.025
+    spec.execution.lot_size = 1
+    spec.execution.lot_size_config.default = 100
+    spec.execution.lot_size_config.by_symbol = {"SPY": 10}
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03"], utc=True)
+    pd.DataFrame(
+        {
+            "open": [1.0, 2.0],
+            "high": [1.0, 2.0],
+            "low": [1.0, 2.0],
+            "close": [1.0, 2.0],
+            "volume": [100, 100],
+        },
+        index=dates,
+    ).to_parquet(data_dir / "SPY.parquet")
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    assumptions = json.loads((run_dir / "execution_assumptions.json").read_text(encoding="utf-8"))
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert assumptions == {
+        "schema_version": 1,
+        "calendar": "XSHE",
+        "runtime_calendar": "XSHG",
+        "order_timing": "next_session_open",
+        "price_bar": "next_session",
+        "price_type": "open",
+        "fill_price_mode": "next_open",
+        "compatibility_source": "explicit_fields",
+        "cash_annual_return": 0.025,
+        "lot_size": 1,
+        "lot_size_config": {
+            "default": 100,
+            "by_symbol": {"SPY": 10},
+        },
+    }
+    assert "execution_assumptions.json" in hashes
+    assert audit_reproducibility(run_dir)["status"] == "pass"
+
+
 def test_compile_run_records_resolved_default_data_dir(tmp_path, monkeypatch) -> None:
     spec = StrategySpec.template(strategy_id="resolved_data_dir", hypothesis="default data dir is auditable")
     market_dir = tmp_path / "oxq_data" / "market"
@@ -1893,6 +1945,7 @@ def test_reproducibility_audit_allows_legacy_artifacts_without_source_fingerprin
         "trades.csv": current_hashes["trades.csv"],
         "metrics.json": current_hashes["metrics.json"],
     }
+    (tmp_path / "execution_assumptions.json").unlink(missing_ok=True)
     (tmp_path / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
     (tmp_path.parent / "run_digests.jsonl").write_text(
         json.dumps({"run_id": tmp_path.name, "artifact_hashes": _hash_json_file(tmp_path / "artifact_hashes.json")}) + "\n",

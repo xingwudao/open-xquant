@@ -382,6 +382,10 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     }
     (run_dir / "data_manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
+    # execution_assumptions.json
+    execution_assumptions = _build_execution_assumptions(spec)
+    (run_dir / "execution_assumptions.json").write_text(json.dumps(execution_assumptions, indent=2) + "\n", encoding="utf-8")
+
     # metrics.json
     metrics = _sanitize_json(_build_metrics(spec, result, run_id))
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, allow_nan=False) + "\n")
@@ -437,6 +441,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "strategy_spec.yaml": _hash_file(run_dir / "strategy_spec.yaml"),
         "environment.json": _hash_json_file(run_dir / "environment.json", exclude_keys={"run_timestamp"}),
         "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
+        "execution_assumptions.json": _hash_json_file(run_dir / "execution_assumptions.json"),
         "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
         "trades.csv": _hash_file(run_dir / "trades.csv"),
         "positions.csv": _hash_file(run_dir / "positions.csv"),
@@ -460,6 +465,26 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
             )
             + "\n"
         )
+
+
+def _build_execution_assumptions(spec: StrategySpec) -> dict[str, Any]:
+    semantics = derive_execution_semantics(spec.execution)
+    return {
+        "schema_version": 1,
+        "calendar": spec.market.calendar,
+        "runtime_calendar": normalize_exchange_calendar(spec.market.calendar),
+        "order_timing": semantics.order_timing,
+        "price_bar": semantics.price_bar,
+        "price_type": semantics.price_type,
+        "fill_price_mode": semantics.fill_price_mode,
+        "compatibility_source": semantics.compatibility_source,
+        "cash_annual_return": spec.execution.cash_annual_return,
+        "lot_size": spec.execution.lot_size,
+        "lot_size_config": {
+            "default": spec.execution.lot_size_config.default,
+            "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
+        },
+    }
 
 
 def _to_timestamp(ts_val: str | object, tz: object | None = None) -> pd.Timestamp:
