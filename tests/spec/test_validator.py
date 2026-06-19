@@ -342,6 +342,28 @@ def test_validate_rejects_invalid_execution_numeric_ranges() -> None:
     assert "rebalance_interval_invalid" in checks
 
 
+def test_validate_rejects_invalid_lot_size_config_default() -> None:
+    spec = StrategySpec.template(strategy_id="bad_lot_config_default", hypothesis="lot config default needs range")
+    spec.execution.lot_size_config.default = 0
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "lot_size_config_invalid")
+    assert error["dimensions"] == ["executable"]
+
+
+def test_validate_rejects_invalid_lot_size_config_by_symbol() -> None:
+    spec = StrategySpec.template(strategy_id="bad_lot_config_symbol", hypothesis="lot config symbols need ranges")
+    spec.execution.lot_size_config.by_symbol = {"SPY": 0}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "lot_size_config_invalid")
+    assert error["dimensions"] == ["executable"]
+
+
 def test_validate_rejects_rebalance_frequency_when_interval_is_omitted(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(

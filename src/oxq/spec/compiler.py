@@ -94,6 +94,13 @@ def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
     return opt_cls(**spec.portfolio.params)
 
 
+def _effective_lot_size(spec: StrategySpec) -> int:
+    lot_size = spec.execution.lot_size_config.default
+    if isinstance(lot_size, int) and not isinstance(lot_size, bool) and lot_size > 0:
+        return lot_size
+    return spec.execution.lot_size
+
+
 class _SignalFilteredEqualWeightOptimizer:
     """Equal weight among symbols with active signals.
 
@@ -286,7 +293,8 @@ def compile_run(
         start=start,
         end=end,
         initial_cash=spec.execution.initial_cash,
-        lot_size=spec.execution.lot_size,
+        lot_size=_effective_lot_size(spec),
+        cash_annual_return=spec.execution.cash_annual_return,
         rules=rules,
         data_start=spec.data.min_start_date or None,
     )

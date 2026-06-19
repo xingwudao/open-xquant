@@ -875,6 +875,47 @@ def test_compile_run_explicit_only_next_open_instantiates_next_open_broker(tmp_p
         compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
 
 
+def test_compile_run_passes_cash_annual_return_to_engine(tmp_path, monkeypatch) -> None:
+    spec = StrategySpec.template(strategy_id="cash_return", hypothesis="cash return reaches runtime")
+    spec.execution.cash_annual_return = 0.025
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    captured: dict = {}
+
+    class EngineProbe:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(compiler, "Engine", EngineProbe)
+    monkeypatch.setattr(compiler, "_write_artifacts", lambda *args, **kwargs: None)
+
+    compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    assert captured["cash_annual_return"] == 0.025
+
+
+def test_compile_run_uses_lot_size_config_default(tmp_path, monkeypatch) -> None:
+    spec = StrategySpec.template(strategy_id="lot_size_config", hypothesis="lot config controls runtime lot size")
+    spec.execution.lot_size = 1
+    spec.execution.lot_size_config.default = 100
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    captured: dict = {}
+
+    class EngineProbe:
+        def run(self, **kwargs):
+            captured.update(kwargs)
+            return object()
+
+    monkeypatch.setattr(compiler, "Engine", EngineProbe)
+    monkeypatch.setattr(compiler, "_write_artifacts", lambda *args, **kwargs: None)
+
+    compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    assert captured["lot_size"] == 100
+
+
 def test_compile_run_records_resolved_default_data_dir(tmp_path, monkeypatch) -> None:
     spec = StrategySpec.template(strategy_id="resolved_data_dir", hypothesis="default data dir is auditable")
     market_dir = tmp_path / "oxq_data" / "market"

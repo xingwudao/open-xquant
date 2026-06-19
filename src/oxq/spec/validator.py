@@ -348,6 +348,31 @@ def _validate_required_execution_columns(required_columns: set[str], fill_price_
     return errors
 
 
+def _validate_lot_size_config(spec: StrategySpec) -> list[dict]:
+    errors: list[dict] = []
+    config = spec.execution.lot_size_config
+    if not _is_positive_int(config.default):
+        errors.append(
+            _err(
+                "fatal",
+                "lot_size_config_invalid",
+                "execution.lot_size_config.default must be a positive integer",
+                ["executable"],
+            )
+        )
+    for symbol, lot_size in config.by_symbol.items():
+        if not _is_positive_int(lot_size):
+            errors.append(
+                _err(
+                    "fatal",
+                    "lot_size_config_invalid",
+                    f"execution.lot_size_config.by_symbol.{symbol} must be a positive integer",
+                    ["executable"],
+                )
+            )
+    return errors
+
+
 def _missing_signal_param(rule_name: str, param_name: str) -> dict:
     return _err(
         "fatal",
@@ -578,6 +603,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "fill_price_mode_missing", "execution.fill_price_mode is missing"))
     if not isinstance(spec.execution.lot_size, int) or isinstance(spec.execution.lot_size, bool) or spec.execution.lot_size <= 0:
         errors.append(_err("fatal", "lot_size_invalid", "execution.lot_size must be a positive integer"))
+    errors.extend(_validate_lot_size_config(spec))
     if (
         not isinstance(spec.execution.rebalance.interval_days, int)
         or isinstance(spec.execution.rebalance.interval_days, bool)
