@@ -51,6 +51,10 @@ def _is_finite_number(value: object) -> bool:
         return False
 
 
+def _is_finite_real_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(float(value))
+
+
 def _unsafe_strategy_id(strategy_id: str) -> bool:
     from pathlib import Path
 
@@ -620,6 +624,15 @@ def validate(spec: StrategySpec) -> ValidationResult:
         )
     if not _is_finite_number(spec.execution.initial_cash) or spec.execution.initial_cash <= 0:
         errors.append(_err("fatal", "initial_cash_invalid", "execution.initial_cash must be a positive finite number"))
+    if not _is_finite_real_number(spec.execution.cash_annual_return) or spec.execution.cash_annual_return < 0:
+        errors.append(
+            _err(
+                "fatal",
+                "cash_annual_return_invalid",
+                "execution.cash_annual_return must be a non-negative finite number",
+                ["executable"],
+            )
+        )
 
     expected_trade_time = {
         "close": "close_t",

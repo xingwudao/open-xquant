@@ -364,6 +364,28 @@ def test_validate_rejects_invalid_lot_size_config_by_symbol() -> None:
     assert error["dimensions"] == ["executable"]
 
 
+@pytest.mark.parametrize("cash_annual_return", ["0.01", float("nan"), -0.01])
+def test_validate_rejects_invalid_cash_annual_return(cash_annual_return) -> None:
+    spec = StrategySpec.template(strategy_id="bad_cash_return", hypothesis="cash return must be non-negative finite")
+    spec.execution.cash_annual_return = cash_annual_return
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "cash_annual_return_invalid")
+    assert error["dimensions"] == ["executable"]
+
+
+@pytest.mark.parametrize("cash_annual_return", [0.0, 0.025])
+def test_validate_accepts_valid_cash_annual_return(cash_annual_return: float) -> None:
+    spec = StrategySpec.template(strategy_id="valid_cash_return", hypothesis="cash return accepts non-negative finite")
+    spec.execution.cash_annual_return = cash_annual_return
+
+    result = validate(spec)
+
+    assert "cash_annual_return_invalid" not in {error["check"] for error in result.errors}
+
+
 def test_validate_rejects_rebalance_frequency_when_interval_is_omitted(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(
