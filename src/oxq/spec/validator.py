@@ -355,12 +355,21 @@ def _validate_required_execution_columns(required_columns: set[str], fill_price_
 def _validate_lot_size_config(spec: StrategySpec) -> list[dict]:
     errors: list[dict] = []
     config = spec.execution.lot_size_config
-    if not _is_positive_int(config.default):
+    if config.default is not None and not _is_positive_int(config.default):
         errors.append(
             _err(
                 "fatal",
                 "lot_size_config_invalid",
                 "execution.lot_size_config.default must be a positive integer",
+                ["executable"],
+            )
+        )
+    if config.by_symbol:
+        errors.append(
+            _err(
+                "fatal",
+                "lot_size_config_by_symbol_unsupported",
+                "execution.lot_size_config.by_symbol is parsed but not executable yet; use a single default lot size",
                 ["executable"],
             )
         )

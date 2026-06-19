@@ -78,6 +78,27 @@ def test_programmatic_lot_size_round_trip_keeps_hash_stable(tmp_path: Path) -> N
     assert reparsed.compute_hash() == original_hash
 
 
+def test_explicit_lot_size_config_default_overrides_legacy_lot_size(tmp_path: Path) -> None:
+    spec_path = tmp_path / "strategy.yaml"
+    spec_path.write_text(
+        """
+schema_version: "0.1"
+strategy_id: explicit_lot_config
+execution:
+  lot_size: 100
+  lot_size_config:
+    default: 1
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.execution.lot_size == 100
+    assert spec.execution.lot_size_config.default == 1
+    assert spec.to_dict()["execution"]["lot_size_config"]["default"] == 1
+
+
 @pytest.mark.parametrize(
     ("field_name", "message"),
     [
@@ -130,6 +151,18 @@ def test_helper_derives_explicit_execution_semantics_without_legacy_fill_mode() 
     assert effective.compatibility_source == "explicit_fields"
 
 
+def test_programmatic_explicit_execution_treats_default_fill_mode_as_absent() -> None:
+    spec = StrategySpec.template(strategy_id="programmatic_explicit", hypothesis="explicit mapping")
+    spec.execution.order_timing = "next_session_close"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "close"
+
+    effective = derive_execution_semantics(spec.execution)
+
+    assert effective.fill_price_mode == "next_close"
+    assert effective.compatibility_source == "explicit_fields"
+
+
 def test_yaml_explicit_execution_can_omit_legacy_fill_price_mode(tmp_path: Path) -> None:
     spec_path = tmp_path / "strategy.yaml"
     spec_path.write_text(
@@ -156,6 +189,7 @@ execution:
 def test_conflicting_execution_semantics_raise_value_error() -> None:
     spec = StrategySpec.template(strategy_id="conflict", hypothesis="conflict")
     spec.execution.fill_price_mode = "next_open"
+    spec.execution._fill_price_mode_explicit = True
     spec.execution.order_timing = "same_session_close"
     spec.execution.price_bar = "same_session"
     spec.execution.price_type = "close"

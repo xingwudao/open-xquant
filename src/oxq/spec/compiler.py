@@ -437,7 +437,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     pd.DataFrame(order_rows, columns=order_columns).to_csv(run_dir / "orders.csv", index=False)
 
     artifact_hashes = {
-        "schema_version": 1,
+        "schema_version": 2,
         "strategy_spec.yaml": _hash_file(run_dir / "strategy_spec.yaml"),
         "environment.json": _hash_json_file(run_dir / "environment.json", exclude_keys={"run_timestamp"}),
         "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),

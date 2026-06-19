@@ -55,7 +55,9 @@ def derive_execution_semantics(execution: ExecutionSection) -> EffectiveExecutio
         )
 
     fill_price_mode = _derive_fill_price_mode(explicit_values)
-    if execution.fill_price_mode and execution.fill_price_mode != fill_price_mode:
+    legacy_fill_mode_is_explicit = getattr(execution, "_fill_price_mode_explicit", False)
+    legacy_fill_mode_is_default = execution.fill_price_mode == "next_open" and not legacy_fill_mode_is_explicit
+    if execution.fill_price_mode and not legacy_fill_mode_is_default and execution.fill_price_mode != fill_price_mode:
         raise ValueError(
             "execution semantics conflict: "
             f"fill_price_mode={execution.fill_price_mode!r} does not match explicit semantics "

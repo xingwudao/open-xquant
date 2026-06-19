@@ -941,7 +941,6 @@ def test_compile_run_writes_execution_assumptions_artifact(tmp_path) -> None:
     spec.execution.cash_annual_return = 0.025
     spec.execution.lot_size = 1
     spec.execution.lot_size_config.default = 100
-    spec.execution.lot_size_config.by_symbol = {"SPY": 10}
     spec.validation.train_period = []
     spec.validation.test_period = ["2024-01-02", "2024-01-03"]
     spec.validation.required_oos = False
@@ -976,7 +975,7 @@ def test_compile_run_writes_execution_assumptions_artifact(tmp_path) -> None:
         "lot_size": 1,
         "lot_size_config": {
             "default": 100,
-            "by_symbol": {"SPY": 10},
+            "by_symbol": {},
         },
     }
     assert "execution_assumptions.json" in hashes

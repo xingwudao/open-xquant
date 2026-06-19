@@ -88,7 +88,7 @@ class RebalanceDef:
 
 @dataclass
 class LotSizeConfig:
-    default: int = 1
+    default: int | None = None
     by_symbol: dict[str, int] = field(default_factory=dict)
 
 
@@ -104,12 +104,10 @@ class ExecutionSection:
     lot_size_config: LotSizeConfig = field(default_factory=LotSizeConfig)
     cash_annual_return: float = 0.0
     initial_cash: float = 100_000.0
-
-    def __post_init__(self) -> None:
-        self.normalize_lot_size_config()
+    _fill_price_mode_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
 
     def normalize_lot_size_config(self) -> None:
-        if self.lot_size_config == LotSizeConfig():
+        if self.lot_size_config.default is None:
             self.lot_size_config.default = self.lot_size
 
 
@@ -173,10 +171,8 @@ class StrategySpec:
 
     def compute_hash(self) -> str:
         """Compute sha256 hash of the spec for reproducibility tracking."""
-        from dataclasses import asdict
-
         self.execution.normalize_lot_size_config()
-        canonical = json.dumps(asdict(self), sort_keys=True, default=str)
+        canonical = json.dumps(_dataclass_to_canonical_dict(self), sort_keys=True, default=str)
         return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
     def to_dict(self) -> dict[str, Any]:
@@ -328,6 +324,7 @@ def _parse_execution(raw: dict) -> ExecutionSection:
         lot_size_config=_parse_lot_size_config(raw.get("lot_size_config"), lot_size),
         cash_annual_return=_parse_float(raw.get("cash_annual_return", 0.0), "execution.cash_annual_return"),
         initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),
+        _fill_price_mode_explicit="fill_price_mode" in raw,
     )
 
 
@@ -473,6 +470,8 @@ def _dataclass_to_dict(obj: Any) -> Any:
     if is_dataclass(obj):
         result = {}
         for f in fields(obj):
+            if f.metadata.get("serialize") is False:
+                continue
             value = getattr(obj, f.name)
             if value is not None:
                 if f.default is not MISSING and value == f.default:
@@ -489,4 +488,22 @@ def _dataclass_to_dict(obj: Any) -> Any:
         return [_dataclass_to_dict(v) for v in obj]
     if isinstance(obj, dict):
         return {k: _dataclass_to_dict(v) for k, v in obj.items()}
+    return obj
+
+
+def _dataclass_to_canonical_dict(obj: Any) -> Any:
+    """Recursively convert dataclass to a complete canonical dict."""
+    from dataclasses import fields, is_dataclass
+
+    if is_dataclass(obj):
+        result = {}
+        for f in fields(obj):
+            if f.metadata.get("serialize") is False:
+                continue
+            result[f.name] = _dataclass_to_canonical_dict(getattr(obj, f.name))
+        return result
+    if isinstance(obj, (list, tuple)):
+        return [_dataclass_to_canonical_dict(v) for v in obj]
+    if isinstance(obj, dict):
+        return {k: _dataclass_to_canonical_dict(v) for k, v in obj.items()}
     return obj

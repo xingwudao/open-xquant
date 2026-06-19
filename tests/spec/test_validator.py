@@ -847,6 +847,27 @@ def test_validate_rejects_zero_slippage_even_with_explicit_execution_fields() ->
     assert any(error["check"] == "slippage_missing" for error in result.errors)
 
 
+def test_validate_rejects_lot_size_config_by_symbol_until_executable() -> None:
+    spec = StrategySpec.template(strategy_id="by_symbol_lot", hypothesis="by-symbol lot sizes must execute")
+    spec.execution.lot_size_config.by_symbol = {"SPY": 1}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "lot_size_config_by_symbol_unsupported")
+    assert error["dimensions"] == ["executable"]
+
+
+def test_validate_non_string_market_calendar_returns_finding() -> None:
+    spec = StrategySpec.template(strategy_id="bad_calendar_type", hypothesis="calendar must validate")
+    spec.market.calendar = ["XNYS"]  # type: ignore[assignment]
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "market_calendar_unsupported" for error in result.errors)
+
+
 def test_validate_rejects_unsupported_signal_time() -> None:
     spec = StrategySpec.template(strategy_id="unsupported_signal_time", hypothesis="runtime only supports close signals")
     spec.signal.signal_time = "open_t"

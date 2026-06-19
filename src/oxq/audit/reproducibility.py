@@ -137,11 +137,18 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                         "fatal",
                         "artifact_hashes.json schema_version must be >= 1 for data_manifest schema_version >= 1",
                     ))
-                required_hashes = (
-                    new_required_artifact_hashes
-                    if manifest_schema_version >= 1 or artifact_schema_version >= 1
-                    else required_artifact_hashes
-                )
+                if artifact_schema_version >= 2:
+                    required_hashes = new_required_artifact_hashes
+                elif manifest_schema_version >= 1 or artifact_schema_version >= 1:
+                    required_hashes = {
+                        **required_artifact_hashes,
+                        "strategy_spec.yaml": "strategy_spec_file_hash",
+                        "environment.json": "environment_hash",
+                        "positions.csv": "positions_hash",
+                        "orders.csv": "orders_hash",
+                    }
+                else:
+                    required_hashes = required_artifact_hashes
                 missing_hash_keys = sorted(set(required_hashes).difference(expected_hashes))
             except (TypeError, ValueError):
                 checks.append(_check("artifact_hashes", False, "fatal", "artifact_hashes.json has invalid schema_version"))

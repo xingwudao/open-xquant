@@ -48,7 +48,7 @@ def test_reproducibility_audit_accepts_xshe_calendar_alias(tmp_path) -> None:
     assert any(check["id"] == "data_fingerprint" and check["status"] == "pass" for check in audit["checks"])
 
 
-def test_reproducibility_audit_requires_execution_assumptions_for_schema_v1_hashes(tmp_path) -> None:
+def test_reproducibility_audit_requires_execution_assumptions_for_schema_v2_hashes(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     (run_dir / "execution_assumptions.json").unlink()
     hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
@@ -65,6 +65,20 @@ def test_reproducibility_audit_requires_execution_assumptions_for_schema_v1_hash
         and "execution_assumptions.json" in check["message"]
         for check in audit["checks"]
     )
+
+
+def test_reproducibility_audit_allows_schema_v1_without_execution_assumptions(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    (run_dir / "execution_assumptions.json").unlink()
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["schema_version"] = 1
+    hashes.pop("execution_assumptions.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
 
 
 def test_reproducibility_audit_allows_legacy_schema_zero_without_execution_assumptions(tmp_path) -> None:
