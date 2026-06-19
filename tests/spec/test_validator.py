@@ -6,6 +6,10 @@ from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 from oxq.spec.validator import validate
 
 
+def _finding(findings: list[dict], check: str) -> dict:
+    return next(finding for finding in findings if finding["check"] == check)
+
+
 def test_validate_rejects_reversed_test_period() -> None:
     spec = StrategySpec.template(strategy_id="bad_dates", hypothesis="date ranges must be ordered")
     spec.validation.test_period = ["2024-12-31", "2024-01-01"]
@@ -163,7 +167,8 @@ validation:
     result = validate(spec)
 
     assert spec.universe.point_in_time is False
-    assert any(warning["check"] == "static_universe_survivorship" for warning in result.warnings)
+    warning = _finding(result.warnings, "static_universe_survivorship")
+    assert warning["dimensions"] == ["conservative"]
 
 
 def test_from_yaml_rejects_invalid_point_in_time_bool(tmp_path) -> None:
@@ -533,6 +538,93 @@ def test_validate_rejects_trade_time_fill_price_mismatch() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "execution_timing_mismatch" for error in result.errors)
+
+
+def test_validate_warns_for_next_session_mid_explicit_execution_conservatism() -> None:
+    spec = StrategySpec.template(strategy_id="next_mid", hypothesis="next-session mid is causal but optimistic")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_mid"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "mid"
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    warning = _finding(result.warnings, "execution_conservatism")
+    assert warning["dimensions"] == ["conservative"]
+
+
+def test_validate_does_not_warn_for_next_session_open_explicit_execution() -> None:
+    spec = StrategySpec.template(strategy_id="next_open_explicit", hypothesis="next open is conservative")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    assert not any(warning["check"] == "execution_conservatism" for warning in result.warnings)
+
+
+def test_validate_rejects_same_session_mid_explicit_execution_lag() -> None:
+    spec = StrategySpec.template(strategy_id="same_mid", hypothesis="same-session mid is not causal")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "close_t"
+    spec.execution.order_timing = "same_session_close"
+    spec.execution.price_bar = "same_session"
+    spec.execution.price_type = "mid"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "execution_lag")
+    assert error["dimensions"] == ["causal"]
+
+
+def test_validate_rejects_legacy_mid_as_same_session_execution_lag() -> None:
+    spec = StrategySpec.template(strategy_id="legacy_mid", hypothesis="legacy mid maps to same-session")
+    spec.execution.fill_price_mode = "mid"
+    spec.execution.trade_time = "close_t"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "execution_lag")
+    assert error["dimensions"] == ["causal"]
+
+
+def test_validate_reports_invalid_derived_execution_semantics() -> None:
+    spec = StrategySpec.template(strategy_id="bad_execution_semantics", hypothesis="execution semantics must derive")
+    spec.execution.fill_price_mode = ""
+    spec.execution.order_timing = "next_session_mid"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "execution_semantics_invalid")
+    assert error["dimensions"] == ["executable"]
+
+
+def test_validate_warns_for_zero_cost_with_explicit_replay_style_execution() -> None:
+    spec = StrategySpec.template(strategy_id="zero_cost_replay", hypothesis="zero costs may be replay-style")
+    spec.cost.fee_rate = 0.0
+    spec.cost.slippage_rate = 0.0
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    warning = _finding(result.warnings, "cost_model_zero")
+    assert set(warning["dimensions"]) == {"conservative", "production_consistent"}
 
 
 def test_validate_rejects_unsupported_signal_time() -> None:
