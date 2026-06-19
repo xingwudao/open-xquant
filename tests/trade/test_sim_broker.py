@@ -591,6 +591,43 @@ class TestFillPriceMode:
         assert fills[0].filled_at == dates[1].isoformat()
 
     @pytest.mark.parametrize(
+        ("mode", "expected_price"),
+        [
+            (FillPriceMode.NEXT_CLOSE, Decimal("101")),
+            (FillPriceMode.NEXT_MID, Decimal("101.5")),
+            (FillPriceMode.NEXT_AVG, Decimal("101.5")),
+        ],
+    )
+    def test_next_session_close_modes_do_not_fill_via_due_open_hook(self, mode, expected_price):
+        mktdata, dates = self._make_mktdata()
+        broker = SimBroker(fill_price_mode=mode, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+
+        broker.fill_due_market_orders(mktdata, dates[1])
+        assert broker.get_fills() == []
+
+        broker.on_bar_close(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].filled_price == expected_price
+        assert fills[0].filled_at == dates[1].isoformat()
+
+    def test_next_open_still_fills_via_due_open_hook(self):
+        mktdata, dates = self._make_mktdata()
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+
+        broker.fill_due_market_orders(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].filled_price == Decimal("102")
+        assert fills[0].filled_at == dates[1].isoformat()
+
+    @pytest.mark.parametrize(
         "mode",
         [FillPriceMode.NEXT_CLOSE, FillPriceMode.NEXT_MID, FillPriceMode.NEXT_AVG],
     )

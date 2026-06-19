@@ -247,8 +247,8 @@ class SimBroker:
     def fill_due_market_orders(
         self, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
     ) -> None:
-        """Fill market orders whose configured execution time has arrived."""
-        if self._fill_price_mode not in _NEXT_SESSION_FILL_MODES:
+        """Fill market orders due at the bar open stage."""
+        if self._fill_price_mode != FillPriceMode.NEXT_OPEN:
             return
         self.fill_market_orders(mktdata, date)
 
