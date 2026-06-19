@@ -85,7 +85,7 @@ git commit -m "feat(spec): add metrics profile section"
 ### Task 2: Profile-Aware Metrics Computation
 
 **Files:**
-- Create: `src/oxq/portfolio/metrics.py`
+- Create: `src/oxq/portfolio/metrics_profile.py`
 - Test: `tests/portfolio/test_metrics_profile.py`
 
 - [ ] **Step 1: Write failing profile computation tests**
@@ -103,7 +103,7 @@ Run:
 .venv/bin/python -m pytest tests/portfolio/test_metrics_profile.py -q
 ```
 
-Expected: failure because `oxq.portfolio.metrics` does not exist.
+Expected: failure because `oxq.portfolio.metrics_profile` does not exist.
 
 - [ ] **Step 3: Implement metrics profile module**
 
@@ -206,7 +206,7 @@ git commit -m "feat(spec): write metrics profile artifacts"
 - [ ] **Step 1: Write failing report tests**
 
 Add tests that generate a report from `metrics.json` containing
-`metrics_profile` and `metric_assumptions`. Assert report includes:
+`metrics_profile`, `metric_assumptions`, and `oos_*` keys. Assert report includes:
 - `### Metrics Profile`
 - profile name
 - return type
@@ -215,6 +215,11 @@ Add tests that generate a report from `metrics.json` containing
 - Calmar denominator
 - evaluation window
 - a non-default profile note for `xquant_production`.
+- `### IS/OOS Metrics`
+- available OOS metric values
+- `### Validation Classification`
+- validator dimensions such as `causal`, `executable`, `conservative`, and
+  `production_consistent`
 
 - [ ] **Step 2: Verify RED**
 
@@ -230,7 +235,10 @@ Expected: failure because report does not render metric assumptions yet.
 
 Add a metrics-profile subsection in section 5 before the metrics table. Use
 `metrics["metric_assumptions"]` when present; otherwise infer the legacy
-`open_xquant_default` assumptions for old run directories.
+`open_xquant_default` assumptions for old run directories. Add an IS/OOS
+subsection when OOS metrics exist. Add a validation classification subsection
+that calls `validate(spec)` and groups errors/warnings by their `dimensions`
+field without changing report decisions.
 
 - [ ] **Step 4: Verify GREEN**
 
