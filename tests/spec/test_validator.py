@@ -445,6 +445,51 @@ def test_validate_rejects_next_open_required_columns_without_open() -> None:
     assert any(error["check"] == "required_columns_missing_open" for error in result.errors)
 
 
+def test_validate_rejects_explicit_next_session_open_without_open() -> None:
+    spec = StrategySpec.template(strategy_id="missing_explicit_open", hypothesis="open is required for explicit open fills")
+    spec.data.required_columns = ["high", "low", "close", "volume"]
+    spec.execution.fill_price_mode = ""
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "required_columns_missing_open" for error in result.errors)
+
+
+def test_validate_rejects_explicit_next_session_mid_without_open() -> None:
+    spec = StrategySpec.template(strategy_id="missing_explicit_mid_open", hypothesis="mid requires open and close")
+    spec.data.required_columns = ["high", "low", "close", "volume"]
+    spec.execution.fill_price_mode = ""
+    spec.execution.order_timing = "next_session_mid"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "mid"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "required_columns_missing_open" for error in result.errors)
+
+
+def test_validate_rejects_explicit_next_session_avg_without_ohlc() -> None:
+    spec = StrategySpec.template(strategy_id="missing_explicit_avg_ohlc", hypothesis="avg requires OHLC")
+    spec.data.required_columns = ["close", "volume"]
+    spec.execution.fill_price_mode = ""
+    spec.execution.order_timing = "next_session_avg"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "avg"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    checks = {error["check"] for error in result.errors}
+    assert "required_columns_missing_open" in checks
+    assert "required_columns_missing_high" in checks
+    assert "required_columns_missing_low" in checks
+
+
 def test_validate_rejects_unsupported_data_provider() -> None:
     spec = StrategySpec.template(strategy_id="remote_provider", hypothesis="compiler only supports local data")
     spec.data.provider = "yfinance"
@@ -526,7 +571,9 @@ def test_validate_rejects_next_high_and_next_low_fill_modes() -> None:
     result = validate(spec)
 
     assert result.status == "fail"
-    assert any(error["check"] == "fill_price_mode_invalid" for error in result.errors)
+    checks = [error["check"] for error in result.errors]
+    assert checks.count("fill_price_mode_invalid") == 1
+    assert "execution_semantics_invalid" not in checks
 
 
 def test_validate_rejects_trade_time_fill_price_mismatch() -> None:
@@ -583,6 +630,23 @@ def test_validate_warns_for_next_session_avg_explicit_execution_conservatism() -
     assert result.status == "pass"
     warning = _finding(result.warnings, "execution_conservatism")
     assert warning["dimensions"] == ["conservative"]
+
+
+def test_validate_explicit_next_session_avg_maps_to_next_avg() -> None:
+    from oxq.spec.execution import derive_execution_semantics
+
+    spec = StrategySpec.template(strategy_id="next_avg_map", hypothesis="avg maps to executable next avg")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_avg"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "avg"
+
+    result = validate(spec)
+    effective = derive_execution_semantics(spec.execution)
+
+    assert result.status == "pass"
+    assert effective.fill_price_mode == "next_avg"
 
 
 def test_validate_does_not_warn_for_next_session_open_explicit_execution() -> None:

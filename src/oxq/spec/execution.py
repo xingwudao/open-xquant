@@ -24,9 +24,9 @@ _LEGACY_TO_EXPLICIT: dict[str, tuple[str, str, str]] = {
 
 _EXPLICIT_TO_LEGACY: dict[tuple[str, str, str], str] = {
     ("next_session_open", "next_session", "open"): "next_open",
-    ("next_session_close", "next_session", "close"): "close",
-    ("next_session_mid", "next_session", "mid"): "mid",
-    ("next_session_avg", "next_session", "avg"): "avg",
+    ("next_session_close", "next_session", "close"): "next_close",
+    ("next_session_mid", "next_session", "mid"): "next_mid",
+    ("next_session_avg", "next_session", "avg"): "next_avg",
     ("same_session_close", "same_session", "close"): "close",
     ("same_session_close", "same_session", "mid"): "mid",
 }

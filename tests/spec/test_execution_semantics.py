@@ -126,7 +126,7 @@ def test_helper_derives_explicit_execution_semantics_without_legacy_fill_mode() 
     assert effective.order_timing == "next_session_close"
     assert effective.price_bar == "next_session"
     assert effective.price_type == "close"
-    assert effective.fill_price_mode == "close"
+    assert effective.fill_price_mode == "next_close"
     assert effective.compatibility_source == "explicit_fields"
 
 

@@ -30,6 +30,7 @@ from oxq.data.loaders import resolve_data_dir
 from oxq.data.market import LocalMarketDataProvider
 from oxq.portfolio.analytics import RunResult
 from oxq.rules.constraint import RebalanceFrequencyRule
+from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 from oxq.trade.fees import PercentageFee
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
@@ -39,7 +40,10 @@ from oxq.universe.static import StaticUniverse
 FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
     "close": FillPriceMode.CLOSE,
     "next_open": FillPriceMode.NEXT_OPEN,
+    "next_close": FillPriceMode.NEXT_CLOSE,
     "mid": FillPriceMode.MID,
+    "next_mid": FillPriceMode.NEXT_MID,
+    "next_avg": FillPriceMode.NEXT_AVG,
 }
 
 # Signals that fire on a single bar and should latch once triggered.
@@ -237,7 +241,7 @@ def compile_run(
     # Broker with fee/slippage from spec
     fee_model = PercentageFee(rate=Decimal(str(spec.cost.fee_rate)), min_fee=Decimal(str(spec.cost.fee_min)))
     slippage_model = PercentageSlippage(rate=Decimal(str(spec.cost.slippage_rate)))
-    fill_mode_str = spec.execution.fill_price_mode
+    fill_mode_str = derive_execution_semantics(spec.execution).fill_price_mode
     fill_mode = FILL_PRICE_MODE_MAP.get(fill_mode_str)
     if fill_mode is None:
         valid = ", ".join(sorted(FILL_PRICE_MODE_MAP.keys()))

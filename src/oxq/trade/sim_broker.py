@@ -19,8 +19,19 @@ class FillPriceMode(Enum):
     CLOSE = "close"
     MID = "mid"
     NEXT_OPEN = "next_open"
+    NEXT_CLOSE = "next_close"
+    NEXT_MID = "next_mid"
+    NEXT_AVG = "next_avg"
     NEXT_HIGH = "next_high"
     NEXT_LOW = "next_low"
+
+
+_NEXT_SESSION_FILL_MODES = {
+    FillPriceMode.NEXT_OPEN,
+    FillPriceMode.NEXT_CLOSE,
+    FillPriceMode.NEXT_MID,
+    FillPriceMode.NEXT_AVG,
+}
 
 
 class SimBroker:
@@ -57,8 +68,8 @@ class SimBroker:
     ) -> None:
         if fill_price_mode in {FillPriceMode.NEXT_HIGH, FillPriceMode.NEXT_LOW}:
             raise ValueError(f"{fill_price_mode.name} is not supported for causal market-order backtests")
-        if fill_price_mode == FillPriceMode.NEXT_OPEN and market_calendar is None:
-            raise ValueError("market_calendar is required for NEXT_OPEN fills")
+        if fill_price_mode in _NEXT_SESSION_FILL_MODES and market_calendar is None:
+            raise ValueError(f"market_calendar is required for {fill_price_mode.name} fills")
         self._fee_model = fee_model
         self._slippage_model = slippage_model
         self._fill_price_mode = fill_price_mode
@@ -107,7 +118,7 @@ class SimBroker:
         managed = self._order_book.add(order, created_at=created_at)
         if order.order_type == "market":
             if (
-                self._fill_price_mode == FillPriceMode.NEXT_OPEN
+                self._fill_price_mode in _NEXT_SESSION_FILL_MODES
                 and self._market_calendar is not None
                 and self._current_date is not None
             ):
@@ -198,20 +209,20 @@ class SimBroker:
             if managed.status != "open":
                 continue
             order = managed.order
-            if self._fill_price_mode == FillPriceMode.NEXT_OPEN:
-                due_status = self._next_open_due_status(managed, mktdata, date)
+            if self._fill_price_mode in _NEXT_SESSION_FILL_MODES:
+                due_status = self._next_session_due_status(managed, mktdata, date)
                 if due_status == "pending":
                     still_pending.append(managed)
                     continue
                 if due_status == "expired":
                     managed.status = "expired"
-                    managed.status_reason = "next_open_due_bar_missing"
+                    managed.status_reason = "next_session_due_bar_missing"
                     continue
             raw_price = self._get_fill_price(managed, mktdata, date)
             if raw_price is None:
-                if self._is_due_next_open_order(managed, date):
+                if self._is_due_next_session_order(managed, date):
                     managed.status = "expired"
-                    managed.status_reason = "next_open_price_missing"
+                    managed.status_reason = "next_session_price_missing"
                     continue
                 still_pending.append(managed)
                 continue
@@ -236,7 +247,7 @@ class SimBroker:
         self, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp,
     ) -> None:
         """Fill market orders whose configured execution time has arrived."""
-        if self._fill_price_mode != FillPriceMode.NEXT_OPEN:
+        if self._fill_price_mode not in _NEXT_SESSION_FILL_MODES:
             return
         self.fill_market_orders(mktdata, date)
 
@@ -346,6 +357,8 @@ class SimBroker:
     ) -> Decimal | None:
         """Get fill price based on fill_price_mode."""
         symbol = managed.order.symbol
+        if symbol not in mktdata:
+            return None
         df = mktdata[symbol]
         if date not in df.index:
             return None
@@ -368,22 +381,35 @@ class SimBroker:
             created_at = pd.Timestamp(managed.created_at)
             if pd.Timestamp(date) <= created_at:
                 return None
-            col = {
-                FillPriceMode.NEXT_OPEN: "open",
-                FillPriceMode.NEXT_HIGH: "high",
-                FillPriceMode.NEXT_LOW: "low",
-            }[self._fill_price_mode]
-            price = Decimal(str(float(df.loc[date, col])))  # type: ignore[arg-type]
-            return price if price.is_finite() else None
+            if self._fill_price_mode == FillPriceMode.NEXT_OPEN:
+                price = Decimal(str(float(df.loc[date, "open"])))  # type: ignore[arg-type]
+                return price if price.is_finite() else None
+            if self._fill_price_mode == FillPriceMode.NEXT_CLOSE:
+                price = Decimal(str(float(df.loc[date, "close"])))  # type: ignore[arg-type]
+                return price if price.is_finite() else None
+            if self._fill_price_mode == FillPriceMode.NEXT_MID:
+                open_price = Decimal(str(float(df.loc[date, "open"])))
+                close_price = Decimal(str(float(df.loc[date, "close"])))
+                if not open_price.is_finite() or not close_price.is_finite():
+                    return None
+                return (open_price + close_price) / 2
+            if self._fill_price_mode == FillPriceMode.NEXT_AVG:
+                prices = [
+                    Decimal(str(float(df.loc[date, column])))
+                    for column in ("open", "high", "low", "close")
+                ]
+                if not all(price.is_finite() for price in prices):
+                    return None
+                return sum(prices, Decimal("0")) / 4
 
         return None
 
-    def _is_due_next_open_order(self, managed: ManagedOrder, date: pd.Timestamp) -> bool:
-        if self._fill_price_mode != FillPriceMode.NEXT_OPEN or not managed.created_at:
+    def _is_due_next_session_order(self, managed: ManagedOrder, date: pd.Timestamp) -> bool:
+        if self._fill_price_mode not in _NEXT_SESSION_FILL_MODES or not managed.created_at:
             return False
         return pd.Timestamp(date) > pd.Timestamp(managed.created_at)
 
-    def _next_open_due_status(self, managed: ManagedOrder, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp) -> str:
+    def _next_session_due_status(self, managed: ManagedOrder, mktdata: dict[str, pd.DataFrame], date: pd.Timestamp) -> str:
         if not managed.created_at:
             managed.created_at = pd.Timestamp(date).isoformat()
         if managed.due_at is None:

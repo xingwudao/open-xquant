@@ -565,6 +565,39 @@ class TestFillPriceMode:
         with pytest.raises(ValueError, match="market_calendar"):
             SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN)
 
+    @pytest.mark.parametrize(
+        ("mode", "expected_price"),
+        [
+            (FillPriceMode.NEXT_CLOSE, Decimal("101")),
+            (FillPriceMode.NEXT_MID, Decimal("101.5")),
+            (FillPriceMode.NEXT_AVG, Decimal("101.5")),
+        ],
+    )
+    def test_next_session_modes_fill_on_next_session_not_same_bar(self, mode, expected_price):
+        mktdata, dates = self._make_mktdata()
+        broker = SimBroker(fill_price_mode=mode, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+
+        broker.on_bar_close(mktdata, dates[0])
+        assert broker.get_fills() == []
+        broker.on_bar_open(mktdata, dates[1])
+        assert broker.get_fills() == []
+        broker.on_bar_close(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].filled_price == expected_price
+        assert fills[0].filled_at == dates[1].isoformat()
+
+    @pytest.mark.parametrize(
+        "mode",
+        [FillPriceMode.NEXT_CLOSE, FillPriceMode.NEXT_MID, FillPriceMode.NEXT_AVG],
+    )
+    def test_all_next_session_modes_require_market_calendar(self, mode):
+        with pytest.raises(ValueError, match="market_calendar"):
+            SimBroker(fill_price_mode=mode)
+
     def test_next_mode_without_submission_timestamp_does_not_peek(self):
         """NEXT_OPEN without created_at should not read next-bar prices."""
         mktdata, dates = self._make_mktdata()

@@ -328,6 +328,25 @@ def _has_any_explicit_execution_field(spec: StrategySpec) -> bool:
     return any((spec.execution.order_timing, spec.execution.price_bar, spec.execution.price_type))
 
 
+def _validate_required_execution_columns(required_columns: set[str], fill_price_mode: str) -> list[dict]:
+    required_by_mode = {
+        "next_open": {"open"},
+        "mid": {"open"},
+        "next_mid": {"open"},
+        "next_avg": {"open", "high", "low"},
+    }
+    errors: list[dict] = []
+    for column in sorted(required_by_mode.get(fill_price_mode, set()) - required_columns):
+        errors.append(
+            _err(
+                "fatal",
+                f"required_columns_missing_{column}",
+                f"data.required_columns must include {column} for fill_price_mode={fill_price_mode}",
+            )
+        )
+    return errors
+
+
 def _missing_signal_param(rule_name: str, param_name: str) -> dict:
     return _err(
         "fatal",
@@ -482,6 +501,37 @@ def validate(spec: StrategySpec) -> ValidationResult:
             )
         )
 
+    # Derive execution semantics early so data requirements use effective explicit fields.
+    has_any_explicit_execution_field = _has_any_explicit_execution_field(spec)
+    valid_legacy_fill_modes = frozenset({"close", "next_open", "mid"})
+    raw_legacy_fill_mode_invalid = (
+        bool(spec.execution.fill_price_mode)
+        and not has_any_explicit_execution_field
+        and spec.execution.fill_price_mode not in valid_legacy_fill_modes
+    )
+    effective_execution = None
+    if raw_legacy_fill_mode_invalid:
+        errors.append(
+            _err(
+                "fatal",
+                "fill_price_mode_invalid",
+                f"Unknown fill_price_mode '{spec.execution.fill_price_mode}'. "
+                f"Valid: {', '.join(sorted(valid_legacy_fill_modes))}",
+            )
+        )
+    elif spec.execution.fill_price_mode or has_any_explicit_execution_field:
+        try:
+            effective_execution = derive_execution_semantics(spec.execution)
+        except ValueError as exc:
+            errors.append(
+                _err(
+                    "fatal",
+                    "execution_semantics_invalid",
+                    f"execution semantics are invalid: {exc}",
+                    ["executable"],
+                )
+            )
+
     # --- Data ---
     if spec.data.provider != "local":
         errors.append(
@@ -504,14 +554,8 @@ def validate(spec: StrategySpec) -> ValidationResult:
     required_columns = set(spec.data.required_columns)
     if "close" not in required_columns:
         errors.append(_err("fatal", "required_columns_missing_close", "data.required_columns must include close"))
-    if spec.execution.fill_price_mode in {"next_open", "mid"} and "open" not in required_columns:
-        errors.append(
-            _err(
-                "fatal",
-                "required_columns_missing_open",
-                f"data.required_columns must include open for fill_price_mode={spec.execution.fill_price_mode}",
-            )
-        )
+    if effective_execution is not None:
+        errors.extend(_validate_required_execution_columns(required_columns, effective_execution.fill_price_mode))
 
     # --- Signal ---
     if not spec.signal.signal_time:
@@ -528,7 +572,6 @@ def validate(spec: StrategySpec) -> ValidationResult:
     # --- Execution ---
     if not spec.execution.trade_time:
         errors.append(_err("fatal", "trade_time_missing", "execution.trade_time is missing — cannot determine fill timing"))
-    has_any_explicit_execution_field = _has_any_explicit_execution_field(spec)
     if not spec.execution.fill_price_mode and not has_any_explicit_execution_field:
         errors.append(_err("fatal", "fill_price_mode_missing", "execution.fill_price_mode is missing"))
     if not isinstance(spec.execution.lot_size, int) or isinstance(spec.execution.lot_size, bool) or spec.execution.lot_size <= 0:
@@ -550,31 +593,6 @@ def validate(spec: StrategySpec) -> ValidationResult:
     if not _is_finite_number(spec.execution.initial_cash) or spec.execution.initial_cash <= 0:
         errors.append(_err("fatal", "initial_cash_invalid", "execution.initial_cash must be a positive finite number"))
 
-    effective_execution = None
-    if spec.execution.fill_price_mode or has_any_explicit_execution_field:
-        try:
-            effective_execution = derive_execution_semantics(spec.execution)
-        except ValueError as exc:
-            errors.append(
-                _err(
-                    "fatal",
-                    "execution_semantics_invalid",
-                    f"execution semantics are invalid: {exc}",
-                    ["executable"],
-                )
-            )
-
-    # Validate fill mode against known values
-    valid_fill_modes = frozenset({"close", "next_open", "mid", "avg"})
-    if spec.execution.fill_price_mode and spec.execution.fill_price_mode not in valid_fill_modes:
-        errors.append(
-            _err(
-                "fatal",
-                "fill_price_mode_invalid",
-                f"Unknown fill_price_mode '{spec.execution.fill_price_mode}'. "
-                f"Valid: {', '.join(sorted(valid_fill_modes))}",
-            )
-        )
     expected_trade_time = {
         "close": "close_t",
         "mid": "close_t",

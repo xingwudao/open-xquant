@@ -846,6 +846,27 @@ def test_compile_run_rejects_invalid_specs_before_execution(tmp_path) -> None:
         compile_run(spec, out_dir=tmp_path)
 
 
+def test_compile_run_explicit_only_next_open_instantiates_next_open_broker(tmp_path, monkeypatch) -> None:
+    spec = StrategySpec.template(strategy_id="explicit_next_open", hypothesis="explicit execution reaches broker")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    class BrokerProbe:
+        def __init__(self, *args, **kwargs) -> None:
+            assert kwargs["fill_price_mode"] == compiler.FillPriceMode.NEXT_OPEN
+            raise RuntimeError("broker probe complete")
+
+    monkeypatch.setattr(compiler, "SimBroker", BrokerProbe)
+
+    with pytest.raises(RuntimeError, match="broker probe complete"):
+        compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+
 def test_compile_run_records_resolved_default_data_dir(tmp_path, monkeypatch) -> None:
     spec = StrategySpec.template(strategy_id="resolved_data_dir", hypothesis="default data dir is auditable")
     market_dir = tmp_path / "oxq_data" / "market"
