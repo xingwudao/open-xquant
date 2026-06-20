@@ -43,6 +43,7 @@ def test_agent_install_all_targets_writes_managed_skills(monkeypatch, tmp_path) 
     assert (home / ".claude/skills/strategy-builder/SKILL.md").exists()
     assert (home / ".cursor/skills/strategy-builder/SKILL.md").exists()
     assert (home / ".openclaw/skills/strategy-builder/SKILL.md").exists()
+    assert (home / ".trae/skills/strategy-builder/SKILL.md").exists()
     assert (codex_home / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant:begin") == 1
     assert "open-xquant:begin" in (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
     assert "open-xquant:begin" in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
@@ -52,7 +53,30 @@ def test_agent_install_all_targets_writes_managed_skills(monkeypatch, tmp_path) 
 
     manifest = home / ".config/open-xquant/agent-install.json"
     targets = json.loads(manifest.read_text(encoding="utf-8"))["targets"]
-    assert set(targets) == {"codex", "opencode", "claude-code", "cursor", "openclaw"}
+    assert set(targets) == {"codex", "opencode", "claude-code", "cursor", "openclaw", "trae"}
+
+
+def test_agent_install_trae_writes_global_skills(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "trae", "--from-local", str(source), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    installed = home / ".trae/skills/strategy-builder/SKILL.md"
+    assert installed.exists()
+    assert "Build quant strategies" in installed.read_text(encoding="utf-8")
+
+    marker = home / ".trae/skills/strategy-builder/.open-xquant-managed.json"
+    assert json.loads(marker.read_text(encoding="utf-8"))["target"] == "trae"
+
+    config = read_yaml_file(home / ".config/open-xquant/agent.yaml")
+    assert config["preferred_runner"] == f"uv run --project {source.resolve()} oxq"
 
 
 def test_agent_install_writes_cross_directory_runner(monkeypatch, tmp_path) -> None:

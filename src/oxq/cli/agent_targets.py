@@ -12,7 +12,7 @@ import yaml
 
 from oxq.cli.agent_manifest import expand_path, sha256_file
 
-CONCRETE_TARGETS = ("codex", "opencode", "claude-code", "cursor", "openclaw")
+CONCRETE_TARGETS = ("codex", "opencode", "claude-code", "cursor", "openclaw", "trae")
 SUPPORTED_TARGETS = CONCRETE_TARGETS + ("generic",)
 
 
@@ -68,6 +68,10 @@ def resolve_openclaw_target() -> AgentTarget:
     return AgentTarget("openclaw", home_path(".openclaw", "skills"), config_file=home_path(".openclaw", "openclaw.json"))
 
 
+def resolve_trae_target() -> AgentTarget:
+    return AgentTarget("trae", home_path(".trae", "skills"))
+
+
 def resolve_generic_target() -> AgentTarget:
     return AgentTarget("generic", None)
 
@@ -79,6 +83,7 @@ def resolve_target(target_id: str) -> AgentTarget:
         "claude-code": resolve_claude_code_target,
         "cursor": resolve_cursor_target,
         "openclaw": resolve_openclaw_target,
+        "trae": resolve_trae_target,
         "generic": resolve_generic_target,
     }
     try:
@@ -99,6 +104,8 @@ def detect_targets() -> list[str]:
         detected.append("cursor")
     if which("openclaw") or home_path(".openclaw").exists():
         detected.append("openclaw")
+    if which("trae") or home_path(".trae").exists():
+        detected.append("trae")
     return detected or ["generic"]
 
 
