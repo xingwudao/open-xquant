@@ -542,6 +542,25 @@ class DroppingSellBroker(SimBroker):
         return super().submit_order(order)
 
 
+class HoldingSellBroker(SimBroker):
+    """Broker that leaves submitted market sells open for inspection."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.held_sells: list[Order] = []
+
+    def submit_order(self, order: Order) -> str:
+        order_id = super().submit_order(order)
+        if order.side == "SELL":
+            self.held_sells.append(order)
+            self._pending_market = [
+                managed
+                for managed in self._pending_market
+                if managed.order is not order
+            ]
+        return order_id
+
+
 def test_engine_notifies_optimizer_after_full_exit() -> None:
     """Exit fills should notify optimizers that keep per-symbol entry state."""
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
@@ -886,6 +905,75 @@ def test_signal_to_position_hold_rule_override_preserves_other_symbols() -> None
     assert result.snapshots[1].positions["BBB"].shares == result.snapshots[0].positions["BBB"].shares
 
 
+def test_signal_to_position_hold_rule_override_buy_uses_cash_budget() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["BUY", "HOLD"],
+            },
+            index=dates,
+        ),
+        "CCC": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["HOLD", "HOLD"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    class AddCCCSecondBarRule:
+        name = "AddCCCSecondBar"
+
+        def evaluate(
+            self,
+            symbol: str,
+            row: pd.Series,
+            portfolio: Portfolio,
+            prices: dict[str, Decimal] | None = None,
+        ) -> RuleResult:
+            if symbol == "CCC" and row.name == dates[1]:
+                return RuleResult(weights={symbol: 0.5}, reason="add_ccc")
+            return RuleResult()
+
+    strategy = Strategy(
+        name="signal_hold_rule_override_buy_cash_budget",
+        universe=StaticUniverse(("AAA", "CCC")),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[AddCCCSecondBarRule()],
+    )
+
+    ccc_orders = [managed.order for managed in result.orders if managed.order.symbol == "CCC"]
+
+    assert ccc_orders == []
+    assert result.snapshots[1].rule_reasons == {"CCC": "add_ccc"}
+
+
 def test_signal_to_position_mixed_hold_does_not_rebalance_held_symbol() -> None:
     dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
     data = {
@@ -1162,6 +1250,49 @@ def test_signal_to_position_completed_partial_sell_freezes_later_hold_symbol() -
     aaa_sides = [trade.order.side for trade in result.trades if trade.order.symbol == "AAA"]
 
     assert aaa_sides == ["BUY", "SELL"]
+
+
+def test_signal_to_position_pending_partial_sell_keeps_reduction_state() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 10.0],
+                "high": [100.0, 100.0, 10.0],
+                "low": [100.0, 100.0, 10.0],
+                "close": [100.0, 100.0, 10.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+                "timing_input": ["BUY", "SELL", "HOLD"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    optimizer = SignalToPositionOptimizer(signal="timing", buy_weight=0.5, sell_weight=0.25)
+    strategy = Strategy(
+        name="signal_pending_partial_sell_keeps_reduction",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=optimizer,
+    )
+    broker = HoldingSellBroker()
+
+    Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=broker,
+        start="2024-01-02",
+        end="2024-01-04",
+    )
+
+    assert [order.side for order in broker.held_sells] == ["SELL"]
+    assert optimizer.pending_reduction_symbols == {"AAA"}
 
 
 def test_signal_to_position_pending_next_close_buy_latches_later_sell() -> None:

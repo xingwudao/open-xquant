@@ -334,6 +334,12 @@ class SimBroker:
         fill_price = self._apply_slippage(order, price)
         return fill_price * shares + self._calc_fee(order, fill_price)
 
+    def estimate_market_sell_proceeds(self, symbol: str, price: Decimal, shares: int, currency: str = "CNY") -> Decimal:
+        """Estimate net cash credited by a market SELL, after costs."""
+        order = Order(symbol=symbol, side="SELL", shares=shares, currency=currency)
+        fill_price = self._apply_slippage(order, price)
+        return fill_price * shares - self._calc_fee(order, fill_price)
+
     # -- Backward Compatibility -----------------------------------------------
 
     def fill_pending_orders(

@@ -282,10 +282,7 @@ class SignalToPositionOptimizer:
                     self._weights.pop(symbol, None)
                     self.pending_reduction_symbols.add(symbol)
                 elif has_latched_position and has_pending_buy:
-                    if self.sell_weight > 0:
-                        self._weights[symbol] = float(self.sell_weight)
-                    else:
-                        self._weights.pop(symbol, None)
+                    self._weights.pop(symbol, None)
                     self.pending_reduction_symbols.add(symbol)
                 else:
                     self._weights.pop(symbol, None)

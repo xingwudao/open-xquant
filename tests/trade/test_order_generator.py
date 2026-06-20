@@ -256,3 +256,18 @@ class TestGenerateOrders:
 
         assert len(result) == 1
         assert result[0].order.shares == 98
+
+    def test_explicit_buying_power_uses_net_planned_sell_proceeds(self):
+        result = generate_orders(
+            target_weights={"CCC": Decimal("1.0")},
+            positions={"AAA": Position(symbol="AAA", shares=100, avg_cost=Decimal("10"))},
+            prices={"AAA": Decimal("10"), "CCC": Decimal("10")},
+            total_capital=Decimal("1000"),
+            buying_power=Decimal("0"),
+            sell_proceeds_estimator=lambda _symbol, price, shares: price * shares - Decimal("10"),
+        )
+
+        assert [(item.order.symbol, item.order.side, item.order.shares) for item in result] == [
+            ("AAA", "SELL", 100),
+            ("CCC", "BUY", 99),
+        ]

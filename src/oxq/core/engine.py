@@ -369,12 +369,17 @@ class Engine:
                 for managed in broker.get_open_orders()
                 if managed.order.order_type == "market" and managed.order.side == "BUY"
             }
+            pending_sell_symbols = {
+                managed.order.symbol
+                for managed in broker.get_open_orders()
+                if managed.order.order_type == "market" and managed.order.side == "SELL"
+            }
             reached_symbols: list[str] = []
             all_reached = True
             for symbol in pending_reduction_symbols:
                 position = portfolio.positions.get(symbol)
                 price = bar_prices.get(symbol)
-                if symbol in pending_buy_symbols:
+                if symbol in pending_buy_symbols or symbol in pending_sell_symbols:
                     all_reached = False
                     continue
                 if position is None or position.shares <= 0 or price is None or total_value <= 0:
@@ -435,10 +440,15 @@ class Engine:
         if not hold:
             total_capital = portfolio.total_value(bar_prices)
             estimate_market_buy_cost = getattr(broker, "estimate_market_buy_cost", None)
+            estimate_market_sell_proceeds = getattr(broker, "estimate_market_sell_proceeds", None)
             buy_cost_estimator = None
             if callable(estimate_market_buy_cost):
                 def buy_cost_estimator(symbol: str, price: Decimal, shares: int) -> Decimal:
                     return estimate_market_buy_cost(symbol, price, shares, portfolio.currency)
+            sell_proceeds_estimator = None
+            if callable(estimate_market_sell_proceeds):
+                def sell_proceeds_estimator(symbol: str, price: Decimal, shares: int) -> Decimal:
+                    return estimate_market_sell_proceeds(symbol, price, shares, portfolio.currency)
 
             order_weights = adjusted_weights
             order_positions = portfolio.positions
@@ -453,6 +463,7 @@ class Engine:
                     symbol: position for symbol, position in portfolio.positions.items()
                     if symbol in overridden_symbols
                 }
+                buying_power = portfolio.cash
             else:
                 held_symbols = set(getattr(strategy.portfolio, "held_symbols", set()))
                 pending_reduction_symbols = set(getattr(strategy.portfolio, "pending_reduction_symbols", set()))
@@ -484,6 +495,7 @@ class Engine:
                 currency=portfolio.currency,
                 pending_orders=[managed.order for managed in broker.get_open_orders() if managed.order.order_type == "market"],
                 buy_cost_estimator=buy_cost_estimator,
+                sell_proceeds_estimator=sell_proceeds_estimator,
                 buying_power=buying_power,
             )
             for p in planned:

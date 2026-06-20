@@ -46,6 +46,7 @@ def generate_orders(
     currency: str = "CNY",
     pending_orders: list[Order] | None = None,
     buy_cost_estimator: Callable[[str, Decimal, int], Decimal] | None = None,
+    sell_proceeds_estimator: Callable[[str, Decimal, int], Decimal] | None = None,
     buying_power: Decimal | None = None,
 ) -> list[PlannedOrder]:
     """Generate a trade plan from target weights.
@@ -70,6 +71,8 @@ def generate_orders(
         Open orders already submitted but not filled.
     buy_cost_estimator : Callable or None
         Function returning total estimated cash needed for a BUY order.
+    sell_proceeds_estimator : Callable or None
+        Function returning estimated net cash credited by a SELL order.
     buying_power : Decimal or None
         Optional cash budget for new buys. Defaults to total capital when omitted.
 
@@ -83,6 +86,7 @@ def generate_orders(
     pending_sell_shares: dict[str, int] = {}
     pending_buy_notional = Decimal("0")
     estimate_cost = buy_cost_estimator or _default_buy_cost_estimator
+    estimate_proceeds = sell_proceeds_estimator or _default_sell_proceeds_estimator
     for order in pending_orders or []:
         if order.order_type != "market":
             continue
@@ -129,7 +133,7 @@ def generate_orders(
                     continue
                 planned_target_shares = current_shares - shares
                 if buying_power is not None:
-                    remaining_buy_budget += price * shares
+                    remaining_buy_budget += max(Decimal("0"), estimate_proceeds(symbol, price, shares))
             else:
                 if buy_delta <= 0:
                     continue
@@ -159,4 +163,8 @@ def generate_orders(
 
 
 def _default_buy_cost_estimator(_symbol: str, price: Decimal, shares: int) -> Decimal:
+    return price * shares
+
+
+def _default_sell_proceeds_estimator(_symbol: str, price: Decimal, shares: int) -> Decimal:
     return price * shares
