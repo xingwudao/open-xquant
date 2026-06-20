@@ -103,33 +103,80 @@ def backtest():
 @click.argument("spec_file", type=click.Path(exists=True))
 @click.option("--out", "-o", default="runs/auto", help="Output directory for run artifacts")
 @click.option("--data-dir", default=None, help="Directory for market data files")
-def run(spec_file: str, out: str, data_dir: str | None):
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
     """Run a backtest from a strategy spec file.
 
     SPEC_FILE is the path to a strategy_spec.yaml file.
     """
-    from oxq.spec.compiler import compile_run
+    from oxq.spec.compiler import build_artifact_manifest, compile_run
 
     spec = StrategySpec.from_yaml(spec_file)
     validation = validate_spec(spec)
     if validation.status == "fail":
+        if as_json:
+            import json as _json
+
+            click.echo(_json.dumps(_backtest_failure_payload(validation), indent=2))
+            raise SystemExit(1)
         click.echo("Spec validation failed. Fix errors before running backtest:")
         for e in validation.errors:
             click.echo(f"  [{e['severity']}] {e['check']}: {e['message']}")
         raise SystemExit(1)
-    if validation.warnings:
+    if validation.warnings and not as_json:
         click.echo("Warnings (continuing):")
         for w in validation.warnings:
             click.echo(f"  [{w['severity']}] {w['check']}: {w['message']}")
 
-    click.echo(f"Running backtest for '{spec.strategy_id}'...")
+    if not as_json:
+        click.echo(f"Running backtest for '{spec.strategy_id}'...")
     result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
+
+    if as_json:
+        import json as _json
+
+        payload = {
+            "status": "pass",
+            "run_id": run_dir.name,
+            "run_dir": str(run_dir),
+            "artifacts": build_artifact_manifest(run_dir),
+            "summary_metrics": _backtest_summary_metrics(result),
+            "warnings": validation.warnings,
+            "errors": validation.errors,
+        }
+        click.echo(_json.dumps(payload, indent=2, allow_nan=False))
+        return
 
     click.echo(f"\nRun complete. Artifacts written to {run_dir}/")
     click.echo(f"  Total Return: {result.total_return():.2%}")
     click.echo(f"  Sharpe Ratio: {result.sharpe_ratio():.2f}")
     click.echo(f"  Max Drawdown: {result.max_drawdown():.2%}")
     click.echo(f"  Trade Count:  {len(result.trades)}")
+
+
+def _backtest_failure_payload(validation) -> dict:
+    return {
+        "status": "fail",
+        "run_id": None,
+        "run_dir": None,
+        "artifacts": {},
+        "summary_metrics": {},
+        "warnings": validation.warnings,
+        "errors": validation.errors,
+    }
+
+
+def _backtest_summary_metrics(result) -> dict:
+    return {
+        "total_return": _json_number(result.total_return()),
+        "sharpe_ratio": _json_number(result.sharpe_ratio()),
+        "max_drawdown": _json_number(result.max_drawdown()),
+        "trade_count": len(result.trades),
+    }
+
+
+def _json_number(value: float) -> float | None:
+    return float(value) if math.isfinite(float(value)) else None
 
 
 @main.group()

@@ -117,6 +117,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         "environment.json": "environment_hash",
         "execution_assumptions.json": "execution_assumptions_hash",
         "positions.csv": "positions_hash",
+        "target_weights.csv": "target_weights_hash",
         "orders.csv": "orders_hash",
     }
     try:

@@ -419,21 +419,10 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     pd.DataFrame(pos_rows).to_csv(run_dir / "positions.csv", index=False)
 
     # target_weights.csv — per-bar optimizer output for external alignment.
-    target_rows = []
-    for snapshot in result.snapshots:
-        symbols = set(snapshot.target_weights) | set(snapshot.adjusted_weights)
-        for symbol in sorted(symbols):
-            target_rows.append(
-                {
-                    "date": snapshot.date.isoformat(),
-                    "symbol": symbol,
-                    "target_weight": float(snapshot.target_weights.get(symbol, 0.0)),
-                    "adjusted_weight": float(snapshot.adjusted_weights.get(symbol, 0.0)),
-                }
-            )
+    target_rows = _build_target_weight_rows(spec, result)
     pd.DataFrame(
         target_rows,
-        columns=["date", "symbol", "target_weight", "adjusted_weight"],
+        columns=["date", "symbol", "target_weight", "adjusted_weight", "is_rebalance", "reason"],
     ).to_csv(run_dir / "target_weights.csv", index=False)
 
     # orders.csv
@@ -489,6 +478,45 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
             )
             + "\n"
         )
+
+
+def _build_target_weight_rows(spec: StrategySpec, result: RunResult) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    symbols = set(spec.universe.symbols)
+    for snapshot in result.snapshots:
+        symbols.update(snapshot.target_weights)
+        symbols.update(snapshot.adjusted_weights)
+    ordered_symbols = sorted(symbols)
+
+    previous: dict[str, tuple[float, float]] = {}
+    for snapshot in result.snapshots:
+        for symbol in ordered_symbols:
+            target_weight = float(snapshot.target_weights.get(symbol, 0.0))
+            adjusted_weight = float(snapshot.adjusted_weights.get(symbol, 0.0))
+            current = (target_weight, adjusted_weight)
+            prior = previous.get(symbol, (0.0, 0.0))
+            is_rebalance = current != prior
+            rows.append(
+                {
+                    "date": snapshot.date.isoformat(),
+                    "symbol": symbol,
+                    "target_weight": target_weight,
+                    "adjusted_weight": adjusted_weight,
+                    "is_rebalance": is_rebalance,
+                    "reason": "rebalance" if is_rebalance else "hold",
+                }
+            )
+            previous[symbol] = current
+    return rows
+
+
+def build_artifact_manifest(run_dir: str | Path) -> dict[str, str]:
+    run_path = Path(run_dir)
+    return {
+        path.name: str(path)
+        for path in sorted(run_path.iterdir())
+        if path.is_file()
+    }
 
 
 def _write_benchmark_curve_artifact(spec: StrategySpec, result: RunResult, run_dir: Path) -> Path | None:
