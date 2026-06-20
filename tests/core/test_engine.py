@@ -645,7 +645,7 @@ def test_snapshot_adjusted_weights_partial_exit_uses_held_exposure() -> None:
     )
 
     assert result.snapshots[1].target_weights == {"CASH": 1.0}
-    assert result.snapshots[1].adjusted_weights["AAA"] == 0.5
+    assert result.snapshots[1].adjusted_weights == {"AAA": 0.5, "CASH": 0.5}
 
 
 def test_engine_notifies_optimizer_after_normal_broker_full_exit() -> None:
