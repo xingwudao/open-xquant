@@ -405,8 +405,10 @@ class Engine:
         # ── Step 7: Execute exits ─────────────────────────────────────
         if exit_targets:
             adjusted_weights = dict(adjusted_weights)
+            held_weights = current_portfolio_weights()
             for sym, target_ratio in exit_targets.items():
-                adjusted_weights[sym] = float(adjusted_weights.get(sym, 0.0)) * float(target_ratio)
+                base_weight = held_weights.get(sym, float(adjusted_weights.get(sym, 0.0)))
+                adjusted_weights[sym] = float(base_weight) * float(target_ratio)
             for sym, target_ratio in exit_targets.items():
                 if sym not in portfolio.positions:
                     continue
