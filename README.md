@@ -153,7 +153,7 @@ open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Rese
 
 已完成：
 - 核心引擎 (Engine, Strategy, types, registry)
-- 30+ 指标库、7 种信号、9 种规则、5 种组合优化器
+- 30+ 指标库、8 种信号、9 种规则、6 种组合优化器
 - 因子评估 (IC, ICIR, decay, turnover, tearsheet)
 - 参数优化 (grid search, walk-forward, cross-validation)
 - 可观测性 (tracing, audit, monitoring, experiment log)
@@ -323,7 +323,7 @@ open-xquant is upgrading from an Agent First trading framework to an Agentic Qua
 
 Completed:
 - Core engine (Engine, Strategy, types, registry)
-- 30+ indicators, 7 signals, 9 rules, 5 portfolio optimizers
+- 30+ indicators, 8 signals, 9 rules, 6 portfolio optimizers
 - Factor evaluation (IC, ICIR, decay, turnover, tearsheet)
 - Parameter optimization (grid search, walk-forward, cross-validation)
 - Observability (tracing, audit, monitoring, experiment log)

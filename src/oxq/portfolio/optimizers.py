@@ -209,22 +209,30 @@ class SignalToPositionOptimizer:
         self.sell_weight = sell_weight
         self.hold_behavior = hold_behavior
         self._weights: dict[str, float] = {}
+        self.skip_rebalance = False
 
     def optimize(
         self,
         signals: dict[str, pd.DataFrame],
         indicators: dict[str, pd.DataFrame],
     ) -> dict[str, float]:
+        saw_signal = False
+        saw_trade_intent = False
         for symbol, frame in signals.items():
             if self.signal not in frame.columns or frame.empty:
                 continue
+            saw_signal = True
             value = frame[self.signal].iloc[-1]
             action = "HOLD" if pd.isna(value) else str(value).upper()
             if action == "BUY":
-                self._weights[symbol] = float(self.buy_weight)
+                saw_trade_intent = True
+                buy_weight = float(self.buy_weight)
+                self._weights[symbol] = buy_weight
             elif action == "SELL":
+                saw_trade_intent = True
                 if self.sell_weight > 0:
-                    self._weights[symbol] = float(self.sell_weight)
+                    sell_weight = float(self.sell_weight)
+                    self._weights[symbol] = sell_weight
                 else:
                     self._weights.pop(symbol, None)
             elif action == "HOLD":
@@ -232,6 +240,7 @@ class SignalToPositionOptimizer:
             else:
                 raise ValueError("expected BUY, SELL, or HOLD")
 
+        self.skip_rebalance = saw_signal and not saw_trade_intent
         total = sum(weight for weight in self._weights.values() if weight > 0)
         if total <= 0:
             return {"CASH": 1.0}

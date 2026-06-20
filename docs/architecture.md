@@ -62,7 +62,7 @@ open-xquant/
 │   ├── data/                       # 数据层（Provider 协议、行情/因子数据）
 │   ├── universe/                   # Universe 构建（静态、过滤、指数成分）
 │   ├── indicators/                 # 技术指标库（30+ 内置指标）
-│   ├── signals/                    # 信号生成器（7 种信号类型）
+│   ├── signals/                    # 信号生成器（8 种信号类型）
 │   ├── portfolio/                  # 组合管理（优化器、持仓、订单簿、绩效分析）
 │   ├── trade/                      # 交易执行（SimBroker、费率、滑点、OrderGenerator）
 │   ├── rules/                      # 交易规则（止损、止盈、风控熔断）
@@ -532,7 +532,7 @@ CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现。
 
 ### 11.4 信号生成器 (oxq.signals)
 
-7 种信号类型：Crossover, Threshold, Comparison, Formula, Peak, Timestamp, Composite。
+8 种信号类型：Crossover, Threshold, Comparison, Formula, Peak, Timestamp, Composite, ROCTiming。
 
 ### 11.5 组合优化器 (oxq.portfolio.optimizers)
 
@@ -542,6 +542,8 @@ CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现。
 | `RiskParityOptimizer` | 按波动率倒数加权 |
 | `KellyOptimizer` | Kelly 公式计算最优仓位 |
 | `TopNRankingOptimizer` | 按评分排名取 Top N 归一化 |
+| `PctEquityOptimizer` | 每个信号标的固定权益比例 |
+| `SignalToPositionOptimizer` | 将 `BUY`、`SELL`、`HOLD` 信号映射为目标仓位 |
 
 ### 11.6 交易规则 (oxq.rules)
 

@@ -8,7 +8,7 @@ from oxq.core.engine import Engine, _apply_fill
 from oxq.core.strategy import Strategy
 from oxq.core.types import Fill, Order, Portfolio, Position, RuleResult
 from oxq.indicators.sma import SMA
-from oxq.portfolio.optimizers import EqualWeightOptimizer
+from oxq.portfolio.optimizers import EqualWeightOptimizer, SignalToPositionOptimizer
 from oxq.signals.crossover import Crossover
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
 from oxq.universe.static import StaticUniverse
@@ -646,6 +646,50 @@ def test_snapshot_adjusted_weights_partial_exit_uses_held_exposure() -> None:
 
     assert result.snapshots[1].target_weights == {"CASH": 1.0}
     assert result.snapshots[1].adjusted_weights == {"AAA": 0.5, "CASH": 0.5}
+
+
+def test_signal_to_position_hold_does_not_rebalance_existing_position() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 50.0],
+                "high": [100.0, 50.0],
+                "low": [100.0, 50.0],
+                "close": [100.0, 50.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class BuyThenHoldSignal:
+        name = "BuyThenHold"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "HOLD"], index=mktdata.index)
+
+    strategy = Strategy(
+        name="signal_hold_no_rebalance",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (BuyThenHoldSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        initial_cash=950.0,
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].order.side == "BUY"
+    assert result.trades[0].order.shares == 9
+    assert result.snapshots[1].positions["AAA"].shares == 9
+    assert result.snapshots[1].rule_reasons == {"__all__": "signal_hold"}
 
 
 def test_engine_notifies_optimizer_after_normal_broker_full_exit() -> None:

@@ -297,16 +297,20 @@ class Engine:
         if callable(set_held_symbols):
             set_held_symbols(list(portfolio.positions.keys()))
         target_weights = strategy.portfolio.optimize(signals_data, indicators_data)
+        optimizer_hold = bool(getattr(strategy.portfolio, "skip_rebalance", False))
         raw_target_weights = dict(target_weights)
 
         # ── Step 3: Pre-trade rules ───────────────────────────────────
-        hold = False
+        hold = optimizer_hold
         rule_reasons: dict[str, list[str]] = {}
 
         def record_rule_reason(symbol: str, reason: str) -> None:
             if not reason:
                 return
             rule_reasons.setdefault(symbol, []).append(reason)
+
+        if optimizer_hold:
+            record_rule_reason("__all__", "signal_hold")
 
         for rule in self._rules:
             for symbol in universe.symbols:

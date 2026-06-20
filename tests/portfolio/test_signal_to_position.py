@@ -31,6 +31,19 @@ def test_signal_to_position_maps_buy_sell_hold() -> None:
     assert sell == {"CASH": 1.0}
 
 
+def test_signal_to_position_only_skips_rebalance_for_hold() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing")
+
+    optimizer.optimize({"CSI300": pd.DataFrame({"timing": ["BUY"]})}, {})
+    assert optimizer.skip_rebalance is False
+
+    optimizer.optimize({"CSI300": pd.DataFrame({"timing": ["BUY"]})}, {})
+    assert optimizer.skip_rebalance is False
+
+    optimizer.optimize({"CSI300": pd.DataFrame({"timing": ["HOLD"]})}, {})
+    assert optimizer.skip_rebalance is True
+
+
 def test_hold_starts_in_cash() -> None:
     optimizer = SignalToPositionOptimizer(signal="timing")
 

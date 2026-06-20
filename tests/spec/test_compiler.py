@@ -2608,3 +2608,123 @@ def test_roc_timing_signal_to_position_compiles_and_writes_target_weights(tmp_pa
     csi = weights[weights["symbol"] == "CSI300"]
     assert csi["adjusted_target_weight"].max() == 1.0
     assert "target_changed" in set(weights["reason"])
+
+
+def _adjusted_weight_sequence(weights: pd.DataFrame, symbol: str) -> list[float]:
+    dates = weights["date"].drop_duplicates().tolist()
+    by_date = (
+        weights[weights["symbol"] == symbol]
+        .set_index("date")["adjusted_target_weight"]
+        .to_dict()
+    )
+    return [float(by_date.get(date, 0.0)) for date in dates]
+
+
+def test_roc_timing_fixed_threshold_target_weight_sequence(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    frame = pd.DataFrame(
+        {
+            "open": [100, 90, 89, 94, 110, 111, 105, 104],
+            "high": [101, 91, 90, 95, 111, 112, 106, 105],
+            "low": [99, 89, 88, 93, 109, 110, 104, 103],
+            "close": [100, 90, 89, 94, 110, 111, 105, 104],
+            "volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        },
+        index=pd.date_range("2024-01-02", periods=8, freq="B", tz="UTC"),
+    )
+    frame.to_parquet(data_dir / "CSI300.parquet")
+
+    spec = StrategySpec.template(
+        strategy_id="roc_timing_fixed_acceptance",
+        hypothesis="fixed ROC timing target weights match expected state transitions",
+    )
+    spec.universe.symbols = ["CSI300"]
+    spec.signal.indicators = {
+        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
+    }
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={"column": "roc_1", "mode": "fixed", "bottom": -5.0, "top": 10.0},
+        )
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing"}
+    spec.validation.train_period = ["2024-01-02", "2024-01-05"]
+    spec.validation.test_period = ["2024-01-08", "2024-01-11"]
+    spec.benchmark.symbols = ["CSI300"]
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    weights = pd.read_csv(run_dir / "target_weights.csv")
+    assert _adjusted_weight_sequence(weights, "CSI300") == [
+        0.0,
+        1.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+    ]
+
+    trades = pd.read_csv(run_dir / "trades.csv")
+    assert trades["side"].tolist() == ["BUY", "SELL", "BUY"]
+
+
+def test_roc_timing_rolling_quantile_target_weight_sequence(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    frame = pd.DataFrame(
+        {
+            "open": [5, 4, 3, 1, 2, 6, 7, 6],
+            "high": [5, 4, 3, 1, 2, 6, 7, 6],
+            "low": [5, 4, 3, 1, 2, 6, 7, 6],
+            "close": [5, 4, 3, 1, 2, 6, 7, 6],
+            "volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        },
+        index=pd.date_range("2024-01-02", periods=8, freq="B", tz="UTC"),
+    )
+    frame.to_parquet(data_dir / "CSI300.parquet")
+
+    spec = StrategySpec.template(
+        strategy_id="roc_timing_rolling_acceptance",
+        hypothesis="rolling ROC timing uses prior-window thresholds for target weights",
+    )
+    spec.universe.symbols = ["CSI300"]
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={
+                "column": "close",
+                "mode": "rolling_quantile",
+                "q_window": 3,
+                "q_bottom": 0.0,
+                "q_top": 1.0,
+            },
+        )
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing"}
+    spec.validation.train_period = ["2024-01-02", "2024-01-05"]
+    spec.validation.test_period = ["2024-01-08", "2024-01-11"]
+    spec.benchmark.symbols = ["CSI300"]
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    weights = pd.read_csv(run_dir / "target_weights.csv")
+    assert _adjusted_weight_sequence(weights, "CSI300") == [
+        0.0,
+        0.0,
+        0.0,
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+    ]
