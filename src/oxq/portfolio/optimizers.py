@@ -186,3 +186,59 @@ class PctEquityOptimizer:
         weights: dict[str, float] = {symbol: self.pct for symbol in signals}
         weights["CASH"] = 1.0 - total_pct
         return weights
+
+
+class SignalToPositionOptimizer:
+    """Map BUY/SELL/HOLD signal values to target weights with HOLD preserving state."""
+
+    name: str = "SignalToPosition"
+
+    def __init__(
+        self,
+        signal: str,
+        buy_weight: float = 1.0,
+        sell_weight: float = 0.0,
+        hold_behavior: str = "maintain",
+    ) -> None:
+        if not signal:
+            raise ValueError("signal is required")
+        if hold_behavior != "maintain":
+            raise ValueError("hold_behavior must be 'maintain'")
+        self.signal = signal
+        self.buy_weight = buy_weight
+        self.sell_weight = sell_weight
+        self.hold_behavior = hold_behavior
+        self._weights: dict[str, float] = {}
+
+    def optimize(
+        self,
+        signals: dict[str, pd.DataFrame],
+        indicators: dict[str, pd.DataFrame],
+    ) -> dict[str, float]:
+        for symbol, frame in signals.items():
+            if self.signal not in frame.columns or frame.empty:
+                continue
+            value = frame[self.signal].iloc[-1]
+            action = "HOLD" if pd.isna(value) else str(value).upper()
+            if action == "BUY":
+                self._weights[symbol] = float(self.buy_weight)
+            elif action == "SELL":
+                if self.sell_weight > 0:
+                    self._weights[symbol] = float(self.sell_weight)
+                else:
+                    self._weights.pop(symbol, None)
+            elif action == "HOLD":
+                continue
+            else:
+                raise ValueError("expected BUY, SELL, or HOLD")
+
+        total = sum(weight for weight in self._weights.values() if weight > 0)
+        if total <= 0:
+            return {"CASH": 1.0}
+        if total > 1.0:
+            return {symbol: weight / total for symbol, weight in self._weights.items() if weight > 0}
+
+        result = {symbol: weight for symbol, weight in self._weights.items() if weight > 0}
+        if total < 1.0:
+            result["CASH"] = 1.0 - total
+        return result

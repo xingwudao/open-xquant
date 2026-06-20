@@ -262,6 +262,7 @@ def _load_builtins() -> None:
         KellyOptimizer,
         PctEquityOptimizer,
         RiskParityOptimizer,
+        SignalToPositionOptimizer,
         TopNRankingOptimizer,
     )
 
@@ -271,6 +272,7 @@ def _load_builtins() -> None:
         KellyOptimizer,
         TopNRankingOptimizer,
         PctEquityOptimizer,
+        SignalToPositionOptimizer,
     ):
         _register(cls, PortfolioOptimizer, _PORTFOLIO_OPTIMIZER_REGISTRY)
 
