@@ -55,6 +55,10 @@ Write tests with hand-crafted data:
 - output domain is boolean or the declared categorical set
 - categorical trading-intent signals must use exact uppercase labels such as
   `BUY`, `SELL`, and `HOLD`
+- if a categorical custom signal is used from spec, declare
+  `signal.rules.<name>.output_domain: [BUY, SELL, HOLD]` as rule metadata;
+  do not place `output_domain` in `params` because `params` are passed to
+  `Signal.compute()`
 - trigger scenario
 - no-trigger scenario
 - NaN or insufficient-history behavior when relevant

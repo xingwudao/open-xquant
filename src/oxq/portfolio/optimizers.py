@@ -211,6 +211,11 @@ class SignalToPositionOptimizer:
         self._weights: dict[str, float] = {}
         self.skip_rebalance = False
 
+    def reset(self) -> None:
+        """Clear latched target weights at the start of an independent run."""
+        self._weights = {}
+        self.skip_rebalance = False
+
     def reset_symbols(self, symbols: list[str]) -> None:
         """Clear latched target weights for symbols that fully exited."""
         for symbol in symbols:

@@ -99,6 +99,9 @@ class Engine:
         self._rules: list[Rule] = rules or []
         self._lot_size = lot_size
         self._cash_annual_return = cash_annual_return
+        reset_optimizer = getattr(strategy.portfolio, "reset", None)
+        if callable(reset_optimizer):
+            reset_optimizer()
         if tracer:
             tracer.on_run_start(
                 strategy_name=strategy.name,
@@ -303,6 +306,7 @@ class Engine:
         # ── Step 3: Pre-trade rules ───────────────────────────────────
         rule_hold = False
         rule_weight_override = False
+        rule_weight_overrides: dict[str, float] = {}
         rule_reasons: dict[str, list[str]] = {}
 
         def record_rule_reason(symbol: str, reason: str) -> None:
@@ -321,6 +325,7 @@ class Engine:
                     record_rule_reason("__all__", result.reason)
                 if result.weights is not None:
                     rule_weight_override = True
+                    rule_weight_overrides.update(result.weights)
                     target_weights.update(result.weights)
                     for target_symbol in result.weights:
                         record_rule_reason(target_symbol, result.reason)
@@ -355,6 +360,14 @@ class Engine:
                 if self._snapshots
                 else current_portfolio_weights()
             )
+        elif optimizer_hold and rule_weight_override:
+            adjusted_weights = current_portfolio_weights()
+            adjusted_weights.update(rule_weight_overrides)
+            invested_weight = sum(
+                weight for symbol, weight in adjusted_weights.items()
+                if symbol != "CASH" and weight > 0
+            )
+            adjusted_weights["CASH"] = max(0.0, 1.0 - invested_weight)
         else:
             adjusted_weights = dict(target_weights)
 
@@ -367,13 +380,26 @@ class Engine:
                 def buy_cost_estimator(symbol: str, price: Decimal, shares: int) -> Decimal:
                     return estimate_market_buy_cost(symbol, price, shares, portfolio.currency)
 
+            order_weights = adjusted_weights
+            order_positions = portfolio.positions
+            if optimizer_hold and rule_weight_override:
+                overridden_symbols = set(rule_weight_overrides)
+                order_weights = {
+                    symbol: weight for symbol, weight in adjusted_weights.items()
+                    if symbol in overridden_symbols
+                }
+                order_positions = {
+                    symbol: position for symbol, position in portfolio.positions.items()
+                    if symbol in overridden_symbols
+                }
+
             planned = generate_orders(
                 target_weights={
                     s: Decimal(str(w))
-                    for s, w in target_weights.items()
+                    for s, w in order_weights.items()
                     if s != "CASH"
                 },
-                positions=portfolio.positions,
+                positions=order_positions,
                 prices=bar_prices,
                 total_capital=total_capital,
                 lot_size=self._lot_size,

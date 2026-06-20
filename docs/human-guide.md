@@ -95,6 +95,11 @@ cd my-research
 
 信息不完整时，Agent 应该先追问，而不是直接编造假设。
 
+如果策略输出的是 `BUY`、`SELL`、`HOLD` 这类交易意图，Agent 应该把它建模为
+`Signal`，再用 `SignalToPosition` 转成目标仓位。`EqualWeight` 只适合布尔过滤
+信号，不适合直接消费分类交易意图。自定义分类信号用于 spec 时，应在 signal
+rule 顶层声明 `output_domain: [BUY, SELL, HOLD]`。
+
 可以这样说：
 
 ```text

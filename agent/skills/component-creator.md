@@ -32,6 +32,11 @@ For ROC timing strategies, prefer the existing split:
 - `SignalToPosition` is the PortfolioOptimizer that turns those labels into
   target weights while `HOLD` maintains the prior target position.
 
+For other categorical timing signals, keep the same boundary: the Signal emits
+labels, the spec declares `output_domain`, and `SignalToPosition` maps labels
+to target weights. Do not route that behavior to an Indicator only to make a
+spec compile.
+
 ## Step 2: Check Existing Registry
 
 ```bash

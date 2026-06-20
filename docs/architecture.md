@@ -126,6 +126,10 @@ Engine 驱动完整管道：**Indicator → Universe → Signal → Portfolio �
 分类信号不会直接下单；例如 `ROCTiming` 输出 `BUY`、`SELL`、`HOLD` 后，
 由 `SignalToPosition` 将其转换为 `{symbol: weight}` 或 `{CASH: 1.0}` 目标组合，
 再由交易算法生成订单。
+`EqualWeight` 只消费布尔过滤信号；`BUY`、`SELL`、`HOLD` 这类分类交易意图
+必须经由 `SignalToPosition` 或同等语义的 PortfolioOptimizer。自定义分类
+Signal 在 spec 中通过 `signal.rules.<name>.output_domain` 声明输出域，
+不要把该元数据放进 `params`。
 
 ```python
 from oxq.core import Engine, Strategy
@@ -533,6 +537,9 @@ CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现。
 ### 11.4 信号生成器 (oxq.signals)
 
 8 种信号类型：Crossover, Threshold, Comparison, Formula, Peak, Timestamp, Composite, ROCTiming。
+其中 `ROCTiming` 是内置分类信号，输出 `BUY`、`SELL`、`HOLD`。
+自定义分类信号用于 spec 时，应在 rule 顶层声明
+`output_domain: [BUY, SELL, HOLD]`。
 
 ### 11.5 组合优化器 (oxq.portfolio.optimizers)
 
@@ -544,6 +551,10 @@ CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现。
 | `TopNRankingOptimizer` | 按评分排名取 Top N 归一化 |
 | `PctEquityOptimizer` | 每个信号标的固定权益比例 |
 | `SignalToPositionOptimizer` | 将 `BUY`、`SELL`、`HOLD` 信号映射为目标仓位 |
+
+`SignalToPositionOptimizer` 是有状态优化器：每个独立 run 开始时重置状态；
+`BUY` 更新目标仓位，`SELL` 清空或降到 `sell_weight`，`HOLD` 维持上一目标仓位。
+当 pre-trade Rule 只 override 部分标的时，其他 `HOLD` 标的不参与再平衡。
 
 ### 11.6 交易规则 (oxq.rules)
 

@@ -53,6 +53,16 @@ def test_signal_to_position_reset_symbols_clears_exited_latches() -> None:
     assert optimizer.optimize({"AAA": pd.DataFrame({"timing": ["HOLD"]})}, {}) == {"CASH": 1.0}
 
 
+def test_signal_to_position_reset_clears_run_latches() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing")
+
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["BUY"]})}, {})
+    optimizer.reset()
+
+    assert optimizer.skip_rebalance is False
+    assert optimizer.optimize({"AAA": pd.DataFrame({"timing": ["HOLD"]})}, {}) == {"CASH": 1.0}
+
+
 def test_signal_to_position_preserves_hold_weight_when_other_symbol_sells() -> None:
     optimizer = SignalToPositionOptimizer(signal="timing")
 

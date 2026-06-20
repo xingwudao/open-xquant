@@ -75,6 +75,14 @@ Key interfaces (all use Protocol over ABC — prefer structural typing):
 - `PortfolioOptimizer.optimize(signals, indicators) → dict[str, float]` — 截面优化，输出目标权重
 - `Rule.evaluate(symbol, row, portfolio) → RuleResult` — 逐 bar 有状态，输出约束/减仓意图
 
+Compile boundary:
+- Boolean signal rules can feed `EqualWeight`.
+- `BUY` / `SELL` / `HOLD` categorical signal rules must feed
+  `SignalToPosition` or an equivalent stateful PortfolioOptimizer.
+- Custom categorical signal specs declare
+  `signal.rules.<name>.output_domain: [BUY, SELL, HOLD]`; this is metadata,
+  not a `Signal.compute()` parameter.
+
 Universe: `StaticUniverse` (fixed pool), `FilterUniverse` (dynamic screening)
 Data providers: `LocalMarketDataProvider` (unified read interface)
 Data sources: YFinance (US equities), AkShare (A-shares), WorldBank (macro factors)

@@ -76,12 +76,16 @@ execution comparisons.
   `execution.lot_size_config`。
 - 评估口径：`metrics.profile`、`risk_free_rate`、`return_type`、
   `annualization_days`、`calmar_denominator`、`evaluation_window`。
-- `EqualWeight` 组合。
+- `EqualWeight` 组合只用于布尔过滤信号。
 - `SMA`、`Crossover` 等注册表中的内置指标和信号。
 - `ROC` + `ROCTiming` + `SignalToPosition` 单标的择时。
   `ROCTiming` 输出 `BUY`、`SELL`、`HOLD` 交易意图；
   `SignalToPosition` 把 `BUY` 映射为目标仓位、把 `SELL` 映射为空仓，
-  并让 `HOLD` 维持上一目标仓位。
+  并让 `HOLD` 维持上一目标仓位。分类交易意图不能直接交给
+  `EqualWeight`。
+- 自定义分类 Signal 用于 spec 时，在 signal rule 顶层声明
+  `output_domain: [BUY, SELL, HOLD]`；不要把 `output_domain` 放入
+  `params`。
 - 回测后的 reproducibility audit、research audit、robustness、report。
 
 不要在默认 spec 工作流中承诺这些能力已完整可编译：
@@ -93,6 +97,7 @@ execution comparisons.
 - `Peak` 信号作为因果回测信号。
 - `Timestamp` 的 `month_end` 或 `quarter_end` 规则。
 - 除 `EqualWeight` 和 `SignalToPosition` 之外，带 signal rules 的 portfolio。
+- `BUY`、`SELL`、`HOLD` 分类 signal rules 搭配 `EqualWeight`。
 
 如果用户需要上面的扩展能力，先说明当前 CLI 约束，再改用 SDK、
 组件开发或后续框架扩展流程。

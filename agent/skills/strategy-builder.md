@@ -55,7 +55,7 @@ Use this path first:
   supported metrics profile
 - positive `cost.fee_rate`
 - positive `cost.slippage_rate`
-- `portfolio.type: EqualWeight` when `signal.rules` is present
+- `portfolio.type: EqualWeight` only for boolean signal filters
 - `ROC` + `ROCTiming` + `SignalToPosition` for single-symbol timing strategies
   that need explicit `BUY` / `SELL` / `HOLD` and HOLD-maintains-position
   semantics
@@ -69,6 +69,7 @@ Do not promise these are directly supported by the audited CLI compiler:
 - `Timestamp` `month_end` or `quarter_end`
 - signal rules combined with portfolio types other than `EqualWeight` or
   `SignalToPosition`
+- `BUY` / `SELL` / `HOLD` categorical signal rules with `EqualWeight`
 - arbitrary rules declared under a top-level `rules:` YAML section
 
 ## Phase 0: Confirm Constraints
@@ -137,6 +138,23 @@ robustness:
   cost_multiplier: [1.0, 2.0]
   parameter_perturbation: {}
   regime_analysis: false
+```
+
+Categorical custom signals must declare their output domain as rule metadata,
+not as compute params:
+
+```yaml
+signal:
+  rules:
+    timing:
+      type: CustomTiming
+      output_domain: [BUY, SELL, HOLD]
+      params:
+        column: close
+portfolio:
+  type: SignalToPosition
+  params:
+    signal: timing
 ```
 
 For non-SMA strategies, inspect the registry before choosing names:

@@ -233,6 +233,23 @@ def _validate_derived_column_names(spec: StrategySpec) -> list[dict]:
     return errors
 
 
+_CATEGORICAL_SIGNAL_DOMAIN = {"BUY", "SELL", "HOLD"}
+
+
+def _signal_output_domain(rule_def: object) -> set[str]:
+    return {
+        str(value).upper()
+        for value in getattr(rule_def, "output_domain", [])
+    }
+
+
+def _is_categorical_signal_rule(rule_def: object) -> bool:
+    return (
+        getattr(rule_def, "type", "") == "ROCTiming"
+        or _signal_output_domain(rule_def) == _CATEGORICAL_SIGNAL_DOMAIN
+    )
+
+
 def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
     errors: list[dict] = []
     params = spec.portfolio.params
@@ -269,13 +286,7 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
             errors.append(_optimizer_param_error("portfolio.params.signal must reference a signal rule"))
         else:
             rule_def = spec.signal.rules[signal_name]
-            output_domain = rule_def.params.get("output_domain")
-            declared_domain = (
-                {str(value).upper() for value in output_domain}
-                if isinstance(output_domain, list)
-                else set()
-            )
-            if rule_def.type != "ROCTiming" and declared_domain != {"BUY", "SELL", "HOLD"}:
+            if not _is_categorical_signal_rule(rule_def):
                 errors.append(
                     _optimizer_param_error(
                         "portfolio.params.signal must reference a BUY/SELL/HOLD categorical signal rule"
@@ -311,6 +322,25 @@ def _validate_terminal_signal_rules(spec: StrategySpec) -> list[dict]:
             "signal_terminal_ambiguous",
             "EqualWeight specs with signal.rules must declare exactly one terminal signal rule; "
             f"found {terminal or 'none'}",
+        )
+    ]
+
+
+def _validate_categorical_signal_portfolio(spec: StrategySpec) -> list[dict]:
+    if not spec.signal.rules or spec.portfolio.type != "EqualWeight":
+        return []
+    categorical_rules = [
+        name for name, rule_def in spec.signal.rules.items()
+        if _is_categorical_signal_rule(rule_def)
+    ]
+    if not categorical_rules:
+        return []
+    return [
+        _err(
+            "fatal",
+            "signal_categorical_portfolio_invalid",
+            "categorical BUY/SELL/HOLD signal rules require portfolio.type=SignalToPosition; "
+            f"found {categorical_rules}",
         )
     ]
 
@@ -916,6 +946,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
 
     errors.extend(_validate_derived_column_names(spec))
     errors.extend(_validate_signal_column_references(spec))
+    errors.extend(_validate_categorical_signal_portfolio(spec))
     errors.extend(_validate_terminal_signal_rules(spec))
     errors.extend(_validate_composite_lifecycle_rules(spec))
     errors.extend(_validate_optimizer_params(spec))

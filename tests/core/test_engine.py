@@ -748,6 +748,126 @@ def test_signal_to_position_hold_allows_rule_weight_override() -> None:
     assert result.snapshots[1].rule_reasons == {"AAA": "blocked"}
 
 
+def test_signal_to_position_hold_rule_override_preserves_other_symbols() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [100.0, 50.0],
+                "high": [100.0, 50.0],
+                "low": [100.0, 50.0],
+                "close": [100.0, 50.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class BuyThenHoldSignal:
+        name = "BuyThenHold"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "HOLD"], index=mktdata.index)
+
+    class BlockAAASecondBarRule:
+        name = "BlockAAASecondBar"
+
+        def evaluate(
+            self,
+            symbol: str,
+            row: pd.Series,
+            portfolio: Portfolio,
+            prices: dict[str, Decimal] | None = None,
+        ) -> RuleResult:
+            if symbol == "AAA" and row.name == dates[1]:
+                return RuleResult(weights={symbol: 0.0}, reason="blocked")
+            return RuleResult()
+
+    strategy = Strategy(
+        name="signal_hold_rule_override_preserves_others",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={"timing": (BuyThenHoldSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[BlockAAASecondBarRule()],
+    )
+
+    aaa_sides = [trade.order.side for trade in result.trades if trade.order.symbol == "AAA"]
+    bbb_trades = [trade for trade in result.trades if trade.order.symbol == "BBB"]
+
+    assert aaa_sides == ["BUY", "SELL"]
+    assert len(bbb_trades) == 1
+    assert bbb_trades[0].order.side == "BUY"
+    assert result.snapshots[1].positions["BBB"].shares == result.snapshots[0].positions["BBB"].shares
+
+
+def test_signal_to_position_optimizer_resets_between_engine_runs() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=1, tz="UTC")
+
+    def frame(label: str) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "open": [100.0],
+                "high": [100.0],
+                "low": [100.0],
+                "close": [100.0],
+                "volume": [1_000_000],
+                "timing_input": [label],
+            },
+            index=dates,
+        )
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    optimizer = SignalToPositionOptimizer(signal="timing")
+    strategy = Strategy(
+        name="signal_hold_reset_between_runs",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=optimizer,
+    )
+
+    first = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider({"AAA": frame("BUY")}),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-02",
+    )
+    second = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider({"AAA": frame("HOLD")}),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-02",
+    )
+
+    assert [trade.order.side for trade in first.trades] == ["BUY"]
+    assert second.trades == []
+    assert second.snapshots[0].target_weights == {"CASH": 1.0}
+
+
 def test_engine_notifies_optimizer_after_normal_broker_full_exit() -> None:
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
     data = {
