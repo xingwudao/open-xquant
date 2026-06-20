@@ -10,9 +10,12 @@ Generate a research report with executive decision.
 
 ## Steps
 
-1. `oxq report write runs/<run_id>/` — generate research_report.md
-2. `oxq experiment add runs/<run_id>/` — register in experiment log
-3. Present the executive decision and key findings
+1. Confirm audit artifacts exist or run `/quant-audit runs/<run_id>/`.
+2. Confirm `robustness.json` exists and is covered by `artifact_hashes.json`.
+3. If robustness is missing or untrusted, run `oxq robustness run runs/<run_id>/`.
+4. `oxq report write runs/<run_id>/` — generate research_report.md
+5. `oxq experiment add runs/<run_id>/` — register in experiment log
+6. Present the executive decision and key findings
 
 ## Decision Scale
 
@@ -23,3 +26,7 @@ Generate a research report with executive decision.
 
 Include metrics profile, execution assumptions, and robustness highlights when
 present.
+
+If `research_report.md` says **PAPER TRADING CANDIDATE** but robustness is still
+missing, untrusted, `warn`, `fragile`, or `error`, present the final command
+decision as **WATCHLIST** and state the robustness reason.
