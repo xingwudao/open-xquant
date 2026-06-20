@@ -84,6 +84,7 @@ broker = SimBroker(
     fee_model=PercentageFee(rate=Decimal("0.001")),
     slippage_model=PercentageSlippage(rate=Decimal("0.001")),
     fill_price_mode=FillPriceMode.NEXT_OPEN,
+    market_calendar="XNYS",
 )
 ```
 

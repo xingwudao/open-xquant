@@ -20,7 +20,7 @@ from oxq.observe.experiment_registry import add_experiment
 from oxq.report import generate_report
 from oxq.robustness import run_robustness
 from oxq.spec import StrategySpec, compile_run, validate
-from oxq.spec.schema import IndicatorDef, SignalRuleDef
+from oxq.spec.schema import IndicatorDef
 
 OUT_DIR = Path("/tmp/oxq_examples/e2e_momentum")
 OUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -50,15 +50,11 @@ spec.name = "Momentum Top-1 Rotation — E2E Example"
 spec.universe.symbols = list(SYMBOLS)
 spec.data.price_adjustment = "adjusted"
 
-# Signal: 20-day return, positive filter, Top-1 ranking
+# Signal: 20-day return. The TopNRanking portfolio consumes the indicator
+# directly and filters negative scores.
 spec.signal.signal_time = "close_t"
 spec.signal.indicators = {
     "momentum_20": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 20}),
-}
-spec.signal.rules = {
-    "positive_momentum": SignalRuleDef(
-        type="Threshold", params={"column": "momentum_20", "threshold": 0, "relationship": "gt"}
-    ),
 }
 
 # Portfolio: Top-1 by momentum score
