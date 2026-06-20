@@ -427,6 +427,13 @@ def test_write_artifacts_persists_target_weights(tmp_path) -> None:
             "adjusted_target_weight": 1.0,
             "reason": "target_changed",
         },
+        {
+            "date": "2024-01-03 00:00:00+00:00",
+            "symbol": "SPY",
+            "raw_target_weight": 0.0,
+            "adjusted_target_weight": 0.0,
+            "reason": "target_changed",
+        },
     ]
 
     hashes = json.loads((tmp_path / "artifact_hashes.json").read_text(encoding="utf-8"))

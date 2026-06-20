@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pandas as pd
 import yaml
@@ -8,7 +9,7 @@ from oxq.cli.main import main
 from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 
 
-def _write_spec_and_data(tmp_path):
+def _write_spec_and_data(tmp_path, *, evaluation_window: str = "full"):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
     frame = pd.DataFrame(
@@ -41,6 +42,7 @@ def _write_spec_and_data(tmp_path):
     spec.validation.train_period = ["2024-01-02", "2024-01-04"]
     spec.validation.test_period = ["2024-01-05", "2024-01-09"]
     spec.benchmark.symbols = ["SPY"]
+    spec.metrics.evaluation_window = evaluation_window
     spec.cost.fee_rate = 0.001
     spec.cost.slippage_rate = 0.001
     spec_path = tmp_path / "strategy_spec.yaml"
@@ -72,6 +74,7 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
     assert payload["run_id"]
     assert payload["run_dir"]
     assert payload["metrics"]["trade_count"] >= 0
+    assert payload["metrics"] == json.loads(Path(payload["artifacts"]["metrics_json"]).read_text(encoding="utf-8"))
     assert payload["warnings"] == []
     assert payload["errors"] == []
     assert set(payload["artifacts"]) >= {
@@ -121,3 +124,58 @@ def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:
     assert payload["run_dir"] == ""
     assert payload["errors"]
     assert payload["artifacts"] == {}
+
+
+def test_backtest_run_json_reports_runtime_failure(tmp_path) -> None:
+    spec_path, _data_dir = _write_spec_and_data(tmp_path)
+    missing_data_dir = tmp_path / "missing_data"
+    missing_data_dir.mkdir()
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(missing_data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["run_id"] == ""
+    assert payload["run_dir"] == ""
+    assert payload["artifacts"] == {}
+    assert payload["metrics"] == {}
+    assert payload["errors"][0]["check"] == "runtime_error"
+
+
+def test_backtest_run_json_uses_artifact_metrics_for_oos_window(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path, evaluation_window="oos")
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    artifact_metrics = json.loads(Path(payload["artifacts"]["metrics_json"]).read_text(encoding="utf-8"))
+    assert payload["metrics"] == artifact_metrics
+    assert payload["metrics"]["metric_assumptions"]["evaluation_window"] == "oos"

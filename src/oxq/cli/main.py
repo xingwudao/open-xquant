@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
-from typing import Any
 
 import click
 import yaml
@@ -122,12 +121,19 @@ def _backtest_artifact_paths(run_dir: Path) -> dict[str, str]:
     return artifacts
 
 
-def _backtest_summary_metrics(result: Any) -> dict[str, float | int]:
+def _backtest_summary_metrics(run_dir: Path) -> dict:
+    return json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+
+
+def _backtest_json_failure(check: str, message: str, warnings: list[dict] | None = None) -> dict:
     return {
-        "total_return": result.total_return(),
-        "sharpe_ratio": result.sharpe_ratio(),
-        "max_drawdown": result.max_drawdown(),
-        "trade_count": len(result.trades),
+        "status": "fail",
+        "run_id": "",
+        "run_dir": "",
+        "artifacts": {},
+        "metrics": {},
+        "warnings": warnings or [],
+        "errors": [{"severity": "fatal", "check": check, "message": message}],
     }
 
 
@@ -147,20 +153,7 @@ def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
         spec = StrategySpec.from_yaml(spec_file)
     except Exception as e:
         if as_json:
-            click.echo(
-                json.dumps(
-                    {
-                        "status": "fail",
-                        "run_id": "",
-                        "run_dir": "",
-                        "artifacts": {},
-                        "metrics": {},
-                        "warnings": [],
-                        "errors": [{"severity": "fatal", "check": "parse_error", "message": str(e)}],
-                    },
-                    indent=2,
-                )
-            )
+            click.echo(json.dumps(_backtest_json_failure("parse_error", str(e)), indent=2))
             raise SystemExit(1)
         raise
 
@@ -193,7 +186,18 @@ def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
 
     if not as_json:
         click.echo(f"Running backtest for '{spec.strategy_id}'...")
-    result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
+    try:
+        result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
+    except Exception as e:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    _backtest_json_failure("runtime_error", str(e), warnings=validation.warnings),
+                    indent=2,
+                )
+            )
+            raise SystemExit(1)
+        raise
     run_dir = Path(run_dir)
 
     if as_json:
@@ -204,7 +208,7 @@ def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
                     "run_id": run_dir.name,
                     "run_dir": str(run_dir),
                     "artifacts": _backtest_artifact_paths(run_dir),
-                    "metrics": _backtest_summary_metrics(result),
+                    "metrics": _backtest_summary_metrics(run_dir),
                     "warnings": validation.warnings,
                     "errors": validation.errors,
                 },
