@@ -200,15 +200,17 @@ Use `--data-dir /path/to/parquet` when the data is not in the default
 
 ```bash
 uv run oxq strategy compile strategy_spec.yaml
-uv run oxq backtest run strategy_spec.yaml --data-dir /path/to/parquet --out runs/auto
-```
-
-Capture the printed run directory. If needed:
-
-```bash
-RUN_DIR=$(find runs -mindepth 2 -maxdepth 2 -type d | sort | tail -1)
+uv run oxq backtest run strategy_spec.yaml --data-dir /path/to/parquet --out runs/auto --json > backtest_result.json
+RUN_DIR=$(uv run python - <<'PY'
+import json
+print(json.load(open("backtest_result.json"))["run_dir"])
+PY
+)
 echo "$RUN_DIR"
 ```
+
+Use `artifacts.target_weights_csv` from `backtest_result.json` for baseline
+target-weight comparisons. Do not parse human stdout for `run_dir`.
 
 ## Phase 5: Audit And Report
 

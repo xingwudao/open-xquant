@@ -14,6 +14,10 @@ idea -> strategy_spec.yaml -> validate -> backtest
      -> audit -> robustness -> report -> experiment
 ```
 
+For agent orchestration, run `oxq backtest run --json` and read `run_dir` and
+artifact paths from the JSON payload. Use `target_weights.csv` for target
+allocation comparisons; use `trades.csv` for execution comparisons.
+
 完成本文档后，你应该能够：
 
 - 为用户的长期 Agent 环境安装 open-xquant skills。

@@ -24,6 +24,8 @@ A valid CLI run should contain:
 - `equity_curve.csv`
 - `benchmark_curve.csv` when benchmarks are available
 - `trades.csv`
+- `target_weights.csv`: per-date raw and adjusted target weights, suitable for
+  external baseline comparison without importing open-xquant internals.
 - `positions.csv`
 - `orders.csv`
 - `run_log.jsonl`
