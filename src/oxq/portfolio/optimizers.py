@@ -210,16 +210,22 @@ class SignalToPositionOptimizer:
         self.hold_behavior = hold_behavior
         self._weights: dict[str, float] = {}
         self.skip_rebalance = False
+        self.held_symbols: set[str] = set()
+        self.pending_reduction_symbols: set[str] = set()
 
     def reset(self) -> None:
         """Clear latched target weights at the start of an independent run."""
         self._weights = {}
         self.skip_rebalance = False
+        self.held_symbols = set()
+        self.pending_reduction_symbols = set()
 
     def reset_symbols(self, symbols: list[str]) -> None:
         """Clear latched target weights for symbols that fully exited."""
         for symbol in symbols:
             self._weights.pop(symbol, None)
+            self.pending_reduction_symbols.discard(symbol)
+            self.held_symbols.discard(symbol)
 
     def optimize(
         self,
@@ -229,6 +235,7 @@ class SignalToPositionOptimizer:
         saw_signal = False
         saw_trade_intent = False
         buy_symbols: set[str] = set()
+        self.held_symbols = set()
         for symbol, frame in signals.items():
             if self.signal not in frame.columns or frame.empty:
                 continue
@@ -240,14 +247,22 @@ class SignalToPositionOptimizer:
                 buy_symbols.add(symbol)
                 buy_weight = float(self.buy_weight)
                 self._weights[symbol] = buy_weight
+                self.pending_reduction_symbols.discard(symbol)
             elif action == "SELL":
                 saw_trade_intent = True
+                has_latched_position = symbol in self._weights or symbol in self.pending_reduction_symbols
                 if symbol in self._weights and self.sell_weight > 0:
                     sell_weight = float(self.sell_weight)
                     self._weights[symbol] = sell_weight
+                    self.pending_reduction_symbols.add(symbol)
+                elif has_latched_position:
+                    self._weights.pop(symbol, None)
+                    self.pending_reduction_symbols.add(symbol)
                 else:
                     self._weights.pop(symbol, None)
             elif action == "HOLD":
+                if symbol in self._weights:
+                    self.held_symbols.add(symbol)
                 continue
             else:
                 raise ValueError("expected BUY, SELL, or HOLD")

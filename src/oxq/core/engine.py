@@ -351,6 +351,18 @@ class Engine:
             return weights
 
         def optimizer_hold_target_reached() -> bool:
+            pending_reduction_symbols = set(getattr(strategy.portfolio, "pending_reduction_symbols", set()))
+            if pending_reduction_symbols:
+                total_value = portfolio.total_value(bar_prices)
+                for symbol in pending_reduction_symbols:
+                    position = portfolio.positions.get(symbol)
+                    price = bar_prices.get(symbol)
+                    if position is None or position.shares <= 0 or price is None or total_value <= 0:
+                        continue
+                    current_weight = float((Decimal(position.shares) * price) / total_value)
+                    target_weight = float(target_weights.get(symbol, 0.0))
+                    if current_weight > target_weight + 1e-9:
+                        return False
             for symbol, weight in target_weights.items():
                 if symbol == "CASH" or weight <= 0:
                     continue
@@ -405,6 +417,22 @@ class Engine:
                     symbol: position for symbol, position in portfolio.positions.items()
                     if symbol in overridden_symbols
                 }
+            else:
+                held_symbols = set(getattr(strategy.portfolio, "held_symbols", set()))
+                pending_reduction_symbols = set(getattr(strategy.portfolio, "pending_reduction_symbols", set()))
+                frozen_symbols = {
+                    symbol for symbol in held_symbols - pending_reduction_symbols
+                    if symbol in portfolio.positions
+                }
+                if frozen_symbols:
+                    order_weights = {
+                        symbol: weight for symbol, weight in adjusted_weights.items()
+                        if symbol not in frozen_symbols
+                    }
+                    order_positions = {
+                        symbol: position for symbol, position in portfolio.positions.items()
+                        if symbol not in frozen_symbols
+                    }
 
             planned = generate_orders(
                 target_weights={
@@ -632,7 +660,10 @@ def _signal_output_summary(sample: pd.Series) -> dict[str, object]:
     labels = non_null.astype(str).str.upper()
     counts = {label: int(count) for label, count in labels.value_counts().sort_index().items()}
     summary["value_counts"] = counts
-    summary["signal_count"] = int(sum(count for label, count in counts.items() if label != "HOLD"))
+    no_event_labels = {"", "0", "FALSE", "HOLD", "NONE", "NAN"}
+    summary["signal_count"] = int(
+        sum(count for label, count in counts.items() if label not in no_event_labels)
+    )
     return summary
 
 

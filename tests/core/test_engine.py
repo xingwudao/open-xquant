@@ -528,6 +528,20 @@ class DroppingBroker(SimBroker):
         return f"dropped-{len(self.submitted_orders)}"
 
 
+class DroppingSellBroker(SimBroker):
+    """Broker that fills buys but drops sells without leaving open orders."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.dropped_sells: list[Order] = []
+
+    def submit_order(self, order: Order) -> str:
+        if order.side == "SELL":
+            self.dropped_sells.append(order)
+            return f"dropped-sell-{len(self.dropped_sells)}"
+        return super().submit_order(order)
+
+
 def test_engine_notifies_optimizer_after_full_exit() -> None:
     """Exit fills should notify optimizers that keep per-symbol entry state."""
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
@@ -870,6 +884,105 @@ def test_signal_to_position_hold_rule_override_preserves_other_symbols() -> None
     assert len(bbb_trades) == 1
     assert bbb_trades[0].order.side == "BUY"
     assert result.snapshots[1].positions["BBB"].shares == result.snapshots[0].positions["BBB"].shares
+
+
+def test_signal_to_position_mixed_hold_does_not_rebalance_held_symbol() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [100.0, 50.0],
+                "high": [100.0, 50.0],
+                "low": [100.0, 50.0],
+                "close": [100.0, 50.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            if mktdata["close"].iloc[0] == 100 and mktdata["close"].iloc[-1] == 100:
+                return pd.Series(["BUY", "SELL"], index=mktdata.index)
+            return pd.Series(["BUY", "HOLD"], index=mktdata.index)
+
+    strategy = Strategy(
+        name="signal_mixed_hold_no_rebalance",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+    )
+
+    aaa_sides = [trade.order.side for trade in result.trades if trade.order.symbol == "AAA"]
+    bbb_trades = [trade for trade in result.trades if trade.order.symbol == "BBB"]
+
+    assert aaa_sides == ["BUY", "SELL"]
+    assert len(bbb_trades) == 1
+    assert bbb_trades[0].order.side == "BUY"
+    assert result.snapshots[1].positions["BBB"].shares == result.snapshots[0].positions["BBB"].shares
+
+
+def test_signal_to_position_hold_retries_unfilled_exit() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0],
+                "high": [100.0, 100.0, 100.0],
+                "low": [100.0, 100.0, 100.0],
+                "close": [100.0, 100.0, 100.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class BuySellHoldSignal:
+        name = "BuySellHold"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "SELL", "HOLD"], index=mktdata.index)
+
+    broker = DroppingSellBroker()
+    strategy = Strategy(
+        name="signal_hold_retries_unfilled_exit",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (BuySellHoldSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=broker,
+        start="2024-01-02",
+        end="2024-01-04",
+    )
+
+    assert [trade.order.side for trade in result.trades] == ["BUY"]
+    assert [order.side for order in broker.dropped_sells] == ["SELL", "SELL"]
+    assert result.snapshots[2].positions["AAA"].shares == result.snapshots[0].positions["AAA"].shares
 
 
 def test_signal_to_position_optimizer_resets_between_engine_runs() -> None:

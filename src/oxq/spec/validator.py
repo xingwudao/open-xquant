@@ -246,7 +246,7 @@ def _signal_output_domain(rule_def: object) -> set[str]:
 def _is_categorical_signal_rule(rule_def: object) -> bool:
     return (
         getattr(rule_def, "type", "") == "ROCTiming"
-        or _signal_output_domain(rule_def) == _CATEGORICAL_SIGNAL_DOMAIN
+        or bool(_signal_output_domain(rule_def) & _CATEGORICAL_SIGNAL_DOMAIN)
     )
 
 

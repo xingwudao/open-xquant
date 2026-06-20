@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pandas as pd
 
-from oxq.core.engine import Engine
+from oxq.core.engine import Engine, _signal_output_summary
 from oxq.core.strategy import Strategy
 from oxq.core.types import Fill, Order
 from oxq.indicators.sma import SMA
@@ -95,6 +95,12 @@ def _make_crossover_signal():
 
 
 class TestEngineTracer:
+    def test_signal_output_summary_counts_object_false_as_no_event(self) -> None:
+        summary = _signal_output_summary(pd.Series([True, False, None], dtype="object"))
+
+        assert summary["value_counts"] == {"FALSE": 1, "TRUE": 1}
+        assert summary["signal_count"] == 1
+
     def test_tracer_receives_indicator_callbacks(self) -> None:
         cross = _make_crossover_signal()
         strategy = Strategy(

@@ -1380,6 +1380,28 @@ def test_equal_weight_rejects_categorical_signal_rule() -> None:
     assert any(error["check"] == "signal_categorical_portfolio_invalid" for error in result.errors)
 
 
+def test_equal_weight_rejects_partial_trading_intent_output_domain(monkeypatch) -> None:
+    class BuySellOnlySignal:
+        name = "BuySellOnlyForValidationTest"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "SELL"], index=mktdata.index)
+
+    monkeypatch.setitem(registry._SIGNAL_REGISTRY, BuySellOnlySignal.name, BuySellOnlySignal)
+    spec = StrategySpec.template(
+        strategy_id="equal_weight_partial_intent_domain",
+        hypothesis="Any trading-intent label domain requires an explicit position mapper",
+    )
+    spec.signal.rules = {
+        "timing": SignalRuleDef(type=BuySellOnlySignal.name, output_domain=["BUY", "SELL"])
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "signal_categorical_portfolio_invalid" for error in result.errors)
+
+
 def test_signal_rule_output_domain_is_metadata_not_compute_params(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(
