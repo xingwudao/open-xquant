@@ -102,7 +102,7 @@ def backtest():
 
 
 def _backtest_artifact_paths(run_dir: Path) -> dict[str, str]:
-    return {
+    artifacts = {
         "strategy_spec_yaml": str(run_dir / "strategy_spec.yaml"),
         "environment_json": str(run_dir / "environment.json"),
         "data_manifest_json": str(run_dir / "data_manifest.json"),
@@ -116,6 +116,10 @@ def _backtest_artifact_paths(run_dir: Path) -> dict[str, str]:
         "artifact_hashes_json": str(run_dir / "artifact_hashes.json"),
         "run_log_jsonl": str(run_dir / "run_log.jsonl"),
     }
+    benchmark_curve = run_dir / "benchmark_curve.csv"
+    if benchmark_curve.exists():
+        artifacts["benchmark_curve_csv"] = str(benchmark_curve)
+    return artifacts
 
 
 def _backtest_summary_metrics(result: Any) -> dict[str, float | int]:

@@ -84,11 +84,13 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
         "positions_csv",
         "orders_csv",
         "target_weights_csv",
+        "benchmark_curve_csv",
         "metrics_json",
         "artifact_hashes_json",
         "run_log_jsonl",
     }
     assert payload["artifacts"]["target_weights_csv"].endswith("target_weights.csv")
+    assert payload["artifacts"]["benchmark_curve_csv"].endswith("benchmark_curve.csv")
     assert payload["artifacts"]["artifact_hashes_json"].endswith("artifact_hashes.json")
 
 
