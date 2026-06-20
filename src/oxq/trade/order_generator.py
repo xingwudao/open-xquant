@@ -85,6 +85,7 @@ def generate_orders(
     pending_delta: dict[str, int] = {}
     pending_sell_shares: dict[str, int] = {}
     pending_buy_notional = Decimal("0")
+    pending_sell_proceeds = Decimal("0")
     estimate_cost = buy_cost_estimator or _default_buy_cost_estimator
     estimate_proceeds = sell_proceeds_estimator or _default_sell_proceeds_estimator
     for order in pending_orders or []:
@@ -96,9 +97,17 @@ def generate_orders(
             pending_buy_notional += estimate_cost(order.symbol, prices[order.symbol], order.shares)
         elif order.side == "SELL":
             pending_sell_shares[order.symbol] = pending_sell_shares.get(order.symbol, 0) + order.shares
+            if order.symbol in prices:
+                pending_sell_proceeds += max(
+                    Decimal("0"),
+                    estimate_proceeds(order.symbol, prices[order.symbol], order.shares),
+                )
     reserved_capital = max(Decimal("0"), pending_buy_notional)
     buy_budget = total_capital if buying_power is None else buying_power
-    remaining_buy_budget = max(Decimal("0"), buy_budget - reserved_capital)
+    if buying_power is None:
+        remaining_buy_budget = max(Decimal("0"), buy_budget - reserved_capital)
+    else:
+        remaining_buy_budget = max(Decimal("0"), buy_budget - reserved_capital + pending_sell_proceeds)
 
     # All symbols: union of targets and current positions.
     # Pending-only symbols are already represented by open orders and should

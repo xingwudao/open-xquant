@@ -43,6 +43,21 @@ def test_rolling_quantile_thresholds_are_causal() -> None:
     assert result.iloc[5] == "SELL"
 
 
+def test_rolling_quantile_collapsed_bands_hold() -> None:
+    frame = pd.DataFrame({"roc_120": [0.0, 0.0, 0.0, 0.0]})
+
+    result = ROCTiming().compute(
+        frame,
+        column="roc_120",
+        mode="rolling_quantile",
+        q_window=3,
+        q_bottom=0.05,
+        q_top=0.95,
+    )
+
+    assert result.tolist() == ["HOLD", "HOLD", "HOLD", "HOLD"]
+
+
 def test_invalid_mode_raises_clear_error() -> None:
     frame = pd.DataFrame({"roc_120": [1.0]})
 

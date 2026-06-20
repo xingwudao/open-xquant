@@ -51,6 +51,7 @@ class ROCTiming:
             raise ValueError("mode must be 'fixed' or 'rolling_quantile'")
 
         result = pd.Series("HOLD", index=mktdata.index, dtype="object")
-        result = result.mask(values <= bottom_threshold, "BUY")
-        result = result.mask(values >= top_threshold, "SELL")
+        separated = bottom_threshold < top_threshold
+        result = result.mask(separated & (values <= bottom_threshold), "BUY")
+        result = result.mask(separated & (values >= top_threshold), "SELL")
         return result

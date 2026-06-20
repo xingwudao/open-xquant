@@ -252,10 +252,12 @@ class SignalToPositionOptimizer:
         saw_signal = False
         saw_trade_intent = False
         buy_symbols: set[str] = set()
+        seen_symbols: set[str] = set()
         self.held_symbols = set()
         for symbol, frame in signals.items():
             if self.signal not in frame.columns or frame.empty:
                 continue
+            seen_symbols.add(symbol)
             saw_signal = True
             value = frame[self.signal].iloc[-1]
             action = "HOLD" if pd.isna(value) else str(value).upper()
@@ -293,6 +295,10 @@ class SignalToPositionOptimizer:
                 continue
             else:
                 raise ValueError("expected BUY, SELL, or HOLD")
+
+        for symbol in self._weights:
+            if symbol not in seen_symbols:
+                self.held_symbols.add(symbol)
 
         self.skip_rebalance = saw_signal and not saw_trade_intent
         positive_weights = {symbol: weight for symbol, weight in self._weights.items() if weight > 0}

@@ -1128,6 +1128,62 @@ def test_signal_to_position_mixed_hold_buy_uses_cash_budget_for_frozen_holdings(
     assert bbb_buys[0].shares == 500
 
 
+def test_signal_to_position_missing_bar_latched_position_is_frozen() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0],
+                "high": [100.0],
+                "low": [100.0],
+                "close": [100.0],
+                "volume": [1_000_000],
+                "timing_input": ["BUY"],
+            },
+            index=dates[:1],
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [100.0, 200.0],
+                "high": [100.0, 200.0],
+                "low": [100.0, 200.0],
+                "close": [100.0, 200.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["BUY", "SELL"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    strategy = Strategy(
+        name="signal_missing_bar_latched_position_frozen",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing", buy_weight=0.5),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+    )
+
+    aaa_buy_orders = [
+        managed.order for managed in result.orders
+        if managed.order.symbol == "AAA" and managed.order.side == "BUY"
+    ]
+
+    assert len(aaa_buy_orders) == 1
+
+
 def test_signal_to_position_mixed_sell_buy_uses_unfrozen_sell_proceeds() -> None:
     dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
     data = {
