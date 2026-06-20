@@ -1282,3 +1282,55 @@ def test_validate_rejects_or_composite_mixing_event_and_level_signals() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "signal_lifecycle_ambiguous" for error in result.errors)
+
+
+def test_signal_to_position_accepts_signal_rules() -> None:
+    spec = StrategySpec.template(
+        strategy_id="roc_timing_position",
+        hypothesis="ROC timing maps categorical signals to positions",
+    )
+    spec.universe.symbols = ["CSI300"]
+    spec.signal.indicators = {
+        "roc_120": IndicatorDef(type="ROC", params={"column": "close", "period": 120})
+    }
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={"column": "roc_120", "mode": "fixed", "bottom": -5.0, "top": 5.0},
+        )
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing", "buy_weight": 1.0, "sell_weight": 0.0}
+    spec.validation.train_period = ["2020-01-01", "2023-12-31"]
+    spec.validation.test_period = ["2024-01-01", "2025-01-01"]
+    spec.benchmark.symbols = ["CSI300"]
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_signal_to_position_requires_declared_signal_rule() -> None:
+    spec = StrategySpec.template(
+        strategy_id="roc_timing_bad_signal",
+        hypothesis="SignalToPosition must consume a declared signal rule",
+    )
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={"column": "close", "mode": "fixed", "bottom": -5.0, "top": 5.0},
+        )
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "missing"}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "optimizer_param_invalid"
+        and "portfolio.params.signal must reference a signal rule" in error["message"]
+        for error in result.errors
+    )

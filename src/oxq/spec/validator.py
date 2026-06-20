@@ -96,6 +96,18 @@ def _validate_signal_column_references(spec: StrategySpec) -> list[dict]:
                         )
                     )
             errors.extend(_validate_relationship(rule_name, params.get("relationship", "gt")))
+        elif rule_def.type == "ROCTiming":
+            column = params.get("column")
+            if not _is_non_empty_string(column):
+                errors.append(_missing_signal_param(rule_name, "column"))
+            elif column not in available_data_columns:
+                errors.append(
+                    _err(
+                        "fatal",
+                        "signal_column_missing",
+                        f"signal.rules.{rule_name}.column references unknown column '{column}'",
+                    )
+                )
         elif rule_def.type == "Comparison":
             for param_name in ("left", "right"):
                 column = params.get(param_name)
@@ -229,6 +241,19 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
         pct = params.get("pct", 0.10)
         if not _is_finite_number(pct) or not 0.0 < float(pct) <= 1.0:
             errors.append(_optimizer_param_error("portfolio.params.pct must be in (0, 1]"))
+    elif spec.portfolio.type == "SignalToPosition":
+        signal_name = params.get("signal")
+        if not _is_non_empty_string(signal_name):
+            errors.append(_optimizer_param_error("portfolio.params.signal is required"))
+        elif signal_name not in spec.signal.rules:
+            errors.append(_optimizer_param_error("portfolio.params.signal must reference a signal rule"))
+        for param_name in ("buy_weight", "sell_weight"):
+            weight = params.get(param_name, 1.0 if param_name == "buy_weight" else 0.0)
+            if not _is_finite_number(weight) or not 0.0 <= float(weight) <= 1.0:
+                errors.append(_optimizer_param_error(f"portfolio.params.{param_name} must be in [0, 1]"))
+        hold_behavior = params.get("hold_behavior", "maintain")
+        if hold_behavior != "maintain":
+            errors.append(_optimizer_param_error("portfolio.params.hold_behavior must be 'maintain'"))
 
     return errors
 
@@ -846,7 +871,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
             _err("warning", "parameter_count", f"signal indicators have {param_count} total params — risk of overfitting")
         )
 
-    if spec.signal.rules and spec.portfolio.type not in {"EqualWeight"}:
+    if spec.signal.rules and spec.portfolio.type not in {"EqualWeight", "SignalToPosition"}:
         errors.append(
             _err(
                 "fatal",

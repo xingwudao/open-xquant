@@ -2563,3 +2563,48 @@ def test_compile_strategy_rejects_unsupported_universe_type() -> None:
 
     with pytest.raises(ValueError, match="Unsupported universe.type 'filter'"):
         compile_strategy(spec)
+
+
+def test_roc_timing_signal_to_position_compiles_and_writes_target_weights(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    frame = pd.DataFrame(
+        {
+            "open": [100, 101, 102, 103, 104, 105, 106, 107],
+            "high": [101, 102, 103, 104, 105, 106, 107, 108],
+            "low": [99, 100, 101, 102, 103, 104, 105, 106],
+            "close": [100, 90, 89, 94, 110, 111, 105, 104],
+            "volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        },
+        index=pd.date_range("2024-01-02", periods=8, freq="B", tz="UTC"),
+    )
+    frame.to_parquet(data_dir / "CSI300.parquet")
+
+    spec = StrategySpec.template(
+        strategy_id="roc_timing_position",
+        hypothesis="ROC timing target positions are auditable",
+    )
+    spec.universe.symbols = ["CSI300"]
+    spec.signal.indicators = {
+        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
+    }
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={"column": "roc_1", "mode": "fixed", "bottom": -5.0, "top": 10.0},
+        )
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing"}
+    spec.validation.train_period = ["2024-01-02", "2024-01-05"]
+    spec.validation.test_period = ["2024-01-08", "2024-01-11"]
+    spec.benchmark.symbols = ["CSI300"]
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    weights = pd.read_csv(run_dir / "target_weights.csv")
+    csi = weights[weights["symbol"] == "CSI300"]
+    assert csi["adjusted_target_weight"].max() == 1.0
+    assert "target_changed" in set(weights["reason"])

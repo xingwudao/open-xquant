@@ -5,6 +5,7 @@ from oxq.portfolio.optimizers import (
     KellyOptimizer,
     PctEquityOptimizer,
     RiskParityOptimizer,
+    SignalToPositionOptimizer,
     TopNRankingOptimizer,
 )
 from oxq.portfolio.orderbook import ManagedOrder, OrderBook
@@ -19,5 +20,6 @@ __all__ = [
     "OrderBook",
     "RiskParityOptimizer",
     "RunResult",
+    "SignalToPositionOptimizer",
     "TopNRankingOptimizer",
 ]
