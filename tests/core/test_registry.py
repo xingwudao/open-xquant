@@ -10,7 +10,6 @@ import pytest
 
 from oxq.core.types import Portfolio, RuleResult
 
-
 # ---------------------------------------------------------------------------
 # Dummy classes that satisfy the Protocols
 # ---------------------------------------------------------------------------
@@ -78,14 +77,14 @@ class TestBuiltinsLoaded:
         from oxq.core.registry import list_signals
 
         signals = list_signals()
-        for name in ("Crossover", "Threshold", "Formula", "Composite"):
+        for name in ("Crossover", "Threshold", "Formula", "Composite", "ROCTiming"):
             assert name in signals, f"{name} missing from signal registry"
 
     def test_portfolio_optimizers_loaded(self) -> None:
         from oxq.core.registry import list_portfolio_optimizers
 
         optimizers = list_portfolio_optimizers()
-        for name in ("EqualWeight", "RiskParity", "Kelly", "TopNRanking", "PctEquity"):
+        for name in ("EqualWeight", "RiskParity", "Kelly", "TopNRanking", "PctEquity", "SignalToPosition"):
             assert name in optimizers, f"{name} missing from optimizer registry"
 
     def test_rules_loaded(self) -> None:
@@ -185,14 +184,10 @@ class TestRegisterAPI:
     def test_public_api_importable_from_oxq(self) -> None:
         """register/list functions should be importable from top-level oxq."""
         from oxq import (
-            register_indicator,
-            register_signal,
-            register_portfolio_optimizer,
-            register_rule,
             list_indicators,
-            list_signals,
             list_portfolio_optimizers,
             list_rules,
+            list_signals,
         )
         assert isinstance(list_indicators(), dict)
         assert isinstance(list_signals(), dict)
