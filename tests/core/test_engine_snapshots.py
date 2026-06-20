@@ -4,7 +4,7 @@ import pandas as pd
 
 from oxq.core.engine import Engine
 from oxq.core.strategy import Strategy
-from oxq.core.types import BarSnapshot, PositionSnapshot
+from oxq.core.types import BarSnapshot
 from oxq.trade.sim_broker import SimBroker
 from oxq.universe.static import StaticUniverse
 
@@ -35,6 +35,26 @@ def _make_simple_data(n: int = 5) -> dict[str, pd.DataFrame]:
             },
             index=dates,
         ),
+    }
+
+
+def _make_two_symbol_data(n: int = 5) -> dict[str, pd.DataFrame]:
+    dates = pd.bdate_range("2024-01-01", periods=n, tz="UTC")
+    return {
+        symbol: pd.DataFrame(
+            {
+                "open": closes,
+                "high": closes,
+                "low": closes,
+                "close": closes,
+                "volume": [1_000_000] * n,
+            },
+            index=dates,
+        )
+        for symbol, closes in {
+            "AAA": [100.0 + i for i in range(n)],
+            "BBB": [50.0 + i for i in range(n)],
+        }.items()
     }
 
 
@@ -146,7 +166,7 @@ def test_step_mode_records_snapshots() -> None:
 
 
 def test_snapshot_adjusted_weights_with_hold_rule() -> None:
-    """When a rule sets hold=True, adjusted_weights should still be recorded."""
+    """A first-bar hold should record current portfolio weights."""
     from oxq.core.types import RuleResult
 
     class AlwaysHoldRule:
@@ -173,7 +193,59 @@ def test_snapshot_adjusted_weights_with_hold_rule() -> None:
 
     # target_weights should be optimizer output
     assert result.snapshots[0].target_weights == {"AAA": 1.0}
-    # adjusted_weights same (hold doesn't change weights, just skips trading)
-    assert result.snapshots[0].adjusted_weights == {"AAA": 1.0}
+    # adjusted_weights reflects the executable frozen state.
+    assert result.snapshots[0].adjusted_weights == {"CASH": 1.0}
     # No positions since hold prevented trading
     assert result.snapshots[0].positions == {}
+
+
+def test_snapshot_adjusted_weights_freeze_when_hold_rule_fires() -> None:
+    """Hold rules should freeze adjusted weights when signals change."""
+    from oxq.core.types import RuleResult
+
+    class FlipOptimizer:
+        name = "flip"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def optimize(self, signals, indicators):
+            self.calls += 1
+            if self.calls == 1:
+                return {"AAA": 1.0}
+            return {"BBB": 1.0}
+
+    class HoldAfterFirstBarRule:
+        name = "hold_after_first_bar"
+
+        def __init__(self) -> None:
+            self.dates: set[pd.Timestamp] = set()
+
+        def evaluate(self, symbol, row, portfolio, prices=None):
+            if row.name in self.dates:
+                return RuleResult()
+            self.dates.add(row.name)
+            if len(self.dates) == 1:
+                return RuleResult()
+            return RuleResult(hold=True, reason="rebalance skipped")
+
+    data = _make_two_symbol_data(3)
+    strategy = Strategy(
+        name="snap_hold_freeze",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={},
+        portfolio=FlipOptimizer(),
+    )
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-01",
+        end="2024-12-31",
+        rules=[HoldAfterFirstBarRule()],
+    )
+
+    assert result.snapshots[0].adjusted_weights == {"AAA": 1.0}
+    assert result.snapshots[1].target_weights == {"BBB": 1.0}
+    assert result.snapshots[1].adjusted_weights == {"AAA": 1.0}
+    assert result.snapshots[1].rule_reasons == {"__all__": "rebalance skipped"}

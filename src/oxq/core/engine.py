@@ -325,7 +325,31 @@ class Engine:
                     for constrained_symbol in result.constraints:
                         record_rule_reason(constrained_symbol, result.reason)
 
-        adjusted_weights = dict(target_weights)
+        def current_portfolio_weights() -> dict[str, float]:
+            total_value = portfolio.total_value(bar_prices)
+            if total_value <= 0:
+                return {}
+
+            weights: dict[str, float] = {}
+            for symbol, position in portfolio.positions.items():
+                price = bar_prices.get(symbol)
+                if price is None:
+                    continue
+                value = Decimal(position.shares) * price
+                if value != 0:
+                    weights[symbol] = float(value / total_value)
+            if portfolio.cash != 0:
+                weights["CASH"] = float(portfolio.cash / total_value)
+            return weights
+
+        if hold:
+            adjusted_weights = (
+                dict(self._snapshots[-1].adjusted_weights)
+                if self._snapshots
+                else current_portfolio_weights()
+            )
+        else:
+            adjusted_weights = dict(target_weights)
 
         # ── Step 4: Trading algorithm (skip if hold) ──────────────────
         if not hold:
