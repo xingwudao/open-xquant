@@ -14,9 +14,10 @@ idea -> strategy_spec.yaml -> validate -> backtest
      -> audit -> robustness -> report -> experiment
 ```
 
-For agent orchestration, run `oxq backtest run --json` and read `run_dir` and
-artifact paths from the JSON payload. Use `target_weights.csv` for target
-allocation comparisons; use `trades.csv` for execution comparisons.
+For agent orchestration, run `oxq backtest run strategy_spec.yaml --json` and
+read `run_dir` and artifact paths from the JSON payload. Use
+`target_weights.csv` for target allocation comparisons; use `trades.csv` for
+execution comparisons.
 
 完成本文档后，你应该能够：
 
@@ -359,14 +360,22 @@ Status: PASS
 uv run oxq backtest run \
   /tmp/oxq_agent_test.yaml \
   --data-dir /tmp/oxq_agent_data \
-  --out /tmp/oxq_agent_runs
+  --out /tmp/oxq_agent_runs \
+  --json > /tmp/oxq_agent_backtest_result.json
 ```
 
-记录 run 目录：
+从 JSON 结果检查状态并记录 run 目录：
 
 ```bash
-RUN_DIR=$(find /tmp/oxq_agent_runs -mindepth 1 -maxdepth 1 -type d | sort | tail -1)
-echo "$RUN_DIR"
+RUN_DIR=$(uv run python - <<'PY'
+import json
+payload = json.load(open("/tmp/oxq_agent_backtest_result.json"))
+if payload["status"] != "pass":
+    raise SystemExit(payload)
+print(payload["run_dir"])
+PY
+)
+test -n "$RUN_DIR"
 ```
 
 执行审计和报告：
@@ -383,7 +392,7 @@ uv run oxq experiment add "$RUN_DIR" \
 环境就绪的判断标准：
 
 - `spec validate` 返回 `Status: PASS`。
-- `backtest run` 输出 `Run complete`。
+- `backtest run` JSON 中的 `status` 是 `pass`，且 `RUN_DIR` 非空。
 - `audit reproducibility` 返回 `Status: PASS`。
 - `report write` 生成 `research_report.md`。
 - run 目录中存在标准 artifacts。
