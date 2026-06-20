@@ -778,6 +778,7 @@ def _build_target_weight_rows(result: RunResult) -> list[dict[str, Any]]:
     for snapshot in result.snapshots:
         raw_weights = snapshot.target_weights
         adjusted_weights = snapshot.adjusted_weights
+        rule_reasons = snapshot.rule_reasons
         symbols = sorted(set(raw_weights) | set(adjusted_weights) | set(previous_adjusted))
         current_adjusted: dict[str, float] = {}
         for symbol in symbols:
@@ -785,17 +786,20 @@ def _build_target_weight_rows(result: RunResult) -> list[dict[str, Any]]:
             adjusted_weight = float(adjusted_weights.get(symbol, 0.0))
             if adjusted_weight != 0.0:
                 current_adjusted[symbol] = adjusted_weight
+            reason = rule_reasons.get(symbol) or rule_reasons.get("__all__")
+            if not reason:
+                reason = (
+                    "target_changed"
+                    if adjusted_weight != previous_adjusted.get(symbol, 0.0)
+                    else "target_unchanged"
+                )
             rows.append(
                 {
                     "date": str(snapshot.date),
                     "symbol": symbol,
                     "raw_target_weight": raw_weight,
                     "adjusted_target_weight": adjusted_weight,
-                    "reason": (
-                        "target_changed"
-                        if adjusted_weight != previous_adjusted.get(symbol, 0.0)
-                        else "target_unchanged"
-                    ),
+                    "reason": reason,
                 }
             )
         previous_adjusted = current_adjusted

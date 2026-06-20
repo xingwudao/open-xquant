@@ -138,6 +138,8 @@ class BarSnapshot:
         Cash balance after all fills and interest.
     total_value : float
         Total portfolio value (cash + positions).
+    rule_reasons : dict[str, str]
+        Pre-trade rule reasons keyed by symbol, with "__all__" for global holds.
     """
 
     date: pd.Timestamp
@@ -146,6 +148,7 @@ class BarSnapshot:
     positions: dict[str, PositionSnapshot]
     cash: float
     total_value: float
+    rule_reasons: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

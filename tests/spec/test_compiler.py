@@ -441,6 +441,50 @@ def test_write_artifacts_persists_target_weights(tmp_path) -> None:
     assert "target_weights.csv" in hashes
 
 
+def test_write_artifacts_preserves_target_weight_rule_reasons(tmp_path) -> None:
+    from oxq.core.types import BarSnapshot
+
+    spec = StrategySpec.template(
+        strategy_id="target_weight_reasons",
+        hypothesis="target weight artifacts should preserve rule reasons",
+    )
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100000.0)],
+        mktdata={},
+        snapshots=[
+            BarSnapshot(
+                date=dates[0],
+                target_weights={"SPY": 1.0},
+                adjusted_weights={"SPY": 0.0},
+                positions={},
+                cash=100000.0,
+                total_value=100000.0,
+                rule_reasons={"SPY": "SPY is blacklisted"},
+            ),
+            BarSnapshot(
+                date=dates[1],
+                target_weights={"SPY": 1.0},
+                adjusted_weights={"SPY": 1.0},
+                positions={},
+                cash=100000.0,
+                total_value=100000.0,
+                rule_reasons={"__all__": "rebalance interval: 1 bars < 5 bars"},
+            ),
+        ],
+    )
+
+    _write_artifacts(spec, result, tmp_path, Engine())
+
+    rows = pd.read_csv(tmp_path / "target_weights.csv")
+    assert rows["reason"].to_list() == [
+        "SPY is blacklisted",
+        "rebalance interval: 1 bars < 5 bars",
+    ]
+
+
 def test_missing_ratio_ignores_derived_indicator_nans(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="missing_ratio", hypothesis="derived warmup nans are not raw data missing")
     spec.validation.train_period = []
@@ -1168,6 +1212,38 @@ def test_compile_run_writes_execution_assumptions_artifact(tmp_path) -> None:
     }
     assert "execution_assumptions.json" in hashes
     assert audit_reproducibility(run_dir)["status"] == "pass"
+
+
+def test_compile_run_writes_rebalance_rule_reasons_to_target_weights(tmp_path) -> None:
+    spec = StrategySpec.template(
+        strategy_id="rebalance_reasons",
+        hypothesis="rebalance rule reasons should be auditable",
+    )
+    spec.universe.symbols = ["SPY"]
+    spec.universe.point_in_time = True
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-05"]
+    spec.validation.required_oos = False
+    spec.execution.rebalance.interval_days = 3
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    dates = pd.bdate_range("2024-01-02", periods=4, tz="UTC")
+    pd.DataFrame(
+        {
+            "open": [100.0, 101.0, 102.0, 103.0],
+            "high": [101.0, 102.0, 103.0, 104.0],
+            "low": [99.0, 100.0, 101.0, 102.0],
+            "close": [100.0, 101.0, 102.0, 103.0],
+            "volume": [1000, 1000, 1000, 1000],
+        },
+        index=dates,
+    ).to_parquet(data_dir / "SPY.parquet")
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    rows = pd.read_csv(run_dir / "target_weights.csv")
+    assert rows["reason"].str.contains("rebalance interval").any()
 
 
 def test_compile_run_records_resolved_default_data_dir(tmp_path, monkeypatch) -> None:

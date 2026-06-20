@@ -301,6 +301,13 @@ class Engine:
 
         # ── Step 3: Pre-trade rules ───────────────────────────────────
         hold = False
+        rule_reasons: dict[str, list[str]] = {}
+
+        def record_rule_reason(symbol: str, reason: str) -> None:
+            if not reason:
+                return
+            rule_reasons.setdefault(symbol, []).append(reason)
+
         for rule in self._rules:
             for symbol in universe.symbols:
                 if date not in mktdata[symbol].index:
@@ -309,8 +316,14 @@ class Engine:
                 result = rule.evaluate(symbol, row, portfolio, prices=bar_prices)
                 if result.hold:
                     hold = True
+                    record_rule_reason("__all__", result.reason)
                 if result.weights is not None:
                     target_weights.update(result.weights)
+                    for target_symbol in result.weights:
+                        record_rule_reason(target_symbol, result.reason)
+                if result.constraints is not None:
+                    for constrained_symbol in result.constraints:
+                        record_rule_reason(constrained_symbol, result.reason)
 
         adjusted_weights = dict(target_weights)
 
@@ -427,6 +440,7 @@ class Engine:
                 positions=pos_snapshot,
                 cash=float(portfolio.cash),
                 total_value=tv,
+                rule_reasons={symbol: "; ".join(reasons) for symbol, reasons in rule_reasons.items()},
             )
         )
 
