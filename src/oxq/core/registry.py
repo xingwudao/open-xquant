@@ -248,11 +248,12 @@ def _load_builtins() -> None:
         Crossover,
         Formula,
         Peak,
+        ROCTiming,
         Threshold,
         Timestamp,
     )
 
-    for cls in (Comparison, Composite, Crossover, Formula, Peak, Threshold, Timestamp):
+    for cls in (Comparison, Composite, Crossover, Formula, Peak, ROCTiming, Threshold, Timestamp):
         _register(cls, Signal, _SIGNAL_REGISTRY)
 
     # -- Portfolio Optimizers ------------------------------------------------
