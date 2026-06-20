@@ -203,9 +203,13 @@ uv run oxq strategy compile strategy_spec.yaml
 uv run oxq backtest run strategy_spec.yaml --data-dir /path/to/parquet --out runs/auto --json > backtest_result.json
 RUN_DIR=$(uv run python - <<'PY'
 import json
-print(json.load(open("backtest_result.json"))["run_dir"])
+payload = json.load(open("backtest_result.json"))
+if payload["status"] != "pass":
+    raise SystemExit(payload)
+print(payload["run_dir"])
 PY
 )
+test -n "$RUN_DIR"
 echo "$RUN_DIR"
 ```
 
