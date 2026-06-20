@@ -7,10 +7,17 @@ Run: uv run python examples/modules/04_audit_and_robustness.py
 """
 
 import json
+import math
 from pathlib import Path
 
 from oxq.audit import audit_reproducibility, audit_research
 from oxq.robustness import run_robustness
+
+
+def _format_metric(value):
+    if isinstance(value, (int, float)) and math.isfinite(value):
+        return f"{value:.4f}"
+    return "N/A"
 
 # Find the latest run directory from 03_backtest
 RUNS_DIR = Path("/tmp/oxq_examples/03_backtest")
@@ -62,13 +69,13 @@ print("ROBUSTNESS TESTS")
 print("=" * 50)
 robust = run_robustness(run_dir)
 print(f"Status: {robust['status'].upper()}")
-print(f"Baseline Sharpe: {robust.get('baseline_sharpe', 0):.4f}")
+print(f"Baseline Sharpe: {_format_metric(robust.get('baseline_sharpe'))}")
 for t in robust["tests"]:
     icon = "PASS" if t["status"] == "pass" else ("FAIL" if t["status"] == "fail" else "WARN")
     print(f"  [{icon}] {t['name']}: {t.get('message', '')[:80]}")
     for key in ("baseline_sharpe", "oos_sharpe", "perturbed_sharpe"):
         if key in t:
-            print(f"       {key}: {t[key]:.4f}")
+            print(f"       {key}: {_format_metric(t[key])}")
 
 # ---------------------------------------------------------------------------
 # Save audit results alongside run artifacts

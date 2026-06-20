@@ -24,8 +24,7 @@ def audit_reproducibility(run_dir: str) -> dict[str, Any]:
     name="audit_research",
     description="Run research bias audit on a backtest run directory. "
     "Checks execution lag, cost model, OOS requirement, benchmark, survivorship bias, "
-    "parameter count, trade count, drawdown severity, data quality, and whether "
-    "runtime assumptions are explicit enough for interpretation. "
+    "parameter count, trade count, drawdown severity, and data quality. "
     "Returns status and per-check results with fatal/warning counts.",
 )
 def audit_research(run_dir: str) -> dict[str, Any]:

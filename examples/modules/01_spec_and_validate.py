@@ -65,8 +65,26 @@ OUT_DIR.mkdir(parents=True, exist_ok=True)
 spec_path = OUT_DIR / "strategy_spec.yaml"
 import yaml  # noqa: E402
 
+spec_yaml = spec.to_dict()
+spec_yaml.setdefault("execution", {}).update(
+    {
+        "cash_annual_return": spec.execution.cash_annual_return,
+        "lot_size_config": {
+            "default": spec.execution.lot_size_config.default,
+            "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
+        },
+    }
+)
+spec_yaml["metrics"] = {
+    "profile": spec.metrics.profile,
+    "risk_free_rate": spec.metrics.risk_free_rate,
+    "return_type": spec.metrics.return_type,
+    "annualization_days": spec.metrics.annualization_days,
+    "calmar_denominator": spec.metrics.calmar_denominator,
+    "evaluation_window": spec.metrics.evaluation_window,
+}
 spec_path.write_text(
-    yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+    yaml.dump(spec_yaml, sort_keys=False, allow_unicode=True, default_flow_style=False),
     encoding="utf-8",
 )
 print(f"[SDK] Spec written to {spec_path}")

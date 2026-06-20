@@ -46,18 +46,19 @@ Validator constraints:
 - `fill_price_mode=close` or `mid` with `signal_time=close_t` is fatal.
 - Legacy `trade_time` / `fill_price_mode` must agree with explicit
   `order_timing` / `price_bar` / `price_type` when both are present.
-- Negative `fee_rate` or `slippage_rate` is fatal.
-- Zero fee and zero slippage are fatal unless the spec declares explicit
-  execution semantics for a replay-style validation run; preserve the warning.
+- `fee_rate` and `slippage_rate` must each be positive.
+- The only zero-cost exception is when both values are exactly `0.0` and the
+  spec declares explicit execution semantics for a replay-style validation run;
+  preserve the warning.
 - `lot_size` must be a positive integer.
-- `lot_size_config.default` and each `by_symbol` override must be positive
-  integers.
+- `lot_size_config.default` must be a positive integer.
+- `lot_size_config.by_symbol` is parsed but not executable yet; leave it empty
+  until by-symbol sizing is supported.
 - `initial_cash` must be positive and finite.
-- `cash_annual_return` must be finite.
+- `cash_annual_return` must be non-negative and finite.
 
 Supported audited calendars are `XNYS`, `ARCX`, `XSHG`, and `XSHE`.
-Use `lot_size_config.default: 100` for A-share examples unless the user gives
-symbol-specific overrides.
+Use `lot_size_config.default: 100` for A-share examples.
 
 ## Cost Defaults Are Not Conclusions
 
