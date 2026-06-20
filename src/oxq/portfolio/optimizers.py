@@ -242,7 +242,7 @@ class SignalToPositionOptimizer:
                 self._weights[symbol] = buy_weight
             elif action == "SELL":
                 saw_trade_intent = True
-                if self.sell_weight > 0:
+                if symbol in self._weights and self.sell_weight > 0:
                     sell_weight = float(self.sell_weight)
                     self._weights[symbol] = sell_weight
                 else:

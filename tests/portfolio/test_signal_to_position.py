@@ -83,6 +83,44 @@ def test_signal_to_position_preserves_hold_weight_when_other_symbol_sells() -> N
     ) == {"BBB": 0.5, "CASH": 0.5}
 
 
+def test_signal_to_position_initial_sell_does_not_open_position() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing", sell_weight=0.25)
+
+    result = optimizer.optimize(
+        {"AAA": pd.DataFrame({"timing": ["SELL"]})},
+        {},
+    )
+
+    assert result == {"CASH": 1.0}
+
+
+def test_signal_to_position_sell_weight_only_reduces_latched_position() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing", sell_weight=0.25)
+
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["BUY"]})}, {})
+
+    result = optimizer.optimize(
+        {"AAA": pd.DataFrame({"timing": ["SELL"]})},
+        {},
+    )
+
+    assert result == {"AAA": 0.25, "CASH": 0.75}
+
+
+def test_signal_to_position_sell_after_reset_stays_in_cash() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing", sell_weight=0.25)
+
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["BUY"]})}, {})
+    optimizer.reset_symbols(["AAA"])
+
+    result = optimizer.optimize(
+        {"AAA": pd.DataFrame({"timing": ["SELL"]})},
+        {},
+    )
+
+    assert result == {"CASH": 1.0}
+
+
 def test_hold_starts_in_cash() -> None:
     optimizer = SignalToPositionOptimizer(signal="timing")
 

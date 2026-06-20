@@ -333,10 +333,6 @@ class Engine:
                     for constrained_symbol in result.constraints:
                         record_rule_reason(constrained_symbol, result.reason)
 
-        hold = rule_hold or (optimizer_hold and not rule_weight_override)
-        if optimizer_hold and not rule_weight_override:
-            record_rule_reason("__all__", "signal_hold")
-
         def current_portfolio_weights() -> dict[str, float]:
             total_value = portfolio.total_value(bar_prices)
             if total_value <= 0:
@@ -353,6 +349,23 @@ class Engine:
             if portfolio.cash != 0:
                 weights["CASH"] = float(portfolio.cash / total_value)
             return weights
+
+        def optimizer_hold_target_reached() -> bool:
+            for symbol, weight in target_weights.items():
+                if symbol == "CASH" or weight <= 0:
+                    continue
+                position = portfolio.positions.get(symbol)
+                if position is None or position.shares <= 0:
+                    return False
+            return True
+
+        hold = rule_hold or (
+            optimizer_hold
+            and not rule_weight_override
+            and optimizer_hold_target_reached()
+        )
+        if optimizer_hold and not rule_weight_override and hold:
+            record_rule_reason("__all__", "signal_hold")
 
         if hold:
             adjusted_weights = (

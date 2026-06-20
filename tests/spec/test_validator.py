@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import pandas as pd
 import pytest
 
-from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
+import oxq.core.registry as registry
+from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec, _dataclass_to_canonical_dict
 from oxq.spec.validator import validate
 
 
@@ -1422,7 +1424,55 @@ benchmark:
 
     assert spec.signal.rules["timing"].output_domain == ["BUY", "SELL", "HOLD"]
     assert "output_domain" not in spec.signal.rules["timing"].params
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "signal_output_domain_mismatch"
+        and "does not match declared output_domain" in error["message"]
+        for error in result.errors
+    )
+
+
+def test_custom_categorical_signal_can_declare_output_domain(monkeypatch) -> None:
+    class CustomTimingSignal:
+        name = "CustomTimingForValidationTest"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "HOLD", "SELL"], index=mktdata.index)
+
+    monkeypatch.setitem(registry._SIGNAL_REGISTRY, CustomTimingSignal.name, CustomTimingSignal)
+    spec = StrategySpec.template(
+        strategy_id="custom_categorical_signal",
+        hypothesis="custom categorical signals can drive position latching",
+    )
+    spec.universe.symbols = ["AAA"]
+    spec.signal.rules = {
+        "timing": SignalRuleDef(type=CustomTimingSignal.name, output_domain=["BUY", "SELL", "HOLD"])
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing"}
+    spec.validation.train_period = ["2020-01-01", "2022-12-31"]
+    spec.validation.test_period = ["2023-01-01", "2023-12-31"]
+    spec.benchmark.symbols = ["AAA"]
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+
+    result = validate(spec)
+
     assert result.status == "pass"
+
+
+def test_empty_signal_output_domain_is_not_part_of_canonical_hash_input() -> None:
+    spec = StrategySpec.template(
+        strategy_id="empty_output_domain_hash",
+        hypothesis="default signal metadata should not change historical hashes",
+    )
+    spec.signal.rules = {
+        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})
+    }
+
+    canonical = _dataclass_to_canonical_dict(spec)
+
+    assert "output_domain" not in canonical["signal"]["rules"]["entry"]
 
 
 def test_roc_timing_fixed_thresholds_must_not_overlap() -> None:

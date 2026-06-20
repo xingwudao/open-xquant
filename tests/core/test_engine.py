@@ -516,6 +516,18 @@ class CloseSellBroker(SimBroker):
             self._buy_shares = 0
 
 
+class DroppingBroker(SimBroker):
+    """Broker that rejects submitted orders without leaving open orders."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.submitted_orders: list[Order] = []
+
+    def submit_order(self, order: Order) -> str:
+        self.submitted_orders.append(order)
+        return f"dropped-{len(self.submitted_orders)}"
+
+
 def test_engine_notifies_optimizer_after_full_exit() -> None:
     """Exit fills should notify optimizers that keep per-symbol entry state."""
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
@@ -690,6 +702,48 @@ def test_signal_to_position_hold_does_not_rebalance_existing_position() -> None:
     assert result.trades[0].order.shares == 9
     assert result.snapshots[1].positions["AAA"].shares == 9
     assert result.snapshots[1].rule_reasons == {"__all__": "signal_hold"}
+
+
+def test_signal_to_position_hold_retries_missing_latched_position() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class BuyThenHoldSignal:
+        name = "BuyThenHold"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "HOLD"], index=mktdata.index)
+
+    broker = DroppingBroker()
+    strategy = Strategy(
+        name="signal_hold_retries_missing_position",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (BuyThenHoldSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=broker,
+        start="2024-01-02",
+        end="2024-01-03",
+    )
+
+    assert [order.side for order in broker.submitted_orders] == ["BUY", "BUY"]
+    assert result.trades == []
+    assert result.snapshots[1].positions == {}
 
 
 def test_signal_to_position_hold_allows_rule_weight_override() -> None:

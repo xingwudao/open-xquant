@@ -618,6 +618,8 @@ def _dataclass_to_canonical_dict(obj: Any) -> Any:
         for f in fields(obj):
             if f.metadata.get("serialize") is False:
                 continue
+            if isinstance(obj, SignalRuleDef) and f.name == "output_domain" and not obj.output_domain:
+                continue
             result[f.name] = _dataclass_to_canonical_dict(getattr(obj, f.name))
         return result
     if isinstance(obj, (list, tuple)):

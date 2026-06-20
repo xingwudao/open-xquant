@@ -250,6 +250,13 @@ def _is_categorical_signal_rule(rule_def: object) -> bool:
     )
 
 
+def _observed_signal_domain(values: pd.Series) -> set[str]:
+    return {
+        str(value).upper()
+        for value in values.dropna().unique()
+    }
+
+
 def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
     errors: list[dict] = []
     params = spec.portfolio.params
@@ -603,7 +610,20 @@ def _validate_compute_params(spec: StrategySpec) -> list[dict]:
     for signal_name, signal_def in spec.signal.rules.items():
         try:
             signal = _resolve_signal(signal_def.type)()
-            frame[signal_name] = signal.compute(frame, **signal_def.params)
+            output = signal.compute(frame, **signal_def.params)
+            declared_domain = _signal_output_domain(signal_def)
+            if declared_domain:
+                observed_domain = _observed_signal_domain(output)
+                if not observed_domain.issubset(declared_domain):
+                    errors.append(
+                        _err(
+                            "fatal",
+                            "signal_output_domain_mismatch",
+                            f"signal.rules.{signal_name} output {sorted(observed_domain)} "
+                            f"does not match declared output_domain {sorted(declared_domain)}",
+                        )
+                    )
+            frame[signal_name] = output
         except Exception as exc:
             errors.append(
                 _err(
