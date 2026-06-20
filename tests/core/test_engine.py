@@ -551,6 +551,40 @@ def test_engine_notifies_optimizer_after_full_exit() -> None:
     assert optimizer.reset_symbols_seen == ["AAA", "AAA"]
 
 
+def test_snapshot_adjusted_weights_include_exit_targets() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+    strategy = Strategy(
+        name="snapshot_exit_target",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-01",
+        end="2024-01-02",
+        rules=[AlwaysExitRule()],
+    )
+
+    assert result.snapshots[0].target_weights["AAA"] == 1.0
+    assert result.snapshots[0].adjusted_weights["AAA"] == 0.0
+
+
 def test_engine_notifies_optimizer_after_normal_broker_full_exit() -> None:
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
     data = {

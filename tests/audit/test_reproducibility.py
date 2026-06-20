@@ -160,6 +160,22 @@ def test_reproducibility_audit_validates_target_weight_hash(tmp_path) -> None:
     assert hashes["schema_version"] == 3
 
 
+def test_reproducibility_audit_checks_target_weights_when_schema_2_manifest(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    hashes_path = run_dir / "artifact_hashes.json"
+    hashes = json.loads(hashes_path.read_text(encoding="utf-8"))
+    hashes["schema_version"] = 2
+    hashes_path.write_text(json.dumps(hashes, indent=2), encoding="utf-8")
+    target_weights = pd.read_csv(run_dir / "target_weights.csv")
+    target_weights.loc[0, "adjusted_target_weight"] = 0.25
+    target_weights.to_csv(run_dir / "target_weights.csv", index=False)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "target_weights_hash" for check in audit["checks"])
+
+
 def _write_minimal_run(tmp_path):
     spec = StrategySpec.template(strategy_id="audit_execution_assumptions", hypothesis="audit execution assumptions")
     spec.validation.train_period = []

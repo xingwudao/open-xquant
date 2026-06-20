@@ -161,6 +161,8 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                     "benchmark_prices.csv": "benchmark_prices_hash",
                     "robustness.json": "robustness_hash",
                 }
+                if artifact_schema_version >= 2:
+                    optional_artifact_hashes["target_weights.csv"] = "target_weights_hash"
                 for artifact_name, check_id in optional_artifact_hashes.items():
                     if artifact_name in expected_hashes or (run_path / artifact_name).exists():
                         required_hashes = {

@@ -372,6 +372,7 @@ class Engine:
                 result = rule.evaluate(symbol, row, portfolio, prices=bar_prices)
                 if result.target_positions is not None:
                     for sym, target_ratio in result.target_positions.items():
+                        record_rule_reason(sym, result.reason)
                         if sym in exit_targets:
                             exit_targets[sym] = min(exit_targets[sym], target_ratio)
                         else:
@@ -379,6 +380,9 @@ class Engine:
 
         # ── Step 7: Execute exits ─────────────────────────────────────
         if exit_targets:
+            adjusted_weights = dict(adjusted_weights)
+            for sym, target_ratio in exit_targets.items():
+                adjusted_weights[sym] = float(adjusted_weights.get(sym, 0.0)) * float(target_ratio)
             for sym, target_ratio in exit_targets.items():
                 if sym not in portfolio.positions:
                     continue
