@@ -9,6 +9,8 @@ Run: uv run python examples/modules/03_backtest_and_artifacts.py
 import json
 from pathlib import Path
 
+import pandas as pd
+
 from oxq.spec import StrategySpec, compile_run
 
 OUT_DIR = Path("/tmp/oxq_examples/03_backtest")
@@ -60,8 +62,16 @@ print(f"  sharpe_ratio:  {metrics['sharpe_ratio']:.2f}")
 print(f"  max_drawdown:  {metrics['max_drawdown']:.2%}")
 print(f"  trade_count:   {metrics['trade_count']}")
 
-# Read equity curve (first/last 3 rows)
-import pandas as pd  # noqa: E402
+# Read target weights for allocation-level baseline comparisons
+target_weights = pd.read_csv(run_dir / "target_weights.csv")
+print(f"\nTarget weights ({len(target_weights)} rows):")
+print(target_weights.head(5).to_string(index=False))
+
+# Read artifact hashes used by reproducibility audit
+artifact_hashes = json.loads((run_dir / "artifact_hashes.json").read_text())
+print("\nArtifact hash keys:")
+for key in sorted(artifact_hashes):
+    print(f"  {key}")
 
 eq = pd.read_csv(run_dir / "equity_curve.csv")
 print(f"\nEquity curve ({len(eq)} bars):")
@@ -76,6 +86,6 @@ print(f"""
 {'='*60}
 CLI equivalents:
   oxq strategy compile {SPEC_FILE}
-  oxq backtest run {SPEC_FILE} --out runs/auto
+  oxq backtest run {SPEC_FILE} --out runs/auto --json
 {'='*60}
 """)

@@ -118,6 +118,8 @@ benchmark 用 SPY。
 - `runs/<run_id>/equity_curve.csv`
 - `runs/<run_id>/benchmark_curve.csv`，如果配置了 benchmark。
 - `runs/<run_id>/trades.csv`
+- `runs/<run_id>/target_weights.csv`，用于目标仓位和 baseline 对齐比较。
+  `trades.csv` 用于执行成交比较，不要把两者混用。
 - `runs/<run_id>/orders.csv`
 - `runs/<run_id>/positions.csv`
 - `runs/<run_id>/artifact_hashes.json`

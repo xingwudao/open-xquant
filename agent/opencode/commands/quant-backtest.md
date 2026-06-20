@@ -12,8 +12,8 @@ Run a backtest from a validated strategy spec.
 
 1. Verify spec passes `oxq spec validate strategy_spec.yaml`
 2. `oxq strategy compile strategy_spec.yaml`
-3. `oxq backtest run strategy_spec.yaml --out runs/auto`
-4. Note the run directory path for audit and report steps
+3. `oxq backtest run strategy_spec.yaml --out runs/auto --json > backtest.json`
+4. Read `run_dir` and artifact paths from `backtest.json`
 
 ## Next
 

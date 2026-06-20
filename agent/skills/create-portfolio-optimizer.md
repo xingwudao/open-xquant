@@ -45,6 +45,9 @@ State before coding:
 - fallback when no valid inputs exist
 - whether weights can include `CASH`
 - max/min weight constraints
+- whether the optimizer is stateful. If it consumes categorical signals such as
+  `BUY`, `SELL`, and `HOLD`, define how `HOLD` preserves or resets prior
+  target weights. `SignalToPosition` is the built-in reference pattern.
 
 Ask the user if allocation logic is ambiguous.
 

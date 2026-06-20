@@ -37,7 +37,7 @@ oxq spec validate strategy_spec.yaml
 
 # 3. Compile and run backtest
 oxq strategy compile strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --out runs/auto
+oxq backtest run strategy_spec.yaml --out runs/auto --json > backtest.json
 
 # 4. Audit the results
 oxq audit reproducibility runs/<run_id>/
@@ -70,7 +70,8 @@ Indicator → Universe → Signal → Portfolio → Pre-trade Rule
 
 Key interfaces (all use Protocol over ABC — prefer structural typing):
 - `Indicator.compute(df) → Series` — 纯函数，输出连续数值
-- `Signal.compute(df) → Series` — 纯函数，输出离散标签（buy/hold/sell）
+- `Signal.compute(df) → Series` — 纯函数，输出布尔值或离散标签
+  （`BUY` / `SELL` / `HOLD`）
 - `PortfolioOptimizer.optimize(signals, indicators) → dict[str, float]` — 截面优化，输出目标权重
 - `Rule.evaluate(symbol, row, portfolio) → RuleResult` — 逐 bar 有状态，输出约束/减仓意图
 
@@ -99,13 +100,13 @@ Data sources: YFinance (US equities), AkShare (A-shares), WorldBank (macro facto
 
 | Command | Description |
 |----------|-------------|
-| `oxq backtest run <file> --out runs/auto` | Run a backtest from a spec and write standardized artifacts |
+| `oxq backtest run <file> --out runs/auto --json` | Run a backtest and return machine-readable `run_dir` and artifact paths |
 
 ### audit (2 commands)
 
 | Command | Description |
 |----------|-------------|
-| `oxq audit reproducibility <run_dir>` | Verify spec hash, equity hash, trades hash, metrics hash consistency |
+| `oxq audit reproducibility <run_dir>` | Verify spec, data manifest, artifact hashes, equity, trades, target weights, and metrics |
 | `oxq audit research <run_dir>` | Check execution lag, cost model, OOS, survivorship bias, parameter count, trade count, etc. |
 
 ### robustness (1 command)

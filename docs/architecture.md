@@ -112,7 +112,8 @@ open-xquant/
 Strategy 由三个核心组件构成：
 
 - **Universe** — 确定标的池。可以是固定列表（StaticUniverse）、指数成分（IndexUniverse）或基于条件的动态过滤（FilterUniverse）
-- **Signal** — 逐 symbol 产出交易意图。输出布尔或分类标签（buy/hold/sell），描述"交易的欲望"而非交易指令
+- **Signal** — 逐 symbol 产出交易意图。输出布尔或分类标签
+  （`BUY` / `SELL` / `HOLD`），描述"交易的欲望"而非订单
 - **Portfolio** — 跨 symbol 组合优化。接收 Signal 输出，通过 PortfolioOptimizer 计算目标权重
 
 Strategy 是纯声明式容器——直接传给 Engine 执行。它始于假设和目标：hypothesis 定义了策略试图捕捉的市场现象，objectives 量化了成功标准，benchmarks 提供了比较的参照系。
@@ -122,6 +123,9 @@ Strategy 是纯声明式容器——直接传给 Engine 执行。它始于假设
 **Rule** 不属于 Strategy。Rule 的职责是对持仓组合的准入约束和持仓监控，通过 `Engine.run(rules=[...])` 传入。
 
 Engine 驱动完整管道：**Indicator → Universe → Signal → Portfolio → Pre-trade Rule → Trading Algorithm → Broker → Post-trade Rule**。
+分类信号不会直接下单；例如 `ROCTiming` 输出 `BUY`、`SELL`、`HOLD` 后，
+由 `SignalToPosition` 将其转换为 `{symbol: weight}` 或 `{CASH: 1.0}` 目标组合，
+再由交易算法生成订单。
 
 ```python
 from oxq.core import Engine, Strategy
@@ -490,7 +494,7 @@ baseline Sharpe，而应保留 fragile、warn 和 error 状态。
 oxq spec init "策略想法"
 oxq spec validate strategy_spec.yaml
 oxq strategy compile strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --out runs/auto
+oxq backtest run strategy_spec.yaml --out runs/auto --json
 oxq audit reproducibility runs/<run_id>/
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
@@ -662,7 +666,8 @@ agent/opencode/
 
 ### Phase 2: Spec Compiler 与 Backtest Artifacts ✅ 已完成
 - `src/oxq/spec/compiler.py`
-- 标准化 run directory 结构（10 个固定 artifacts）
+- 标准化 run directory 结构，包括 `target_weights.csv` 和
+  `artifact_hashes.json` hash 覆盖
 - CLI: `oxq strategy compile`, `oxq backtest run`
 
 ### Phase 3: Audit 与 Report ✅ 已完成
@@ -710,7 +715,7 @@ agent/opencode/
 ```bash
 oxq spec init "20日动量轮动" --out strategy_spec.yaml
 oxq spec validate strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --out runs/auto
+oxq backtest run strategy_spec.yaml --out runs/auto --json
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
 oxq report write runs/<run_id>/

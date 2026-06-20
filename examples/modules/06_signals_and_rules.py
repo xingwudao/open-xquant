@@ -1,7 +1,7 @@
 """Module example: Signals and Rules.
 
-Demonstrates 7 signal types and 9 rule types via SDK.
-Each signal is a pure function that outputs buy/hold/sell intent.
+Demonstrates 8 signal types and 9 rule types via SDK.
+Signals are pure functions that output boolean or BUY/SELL/HOLD intent.
 Each rule is a state machine that outputs constraints on the portfolio.
 
 Run: uv run python examples/modules/06_signals_and_rules.py
@@ -11,7 +11,7 @@ from oxq.core.engine import Engine
 from oxq.core.strategy import Strategy
 from oxq.data.loaders import YFinanceDownloader
 from oxq.data.market import LocalMarketDataProvider
-from oxq.indicators import SMA
+from oxq.indicators import ROC, SMA
 from oxq.portfolio.optimizers import EqualWeightOptimizer
 from oxq.rules.constraint import MaxHoldingsRule, RebalanceFrequencyRule
 from oxq.rules.exit import ExitRule
@@ -22,6 +22,7 @@ from oxq.signals.composite import Composite
 from oxq.signals.crossover import Crossover
 from oxq.signals.formula import Formula
 from oxq.signals.peak import Peak
+from oxq.signals.roc_timing import ROCTiming
 from oxq.signals.threshold import Threshold
 from oxq.signals.timestamp import Timestamp
 from oxq.trade.fees import PercentageFee
@@ -40,7 +41,7 @@ print(f"  {len(bars)} bars loaded\n")
 # Part 1: Signal Types
 # ===========================================================================
 print("=" * 50)
-print("SIGNAL TYPES (7 total)")
+print("SIGNAL TYPES (8 total)")
 print("=" * 50)
 
 # Compute indicators first
@@ -86,6 +87,19 @@ ts_signal = Timestamp().compute(bars, rule="month_start")
 print(f"   Month-start days: {ts_signal.sum()}")
 ts_qend = Timestamp().compute(bars, rule="quarter_end")
 print(f"   Quarter-end days: {ts_qend.sum()}")
+
+# 8. ROCTiming — categorical BUY/SELL/HOLD timing intent
+print("\n8. ROCTiming (ROC fixed thresholds):")
+bars["roc_20"] = ROC().compute(bars, column="close", period=20)
+roc_timing = ROCTiming().compute(
+    bars,
+    column="roc_20",
+    mode="fixed",
+    bottom=-5.0,
+    top=5.0,
+)
+print(f"   Values: {sorted(set(roc_timing.dropna()))}")
+print("   BUY means target long, SELL means target cash, HOLD preserves position.")
 
 # ===========================================================================
 # Part 2: Rule Types

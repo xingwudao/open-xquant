@@ -50,7 +50,7 @@ Create spec: oxq spec init "<idea>"
     ↓
 Validate: oxq spec validate strategy_spec.yaml
     ↓
-Backtest: oxq backtest run strategy_spec.yaml --out runs/auto
+Backtest: oxq backtest run strategy_spec.yaml --out runs/auto --json > backtest.json
     ↓
 Check assumptions: metrics profile + execution assumptions artifacts
     ↓
@@ -83,7 +83,8 @@ Before recording any result as valid:
 1. Note the exact inputs: universe, date range, parameters, data source version
 2. Confirm metrics profile, execution assumptions, calendar, lot size, costs,
    and cash return assumptions are recorded
-3. Re-run with identical spec and data: `oxq backtest run strategy_spec.yaml`
+3. Re-run with identical spec and data:
+   `oxq backtest run strategy_spec.yaml --json > backtest.json`
 4. Run reproducibility audit: `oxq audit reproducibility runs/<run_id>/`
 5. If hashes differ between runs or audit fails, **stop and investigate** — do not record the result
 

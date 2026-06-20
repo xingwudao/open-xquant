@@ -67,7 +67,8 @@ open-xquant 采用 **Agentic Quant Research Kernel** 的设计哲学——它是
 
 ### 4. 结构化研究产物
 
-每次研究都留下固定结构的 artifacts——metrics、trades、equity curve、audit、report——可版本化、可 diff、可沉淀。
+每次研究都留下固定结构的 artifacts——metrics、trades、target weights、
+equity curve、artifact hashes、audit、report——可版本化、可 diff、可沉淀。
 
 ## 核心流程
 
@@ -75,7 +76,7 @@ open-xquant 采用 **Agentic Quant Research Kernel** 的设计哲学——它是
 oxq spec init "策略想法"
   → oxq spec validate strategy_spec.yaml
   → oxq strategy compile strategy_spec.yaml
-  → oxq backtest run strategy_spec.yaml
+  → oxq backtest run strategy_spec.yaml --json
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
@@ -106,6 +107,7 @@ oxq spec init "策略想法"
 | `03_backtest_and_artifacts.py` | Spec 编译、回测执行、artifact 读取 |
 | `04_audit_and_robustness.py` | 可复现审计、偏差审计、稳健性测试 |
 | `05_report_and_experiment.py` | 研究报告生成、实验登记 |
+| `06_signals_and_rules.py` | Signal、Rule、ROCTiming 与 BUY/SELL/HOLD 语义 |
 
 ```bash
 uv run python examples/modules/01_spec_and_validate.py
@@ -127,6 +129,7 @@ uv run python examples/strategies/spec_validation_demo.py
 |------|----------|
 | `sma_crossover_spec.py` | SMA 均线交叉 — 完整 E2E 管线 |
 | `momentum_rotation_spec.py` | 动量轮动 — 完整 E2E 管线 |
+| `roc_timing_spec.py` | ROC 择时 — fixed threshold 与 rolling quantile spec |
 | `factor_screen.py` | 多因子筛选示例 |
 
 ## 项目边界
@@ -235,7 +238,9 @@ Three defense lines — spec validation, research bias audit, and robustness tes
 
 ### 4. Structured Research Artifacts
 
-Every research run produces fixed-structure artifacts — metrics, trades, equity curve, audit, report — versionable, diffable, and persistent.
+Every research run produces fixed-structure artifacts — metrics, trades,
+target weights, equity curve, artifact hashes, audit, report — versionable,
+diffable, and persistent.
 
 ## Core Workflow
 
@@ -243,7 +248,7 @@ Every research run produces fixed-structure artifacts — metrics, trades, equit
 oxq spec init "strategy idea"
   → oxq spec validate strategy_spec.yaml
   → oxq strategy compile strategy_spec.yaml
-  → oxq backtest run strategy_spec.yaml
+  → oxq backtest run strategy_spec.yaml --json
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
@@ -270,6 +275,7 @@ Runnable Python scripts demonstrating each core module with SDK and equivalent C
 | `03_backtest_and_artifacts.py` | Spec compile, backtest run, artifact inspection |
 | `04_audit_and_robustness.py` | Reproducibility audit, bias audit, robustness tests |
 | `05_report_and_experiment.py` | Research report generation, experiment registry |
+| `06_signals_and_rules.py` | Signals, rules, ROCTiming, and BUY/SELL/HOLD semantics |
 
 ```bash
 uv run python examples/modules/01_spec_and_validate.py
@@ -291,6 +297,7 @@ Complete E2E pipeline examples (spec → backtest → audit → report):
 |------|---------------|
 | `sma_crossover_spec.py` | SMA Crossover — complete E2E pipeline |
 | `momentum_rotation_spec.py` | Momentum Rotation — complete E2E pipeline |
+| `roc_timing_spec.py` | ROC Timing — fixed threshold and rolling quantile specs |
 | `factor_screen.py` | Multi-factor screening example |
 
 ## Project Boundaries

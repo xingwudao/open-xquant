@@ -56,6 +56,9 @@ Use this path first:
 - positive `cost.fee_rate`
 - positive `cost.slippage_rate`
 - `portfolio.type: EqualWeight` when `signal.rules` is present
+- `ROC` + `ROCTiming` + `SignalToPosition` for single-symbol timing strategies
+  that need explicit `BUY` / `SELL` / `HOLD` and HOLD-maintains-position
+  semantics
 
 Do not promise these are directly supported by the audited CLI compiler:
 
@@ -64,7 +67,8 @@ Do not promise these are directly supported by the audited CLI compiler:
 - multiple `Crossover` rules in one spec
 - `Peak` signal for causal audited backtests
 - `Timestamp` `month_end` or `quarter_end`
-- signal rules combined with non-`EqualWeight` portfolio
+- signal rules combined with portfolio types other than `EqualWeight` or
+  `SignalToPosition`
 - arbitrary rules declared under a top-level `rules:` YAML section
 
 ## Phase 0: Confirm Constraints

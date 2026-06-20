@@ -21,9 +21,10 @@ Fix any errors. Spec MUST pass validation before proceeding.
 
 ### Step 2: Backtest
 ```bash
-oxq backtest run strategy_spec.yaml --out runs/auto
+oxq backtest run strategy_spec.yaml --out runs/auto --json > backtest.json
 ```
-Note the run directory path printed by the command.
+Read `run_dir` and artifact paths from `backtest.json`. Use `target_weights.csv`
+for target allocation comparisons and `trades.csv` for execution comparisons.
 
 ### Step 3: Audit
 ```bash

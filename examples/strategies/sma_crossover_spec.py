@@ -214,7 +214,7 @@ print(f"""
 {'='*60}
 CLI one-shot pipeline:
   oxq spec validate {spec_path}
-  oxq backtest run {spec_path} --out {OUT_DIR}/runs/auto
+  oxq backtest run {spec_path} --out {OUT_DIR}/runs/auto --json
   oxq audit research {run_dir}/
   oxq robustness run {run_dir}/
   oxq report write {run_dir}/

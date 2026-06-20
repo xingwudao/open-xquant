@@ -45,7 +45,7 @@ execution comparisons.
 
 3. 每个研究 run 必须留下 artifacts。
    - 必须能找到 `metrics.json`、`equity_curve.csv`、`trades.csv`、
-     `strategy_spec.yaml`、`artifact_hashes.json`。
+     `target_weights.csv`、`strategy_spec.yaml`、`artifact_hashes.json`。
 
 4. 不通过验证就停止。
    - `oxq spec validate` 失败时，不允许回测。
@@ -78,6 +78,10 @@ execution comparisons.
   `annualization_days`、`calmar_denominator`、`evaluation_window`。
 - `EqualWeight` 组合。
 - `SMA`、`Crossover` 等注册表中的内置指标和信号。
+- `ROC` + `ROCTiming` + `SignalToPosition` 单标的择时。
+  `ROCTiming` 输出 `BUY`、`SELL`、`HOLD` 交易意图；
+  `SignalToPosition` 把 `BUY` 映射为目标仓位、把 `SELL` 映射为空仓，
+  并让 `HOLD` 维持上一目标仓位。
 - 回测后的 reproducibility audit、research audit、robustness、report。
 
 不要在默认 spec 工作流中承诺这些能力已完整可编译：
@@ -88,7 +92,7 @@ execution comparisons.
 - 同一 spec 中多个 `Crossover` 规则。
 - `Peak` 信号作为因果回测信号。
 - `Timestamp` 的 `month_end` 或 `quarter_end` 规则。
-- 带 signal rules 的非 `EqualWeight` portfolio。
+- 除 `EqualWeight` 和 `SignalToPosition` 之外，带 signal rules 的 portfolio。
 
 如果用户需要上面的扩展能力，先说明当前 CLI 约束，再改用 SDK、
 组件开发或后续框架扩展流程。
@@ -472,6 +476,13 @@ Skill 文件位于 `agent/skills/`。
 - 再路由到 `create-indicator.md`、`create-signal.md`、
   `create-rule.md` 或 `create-portfolio-optimizer.md`。
 - 扩展组件时必须读现有实现和测试模式。
+- 选择组件归属时按行为边界判断：
+  数值时间序列公式属于 `Indicator`；
+  `BUY`、`SELL`、`HOLD` 这类交易意图属于 `Signal`；
+  目标仓位和 HOLD 维持状态属于 `PortfolioOptimizer`；
+  下单约束、退出和风险暂停属于 `Rule`。
+- 不要把 signal 生命周期或持仓状态藏进 `Indicator` 里只为让 spec 编译。
+  需要 HOLD 维持仓位时，优先使用或创建 `Signal` + `PortfolioOptimizer`。
 
 实盘或模拟盘：
 
@@ -529,8 +540,8 @@ uv run oxq strategy compile strategy_spec.yaml
 运行回测：
 
 ```bash
-uv run oxq backtest run strategy_spec.yaml --out runs/auto
-uv run oxq backtest run strategy_spec.yaml --data-dir /path/to/parquet --out runs/auto
+uv run oxq backtest run strategy_spec.yaml --out runs/auto --json
+uv run oxq backtest run strategy_spec.yaml --data-dir /path/to/parquet --out runs/auto --json
 ```
 
 审计：

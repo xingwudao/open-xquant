@@ -6,7 +6,14 @@ import pandas as pd
 
 
 class ROCTiming:
-    """Emit BUY below bottom threshold, SELL above top threshold, otherwise HOLD."""
+    """ROC reversal timing signal.
+
+    Returns uppercase categorical trading-intent labels:
+    `BUY` when ROC is below the bottom threshold, `SELL` when ROC is above
+    the top threshold, and `HOLD` otherwise. In `rolling_quantile` mode,
+    thresholds are computed from prior rows only so the current bar does not
+    influence its own signal.
+    """
 
     name = "ROCTiming"
 

@@ -10,7 +10,8 @@ from oxq.tools.registry import registry
 @registry.tool(
     name="audit_reproducibility",
     description="Run reproducibility audit on a backtest run directory. "
-    "Verifies spec hash, data manifest, and computes hashes for equity curve, trades, and metrics. "
+    "Verifies spec hash, data manifest, artifact_hashes.json, and hashes for "
+    "equity curve, trades, target_weights.csv, and metrics. "
     "Returns status and per-check results.",
 )
 def audit_reproducibility(run_dir: str) -> dict[str, Any]:

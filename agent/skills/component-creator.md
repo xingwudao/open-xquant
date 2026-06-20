@@ -25,6 +25,13 @@ If the request could fit more than one type, ask the user to clarify. For
 example, "momentum" can be an Indicator, while "buy when momentum is positive"
 is a Signal.
 
+For ROC timing strategies, prefer the existing split:
+
+- `ROC` is the numeric Indicator.
+- `ROCTiming` is the Signal that emits `BUY`, `SELL`, or `HOLD`.
+- `SignalToPosition` is the PortfolioOptimizer that turns those labels into
+  target weights while `HOLD` maintains the prior target position.
+
 ## Step 2: Check Existing Registry
 
 ```bash
