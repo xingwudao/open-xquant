@@ -138,7 +138,7 @@ def _backtest_json_failure(check: str, message: str, warnings: list[dict] | None
 
 
 @backtest.command()
-@click.argument("spec_file", type=click.Path(exists=True))
+@click.argument("spec_file", type=click.Path())
 @click.option("--out", "-o", default="runs/auto", help="Output directory for run artifacts")
 @click.option("--data-dir", default=None, help="Directory for market data files")
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON")
@@ -148,6 +148,14 @@ def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
     SPEC_FILE is the path to a strategy_spec.yaml file.
     """
     from oxq.spec.compiler import compile_run
+
+    spec_path = Path(spec_file)
+    if not spec_path.exists():
+        message = f"strategy spec file not found: {spec_file}"
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("spec_file_missing", message), indent=2))
+            raise SystemExit(1)
+        raise click.ClickException(message)
 
     try:
         spec = StrategySpec.from_yaml(spec_file)

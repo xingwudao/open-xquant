@@ -126,6 +126,31 @@ def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:
     assert payload["artifacts"] == {}
 
 
+def test_backtest_run_json_reports_missing_spec_file(tmp_path) -> None:
+    runner = CliRunner()
+    missing_spec = tmp_path / "missing.yaml"
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(missing_spec),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["run_id"] == ""
+    assert payload["run_dir"] == ""
+    assert payload["artifacts"] == {}
+    assert payload["metrics"] == {}
+    assert payload["errors"][0]["check"] == "spec_file_missing"
+    assert str(missing_spec) in payload["errors"][0]["message"]
+
+
 def test_backtest_run_json_reports_runtime_failure(tmp_path) -> None:
     spec_path, _data_dir = _write_spec_and_data(tmp_path)
     missing_data_dir = tmp_path / "missing_data"
