@@ -119,6 +119,10 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         "positions.csv": "positions_hash",
         "orders.csv": "orders_hash",
     }
+    schema_3_required_artifact_hashes = {
+        **new_required_artifact_hashes,
+        "target_weights.csv": "target_weights_hash",
+    }
     try:
         expected_hashes = json.loads((run_path / "artifact_hashes.json").read_text(encoding="utf-8"))
         valid_hash_manifest = isinstance(expected_hashes, dict)
@@ -137,7 +141,9 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                         "fatal",
                         "artifact_hashes.json schema_version must be >= 1 for data_manifest schema_version >= 1",
                     ))
-                if artifact_schema_version >= 2:
+                if artifact_schema_version >= 3:
+                    required_hashes = schema_3_required_artifact_hashes
+                elif artifact_schema_version >= 2:
                     required_hashes = new_required_artifact_hashes
                 elif manifest_schema_version >= 1 or artifact_schema_version >= 1:
                     required_hashes = {
