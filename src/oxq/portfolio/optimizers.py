@@ -212,6 +212,7 @@ class SignalToPositionOptimizer:
         self.skip_rebalance = False
         self.held_symbols: set[str] = set()
         self.pending_reduction_symbols: set[str] = set()
+        self._held_position_symbols: set[str] | None = None
 
     def reset(self) -> None:
         """Clear latched target weights at the start of an independent run."""
@@ -219,6 +220,16 @@ class SignalToPositionOptimizer:
         self.skip_rebalance = False
         self.held_symbols = set()
         self.pending_reduction_symbols = set()
+        self._held_position_symbols = None
+
+    def set_held_symbols(self, symbols: list[str]) -> None:
+        """Snapshot symbols with actual positions before signal mapping."""
+        self._held_position_symbols = set(symbols)
+
+    def clear_pending_reductions(self, symbols: list[str]) -> None:
+        """Mark pending reduction targets as reached."""
+        for symbol in symbols:
+            self.pending_reduction_symbols.discard(symbol)
 
     def reset_symbols(self, symbols: list[str]) -> None:
         """Clear latched target weights for symbols that fully exited."""
@@ -251,15 +262,21 @@ class SignalToPositionOptimizer:
             elif action == "SELL":
                 saw_trade_intent = True
                 has_latched_position = symbol in self._weights or symbol in self.pending_reduction_symbols
-                if symbol in self._weights and self.sell_weight > 0:
+                has_actual_position = (
+                    symbol in self._held_position_symbols
+                    if self._held_position_symbols is not None
+                    else has_latched_position
+                )
+                if symbol in self._weights and self.sell_weight > 0 and has_actual_position:
                     sell_weight = float(self.sell_weight)
                     self._weights[symbol] = sell_weight
                     self.pending_reduction_symbols.add(symbol)
-                elif has_latched_position:
+                elif has_latched_position and has_actual_position:
                     self._weights.pop(symbol, None)
                     self.pending_reduction_symbols.add(symbol)
                 else:
                     self._weights.pop(symbol, None)
+                    self.pending_reduction_symbols.discard(symbol)
             elif action == "HOLD":
                 if symbol in self._weights:
                     self.held_symbols.add(symbol)

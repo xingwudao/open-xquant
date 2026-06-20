@@ -46,6 +46,7 @@ def generate_orders(
     currency: str = "CNY",
     pending_orders: list[Order] | None = None,
     buy_cost_estimator: Callable[[str, Decimal, int], Decimal] | None = None,
+    buying_power: Decimal | None = None,
 ) -> list[PlannedOrder]:
     """Generate a trade plan from target weights.
 
@@ -69,6 +70,8 @@ def generate_orders(
         Open orders already submitted but not filled.
     buy_cost_estimator : Callable or None
         Function returning total estimated cash needed for a BUY order.
+    buying_power : Decimal or None
+        Optional cash budget for new buys. Defaults to total capital when omitted.
 
     Returns
     -------
@@ -90,7 +93,8 @@ def generate_orders(
         elif order.side == "SELL":
             pending_sell_shares[order.symbol] = pending_sell_shares.get(order.symbol, 0) + order.shares
     reserved_capital = max(Decimal("0"), pending_buy_notional)
-    remaining_buy_budget = max(Decimal("0"), total_capital - reserved_capital)
+    buy_budget = total_capital if buying_power is None else buying_power
+    remaining_buy_budget = max(Decimal("0"), buy_budget - reserved_capital)
 
     # All symbols: union of targets and current positions.
     # Pending-only symbols are already represented by open orders and should

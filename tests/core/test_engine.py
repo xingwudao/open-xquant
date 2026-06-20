@@ -985,6 +985,114 @@ def test_signal_to_position_hold_retries_unfilled_exit() -> None:
     assert result.snapshots[2].positions["AAA"].shares == result.snapshots[0].positions["AAA"].shares
 
 
+def test_signal_to_position_mixed_hold_buy_uses_cash_budget_for_frozen_holdings() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 150.0, 150.0],
+                "high": [100.0, 150.0, 150.0],
+                "low": [100.0, 150.0, 150.0],
+                "close": [100.0, 150.0, 150.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+                "timing_input": ["BUY", "HOLD", "HOLD"],
+            },
+            index=dates,
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0],
+                "high": [100.0, 100.0, 100.0],
+                "low": [100.0, 100.0, 100.0],
+                "close": [100.0, 100.0, 100.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000],
+                "timing_input": ["HOLD", "BUY", "HOLD"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    strategy = Strategy(
+        name="signal_mixed_hold_buy_cash_budget",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing", buy_weight=0.5),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-04",
+    )
+
+    bbb_buys = [trade.order for trade in result.trades if trade.order.symbol == "BBB"]
+
+    assert len(bbb_buys) == 1
+    assert bbb_buys[0].side == "BUY"
+    assert bbb_buys[0].shares == 500
+
+
+def test_signal_to_position_completed_partial_sell_freezes_later_hold_symbol() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=4, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0, 200.0],
+                "high": [100.0, 100.0, 100.0, 200.0],
+                "low": [100.0, 100.0, 100.0, 200.0],
+                "close": [100.0, 100.0, 100.0, 200.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000, 1_000_000],
+                "timing_input": ["BUY", "SELL", "HOLD", "HOLD"],
+            },
+            index=dates,
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0, 100.0],
+                "high": [100.0, 100.0, 100.0, 100.0],
+                "low": [100.0, 100.0, 100.0, 100.0],
+                "close": [100.0, 100.0, 100.0, 100.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000, 1_000_000],
+                "timing_input": ["BUY", "HOLD", "HOLD", "BUY"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    strategy = Strategy(
+        name="signal_partial_sell_completed_hold_freezes",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing", buy_weight=0.5, sell_weight=0.25),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-05",
+    )
+
+    aaa_sides = [trade.order.side for trade in result.trades if trade.order.symbol == "AAA"]
+
+    assert aaa_sides == ["BUY", "SELL"]
+
+
 def test_signal_to_position_optimizer_resets_between_engine_runs() -> None:
     dates = pd.bdate_range("2024-01-02", periods=1, tz="UTC")
 

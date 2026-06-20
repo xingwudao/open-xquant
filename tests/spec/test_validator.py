@@ -1402,6 +1402,35 @@ def test_equal_weight_rejects_partial_trading_intent_output_domain(monkeypatch) 
     assert any(error["check"] == "signal_categorical_portfolio_invalid" for error in result.errors)
 
 
+def test_signal_to_position_rejects_unsupported_output_domain_labels(monkeypatch) -> None:
+    class BuyFlatSignal:
+        name = "BuyFlatForValidationTest"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "FLAT"], index=mktdata.index)
+
+    monkeypatch.setitem(registry._SIGNAL_REGISTRY, BuyFlatSignal.name, BuyFlatSignal)
+    spec = StrategySpec.template(
+        strategy_id="signal_to_position_unsupported_domain",
+        hypothesis="SignalToPosition should reject non BUY/SELL/HOLD labels",
+    )
+    spec.signal.rules = {
+        "timing": SignalRuleDef(type=BuyFlatSignal.name, output_domain=["BUY", "FLAT"])
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing"}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "optimizer_param_invalid"
+        and "unsupported labels" in error["message"]
+        and "FLAT" in error["message"]
+        for error in result.errors
+    )
+
+
 def test_signal_rule_output_domain_is_metadata_not_compute_params(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(

@@ -350,19 +350,38 @@ class Engine:
                 weights["CASH"] = float(portfolio.cash / total_value)
             return weights
 
-        def optimizer_hold_target_reached() -> bool:
+        def sync_pending_reductions() -> bool:
             pending_reduction_symbols = set(getattr(strategy.portfolio, "pending_reduction_symbols", set()))
-            if pending_reduction_symbols:
-                total_value = portfolio.total_value(bar_prices)
-                for symbol in pending_reduction_symbols:
-                    position = portfolio.positions.get(symbol)
-                    price = bar_prices.get(symbol)
-                    if position is None or position.shares <= 0 or price is None or total_value <= 0:
-                        continue
-                    current_weight = float((Decimal(position.shares) * price) / total_value)
-                    target_weight = float(target_weights.get(symbol, 0.0))
-                    if current_weight > target_weight + 1e-9:
-                        return False
+            if not pending_reduction_symbols:
+                return True
+
+            total_value = portfolio.total_value(bar_prices)
+            reached_symbols: list[str] = []
+            all_reached = True
+            for symbol in pending_reduction_symbols:
+                position = portfolio.positions.get(symbol)
+                price = bar_prices.get(symbol)
+                if position is None or position.shares <= 0 or price is None or total_value <= 0:
+                    reached_symbols.append(symbol)
+                    continue
+                current_weight = float((Decimal(position.shares) * price) / total_value)
+                target_weight = float(target_weights.get(symbol, 0.0))
+                if current_weight > target_weight + 1e-9:
+                    all_reached = False
+                else:
+                    reached_symbols.append(symbol)
+
+            if reached_symbols:
+                clear_pending_reductions = getattr(strategy.portfolio, "clear_pending_reductions", None)
+                if callable(clear_pending_reductions):
+                    clear_pending_reductions(reached_symbols)
+            return all_reached
+
+        pending_reductions_reached = sync_pending_reductions()
+
+        def optimizer_hold_target_reached() -> bool:
+            if not pending_reductions_reached:
+                return False
             for symbol, weight in target_weights.items():
                 if symbol == "CASH" or weight <= 0:
                     continue
@@ -407,6 +426,7 @@ class Engine:
 
             order_weights = adjusted_weights
             order_positions = portfolio.positions
+            buying_power = None
             if optimizer_hold and rule_weight_override:
                 overridden_symbols = set(rule_weight_overrides)
                 order_weights = {
@@ -433,6 +453,7 @@ class Engine:
                         symbol: position for symbol, position in portfolio.positions.items()
                         if symbol not in frozen_symbols
                     }
+                    buying_power = portfolio.cash
 
             planned = generate_orders(
                 target_weights={
@@ -447,6 +468,7 @@ class Engine:
                 currency=portfolio.currency,
                 pending_orders=[managed.order for managed in broker.get_open_orders() if managed.order.order_type == "market"],
                 buy_cost_estimator=buy_cost_estimator,
+                buying_power=buying_power,
             )
             for p in planned:
                 broker.submit_order(p.order)

@@ -250,6 +250,13 @@ def _is_categorical_signal_rule(rule_def: object) -> bool:
     )
 
 
+def _unsupported_categorical_labels(rule_def: object) -> set[str]:
+    declared_domain = _signal_output_domain(rule_def)
+    if not declared_domain or not (declared_domain & _CATEGORICAL_SIGNAL_DOMAIN):
+        return set()
+    return declared_domain - _CATEGORICAL_SIGNAL_DOMAIN
+
+
 def _observed_signal_domain(values: pd.Series) -> set[str]:
     return {
         str(value).upper()
@@ -293,7 +300,15 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
             errors.append(_optimizer_param_error("portfolio.params.signal must reference a signal rule"))
         else:
             rule_def = spec.signal.rules[signal_name]
-            if not _is_categorical_signal_rule(rule_def):
+            unsupported_labels = _unsupported_categorical_labels(rule_def)
+            if unsupported_labels:
+                errors.append(
+                    _optimizer_param_error(
+                        "portfolio.params.signal output_domain may only contain BUY, SELL, or HOLD; "
+                        f"unsupported labels: {sorted(unsupported_labels)}"
+                    )
+                )
+            elif not _is_categorical_signal_rule(rule_def):
                 errors.append(
                     _optimizer_param_error(
                         "portfolio.params.signal must reference a BUY/SELL/HOLD categorical signal rule"

@@ -121,6 +121,34 @@ def test_signal_to_position_sell_after_reset_stays_in_cash() -> None:
     assert result == {"CASH": 1.0}
 
 
+def test_signal_to_position_sell_weight_requires_actual_position_snapshot() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing", sell_weight=0.25)
+
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["BUY"]})}, {})
+    optimizer.set_held_symbols([])
+
+    result = optimizer.optimize(
+        {"AAA": pd.DataFrame({"timing": ["SELL"]})},
+        {},
+    )
+
+    assert result == {"CASH": 1.0}
+    assert "AAA" not in optimizer.pending_reduction_symbols
+
+
+def test_signal_to_position_clears_completed_partial_sell_pending_state() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing", sell_weight=0.25)
+
+    optimizer.set_held_symbols(["AAA"])
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["BUY"]})}, {})
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["SELL"]})}, {})
+    optimizer.clear_pending_reductions(["AAA"])
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["HOLD"]})}, {})
+
+    assert "AAA" not in optimizer.pending_reduction_symbols
+    assert optimizer.held_symbols == {"AAA"}
+
+
 def test_hold_starts_in_cash() -> None:
     optimizer = SignalToPositionOptimizer(signal="timing")
 
