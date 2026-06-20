@@ -299,6 +299,14 @@ class Engine:
         set_held_symbols = getattr(strategy.portfolio, "set_held_symbols", None)
         if callable(set_held_symbols):
             set_held_symbols(list(portfolio.positions.keys()))
+        set_pending_buy_symbols = getattr(strategy.portfolio, "set_pending_buy_symbols", None)
+        if callable(set_pending_buy_symbols):
+            pending_buy_symbols = [
+                managed.order.symbol
+                for managed in broker.get_open_orders()
+                if managed.order.order_type == "market" and managed.order.side == "BUY"
+            ]
+            set_pending_buy_symbols(pending_buy_symbols)
         target_weights = strategy.portfolio.optimize(signals_data, indicators_data)
         optimizer_hold = bool(getattr(strategy.portfolio, "skip_rebalance", False))
         raw_target_weights = dict(target_weights)
@@ -356,11 +364,19 @@ class Engine:
                 return True
 
             total_value = portfolio.total_value(bar_prices)
+            pending_buy_symbols = {
+                managed.order.symbol
+                for managed in broker.get_open_orders()
+                if managed.order.order_type == "market" and managed.order.side == "BUY"
+            }
             reached_symbols: list[str] = []
             all_reached = True
             for symbol in pending_reduction_symbols:
                 position = portfolio.positions.get(symbol)
                 price = bar_prices.get(symbol)
+                if symbol in pending_buy_symbols:
+                    all_reached = False
+                    continue
                 if position is None or position.shares <= 0 or price is None or total_value <= 0:
                     reached_symbols.append(symbol)
                     continue

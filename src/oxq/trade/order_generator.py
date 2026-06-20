@@ -101,55 +101,59 @@ def generate_orders(
     # not generate compensating trades unless a new target or position exists.
     all_symbols = set(target_weights.keys()) | set(positions.keys())
 
-    for symbol in sorted(all_symbols):
-        price = prices.get(symbol)
-        if price is None or price <= 0:
-            continue
-
-        target_weight = target_weights.get(symbol, Decimal("0"))
-        current_shares = positions[symbol].shares if symbol in positions else 0
-        projected_shares = current_shares + pending_delta.get(symbol, 0)
-        current_value = price * current_shares
-        current_weight = current_value / total_capital if total_capital > 0 else Decimal("0")
-
-        # Compute target shares with lot_size rounding
-        raw_target = total_capital * target_weight / price
-        target_shares = int(raw_target / lot_size) * lot_size
-
-        buy_delta = target_shares - projected_shares
-        sellable_after_pending_sells = max(0, current_shares - pending_sell_shares.get(symbol, 0))
-        sell_delta = min(max(0, projected_shares - target_shares), sellable_after_pending_sells)
-        if buy_delta > 0:
-            side = "BUY"
-            shares = buy_delta
-            affordable_shares = int((remaining_buy_budget / price) / lot_size) * lot_size
-            shares = min(shares, affordable_shares)
-            while shares > 0 and estimate_cost(symbol, price, shares) > remaining_buy_budget:
-                shares -= lot_size
-            if shares <= 0:
+    for side_pass in ("SELL", "BUY"):
+        for symbol in sorted(all_symbols):
+            price = prices.get(symbol)
+            if price is None or price <= 0:
                 continue
-            remaining_buy_budget -= estimate_cost(symbol, price, shares)
-            planned_target_shares = projected_shares + shares
-        elif sell_delta > 0:
-            side = "SELL"
-            shares = sell_delta
-            shares = min(shares, current_shares)
-            if shares <= 0:
-                continue
-            planned_target_shares = current_shares - shares
-        else:
-            continue
 
-        planned.append(
-            PlannedOrder(
-                order=Order(symbol=symbol, side=side, shares=shares, currency=currency),
-                current_shares=current_shares,
-                target_shares=planned_target_shares,
-                current_weight=current_weight,
-                target_weight=target_weight,
-                estimated_amount=price * shares,
+            target_weight = target_weights.get(symbol, Decimal("0"))
+            current_shares = positions[symbol].shares if symbol in positions else 0
+            projected_shares = current_shares + pending_delta.get(symbol, 0)
+            current_value = price * current_shares
+            current_weight = current_value / total_capital if total_capital > 0 else Decimal("0")
+
+            # Compute target shares with lot_size rounding
+            raw_target = total_capital * target_weight / price
+            target_shares = int(raw_target / lot_size) * lot_size
+
+            buy_delta = target_shares - projected_shares
+            sellable_after_pending_sells = max(0, current_shares - pending_sell_shares.get(symbol, 0))
+            sell_delta = min(max(0, projected_shares - target_shares), sellable_after_pending_sells)
+            if side_pass == "SELL":
+                if sell_delta <= 0:
+                    continue
+                side = "SELL"
+                shares = min(sell_delta, current_shares)
+                if shares <= 0:
+                    continue
+                planned_target_shares = current_shares - shares
+                if buying_power is not None:
+                    remaining_buy_budget += price * shares
+            else:
+                if buy_delta <= 0:
+                    continue
+                side = "BUY"
+                shares = buy_delta
+                affordable_shares = int((remaining_buy_budget / price) / lot_size) * lot_size
+                shares = min(shares, affordable_shares)
+                while shares > 0 and estimate_cost(symbol, price, shares) > remaining_buy_budget:
+                    shares -= lot_size
+                if shares <= 0:
+                    continue
+                remaining_buy_budget -= estimate_cost(symbol, price, shares)
+                planned_target_shares = projected_shares + shares
+
+            planned.append(
+                PlannedOrder(
+                    order=Order(symbol=symbol, side=side, shares=shares, currency=currency),
+                    current_shares=current_shares,
+                    target_shares=planned_target_shares,
+                    current_weight=current_weight,
+                    target_weight=target_weight,
+                    estimated_amount=price * shares,
+                )
             )
-        )
 
     return sorted(planned, key=lambda item: 0 if item.order.side == "SELL" else 1)
 

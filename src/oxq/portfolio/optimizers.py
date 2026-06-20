@@ -213,6 +213,7 @@ class SignalToPositionOptimizer:
         self.held_symbols: set[str] = set()
         self.pending_reduction_symbols: set[str] = set()
         self._held_position_symbols: set[str] | None = None
+        self._pending_buy_symbols: set[str] = set()
 
     def reset(self) -> None:
         """Clear latched target weights at the start of an independent run."""
@@ -221,10 +222,15 @@ class SignalToPositionOptimizer:
         self.held_symbols = set()
         self.pending_reduction_symbols = set()
         self._held_position_symbols = None
+        self._pending_buy_symbols = set()
 
     def set_held_symbols(self, symbols: list[str]) -> None:
         """Snapshot symbols with actual positions before signal mapping."""
         self._held_position_symbols = set(symbols)
+
+    def set_pending_buy_symbols(self, symbols: list[str]) -> None:
+        """Snapshot symbols with open BUY orders before signal mapping."""
+        self._pending_buy_symbols = set(symbols)
 
     def clear_pending_reductions(self, symbols: list[str]) -> None:
         """Mark pending reduction targets as reached."""
@@ -267,12 +273,19 @@ class SignalToPositionOptimizer:
                     if self._held_position_symbols is not None
                     else has_latched_position
                 )
+                has_pending_buy = symbol in self._pending_buy_symbols
                 if symbol in self._weights and self.sell_weight > 0 and has_actual_position:
                     sell_weight = float(self.sell_weight)
                     self._weights[symbol] = sell_weight
                     self.pending_reduction_symbols.add(symbol)
                 elif has_latched_position and has_actual_position:
                     self._weights.pop(symbol, None)
+                    self.pending_reduction_symbols.add(symbol)
+                elif has_latched_position and has_pending_buy:
+                    if self.sell_weight > 0:
+                        self._weights[symbol] = float(self.sell_weight)
+                    else:
+                        self._weights.pop(symbol, None)
                     self.pending_reduction_symbols.add(symbol)
                 else:
                     self._weights.pop(symbol, None)

@@ -1040,6 +1040,77 @@ def test_signal_to_position_mixed_hold_buy_uses_cash_budget_for_frozen_holdings(
     assert bbb_buys[0].shares == 500
 
 
+def test_signal_to_position_mixed_sell_buy_uses_unfrozen_sell_proceeds() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["BUY", "SELL"],
+            },
+            index=dates,
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["BUY", "HOLD"],
+            },
+            index=dates,
+        ),
+        "CCC": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["HOLD", "BUY"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    strategy = Strategy(
+        name="signal_mixed_sell_buy_uses_sell_proceeds",
+        universe=StaticUniverse(("AAA", "BBB", "CCC")),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing", buy_weight=0.5),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+    )
+
+    day_two_trades = [
+        trade.order
+        for trade in result.trades
+        if trade.filled_at == dates[1].isoformat()
+    ]
+
+    assert [(order.symbol, order.side, order.shares) for order in day_two_trades] == [
+        ("AAA", "SELL", 500),
+        ("CCC", "BUY", 500),
+    ]
+
+
 def test_signal_to_position_completed_partial_sell_freezes_later_hold_symbol() -> None:
     dates = pd.bdate_range("2024-01-02", periods=4, tz="UTC")
     data = {
@@ -1091,6 +1162,50 @@ def test_signal_to_position_completed_partial_sell_freezes_later_hold_symbol() -
     aaa_sides = [trade.order.side for trade in result.trades if trade.order.symbol == "AAA"]
 
     assert aaa_sides == ["BUY", "SELL"]
+
+
+def test_signal_to_position_pending_next_close_buy_latches_later_sell() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=4, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0, 100.0, 100.0],
+                "high": [100.0, 100.0, 100.0, 100.0],
+                "low": [100.0, 100.0, 100.0, 100.0],
+                "close": [100.0, 100.0, 100.0, 100.0],
+                "volume": [1_000_000, 1_000_000, 1_000_000, 1_000_000],
+                "timing_input": ["BUY", "SELL", "HOLD", "HOLD"],
+            },
+            index=dates,
+        ),
+    }
+
+    class ColumnSignal:
+        name = "ColumnSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    strategy = Strategy(
+        name="signal_pending_next_close_buy_latches_sell",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (ColumnSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_CLOSE, market_calendar="XNYS"),
+        start="2024-01-02",
+        end="2024-01-05",
+    )
+
+    assert [(trade.order.side, trade.filled_at) for trade in result.trades] == [
+        ("BUY", dates[1].isoformat()),
+        ("SELL", dates[3].isoformat()),
+    ]
+    assert result.portfolio.positions == {}
 
 
 def test_signal_to_position_optimizer_resets_between_engine_runs() -> None:
