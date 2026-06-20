@@ -355,6 +355,85 @@ def test_artifacts_persist_full_order_lifecycle_and_hash(tmp_path) -> None:
     assert "orders.csv" in hashes
 
 
+def test_write_artifacts_persists_target_weights(tmp_path) -> None:
+    import json
+
+    import pandas as pd
+
+    from oxq.core.engine import Engine
+    from oxq.core.types import BarSnapshot, Portfolio
+    from oxq.portfolio.analytics import RunResult
+    from oxq.spec.compiler import _write_artifacts
+    from oxq.spec.schema import StrategySpec
+
+    spec = StrategySpec.template(
+        strategy_id="target_weight_artifact",
+        hypothesis="target weights should be stable artifacts",
+    )
+    spec.universe.symbols = ["SPY"]
+    spec.validation.train_period = ["2024-01-01", "2024-01-03"]
+    spec.validation.test_period = ["2024-01-04", "2024-01-05"]
+
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("0")),
+        trades=[],
+        equity_curve=[
+            (pd.Timestamp("2024-01-02", tz="UTC"), 100000.0),
+            (pd.Timestamp("2024-01-03", tz="UTC"), 101000.0),
+        ],
+        mktdata={},
+        snapshots=[
+            BarSnapshot(
+                date=pd.Timestamp("2024-01-02", tz="UTC"),
+                target_weights={"SPY": 1.0},
+                adjusted_weights={"SPY": 1.0},
+                positions={},
+                cash=0.0,
+                total_value=100000.0,
+            ),
+            BarSnapshot(
+                date=pd.Timestamp("2024-01-03", tz="UTC"),
+                target_weights={"CASH": 1.0},
+                adjusted_weights={"CASH": 1.0},
+                positions={},
+                cash=101000.0,
+                total_value=101000.0,
+            ),
+        ],
+    )
+
+    _write_artifacts(spec, result, tmp_path, Engine())
+
+    rows = pd.read_csv(tmp_path / "target_weights.csv")
+    assert list(rows.columns) == [
+        "date",
+        "symbol",
+        "raw_target_weight",
+        "adjusted_target_weight",
+        "reason",
+    ]
+    assert rows.to_dict("records") == [
+        {
+            "date": "2024-01-02 00:00:00+00:00",
+            "symbol": "SPY",
+            "raw_target_weight": 1.0,
+            "adjusted_target_weight": 1.0,
+            "reason": "target_changed",
+        },
+        {
+            "date": "2024-01-03 00:00:00+00:00",
+            "symbol": "CASH",
+            "raw_target_weight": 1.0,
+            "adjusted_target_weight": 1.0,
+            "reason": "target_changed",
+        },
+    ]
+
+    hashes = json.loads((tmp_path / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert hashes["schema_version"] == 3
+    assert "target_weights.csv" in hashes
+
+
 def test_missing_ratio_ignores_derived_indicator_nans(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="missing_ratio", hypothesis="derived warmup nans are not raw data missing")
     spec.validation.train_period = []

@@ -439,8 +439,19 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     ]
     pd.DataFrame(order_rows, columns=order_columns).to_csv(run_dir / "orders.csv", index=False)
 
+    # target_weights.csv
+    target_weight_rows = _build_target_weight_rows(result)
+    target_weight_columns = [
+        "date",
+        "symbol",
+        "raw_target_weight",
+        "adjusted_target_weight",
+        "reason",
+    ]
+    pd.DataFrame(target_weight_rows, columns=target_weight_columns).to_csv(run_dir / "target_weights.csv", index=False)
+
     artifact_hashes = {
-        "schema_version": 2,
+        "schema_version": 3,
         "strategy_spec.yaml": _hash_file(run_dir / "strategy_spec.yaml"),
         "environment.json": _hash_json_file(run_dir / "environment.json", exclude_keys={"run_timestamp"}),
         "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
@@ -449,6 +460,7 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
         "trades.csv": _hash_file(run_dir / "trades.csv"),
         "positions.csv": _hash_file(run_dir / "positions.csv"),
         "orders.csv": _hash_file(run_dir / "orders.csv"),
+        "target_weights.csv": _hash_file(run_dir / "target_weights.csv"),
         "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
     }
     if benchmark_curve_path is not None:
@@ -758,6 +770,35 @@ def _build_order_rows(result: RunResult) -> list[dict[str, Any]]:
         }
         for fill in result.trades
     ]
+
+
+def _build_target_weight_rows(result: RunResult) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    previous_adjusted: dict[str, float] = {}
+    for snapshot in result.snapshots:
+        raw_weights = snapshot.target_weights
+        adjusted_weights = snapshot.adjusted_weights
+        symbols = sorted(set(raw_weights) | set(adjusted_weights))
+        current_adjusted: dict[str, float] = {}
+        for symbol in symbols:
+            raw_weight = float(raw_weights.get(symbol, 0.0))
+            adjusted_weight = float(adjusted_weights.get(symbol, 0.0))
+            current_adjusted[symbol] = adjusted_weight
+            rows.append(
+                {
+                    "date": str(snapshot.date),
+                    "symbol": symbol,
+                    "raw_target_weight": raw_weight,
+                    "adjusted_target_weight": adjusted_weight,
+                    "reason": (
+                        "target_changed"
+                        if adjusted_weight != previous_adjusted.get(symbol, 0.0)
+                        else "target_unchanged"
+                    ),
+                }
+            )
+        previous_adjusted = current_adjusted
+    return rows
 
 
 def _serialize_managed_order(managed: Any) -> dict[str, Any]:
