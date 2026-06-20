@@ -44,6 +44,35 @@ def test_signal_to_position_only_skips_rebalance_for_hold() -> None:
     assert optimizer.skip_rebalance is True
 
 
+def test_signal_to_position_reset_symbols_clears_exited_latches() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing")
+
+    optimizer.optimize({"AAA": pd.DataFrame({"timing": ["BUY"]})}, {})
+    optimizer.reset_symbols(["AAA"])
+
+    assert optimizer.optimize({"AAA": pd.DataFrame({"timing": ["HOLD"]})}, {}) == {"CASH": 1.0}
+
+
+def test_signal_to_position_preserves_hold_weight_when_other_symbol_sells() -> None:
+    optimizer = SignalToPositionOptimizer(signal="timing")
+
+    assert optimizer.optimize(
+        {
+            "AAA": pd.DataFrame({"timing": ["BUY"]}),
+            "BBB": pd.DataFrame({"timing": ["BUY"]}),
+        },
+        {},
+    ) == {"AAA": 0.5, "BBB": 0.5}
+
+    assert optimizer.optimize(
+        {
+            "AAA": pd.DataFrame({"timing": ["SELL"]}),
+            "BBB": pd.DataFrame({"timing": ["HOLD"]}),
+        },
+        {},
+    ) == {"BBB": 0.5, "CASH": 0.5}
+
+
 def test_hold_starts_in_cash() -> None:
     optimizer = SignalToPositionOptimizer(signal="timing")
 

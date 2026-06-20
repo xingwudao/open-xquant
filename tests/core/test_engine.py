@@ -692,6 +692,62 @@ def test_signal_to_position_hold_does_not_rebalance_existing_position() -> None:
     assert result.snapshots[1].rule_reasons == {"__all__": "signal_hold"}
 
 
+def test_signal_to_position_hold_allows_rule_weight_override() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [100.0, 100.0],
+                "high": [100.0, 100.0],
+                "low": [100.0, 100.0],
+                "close": [100.0, 100.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class BuyThenHoldSignal:
+        name = "BuyThenHold"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return pd.Series(["BUY", "HOLD"], index=mktdata.index)
+
+    class BlockSecondBarRule:
+        name = "BlockSecondBar"
+
+        def evaluate(
+            self,
+            symbol: str,
+            row: pd.Series,
+            portfolio: Portfolio,
+            prices: dict[str, Decimal] | None = None,
+        ) -> RuleResult:
+            if row.name == dates[1]:
+                return RuleResult(weights={symbol: 0.0}, reason="blocked")
+            return RuleResult()
+
+    strategy = Strategy(
+        name="signal_hold_rule_override",
+        universe=StaticUniverse(("AAA",)),
+        signals={"timing": (BuyThenHoldSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[BlockSecondBarRule()],
+    )
+
+    assert [trade.order.side for trade in result.trades] == ["BUY", "SELL"]
+    assert "AAA" not in result.snapshots[1].positions
+    assert result.snapshots[1].rule_reasons == {"AAA": "blocked"}
+
+
 def test_engine_notifies_optimizer_after_normal_broker_full_exit() -> None:
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
     data = {

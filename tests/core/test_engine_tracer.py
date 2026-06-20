@@ -13,6 +13,7 @@ from oxq.indicators.sma import SMA
 from oxq.observe.tracer import DefaultTracer
 from oxq.portfolio.optimizers import EqualWeightOptimizer
 from oxq.signals.crossover import Crossover
+from oxq.signals.roc_timing import ROCTiming
 from oxq.universe.static import StaticUniverse
 
 
@@ -141,6 +142,30 @@ class TestEngineTracer:
         signal_spans = [s for s in tracer.spans if s.component.startswith("signal:")]
         assert len(signal_spans) == 1
         assert signal_spans[0].component == "signal:cross"
+
+    def test_tracer_summarizes_categorical_signal_outputs(self) -> None:
+        strategy = Strategy(
+            name="test",
+            universe=StaticUniverse(("AAPL",)),
+            signals={
+                "timing": (ROCTiming(), {"column": "close", "mode": "fixed", "bottom": 101.0, "top": 120.0}),
+            },
+            portfolio=EqualWeightOptimizer(),
+        )
+        tracer = DefaultTracer()
+        engine = Engine()
+        engine.run(
+            strategy, market=_make_market(),
+            broker=FakeBroker(),
+            start="2024-01-01", end="2024-03-29",
+            run_through="signal",
+            tracer=tracer,
+        )
+
+        signal_spans = [s for s in tracer.spans if s.component == "signal:timing"]
+        assert len(signal_spans) == 1
+        assert signal_spans[0].output_summary["value_counts"]["BUY"] > 0
+        assert "signal_count" in signal_spans[0].output_summary
 
     def test_tracer_receives_rule_callbacks(self) -> None:
         cross = _make_crossover_signal()

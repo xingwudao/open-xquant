@@ -33,6 +33,8 @@ class ROCTiming:
 
         values = mktdata[column]
         if mode == "fixed":
+            if bottom >= top:
+                raise ValueError("bottom must be less than top")
             bottom_threshold = pd.Series(bottom, index=mktdata.index)
             top_threshold = pd.Series(top, index=mktdata.index)
         elif mode == "rolling_quantile":

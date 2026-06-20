@@ -52,3 +52,14 @@ def test_invalid_mode_raises_clear_error() -> None:
         assert "mode must be 'fixed' or 'rolling_quantile'" in str(exc)
     else:
         raise AssertionError("ROCTiming accepted an invalid mode")
+
+
+def test_fixed_thresholds_must_not_overlap() -> None:
+    frame = pd.DataFrame({"roc_120": [0.0]})
+
+    try:
+        ROCTiming().compute(frame, column="roc_120", mode="fixed", bottom=5.0, top=-5.0)
+    except ValueError as exc:
+        assert "bottom must be less than top" in str(exc)
+    else:
+        raise AssertionError("ROCTiming accepted overlapping fixed thresholds")

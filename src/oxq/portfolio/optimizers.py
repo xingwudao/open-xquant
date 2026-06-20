@@ -211,6 +211,11 @@ class SignalToPositionOptimizer:
         self._weights: dict[str, float] = {}
         self.skip_rebalance = False
 
+    def reset_symbols(self, symbols: list[str]) -> None:
+        """Clear latched target weights for symbols that fully exited."""
+        for symbol in symbols:
+            self._weights.pop(symbol, None)
+
     def optimize(
         self,
         signals: dict[str, pd.DataFrame],
@@ -218,6 +223,7 @@ class SignalToPositionOptimizer:
     ) -> dict[str, float]:
         saw_signal = False
         saw_trade_intent = False
+        buy_symbols: set[str] = set()
         for symbol, frame in signals.items():
             if self.signal not in frame.columns or frame.empty:
                 continue
@@ -226,6 +232,7 @@ class SignalToPositionOptimizer:
             action = "HOLD" if pd.isna(value) else str(value).upper()
             if action == "BUY":
                 saw_trade_intent = True
+                buy_symbols.add(symbol)
                 buy_weight = float(self.buy_weight)
                 self._weights[symbol] = buy_weight
             elif action == "SELL":
@@ -241,13 +248,32 @@ class SignalToPositionOptimizer:
                 raise ValueError("expected BUY, SELL, or HOLD")
 
         self.skip_rebalance = saw_signal and not saw_trade_intent
-        total = sum(weight for weight in self._weights.values() if weight > 0)
+        positive_weights = {symbol: weight for symbol, weight in self._weights.items() if weight > 0}
+        total = sum(positive_weights.values())
         if total <= 0:
+            self._weights = {}
             return {"CASH": 1.0}
         if total > 1.0:
-            return {symbol: weight / total for symbol, weight in self._weights.items() if weight > 0}
+            preserved = {symbol: weight for symbol, weight in positive_weights.items() if symbol not in buy_symbols}
+            reserved = sum(preserved.values())
+            if reserved > 1.0:
+                result = {symbol: weight / reserved for symbol, weight in preserved.items()}
+            elif buy_symbols:
+                result = dict(preserved)
+                buy_weights = {
+                    symbol: weight for symbol, weight in positive_weights.items() if symbol in buy_symbols
+                }
+                buy_total = sum(buy_weights.values())
+                capacity = max(0.0, 1.0 - reserved)
+                if buy_total > 0 and capacity > 0:
+                    result.update({symbol: weight / buy_total * capacity for symbol, weight in buy_weights.items()})
+            else:
+                result = {symbol: weight / total for symbol, weight in positive_weights.items()}
+            self._weights = {symbol: weight for symbol, weight in result.items() if weight > 0}
+            return result
 
-        result = {symbol: weight for symbol, weight in self._weights.items() if weight > 0}
+        result = dict(positive_weights)
         if total < 1.0:
             result["CASH"] = 1.0 - total
+        self._weights = {symbol: weight for symbol, weight in result.items() if symbol != "CASH" and weight > 0}
         return result

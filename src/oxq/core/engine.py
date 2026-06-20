@@ -219,7 +219,7 @@ class Engine:
                 sample = self._mktdata[self._universe.symbols[0]][sig_name]
                 tracer.on_signal(
                     name=sig_name, inputs=params,
-                    output_summary={"signal_count": int(sample.sum()) if hasattr(sample, 'sum') else 0},
+                    output_summary=_signal_output_summary(sample),
                     duration_ms=elapsed,
                 )
 
@@ -301,16 +301,14 @@ class Engine:
         raw_target_weights = dict(target_weights)
 
         # ── Step 3: Pre-trade rules ───────────────────────────────────
-        hold = optimizer_hold
+        rule_hold = False
+        rule_weight_override = False
         rule_reasons: dict[str, list[str]] = {}
 
         def record_rule_reason(symbol: str, reason: str) -> None:
             if not reason:
                 return
             rule_reasons.setdefault(symbol, []).append(reason)
-
-        if optimizer_hold:
-            record_rule_reason("__all__", "signal_hold")
 
         for rule in self._rules:
             for symbol in universe.symbols:
@@ -319,15 +317,20 @@ class Engine:
                 row = mktdata[symbol].loc[date]
                 result = rule.evaluate(symbol, row, portfolio, prices=bar_prices)
                 if result.hold:
-                    hold = True
+                    rule_hold = True
                     record_rule_reason("__all__", result.reason)
                 if result.weights is not None:
+                    rule_weight_override = True
                     target_weights.update(result.weights)
                     for target_symbol in result.weights:
                         record_rule_reason(target_symbol, result.reason)
                 if result.constraints is not None:
                     for constrained_symbol in result.constraints:
                         record_rule_reason(constrained_symbol, result.reason)
+
+        hold = rule_hold or (optimizer_hold and not rule_weight_override)
+        if optimizer_hold and not rule_weight_override:
+            record_rule_reason("__all__", "signal_hold")
 
         def current_portfolio_weights() -> dict[str, float]:
             total_value = portfolio.total_value(bar_prices)
@@ -568,6 +571,30 @@ class Engine:
             self._tracer.on_run_end("ok")
 
         return self.result
+
+
+def _signal_output_summary(sample: pd.Series) -> dict[str, object]:
+    non_null = sample.dropna()
+    summary: dict[str, object] = {
+        "rows": len(sample),
+        "non_null": int(non_null.size),
+    }
+    if non_null.empty:
+        summary["signal_count"] = 0
+        return summary
+
+    if pd.api.types.is_bool_dtype(non_null):
+        summary["signal_count"] = int(non_null.astype(bool).sum())
+        return summary
+    if pd.api.types.is_numeric_dtype(non_null):
+        summary["signal_count"] = int((non_null != 0).sum())
+        return summary
+
+    labels = non_null.astype(str).str.upper()
+    counts = {label: int(count) for label, count in labels.value_counts().sort_index().items()}
+    summary["value_counts"] = counts
+    summary["signal_count"] = int(sum(count for label, count in counts.items() if label != "HOLD"))
+    return summary
 
 
 def _apply_fill(portfolio: Portfolio, fill: Fill) -> bool:

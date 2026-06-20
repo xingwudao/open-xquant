@@ -1334,3 +1334,46 @@ def test_signal_to_position_requires_declared_signal_rule() -> None:
         and "portfolio.params.signal must reference a signal rule" in error["message"]
         for error in result.errors
     )
+
+
+def test_signal_to_position_rejects_non_categorical_signal_rule() -> None:
+    spec = StrategySpec.template(
+        strategy_id="signal_to_position_boolean",
+        hypothesis="SignalToPosition must consume categorical signals",
+    )
+    spec.signal.rules = {
+        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "entry"}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "optimizer_param_invalid"
+        and "BUY/SELL/HOLD" in error["message"]
+        for error in result.errors
+    )
+
+
+def test_roc_timing_fixed_thresholds_must_not_overlap() -> None:
+    spec = StrategySpec.template(
+        strategy_id="roc_timing_bad_thresholds",
+        hypothesis="ambiguous fixed thresholds fail validation",
+    )
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={"column": "close", "mode": "fixed", "bottom": 5.0, "top": -5.0},
+        )
+    }
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "signal_threshold_invalid"
+        and "bottom must be less than top" in error["message"]
+        for error in result.errors
+    )

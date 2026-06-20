@@ -108,6 +108,26 @@ def _validate_signal_column_references(spec: StrategySpec) -> list[dict]:
                         f"signal.rules.{rule_name}.column references unknown column '{column}'",
                     )
                 )
+            mode = params.get("mode", "fixed")
+            if mode == "fixed":
+                bottom = params.get("bottom", -5.0)
+                top = params.get("top", 5.0)
+                if not _is_finite_number(bottom) or not _is_finite_number(top):
+                    errors.append(
+                        _err(
+                            "fatal",
+                            "signal_threshold_invalid",
+                            f"signal.rules.{rule_name}.bottom and top must be finite numbers",
+                        )
+                    )
+                elif float(bottom) >= float(top):
+                    errors.append(
+                        _err(
+                            "fatal",
+                            "signal_threshold_invalid",
+                            f"signal.rules.{rule_name}.bottom must be less than top",
+                        )
+                    )
         elif rule_def.type == "Comparison":
             for param_name in ("left", "right"):
                 column = params.get(param_name)
@@ -247,6 +267,20 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
             errors.append(_optimizer_param_error("portfolio.params.signal is required"))
         elif signal_name not in spec.signal.rules:
             errors.append(_optimizer_param_error("portfolio.params.signal must reference a signal rule"))
+        else:
+            rule_def = spec.signal.rules[signal_name]
+            output_domain = rule_def.params.get("output_domain")
+            declared_domain = (
+                {str(value).upper() for value in output_domain}
+                if isinstance(output_domain, list)
+                else set()
+            )
+            if rule_def.type != "ROCTiming" and declared_domain != {"BUY", "SELL", "HOLD"}:
+                errors.append(
+                    _optimizer_param_error(
+                        "portfolio.params.signal must reference a BUY/SELL/HOLD categorical signal rule"
+                    )
+                )
         for param_name in ("buy_weight", "sell_weight"):
             weight = params.get(param_name, 1.0 if param_name == "buy_weight" else 0.0)
             if not _is_finite_number(weight) or not 0.0 <= float(weight) <= 1.0:
