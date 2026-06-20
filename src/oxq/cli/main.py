@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
+from typing import Any
 
 import click
 import yaml
@@ -99,31 +101,113 @@ def backtest():
     """Run backtests from strategy specs."""
 
 
+def _backtest_artifact_paths(run_dir: Path) -> dict[str, str]:
+    return {
+        "strategy_spec_yaml": str(run_dir / "strategy_spec.yaml"),
+        "environment_json": str(run_dir / "environment.json"),
+        "data_manifest_json": str(run_dir / "data_manifest.json"),
+        "execution_assumptions_json": str(run_dir / "execution_assumptions.json"),
+        "equity_curve_csv": str(run_dir / "equity_curve.csv"),
+        "trades_csv": str(run_dir / "trades.csv"),
+        "positions_csv": str(run_dir / "positions.csv"),
+        "orders_csv": str(run_dir / "orders.csv"),
+        "target_weights_csv": str(run_dir / "target_weights.csv"),
+        "metrics_json": str(run_dir / "metrics.json"),
+        "artifact_hashes_json": str(run_dir / "artifact_hashes.json"),
+        "run_log_jsonl": str(run_dir / "run_log.jsonl"),
+    }
+
+
+def _backtest_summary_metrics(result: Any) -> dict[str, float | int]:
+    return {
+        "total_return": result.total_return(),
+        "sharpe_ratio": result.sharpe_ratio(),
+        "max_drawdown": result.max_drawdown(),
+        "trade_count": len(result.trades),
+    }
+
+
 @backtest.command()
 @click.argument("spec_file", type=click.Path(exists=True))
 @click.option("--out", "-o", default="runs/auto", help="Output directory for run artifacts")
 @click.option("--data-dir", default=None, help="Directory for market data files")
-def run(spec_file: str, out: str, data_dir: str | None):
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON")
+def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
     """Run a backtest from a strategy spec file.
 
     SPEC_FILE is the path to a strategy_spec.yaml file.
     """
     from oxq.spec.compiler import compile_run
 
-    spec = StrategySpec.from_yaml(spec_file)
+    try:
+        spec = StrategySpec.from_yaml(spec_file)
+    except Exception as e:
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "fail",
+                        "run_id": "",
+                        "run_dir": "",
+                        "artifacts": {},
+                        "metrics": {},
+                        "warnings": [],
+                        "errors": [{"severity": "fatal", "check": "parse_error", "message": str(e)}],
+                    },
+                    indent=2,
+                )
+            )
+            raise SystemExit(1)
+        raise
+
     validation = validate_spec(spec)
     if validation.status == "fail":
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "status": "fail",
+                        "run_id": "",
+                        "run_dir": "",
+                        "artifacts": {},
+                        "metrics": {},
+                        "warnings": validation.warnings,
+                        "errors": validation.errors,
+                    },
+                    indent=2,
+                )
+            )
+            raise SystemExit(1)
         click.echo("Spec validation failed. Fix errors before running backtest:")
         for e in validation.errors:
             click.echo(f"  [{e['severity']}] {e['check']}: {e['message']}")
         raise SystemExit(1)
-    if validation.warnings:
+    if validation.warnings and not as_json:
         click.echo("Warnings (continuing):")
         for w in validation.warnings:
             click.echo(f"  [{w['severity']}] {w['check']}: {w['message']}")
 
-    click.echo(f"Running backtest for '{spec.strategy_id}'...")
+    if not as_json:
+        click.echo(f"Running backtest for '{spec.strategy_id}'...")
     result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
+    run_dir = Path(run_dir)
+
+    if as_json:
+        click.echo(
+            json.dumps(
+                {
+                    "status": "pass",
+                    "run_id": run_dir.name,
+                    "run_dir": str(run_dir),
+                    "artifacts": _backtest_artifact_paths(run_dir),
+                    "metrics": _backtest_summary_metrics(result),
+                    "warnings": validation.warnings,
+                    "errors": validation.errors,
+                },
+                indent=2,
+            )
+        )
+        return
 
     click.echo(f"\nRun complete. Artifacts written to {run_dir}/")
     click.echo(f"  Total Return: {result.total_return():.2%}")
