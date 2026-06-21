@@ -11,7 +11,12 @@ from oxq.audit.reproducibility import audit_reproducibility
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
-from oxq.robustness.runner import _clone_spec_with_cost_multiplier, run_robustness
+from oxq.robustness.runner import (
+    _clone_spec_with_cost_multiplier,
+    _read_curve_csv,
+    _read_trade_date_counts,
+    run_robustness,
+)
 from oxq.spec.compiler import _hash_file, _write_artifacts
 from oxq.spec.schema import IndicatorDef, StrategySpec
 
@@ -30,6 +35,48 @@ def test_regime_analysis_request_is_not_reported_as_pass_when_unimplemented(tmp_
     regime = next(test for test in result["tests"] if test["name"] == "regime_analysis")
     assert regime["status"] == "warn"
     assert "equity_curve.csv" in regime["message"]
+
+
+def test_read_curve_csv_handles_mixed_timezone_offsets(tmp_path) -> None:
+    path = tmp_path / "equity_curve.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "date,value",
+                "2024-03-08 16:00:00-05:00,100000.0",
+                "2024-03-11 16:00:00-04:00,100500.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    curve, error = _read_curve_csv(path, "equity_curve.csv")
+
+    assert error is None
+    assert curve["date"].astype(str).tolist() == ["2024-03-08", "2024-03-11"]
+    assert curve["value"].tolist() == [100000.0, 100500.0]
+
+
+def test_read_trade_date_counts_handles_mixed_timezone_offsets(tmp_path) -> None:
+    path = tmp_path / "trades.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "symbol,side,shares,filled_price,filled_at,fee",
+                "SPY,buy,1,100,2024-03-08 16:00:00-05:00,1",
+                "SPY,sell,1,101,2024-03-11 16:00:00-04:00,1",
+                "QQQ,buy,1,102,2024-03-11 16:00:00-04:00,1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    counts = _read_trade_date_counts(path)
+
+    assert {str(date): count for date, count in counts.items()} == {
+        "2024-03-08": 1,
+        "2024-03-11": 2,
+    }
 
 
 def test_cost_multiplier_multiplies_minimum_fee() -> None:
