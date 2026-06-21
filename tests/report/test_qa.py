@@ -1174,6 +1174,25 @@ def test_report_qa_skips_numbered_markdown_headings(tmp_path) -> None:
     assert result.status == "pass"
 
 
+def test_report_qa_parses_comma_formatted_percentage_claims_as_single_value(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics["total_return"] = 10.0
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return was 1,000.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+
+
 def test_report_qa_reports_unsafe_source_script_path(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     figure = tmp_path / "equity.png"

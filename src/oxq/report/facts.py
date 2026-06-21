@@ -122,7 +122,7 @@ def _oos_trade_count(artifacts: RunArtifacts) -> int | None:
         return None
     start = _parse_one_date(test_period[0])
     end = _parse_one_date(test_period[1])
-    if start is None or end is None or artifacts.trades.empty or "filled_at" not in artifacts.trades.columns:
+    if start is None or end is None or "filled_at" not in artifacts.trades.columns:
         return None
     dates = _parse_dates(artifacts.trades["filled_at"]).dropna()
     return int(((dates >= start) & (dates <= end)).sum())
@@ -137,7 +137,9 @@ def _known_numbers(
     oos_trade_count: int | None,
 ) -> list[dict[str, float | str]]:
     numbers: list[dict[str, float | str]] = []
-    _append_nested_numbers(numbers, "metric", artifacts.metrics)
+    metrics = _metrics_with_default_assumptions(artifacts.metrics)
+    _append_nested_numbers(numbers, "metric", metrics)
+    _append_audit_numbers(numbers, artifacts)
     for item in monthly_returns:
         parsed = _finite_float(item.get("return"))
         if parsed is not None:
@@ -149,6 +151,26 @@ def _known_numbers(
     if oos_trade_count is not None:
         numbers.append({"name": "fact.oos_trade_count", "value": float(oos_trade_count)})
     return numbers
+
+
+def _metrics_with_default_assumptions(metrics: dict[str, Any]) -> dict[str, Any]:
+    copied = dict(metrics)
+    if not isinstance(copied.get("metric_assumptions"), dict):
+        copied["metric_assumptions"] = {
+            "return_type": "simple",
+            "risk_free_rate": 0.0,
+            "annualization_days": 252,
+            "calmar_denominator": "max_drawdown",
+            "evaluation_window": "full",
+        }
+    return copied
+
+
+def _append_audit_numbers(numbers: list[dict[str, float | str]], artifacts: RunArtifacts) -> None:
+    if artifacts.research_bias_audit is not None:
+        _append_nested_numbers(numbers, "audit.research_bias", artifacts.research_bias_audit)
+    if artifacts.reproducibility_audit is not None:
+        _append_nested_numbers(numbers, "audit.reproducibility", artifacts.reproducibility_audit)
 
 
 def _benchmark_return_numbers(artifacts: RunArtifacts) -> list[dict[str, float | str]]:

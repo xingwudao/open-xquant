@@ -20,7 +20,7 @@ from oxq.report.facts import ReportFacts, build_report_facts
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*]\((?P<src>[^)]+)\)")
 _NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
-_PERCENT_RE = re.compile(r"(?<![\w.])(?P<value>[+-]?\d+(?:\.\d+)?)%")
+_PERCENT_RE = re.compile(rf"(?<![\w.,])(?P<value>{_NUMBER_PATTERN})%")
 _PLAIN_NUMBER_RE = re.compile(rf"(?<![\w.%/-])(?P<value>{_NUMBER_PATTERN})(?!(?:\.\d)|[\w%/-])")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _CJK_FONT_NAMES = (
