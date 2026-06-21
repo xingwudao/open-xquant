@@ -31,6 +31,10 @@ handing the final narrative to `research-report-writer`.
    - Write figure outputs under `report_assets/figures`.
    - Keep plotting deterministic and local; do not download new data unless the
      user explicitly asks.
+   - For Chinese chart labels, explicitly configure an available CJK font such
+     as `Noto Sans CJK`, `Microsoft YaHei`, `PingFang`, or `SimHei`. If a CJK
+     font cannot be verified, default to English labels instead of risking
+     missing glyphs.
 
 4. Register generated assets.
 
@@ -79,6 +83,18 @@ manifest write:
 ```bash
 oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
 ```
+
+After registration, verify every generated figure:
+
+- The image file is non-empty.
+- The image dimensions are readable and positive.
+- The path is under `report_assets/figures`.
+- The figure is present in `report_assets/manifest.json`.
+- The manifest hash matches the current file.
+- Chinese charts either use a verified CJK font or default to English labels.
+
+Use `oxq report qa runs/<run_id>/` after final Markdown and HTML exist to
+re-check image references, fonts, and manifest state.
 
 5. Hand off final writing to `research-report-writer`.
 

@@ -48,6 +48,16 @@ Use `research-report-writer` to write `research_report.md` from run artifacts,
 audits, robustness output, metrics, and registered chart assets. Render
 `research_report.html` from that final Markdown.
 
+Run Final report QA before presenting results:
+
+```bash
+oxq report qa runs/<run_id>/
+```
+
+The QA checklist covers Markdown/HTML image counts, manifest order and hash,
+HTML image paths, CJK font risk, key numeric claims, configured end date, and
+effective last trading day.
+
 ## Quality Gates
 
 - Spec validation: all fatal checks pass; fix spec and re-validate on failure.
@@ -60,6 +70,7 @@ audits, robustness output, metrics, and registered chart assets. Render
 - Robustness: review cost stress, IS/OOS diff, parameter perturbation, and
   regime analysis; flag fragile, warning, or error statuses.
 - Report: executive decision issued; document decision and limitations.
+- Final report QA: `oxq report qa` has no fatal findings; disclose warnings.
 
 ## Critical Rules
 

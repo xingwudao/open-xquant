@@ -259,6 +259,11 @@ preferred_runner: uv run --project /path/to/open-xquant oxq
 uv run --project /path/to/open-xquant oxq doctor --json
 ```
 
+如果当前目录是 open-xquant 源码 worktree，或用户明确要求在当前
+worktree 中复现/开发，优先使用 current worktree runner，例如
+`uv run oxq` 或 `uv run --project . oxq`。不要无脑读取全局
+`preferred_runner` 去调用另一个 checkout。
+
 如果 `agent.yaml` 缺失或 runner 失败，读取：
 
 ```bash
@@ -497,6 +502,9 @@ Skill 文件位于 `agent/skills/`。
 
 - 加载 `agent/skills/strategy-monitor.md`。
 - 必须运行 reproducibility audit 和 research audit。
+- `research_bias_audit.json` is the artifact filename.
+  `audit_research` is the tool/function name. 不要寻找
+  `audit_research.json`。
 
 绩效解读：
 
@@ -532,6 +540,11 @@ Skill 文件位于 `agent/skills/`。
 - 如果同一个脚本一次重绘多张已登记图片，写
   `report_assets/assets.json` 后使用 `oxq report asset add-batch`，
   避免逐个登记时遇到旧 hash 冲突。
+- 最终报告必须披露 effective last trading day 和 configured end date。
+  中文报告写作时对应“有效数据最后交易日”和“配置结束日”。
+- 生成 `research_report.md` 和 `research_report.html` 后运行
+  `oxq report qa runs/<run_id>/`，检查 Markdown/HTML 图片数量、
+  manifest 顺序和 hash、HTML 图片路径、字体风险和正文关键数字来源。
 - 不要修改 `metrics.json`、audit 结果或回测产物来美化图表。
 
 组件扩展：
@@ -633,11 +646,13 @@ uv run oxq report asset add runs/<run_id>/ chart.png \
   --source-script plot_equity.py \
   --source-artifact equity_curve.csv
 uv run oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
+uv run oxq report qa runs/<run_id>/
 ```
 
 最终报告由 Agent 调用 `research-report-writer` 写入
 `runs/<run_id>/research_report.md`，再用 `render_markdown_html_report`
 从同一份 Markdown 渲染 `runs/<run_id>/research_report.html`。
+报告必须披露 effective last trading day 和 configured end date。
 
 实验登记：
 
@@ -811,6 +826,8 @@ print(metrics["sharpe_ratio"])
 `uv run oxq --help` 失败：
 
 - 如果当前目录不是 open-xquant 源码目录，不要搜索其他源码副本。
+- 如果当前目录是源码 worktree，先尝试 current worktree runner
+  `uv run oxq --help` 或 `uv run --project . oxq --help`。
 - 读取 `~/.config/open-xquant/agent.yaml` 的 `preferred_runner`。
 - 如果缺失，读取 `~/.config/open-xquant/agent-install.json` 的 `source.path`。
 - 在研究目录中运行 `uv run --project "<source.path>" oxq --help`。

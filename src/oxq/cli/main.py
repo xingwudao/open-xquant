@@ -418,6 +418,33 @@ def report_asset_list(run_dir: str):
         click.echo(f"  Hash: {asset.sha256}")
 
 
+@report.command(name="qa")
+@click.argument("run_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON")
+def report_qa(run_dir: str, as_json: bool):
+    """Run QA checks on final Markdown and HTML reports."""
+    from oxq.report.qa import run_report_qa
+
+    try:
+        result = run_report_qa(run_dir)
+    except Exception as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    if as_json:
+        click.echo(json.dumps(result.to_dict(), indent=2, ensure_ascii=False))
+    else:
+        facts = result.facts
+        click.echo(f"Status: {result.status.upper()}")
+        click.echo(f"Fatal: {result.fatal_count}, Warnings: {result.warning_count}")
+        click.echo(f"Configured end date: {facts.configured_end_date or 'N/A'}")
+        click.echo(f"Effective last trading day: {facts.effective_last_trading_day or 'N/A'}")
+        for finding in result.findings:
+            click.echo(f"  [{finding.severity}] {finding.id}: {finding.message}")
+
+    if result.status == "fail":
+        raise SystemExit(1)
+
+
 @main.group()
 def experiment():
     """Manage experiment registry."""

@@ -21,10 +21,18 @@ write the final human report.
 4. Use `research-report-writer` to write the final `research_report.md`.
 5. Render `research_report.html` from the final Markdown with
    `render_markdown_html_report`.
-6. Run `oxq experiment add runs/<run_id>/` to register the experiment.
-7. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
+6. Run Final report QA with `oxq report qa runs/<run_id>/`.
+7. Run `oxq experiment add runs/<run_id>/` to register the experiment.
+8. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
    PAPER TRADING CANDIDATE)
    and both report paths.
+
+## Final Report QA
+
+`oxq report qa` must check Markdown/HTML image counts, registered asset paths,
+manifest order and hash, CJK font risk, key numeric claims, configured end
+date, and effective last trading day. Fatal findings block presentation as a
+complete report; warnings must be disclosed.
 
 ## Decision Rules
 

@@ -23,8 +23,22 @@ Generate a human-written research report with executive decision.
    `research_report.md` for human researchers and potential investors.
 6. Render `research_report.html` from final Markdown with
    `render_markdown_html_report`.
-7. `oxq experiment add runs/<run_id>/` — register in experiment log.
-8. Present the executive decision, key findings, and report paths.
+7. Run Final report QA:
+   `oxq report qa runs/<run_id>/`.
+8. `oxq experiment add runs/<run_id>/` — register in experiment log.
+9. Present the executive decision, key findings, and report paths.
+
+## Final Report QA
+
+Before presenting the report, `oxq report qa` must pass without fatal findings.
+Review warnings explicitly:
+
+- Markdown/HTML image counts match.
+- HTML images only use `report_assets/...` paths.
+- Manifest order and hash checks pass.
+- CJK font risk is reviewed for Chinese charts.
+- Key numbers in prose trace back to artifacts or facts.
+- The report discloses configured end date and effective last trading day.
 
 ## Decision Scale
 
