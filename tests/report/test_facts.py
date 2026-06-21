@@ -50,6 +50,8 @@ def test_report_facts_compute_dates_months_oos_trades_and_known_numbers(tmp_path
     assert any(item["name"] == "spec.execution.rebalance.interval_days" and item["value"] == 5.0 for item in facts.known_numbers)
     assert any(item["name"] == "spec.universe.symbols.count" and item["value"] == 3.0 for item in facts.known_numbers)
     assert any(item["name"] == "metric.metric_assumptions.annualization_days" and item["value"] == 252.0 for item in facts.known_numbers)
+    assert any(item["name"] == "fact.benchmark_total_return" and item["value"] == pytest.approx(0.05) for item in facts.known_numbers)
+    assert any(item["name"] == "fact.excess_total_return" and item["value"] == pytest.approx(0.15) for item in facts.known_numbers)
     assert any(item["name"] == "fact.positive_month_count" and item["value"] == 2.0 for item in facts.known_numbers)
 
 
@@ -94,6 +96,12 @@ def _write_run_with_curves(tmp_path):
         "2024-01-31,110\n"
         "2024-02-29,99\n"
         "2024-03-29,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n"
+        "2024-01-02,100\n"
+        "2024-03-29,105\n",
         encoding="utf-8",
     )
     (run_dir / "trades.csv").write_text(

@@ -114,6 +114,7 @@ def run_report_qa(run_dir: str | Path) -> ReportQAResult:
     artifacts = RunArtifacts.load(run_path)
     facts = build_report_facts(artifacts)
     findings: list[ReportQAFinding] = []
+    _check_metrics_artifact(run_path, findings)
 
     markdown_path = run_path / "research_report.md"
     html_path = run_path / "research_report.html"
@@ -154,6 +155,20 @@ def _read_text(path: Path, findings: list[ReportQAFinding], label: str) -> str:
     except (OSError, UnicodeDecodeError) as exc:
         findings.append(ReportQAFinding("report_file_unreadable", "fatal", f"{label} could not be read: {exc}"))
         return ""
+
+
+def _check_metrics_artifact(run_path: Path, findings: list[ReportQAFinding]) -> None:
+    path = run_path / "metrics.json"
+    if not path.exists():
+        findings.append(ReportQAFinding("metrics_unreadable", "fatal", "metrics.json is missing"))
+        return
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        findings.append(ReportQAFinding("metrics_unreadable", "fatal", f"metrics.json could not be read: {exc}"))
+        return
+    if not isinstance(value, dict):
+        findings.append(ReportQAFinding("metrics_unreadable", "fatal", "metrics.json must contain a JSON object"))
 
 
 def _manifest_assets(run_path: Path, findings: list[ReportQAFinding]) -> list[dict[str, Any]]:
@@ -621,19 +636,20 @@ def _percent_context_known_values(
         matched_context = True
         names.update(_known_number_names(facts, "annualized_return", scope=scope))
         names.update(_known_number_names(facts, "cagr", scope=scope))
-    monthly_names = _monthly_return_names_for_line(line, facts)
-    if monthly_names:
-        matched_context = True
-        names.update(monthly_names)
-    elif any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
-        marker in line for marker in ("总收益", "累计收益", "超额收益")
-    ):
-        matched_context = True
-        names.update(_known_number_names(facts, "total_return", scope=scope))
-        names.update(_known_number_names(facts, "excess_total_return", scope=scope))
-    elif "return" in lowered or "收益" in line:
-        matched_context = True
-        names.update(_known_number_names(facts, "return", scope=scope))
+    else:
+        monthly_names = _monthly_return_names_for_line(line, facts)
+        if monthly_names:
+            matched_context = True
+            names.update(monthly_names)
+        elif any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
+            marker in line for marker in ("总收益", "累计收益", "超额收益")
+        ):
+            matched_context = True
+            names.update(_known_number_names(facts, "total_return", scope=scope))
+            names.update(_known_number_names(facts, "excess_total_return", scope=scope))
+        elif "return" in lowered or "收益" in line:
+            matched_context = True
+            names.update(_known_number_names(facts, "return", scope=scope))
     if "volatility" in lowered or "波动" in line:
         matched_context = True
         names.update(_known_number_names(facts, "volatility", scope=scope))
@@ -641,7 +657,7 @@ def _percent_context_known_values(
         matched_context = True
         names.update(_known_number_names(facts, "win_rate", scope=scope))
         names.update(_known_number_names(facts, "winrate", scope=scope))
-    claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end)
+    claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end, rate_only=True)
     if claim_cost_names is not None:
         matched_context = True
         names.update(claim_cost_names)
@@ -703,7 +719,14 @@ def _known_months_for_label(known_months: set[str], month_number: int, year: str
     return {month for month in known_months if month.endswith(suffix)}
 
 
-def _claim_cost_names(line: str, facts: ReportFacts, claim_start: int | None, claim_end: int | None) -> set[str] | None:
+def _claim_cost_names(
+    line: str,
+    facts: ReportFacts,
+    claim_start: int | None,
+    claim_end: int | None,
+    *,
+    rate_only: bool = False,
+) -> set[str] | None:
     if claim_start is None or claim_end is None:
         return None
     label = _nearest_claim_label(
@@ -721,13 +744,25 @@ def _claim_cost_names(line: str, facts: ReportFacts, claim_start: int | None, cl
     if label is None:
         return None
     if label == "slippage":
-        return _known_number_names(facts, "slippage")
+        return _filter_rate_names(_known_number_names(facts, "slippage"), rate_only=rate_only)
     if label == "fee":
-        return _known_number_names(facts, "fee") | _known_number_names(facts, "commission")
+        fee_names = _known_number_names(facts, "fee") | _known_number_names(facts, "commission")
+        return _filter_rate_names(fee_names, rate_only=rate_only)
     names: set[str] = set()
     for marker in ("cost", "fee", "commission", "slippage"):
         names.update(_known_number_names(facts, marker))
-    return names
+    return _filter_rate_names(names, rate_only=rate_only)
+
+
+def _filter_rate_names(names: set[str], *, rate_only: bool) -> set[str]:
+    if not rate_only:
+        return names
+    return {name for name in names if _name_looks_like_rate(name)}
+
+
+def _name_looks_like_rate(name: str) -> bool:
+    lowered = name.lower()
+    return any(marker in lowered for marker in ("rate", "pct", "percentage"))
 
 
 def _claim_trade_names(line: str, facts: ReportFacts, claim_start: int | None, claim_end: int | None) -> set[str] | None:

@@ -142,12 +142,46 @@ def _known_numbers(
         parsed = _finite_float(item.get("return"))
         if parsed is not None:
             numbers.append({"name": f"fact.monthly_return.{item['month']}", "value": parsed})
+    numbers.extend(_benchmark_return_numbers(artifacts))
     numbers.extend(_strategy_spec_numbers(artifacts.strategy_spec))
     numbers.append({"name": "fact.positive_month_count", "value": float(positive_month_count)})
     numbers.append({"name": "fact.negative_month_count", "value": float(negative_month_count)})
     if oos_trade_count is not None:
         numbers.append({"name": "fact.oos_trade_count", "value": float(oos_trade_count)})
     return numbers
+
+
+def _benchmark_return_numbers(artifacts: RunArtifacts) -> list[dict[str, float | str]]:
+    equity_values = _curve_values_by_date(artifacts.equity_curve)
+    benchmark_values = _curve_values_by_date(artifacts.benchmark_curve)
+    common_dates = sorted(set(equity_values).intersection(benchmark_values))
+    if len(common_dates) < 2:
+        return []
+    first_date = common_dates[0]
+    last_date = common_dates[-1]
+    equity_start = equity_values[first_date]
+    benchmark_start = benchmark_values[first_date]
+    if equity_start == 0 or benchmark_start == 0:
+        return []
+    strategy_return = equity_values[last_date] / equity_start - 1.0
+    benchmark_return = benchmark_values[last_date] / benchmark_start - 1.0
+    return [
+        {"name": "fact.strategy_total_return", "value": strategy_return},
+        {"name": "fact.benchmark_total_return", "value": benchmark_return},
+        {"name": "fact.excess_total_return", "value": strategy_return - benchmark_return},
+    ]
+
+
+def _curve_values_by_date(frame: pd.DataFrame) -> dict[date, float]:
+    if frame.empty or "date" not in frame.columns or "value" not in frame.columns:
+        return {}
+    values: dict[date, float] = {}
+    dates = _parse_dates(frame["date"])
+    for parsed_date, raw_value in zip(dates, frame["value"], strict=False):
+        parsed_value = _finite_float(raw_value)
+        if parsed_date is not None and parsed_value is not None:
+            values[parsed_date] = parsed_value
+    return values
 
 
 def _strategy_spec_numbers(strategy_spec: dict[str, Any]) -> list[dict[str, float | str]]:
