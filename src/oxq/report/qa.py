@@ -7,6 +7,7 @@ import json
 import math
 import re
 import struct
+from collections.abc import Callable
 from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
@@ -18,18 +19,28 @@ from oxq.report.facts import ReportFacts, build_report_facts
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*]\((?P<src>[^)]+)\)")
 _PERCENT_RE = re.compile(r"(?<![\w.])(?P<value>-?\d+(?:\.\d+)?)%")
+_PLAIN_NUMBER_RE = re.compile(r"(?<![\w.%/-])(?P<value>-?\d+(?:\.\d+)?)(?!(?:\.\d)|[\w%/-])")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
-_CJK_FONT_MARKERS = (
+_CJK_FONT_NAMES = (
     "Noto Sans CJK",
+    "Noto Serif CJK",
     "Source Han",
+    "SourceHan",
     "SimHei",
     "Microsoft YaHei",
     "PingFang",
     "Heiti",
+    "Hiragino Sans GB",
     "Arial Unicode",
     "WenQuanYi",
-    "FontProperties",
-    "font.sans-serif",
+    "Songti",
+    "STSong",
+    "KaiTi",
+    "Kaiti",
+    "FangSong",
+    "Yu Gothic",
+    "Meiryo",
+    "Malgun Gothic",
 )
 
 
@@ -85,15 +96,21 @@ def run_report_qa(run_dir: str | Path) -> ReportQAResult:
         for asset in manifest_assets
         if isinstance(asset.get("path"), str)
     }
+    registered_figure_paths = {
+        f"report_assets/{asset.get('path')}"
+        for asset in manifest_assets
+        if asset.get("kind") == "figure" and isinstance(asset.get("path"), str)
+    }
 
     markdown_images = _markdown_image_sources(markdown)
     html_images = _html_image_sources(html)
 
     _check_image_counts(markdown_images, html_images, findings)
-    _check_markdown_images(markdown_images, registered_paths, findings)
-    _check_html_images(html_images, registered_paths, findings)
+    _check_image_sources(markdown_images, html_images, findings)
+    _check_markdown_images(markdown_images, registered_paths, registered_figure_paths, findings)
+    _check_html_images(html_images, registered_paths, registered_figure_paths, findings)
     _check_manifest_assets(run_path, manifest_assets, findings)
-    _check_required_date_disclosure(markdown, facts, findings)
+    _check_required_date_disclosure(markdown, html, facts, findings)
     _check_cjk_font_risk(run_path, manifest_assets, findings)
     _check_numeric_claims(markdown, facts, findings)
 
@@ -163,22 +180,49 @@ def _check_image_counts(markdown_images: list[str], html_images: list[str], find
         )
 
 
-def _check_markdown_images(markdown_images: list[str], registered_paths: set[str], findings: list[ReportQAFinding]) -> None:
+def _check_image_sources(markdown_images: list[str], html_images: list[str], findings: list[ReportQAFinding]) -> None:
+    if len(markdown_images) == len(html_images) and markdown_images != html_images:
+        findings.append(
+            ReportQAFinding(
+                "image_source_mismatch",
+                "fatal",
+                "Markdown and HTML image sources differ even though image counts match",
+            )
+        )
+
+
+def _check_markdown_images(
+    markdown_images: list[str],
+    registered_paths: set[str],
+    registered_figure_paths: set[str],
+    findings: list[ReportQAFinding],
+) -> None:
     for src in markdown_images:
         if not _safe_report_asset_src(src):
             findings.append(ReportQAFinding("markdown_image_path", "fatal", f"Markdown image path is not safe: {src}"))
             continue
         if src not in registered_paths:
             findings.append(ReportQAFinding("markdown_image_unregistered", "fatal", f"Markdown image is not registered: {src}"))
+            continue
+        if src not in registered_figure_paths:
+            findings.append(ReportQAFinding("embedded_image_not_figure", "fatal", f"Markdown image is not a figure asset: {src}"))
 
 
-def _check_html_images(html_images: list[str], registered_paths: set[str], findings: list[ReportQAFinding]) -> None:
+def _check_html_images(
+    html_images: list[str],
+    registered_paths: set[str],
+    registered_figure_paths: set[str],
+    findings: list[ReportQAFinding],
+) -> None:
     for src in html_images:
         if not _safe_report_asset_src(src):
             findings.append(ReportQAFinding("html_image_path", "fatal", f"HTML image must use report_assets/...: {src}"))
             continue
         if src not in registered_paths:
             findings.append(ReportQAFinding("html_image_unregistered", "fatal", f"HTML image is not registered: {src}"))
+            continue
+        if src not in registered_figure_paths:
+            findings.append(ReportQAFinding("embedded_image_not_figure", "fatal", f"HTML image is not a figure asset: {src}"))
 
 
 def _check_manifest_assets(run_path: Path, assets: list[dict[str, Any]], findings: list[ReportQAFinding]) -> None:
@@ -217,23 +261,58 @@ def _check_manifest_assets(run_path: Path, assets: list[dict[str, Any]], finding
                 findings.append(ReportQAFinding("image_dimensions_invalid", "fatal", f"figure {asset_id} has invalid dimensions"))
 
 
-def _check_required_date_disclosure(markdown: str, facts: ReportFacts, findings: list[ReportQAFinding]) -> None:
-    if facts.effective_last_trading_day and facts.effective_last_trading_day not in markdown:
+def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts, findings: list[ReportQAFinding]) -> None:
+    if facts.effective_last_trading_day is None:
         findings.append(
             ReportQAFinding(
-                "effective_last_trading_day_missing",
+                "effective_last_trading_day_unavailable",
                 "fatal",
-                f"report must disclose effective last trading day {facts.effective_last_trading_day}",
+                "effective last trading day could not be computed from equity_curve.csv",
             )
         )
-    if facts.configured_end_date and facts.configured_end_date not in markdown:
+    else:
+        if facts.effective_last_trading_day not in markdown:
+            findings.append(
+                ReportQAFinding(
+                    "markdown_effective_last_trading_day_missing",
+                    "fatal",
+                    f"Markdown report must disclose effective last trading day {facts.effective_last_trading_day}",
+                )
+            )
+        if facts.effective_last_trading_day not in html:
+            findings.append(
+                ReportQAFinding(
+                    "html_effective_last_trading_day_missing",
+                    "fatal",
+                    f"HTML report must disclose effective last trading day {facts.effective_last_trading_day}",
+                )
+            )
+
+    if facts.configured_end_date is None:
         findings.append(
             ReportQAFinding(
-                "configured_end_date_missing",
+                "configured_end_date_unavailable",
                 "fatal",
-                f"report must disclose configured end date {facts.configured_end_date}",
+                "configured end date could not be computed from strategy_spec.yaml or data_manifest.json",
             )
         )
+    else:
+        if facts.configured_end_date not in markdown:
+            findings.append(
+                ReportQAFinding(
+                    "markdown_configured_end_date_missing",
+                    "fatal",
+                    f"Markdown report must disclose configured end date {facts.configured_end_date}",
+                )
+            )
+        if facts.configured_end_date not in html:
+            findings.append(
+                ReportQAFinding(
+                    "html_configured_end_date_missing",
+                    "fatal",
+                    f"HTML report must disclose configured end date {facts.configured_end_date}",
+                )
+            )
 
 
 def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings: list[ReportQAFinding]) -> None:
@@ -250,7 +329,7 @@ def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings:
         has_cjk = _contains_cjk(title_caption) or _contains_cjk(script_text)
         if not has_cjk:
             continue
-        if not script_text or not any(marker in script_text for marker in _CJK_FONT_MARKERS):
+        if not script_text or not _has_verified_cjk_font(script_text):
             script_label = str(script_path.relative_to(run_path)) if script_path and script_path.exists() else "missing source script"
             findings.append(
                 ReportQAFinding(
@@ -262,13 +341,13 @@ def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings:
 
 
 def _check_numeric_claims(markdown: str, facts: ReportFacts, findings: list[ReportQAFinding]) -> None:
-    known_values = [float(item["value"]) for item in facts.known_numbers if isinstance(item.get("value"), int | float)]
+    percent_values = _known_values(facts, _is_percent_known_number)
     for match in _PERCENT_RE.finditer(markdown):
         parsed = _finite_float(match.group("value"))
         if parsed is None:
             continue
         value = parsed / 100.0
-        if not any(_numbers_close(value, known) for known in known_values):
+        if not any(_numbers_close(value, known) for known in percent_values):
             findings.append(
                 ReportQAFinding(
                     "numeric_claim_unverified",
@@ -276,6 +355,103 @@ def _check_numeric_claims(markdown: str, facts: ReportFacts, findings: list[Repo
                     f"percentage claim {match.group(0)} was not found in metrics or report facts",
                 )
             )
+    all_known_values = _known_values(facts, lambda _name: True)
+    lines = markdown.splitlines()
+    for line_number, line in enumerate(lines, start=1):
+        if _skip_plain_number_line(line):
+            continue
+        context_values = _context_known_values(line, facts)
+        known_values = context_values if context_values else all_known_values
+        for match in _PLAIN_NUMBER_RE.finditer(line):
+            parsed = _finite_float(match.group("value"))
+            if parsed is None:
+                continue
+            if not any(_numbers_close(parsed, known) for known in known_values):
+                findings.append(
+                    ReportQAFinding(
+                        "numeric_claim_unverified",
+                        "warning",
+                        f"numeric claim {match.group(0)} on line {line_number} was not found in metrics or report facts",
+                    )
+                )
+
+
+def _has_verified_cjk_font(script_text: str) -> bool:
+    return any(name in script_text for name in _CJK_FONT_NAMES)
+
+
+def _known_values(facts: ReportFacts, include_name: Callable[[str], bool]) -> list[float]:
+    values: list[float] = []
+    for item in facts.known_numbers:
+        name = item.get("name")
+        value = item.get("value")
+        if not isinstance(name, str) or not isinstance(value, int | float):
+            continue
+        if include_name(name):
+            values.append(float(value))
+    return values
+
+
+def _is_percent_known_number(name: str) -> bool:
+    lowered = name.lower()
+    if any(marker in lowered for marker in ("count", "trade", "cost", "fee", "commission", "sharpe", "calmar", "sortino")):
+        return False
+    return any(
+        marker in lowered
+        for marker in (
+            "return",
+            "drawdown",
+            "volatility",
+            "cagr",
+            "rate",
+            "pct",
+            "percentage",
+        )
+    )
+
+
+def _context_known_values(line: str, facts: ReportFacts) -> list[float]:
+    lowered = line.lower()
+    names: set[str] = set()
+    if ("oos" in lowered or "样本外" in line) and ("trade" in lowered or "交易" in line):
+        names.update({"metric.oos_trade_count", "fact.oos_trade_count"})
+    elif "trade" in lowered or "交易" in line:
+        names.update({"metric.trade_count", "metric.oos_trade_count", "fact.oos_trade_count"})
+    if "positive month" in lowered or "positive months" in lowered or "正收益月份" in line or "正收益月" in line:
+        names.add("fact.positive_month_count")
+    if "negative month" in lowered or "negative months" in lowered or "负收益月份" in line or "负收益月" in line:
+        names.add("fact.negative_month_count")
+    if "sharpe" in lowered or "夏普" in line:
+        names.update(_known_number_names(facts, "sharpe"))
+    if "calmar" in lowered or "卡玛" in line:
+        names.update(_known_number_names(facts, "calmar"))
+    if "sortino" in lowered:
+        names.update(_known_number_names(facts, "sortino"))
+    if any(marker in lowered for marker in ("cost", "fee", "commission")) or any(marker in line for marker in ("费用", "成本", "佣金")):
+        for marker in ("cost", "fee", "commission"):
+            names.update(_known_number_names(facts, marker))
+    if not names:
+        return []
+    return _known_values(facts, lambda name: name in names)
+
+
+def _known_number_names(facts: ReportFacts, marker: str) -> set[str]:
+    return {
+        str(item["name"])
+        for item in facts.known_numbers
+        if isinstance(item.get("name"), str) and marker in str(item["name"]).lower()
+    }
+
+
+def _skip_plain_number_line(line: str) -> bool:
+    stripped = line.strip()
+    if not stripped:
+        return True
+    if stripped.startswith("!["):
+        return True
+    if re.match(r"^(图|figure)\s+\d+[\s.:：]", stripped, flags=re.IGNORECASE):
+        return True
+    return False
 
 
 def _safe_report_asset_src(src: str) -> bool:

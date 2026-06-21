@@ -111,6 +111,140 @@ def test_report_qa_warns_when_cjk_chart_lacks_font_check(tmp_path) -> None:
     assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
 
 
+def test_report_qa_flags_missing_html_date_disclosures(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = "# 研究报告\n\n有效数据最后交易日：2024-03-29\n\n配置结束日：2024-03-31\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text("<!doctype html><html><body><h1>研究报告</h1></body></html>", encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    finding_ids = {finding.id for finding in result.findings}
+    assert "html_effective_last_trading_day_missing" in finding_ids
+    assert "html_configured_end_date_missing" in finding_ids
+
+
+def test_report_qa_flags_same_count_different_html_image_sources(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    equity = tmp_path / "equity.png"
+    drawdown = tmp_path / "drawdown.png"
+    _write_png(equity)
+    _write_png(drawdown)
+    add_report_asset(run_dir, equity, asset_id="equity", title="Equity", section="results", order=10)
+    add_report_asset(run_dir, drawdown, asset_id="drawdown", title="Drawdown", section="results", order=20)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "![Equity](report_assets/figures/equity.png)\n"
+    )
+    html = '<!doctype html><html><body><p>2024-03-29 2024-03-31</p><img src="report_assets/figures/drawdown.png"></body></html>'
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(html, encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "image_source_mismatch" for finding in result.findings)
+
+
+def test_report_qa_rejects_embedded_attachment_images(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    attachment = tmp_path / "notes.pdf"
+    attachment.write_bytes(b"%PDF-1.4")
+    add_report_asset(run_dir, attachment, asset_id="notes", title="Notes", section="appendix", order=10)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "![Notes](report_assets/attachments/notes.pdf)\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "embedded_image_not_figure" for finding in result.findings)
+
+
+def test_report_qa_requires_available_date_facts(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    (run_dir / "equity_curve.csv").unlink()
+    (run_dir / "research_report.md").write_text("# Report\n\nConfigured end date: 2024-03-31\n", encoding="utf-8")
+    (run_dir / "research_report.html").write_text(
+        "<!doctype html><html><body>Configured end date: 2024-03-31</body></html>",
+        encoding="utf-8",
+    )
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "effective_last_trading_day_unavailable" for finding in result.findings)
+
+
+def test_report_qa_flags_non_percent_numeric_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The report claims 99 OOS trades, 10 positive months, and Sharpe 9.99.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    messages = "\n".join(finding.message for finding in result.findings if finding.id == "numeric_claim_unverified")
+    assert "99" in messages
+    assert "10" in messages
+    assert "9.99" in messages
+
+
+def test_report_qa_does_not_match_percent_claims_against_counts(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "trade_count": 2, "oos_trade_count": 1})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The invented total return was 200.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "200.00%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_does_not_treat_generic_font_sans_serif_as_cjk_font(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    script = run_dir / "report_assets/scripts/plot.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        'import matplotlib.pyplot as plt\nplt.rcParams["font.sans-serif"] = ["DejaVu Sans"]\nplt.title("策略净值")\n',
+        encoding="utf-8",
+    )
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值", source_script=script)
+    markdown = "# 研究报告\n\n有效数据最后交易日：2024-03-29\n\n配置结束日：2024-03-31\n\n![策略净值](report_assets/figures/equity.png)\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
 def _write_qa_run(tmp_path):
     spec = StrategySpec.template(strategy_id="qa_case", hypothesis="qa should validate final reports")
     spec.validation.train_period = ["2024-01-02", "2024-01-31"]

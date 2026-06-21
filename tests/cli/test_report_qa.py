@@ -47,11 +47,9 @@ def test_report_qa_command_exits_nonzero_on_fatal_findings(tmp_path) -> None:
 
 def test_report_qa_command_can_emit_json(tmp_path) -> None:
     run_dir = _write_cli_qa_run(tmp_path)
-    (run_dir / "research_report.md").write_text(
-        "# Report\n\nEffective last trading day: 2024-03-29\n\nConfigured end date: 2024-03-31\n",
-        encoding="utf-8",
-    )
-    (run_dir / "research_report.html").write_text(render_markdown_html_report("# Report", lang="en"), encoding="utf-8")
+    markdown = "# Report\n\nEffective last trading day: 2024-03-29\n\nConfigured end date: 2024-03-31\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["report", "qa", str(run_dir), "--json"])
 
