@@ -74,7 +74,8 @@ cd my-research
 - 生成并验证 `strategy_spec.yaml`。
 - 准备或请求行情数据。
 - 运行回测、审计、稳健性检查和报告。
-- 把结论写到 `runs/<run_id>/research_report.md`。
+- 把结论写到 `runs/<run_id>/research_report.md` 和
+  `runs/<run_id>/research_report.html`。
 
 你不需要再次粘贴 `docs/agent-guide.md`。
 
@@ -130,9 +131,21 @@ benchmark 用 SPY。
 - `runs/<run_id>/artifact_hashes.json`
 - `runs/<run_id>/robustness.json`
 - `runs/<run_id>/research_report.md`
+- `runs/<run_id>/research_report.html`
+- `runs/<run_id>/report_assets/manifest.json`，如果报告登记了图表或附件。
+- `runs/<run_id>/report_assets/figures/`，如果 Agent 或你生成了图表。
+- `runs/<run_id>/report_assets/scripts/`，如果 Agent 为图表编写了绘图代码。
 - 可复现性审计结果。
 - 研究偏差审计结果。
 - 稳健性检查结果。
+
+如果你想在报告中加入图表，可以直接告诉 Agent：
+
+```text
+请和我讨论这个实验报告需要哪些图表。
+确认后读取 run artifacts，编写绘图 Python，把图表和脚本作为
+report_assets 保存并登记，然后重新生成 Markdown 和 HTML 报告。
+```
 
 Agent 的最终回答应该明确区分：
 

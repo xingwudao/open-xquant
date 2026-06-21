@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -11,14 +12,25 @@ import yaml
 
 from oxq.audit.reproducibility import audit_reproducibility
 from oxq.audit.research_bias import audit_research
+from oxq.report.assets import ReportAsset, list_report_assets
+from oxq.report.i18n import messages
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 from oxq.spec.validator import validate
 
 
-def generate_report(run_dir: str | Path) -> str:
+@dataclass(frozen=True)
+class ReportOutputs:
+    markdown: Path | None = None
+    html: Path | None = None
+
+
+def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     """Generate a research_report.md from a backtest run directory."""
     run_path = Path(run_dir)
+    msg = messages(lang)
+    headings = msg["headings"]
+    labels = msg["labels"]
     spec = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml"))
     spec_dict = yaml.safe_load((run_path / "strategy_spec.yaml").read_text(encoding="utf-8")) or {}
     metrics = json.loads((run_path / "metrics.json").read_text(encoding="utf-8"))
@@ -27,50 +39,51 @@ def generate_report(run_dir: str | Path) -> str:
     robustness_result = _load_verified_robustness_result(run_path, repro_audit)
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
+    assets = list_report_assets(run_path)
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
     decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit, robustness_result)
 
     lines: list[str] = []
-    lines.append(f"# Research Report: {strategy_id}")
+    lines.append(f"# {msg['report_title'].format(strategy_id=strategy_id)}")
     lines.append("")
-    lines.append(f"**Generated**: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}")
-    lines.append(f"**Run ID**: {metrics.get('run_id', run_path.name)}")
+    lines.append(f"**{msg['generated']}**: {datetime.now(UTC).strftime('%Y-%m-%d %H:%M:%S UTC')}")
+    lines.append(f"**{msg['run_id']}**: {metrics.get('run_id', run_path.name)}")
     lines.append("")
 
     # 1. Executive Decision
-    lines.append("## 1. Executive Decision")
+    lines.append(f"## 1. {headings['decision']}")
     lines.append("")
     lines.append(f"**{decision}**")
     lines.append("")
-    lines.append(f"_{_decision_explanation()}_")
+    lines.append(f"_{_decision_explanation(lang)}_")
     lines.append("")
 
     # 2. Hypothesis
-    lines.append("## 2. Hypothesis")
+    lines.append(f"## 2. {headings['hypothesis']}")
     lines.append("")
-    lines.append(hypothesis or "(not specified)")
+    lines.append(hypothesis or f"({msg['not_specified']})")
     lines.append("")
 
     # 3. Strategy Spec Summary
-    lines.append("## 3. Strategy Spec Summary")
+    lines.append(f"## 3. {headings['strategy']}")
     lines.append("")
-    lines.append(f"- **Universe**: {spec.universe.type} ({len(spec.universe.symbols)} symbols)")
-    lines.append(f"- **Signal**: {spec.signal.signal_time} timing")
+    lines.append(f"- **{labels['universe']}**: {spec.universe.type} ({len(spec.universe.symbols)} symbols)")
+    lines.append(f"- **{labels['signal']}**: {spec.signal.signal_time} timing")
     for name, ind in spec.signal.indicators.items():
         lines.append(f"  - {name}: {ind.type} ({ind.params})")
-    lines.append(f"- **Portfolio**: {spec.portfolio.type}")
-    lines.append(f"- **Execution**: {spec.execution.trade_time} trade, {_effective_fill_price_mode(spec)} fill")
+    lines.append(f"- **{labels['portfolio']}**: {spec.portfolio.type}")
+    lines.append(f"- **{labels['execution']}**: {spec.execution.trade_time} trade, {_effective_fill_price_mode(spec)} fill")
     lines.append("")
 
     # 4. Data and Execution Assumptions
-    lines.append("## 4. Data and Execution Assumptions")
+    lines.append(f"## 4. {headings['assumptions']}")
     lines.append("")
-    lines.append(f"- **Fee**: {spec.cost.fee_rate:.3%}")
-    lines.append(f"- **Slippage**: {spec.cost.slippage_rate:.3%}")
-    lines.append(f"- **Initial Cash**: ${spec.execution.initial_cash:,.0f}")
-    lines.append(f"- **Price Adjustment**: {spec.data.price_adjustment}")
+    lines.append(f"- **{labels['fee']}**: {spec.cost.fee_rate:.3%}")
+    lines.append(f"- **{labels['slippage']}**: {spec.cost.slippage_rate:.3%}")
+    lines.append(f"- **{labels['initial_cash']}**: ${spec.execution.initial_cash:,.0f}")
+    lines.append(f"- **{labels['price_adjustment']}**: {spec.data.price_adjustment}")
     if execution_assumptions is not None:
         lines.append("")
         lines.append("### Execution Assumptions")
@@ -79,7 +92,7 @@ def generate_report(run_dir: str | Path) -> str:
     lines.append("")
 
     # 5. Backtest Metrics
-    lines.append("## 5. Backtest Metrics")
+    lines.append(f"## 5. {headings['metrics']}")
     lines.append("")
     lines.append("### Metrics Profile")
     lines.append("")
@@ -106,30 +119,36 @@ def generate_report(run_dir: str | Path) -> str:
         lines.append("")
 
     # 6. Benchmark Comparison
-    lines.append("## 6. Benchmark Comparison")
+    lines.append(f"## 6. {headings['benchmark']}")
     lines.append("")
     if spec.benchmark.symbols:
         lines.append(f"Benchmark: {', '.join(spec.benchmark.symbols)}")
     else:
-        lines.append("(No benchmark defined)")
+        lines.append(f"({msg['no_benchmark']})")
     lines.append("")
 
-    # 7. Reproducibility Audit
-    lines.append("## 7. Reproducibility Audit")
+    # 7. Report Assets
+    lines.append(f"## 7. {headings['assets']}")
     lines.append("")
-    lines.append(f"**Status**: {repro_audit['status'].upper()}")
+    lines.extend(_format_asset_lines(assets, lang))
+    lines.append("")
+
+    # 8. Reproducibility Audit
+    lines.append(f"## 8. {headings['reproducibility']}")
+    lines.append("")
+    lines.append(f"**{labels['status']}**: {repro_audit['status'].upper()}")
     lines.append("")
     for c in repro_audit["checks"]:
         icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
         lines.append(f"- [{c['severity'].upper()}] {icon} **{c['id']}**: {c['message']}")
     lines.append("")
 
-    # 8. Research Bias Audit
-    lines.append("## 8. Research Bias Audit")
+    # 9. Research Bias Audit
+    lines.append(f"## 9. {headings['research_bias']}")
     lines.append("")
     lines.append(
-        f"**Status**: {bias_audit['status'].upper()} "
-        f"(Fatal: {bias_audit['fatal_count']}, Warnings: {bias_audit['warning_count']})"
+        f"**{labels['status']}**: {bias_audit['status'].upper()} "
+        f"({labels['fatal']}: {bias_audit['fatal_count']}, {labels['warnings']}: {bias_audit['warning_count']})"
     )
     lines.append("")
     for c in bias_audit["checks"]:
@@ -141,8 +160,8 @@ def generate_report(run_dir: str | Path) -> str:
     lines.extend(_format_validation_classification_lines(validation_result.to_dict()))
     lines.append("")
 
-    # 9. Robustness Tests
-    lines.append("## 9. Robustness Tests")
+    # 10. Robustness Tests
+    lines.append(f"## 10. {headings['robustness']}")
     lines.append("")
     if robustness_result is not None:
         lines.extend(_format_robustness_result_lines(robustness_result))
@@ -158,11 +177,11 @@ def generate_report(run_dir: str | Path) -> str:
         and not spec.robustness.parameter_perturbation
         and not spec.robustness.regime_analysis
     ):
-        lines.append("(No robustness tests configured)")
+        lines.append(f"({msg['no_robustness']})")
     lines.append("")
 
-    # 10. Failure Modes
-    lines.append("## 10. Failure Modes")
+    # 11. Failure Modes
+    lines.append(f"## 11. {headings['failure_modes']}")
     lines.append("")
     fatal_checks = [c for c in bias_audit["checks"] if c["severity"] == "fatal" and c["status"] == "fail"]
     warning_checks = [c for c in bias_audit["checks"] if c["severity"] == "warning" and c["status"] == "fail"]
@@ -175,23 +194,62 @@ def generate_report(run_dir: str | Path) -> str:
         for c in warning_checks:
             lines.append(f"- **{c['id']}**: {c['message']}")
     if not fatal_checks and not warning_checks:
-        lines.append("No significant issues detected.")
+        lines.append(msg["no_significant_issues"])
     lines.append("")
 
-    # 11. Next Actions
-    lines.append("## 11. Next Actions")
+    # 12. Next Actions
+    lines.append(f"## 12. {headings['next_actions']}")
     lines.append("")
+    next_actions = msg["next_actions"]
     if decision == "REJECT":
-        lines.append("- Fix fatal audit findings before reconsidering this strategy.")
+        lines.append(next_actions["reject"])
     elif decision == "WATCHLIST":
-        lines.append("- Address warnings before promoting to paper trading.")
-        lines.append("- Run robustness tests with cost multiplier.")
+        lines.append(next_actions["watchlist_1"])
+        lines.append(next_actions["watchlist_2"])
     else:
-        lines.append("- Proceed to paper trading with monitoring.")
-        lines.append("- Set up live monitoring and drift detection.")
+        lines.append(next_actions["promote_1"])
+        lines.append(next_actions["promote_2"])
     lines.append("")
 
     return "\n".join(lines)
+
+
+def write_report_files(
+    run_dir: str | Path,
+    *,
+    lang: str = "zh",
+    output_format: str = "all",
+    out: str | Path | None = None,
+) -> ReportOutputs:
+    """Write Markdown and/or HTML report files for a run directory."""
+    output_format = output_format.lower()
+    if output_format not in {"all", "markdown", "html"}:
+        raise ValueError(f"unsupported report format: {output_format}")
+
+    run_path = Path(run_dir)
+    markdown_path: Path | None = None
+    html_path: Path | None = None
+
+    if output_format in {"all", "markdown"}:
+        report_md = generate_report(run_path, lang=lang)
+        markdown_path = Path(out) if out is not None else run_path / "research_report.md"
+        markdown_path.parent.mkdir(parents=True, exist_ok=True)
+        markdown_path.write_text(report_md, encoding="utf-8")
+
+    if output_format in {"all", "html"}:
+        from oxq.report.html import render_html_report
+
+        report_html = render_html_report(run_path, lang=lang)
+        if output_format == "all" and out is not None:
+            html_path = Path(out).with_suffix(".html")
+        elif output_format == "html" and out is not None:
+            html_path = Path(out)
+        else:
+            html_path = run_path / "research_report.html"
+        html_path.parent.mkdir(parents=True, exist_ok=True)
+        html_path.write_text(report_html, encoding="utf-8")
+
+    return ReportOutputs(markdown=markdown_path, html=html_path)
 
 
 def _determine_decision(
@@ -380,6 +438,37 @@ def _format_is_oos_metric_lines(metrics: dict) -> list[str]:
     return [f"| {name} | {value} |" for name, value in rows]
 
 
+def _format_asset_lines(assets: list[ReportAsset], lang: str) -> list[str]:
+    msg = messages(lang)
+    labels = msg["labels"]
+    if not assets:
+        return [msg["no_assets"]]
+
+    lines: list[str] = []
+    figure_index = 0
+    for asset in assets:
+        report_path = f"report_assets/{asset.path}"
+        if asset.kind == "figure":
+            figure_index += 1
+            lines.append(f"![{asset.title}]({report_path})")
+            lines.append("")
+            caption = asset.caption or asset.title
+            lines.append(f"{msg['figure_prefix']} {figure_index}. {caption}")
+        else:
+            lines.append(f"- **{msg['attachment']}**: [{asset.title}]({report_path})")
+            if asset.caption:
+                lines.append(f"  - {asset.caption}")
+        lines.append(f"- **id**: {asset.id}")
+        lines.append(f"- **{labels['kind']}**: {asset.kind}")
+        lines.append(f"- **sha256**: {asset.sha256}")
+        if asset.source.script:
+            lines.append(f"- **{labels['source_script']}**: {asset.source.script}")
+        if asset.source.input_artifacts:
+            lines.append(f"- **{labels['source_artifacts']}**: {', '.join(asset.source.input_artifacts)}")
+        lines.append("")
+    return lines
+
+
 def _format_validation_classification_lines(validation_result: dict) -> list[str]:
     findings = list(validation_result.get("errors", [])) + list(validation_result.get("warnings", []))
     dimensions = ("causal", "executable", "conservative", "production_consistent")
@@ -525,9 +614,5 @@ def _format_assumption_value(value: object) -> str:
     return str(value)
 
 
-def _decision_explanation() -> str:
-    return (
-        "**REJECT** = Fatal audit findings, do not proceed.\n"
-        "**WATCHLIST** = Needs further investigation before promotion.\n"
-        "**PAPER TRADING CANDIDATE** = Passes basic audits, suitable for paper trading evaluation."
-    )
+def _decision_explanation(lang: str = "en") -> str:
+    return str(messages(lang)["decision_explanation"])

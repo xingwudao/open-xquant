@@ -7,9 +7,14 @@ executive decision.
 ## Workflow
 
 1. Receive a run directory path
-2. Run `oxq report write runs/<run_id>/` to generate `research_report.md`
-3. Run `oxq experiment add runs/<run_id>/` to register the experiment
-4. Present the executive decision (REJECT / WATCHLIST / PAPER TRADING CANDIDATE)
+2. If the user wants charts, discuss chart requirements, write plotting Python,
+   save scripts under `report_assets/scripts`, save figures under
+   `report_assets/figures`, and register them with `oxq report asset add`.
+3. Run `oxq report write runs/<run_id>/ --lang zh --format all` to generate
+   `research_report.md` and `research_report.html`
+4. Run `oxq experiment add runs/<run_id>/` to register the experiment
+5. Present the executive decision (REJECT / WATCHLIST / PAPER TRADING CANDIDATE)
+   and both report paths.
 
 ## Decision Rules
 
@@ -24,5 +29,6 @@ executive decision.
 
 - NEVER modify audit results or metrics to improve the conclusion.
 - NEVER re-run a backtest to get better numbers.
+- NEVER treat charts as a substitute for audit or robustness evidence.
 - Present the decision honestly, even if unfavorable.
 - Include the specific reasons for the decision in the report.

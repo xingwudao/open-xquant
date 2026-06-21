@@ -10,18 +10,22 @@ from oxq.tools.registry import registry
 
 @registry.tool(
     name="report_write",
-    description="Generate a research_report.md from a backtest run directory. "
+    description="Generate research_report.md and research_report.html from a backtest run directory. "
     "Reads strategy_spec.yaml, metrics.json, runs both audits, and produces a structured "
     "report with executive decision (REJECT/WATCHLIST/PAPER TRADING CANDIDATE). "
-    "Returns the report path and executive decision.",
+    "Returns report paths and executive decision.",
 )
-def report_write(run_dir: str, out: str | None = None) -> dict[str, Any]:
+def report_write(
+    run_dir: str,
+    out: str | None = None,
+    lang: str = "zh",
+    output_format: str = "all",
+) -> dict[str, Any]:
     """Generate a research report from a backtest run."""
-    from oxq.report import generate_report
+    from oxq.report import generate_report, write_report_files
 
-    report_md = generate_report(run_dir)
-    output_path = Path(out) if out else Path(run_dir) / "research_report.md"
-    output_path.write_text(report_md, encoding="utf-8")
+    outputs = write_report_files(run_dir, lang=lang, output_format=output_format, out=out)
+    report_md = outputs.markdown.read_text(encoding="utf-8") if outputs.markdown else generate_report(run_dir, lang=lang)
 
     strategy_id = ""
     for line in report_md.split("\n"):
@@ -29,6 +33,8 @@ def report_write(run_dir: str, out: str | None = None) -> dict[str, Any]:
             break
         if line.startswith("# Research Report: "):
             strategy_id = line.replace("# Research Report: ", "").strip()
+        if line.startswith("# 研究报告: "):
+            strategy_id = line.replace("# 研究报告: ", "").strip()
 
     decision = ""
     for line in report_md.split("\n"):
@@ -36,9 +42,12 @@ def report_write(run_dir: str, out: str | None = None) -> dict[str, Any]:
             decision = line.strip("*").strip()
             break
 
+    legacy_output = outputs.markdown or outputs.html or Path("")
     return {
         "status": "ok",
-        "output": str(output_path),
+        "output": str(legacy_output),
+        "markdown_output": str(outputs.markdown) if outputs.markdown else None,
+        "html_output": str(outputs.html) if outputs.html else None,
         "strategy_id": strategy_id,
         "decision": decision,
     }

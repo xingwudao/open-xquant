@@ -449,7 +449,7 @@ uv run oxq experiment add "$RUN_DIR" \
 - `spec validate` 返回 `Status: PASS`。
 - `backtest run` JSON 中的 `status` 是 `pass`，且 `RUN_DIR` 非空。
 - `audit reproducibility` 返回 `Status: PASS`。
-- `report write` 生成 `research_report.md`。
+- `report write` 生成 `research_report.md` 和 `research_report.html`。
 - run 目录中存在标准 artifacts。
 
 如果 `robustness run` 返回 `WARN`，不一定代表环境失败。
@@ -520,6 +520,15 @@ Skill 文件位于 `agent/skills/`。
 
 - 加载 `agent/skills/chart-indicator.md`。
 - 用于图表检查，不替代 audit。
+
+报告图表资产：
+
+- 加载 `agent/skills/report-chart-builder.md`。
+- 先和用户讨论图表需求，再读取 run artifacts 写绘图 Python。
+- 生成的脚本放入 `report_assets/scripts/`。
+- 生成的图片放入 `report_assets/figures/`。
+- 用 `oxq report asset add` 登记资产后，再运行 `oxq report write`。
+- 不要修改 `metrics.json`、audit 结果或回测产物来美化图表。
 
 组件扩展：
 
@@ -613,7 +622,16 @@ uv run oxq robustness run runs/<run_id>/ --json
 
 ```bash
 uv run oxq report write runs/<run_id>/
-uv run oxq report write runs/<run_id>/ --out report.md
+uv run oxq report write runs/<run_id>/ --lang zh --format all
+uv run oxq report write runs/<run_id>/ --lang en --format markdown --out report.md
+uv run oxq report write runs/<run_id>/ --format html
+uv run oxq report asset list runs/<run_id>/
+uv run oxq report asset add runs/<run_id>/ chart.png \
+  --id equity_vs_benchmark \
+  --title "策略净值与基准对比" \
+  --caption "由 equity_curve.csv 和 benchmark_curve.csv 生成。" \
+  --source-script plot_equity.py \
+  --source-artifact equity_curve.csv
 ```
 
 实验登记：

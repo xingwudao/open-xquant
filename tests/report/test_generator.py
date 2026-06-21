@@ -203,7 +203,7 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "### Execution Assumptions" in report
     assert "- **order_timing**: next_session_open" in report
@@ -219,7 +219,7 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
 def test_report_generation_does_not_fail_without_execution_assumptions(tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "# Research Report: report_execution_assumptions" in report
     assert "### Execution Assumptions" not in report
@@ -229,7 +229,7 @@ def test_report_generation_ignores_malformed_execution_assumptions(tmp_path) -> 
     run_dir = _write_report_run(tmp_path)
     (run_dir / "execution_assumptions.json").write_text("{not-json", encoding="utf-8")
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "# Research Report: report_execution_assumptions" in report
     assert "## 5. Backtest Metrics" in report
@@ -252,7 +252,7 @@ def test_report_summary_uses_effective_execution_fill_mode(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "- **Execution**: next_open trade, next_close fill" in report
 
@@ -315,7 +315,7 @@ def test_report_includes_metric_assumptions_oos_and_validation_classification(tm
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "### Metrics Profile" in report
     assert "- **Profile**: xquant_production" in report
@@ -348,7 +348,7 @@ def test_report_missing_metric_assumptions_uses_legacy_defaults(tmp_path) -> Non
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "- **Profile**: open_xquant_default" in report
     assert "- **return_type**: simple" in report
@@ -394,7 +394,7 @@ def test_report_includes_robustness_artifact_summary(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "**Status**: WARN" in report
     assert "- [PASS] **cost_x2**: costs are stable" in report
@@ -440,7 +440,7 @@ def test_report_rejects_fragile_robustness_result(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "## 1. Executive Decision\n\n**REJECT**" in report
 
@@ -453,7 +453,7 @@ def test_report_does_not_trust_unhashed_robustness_artifact(tmp_path) -> None:
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "## 1. Executive Decision\n\n**REJECT**" in report
     assert "**Status**: ROBUST" not in report
@@ -474,7 +474,7 @@ def test_report_regime_only_config_does_not_claim_no_robustness_tests(tmp_path) 
         encoding="utf-8",
     )
 
-    report = generate_report(run_dir)
+    report = generate_report(run_dir, lang="en")
 
     assert "- Regime analysis: enabled" in report
     assert "(No robustness tests configured)" not in report
