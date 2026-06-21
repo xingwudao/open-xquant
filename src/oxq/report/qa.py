@@ -46,6 +46,32 @@ _CJK_FONT_NAMES = (
 _ASSET_KIND_REQUIRED_PREFIX = {"figure": "figures", "attachment": "attachments"}
 _EFFECTIVE_LAST_TRADING_DAY_LABELS = ("effective last trading day", "有效数据最后交易日")
 _CONFIGURED_END_DATE_LABELS = ("configured end date", "配置结束日")
+_MONTH_NAMES = {
+    "january": 1,
+    "jan": 1,
+    "february": 2,
+    "feb": 2,
+    "march": 3,
+    "mar": 3,
+    "april": 4,
+    "apr": 4,
+    "may": 5,
+    "june": 6,
+    "jun": 6,
+    "july": 7,
+    "jul": 7,
+    "august": 8,
+    "aug": 8,
+    "september": 9,
+    "sep": 9,
+    "sept": 9,
+    "october": 10,
+    "oct": 10,
+    "november": 11,
+    "nov": 11,
+    "december": 12,
+    "dec": 12,
+}
 
 
 @dataclass(frozen=True)
@@ -402,6 +428,8 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
             context_percent_values = _percent_context_known_values(
                 line,
                 facts,
+                claim_start=match.start(),
+                claim_end=match.end(),
                 scope_override=claim_scope,
                 use_line_scope=not has_scope_marker,
             )
@@ -428,6 +456,8 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
             context_values = _context_known_values(
                 scan_line,
                 facts,
+                claim_start=match.start(),
+                claim_end=match.end(),
                 scope_override=claim_scope,
                 use_line_scope=not has_scope_marker,
             )
@@ -498,6 +528,8 @@ def _context_known_values(
     line: str,
     facts: ReportFacts,
     *,
+    claim_start: int | None = None,
+    claim_end: int | None = None,
     scope_override: str | None = None,
     use_line_scope: bool = True,
 ) -> list[float] | None:
@@ -505,7 +537,11 @@ def _context_known_values(
     scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
     names: set[str] = set()
     matched_context = False
-    if ("oos" in lowered or "样本外" in line) and ("trade" in lowered or "交易" in line):
+    claim_trade_names = _claim_trade_names(line, facts, claim_start, claim_end)
+    if claim_trade_names is not None:
+        matched_context = True
+        names.update(claim_trade_names)
+    elif ("oos" in lowered or "样本外" in line) and ("trade" in lowered or "交易" in line):
         matched_context = True
         names.update({"metric.oos_trade_count", "fact.oos_trade_count"})
         if _mentions_total_trades(line, lowered):
@@ -528,7 +564,11 @@ def _context_known_values(
     if "sortino" in lowered:
         matched_context = True
         names.update(_known_number_names(facts, "sortino", scope=scope))
-    if any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
+    claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end)
+    if claim_cost_names is not None:
+        matched_context = True
+        names.update(claim_cost_names)
+    elif any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
         marker in line for marker in ("费用", "成本", "佣金", "滑点")
     ):
         matched_context = True
@@ -546,6 +586,8 @@ def _percent_context_known_values(
     line: str,
     facts: ReportFacts,
     *,
+    claim_start: int | None = None,
+    claim_end: int | None = None,
     scope_override: str | None = None,
     use_line_scope: bool = True,
 ) -> list[float] | None:
@@ -561,7 +603,11 @@ def _percent_context_known_values(
         matched_context = True
         names.update(_known_number_names(facts, "annualized_return", scope=scope))
         names.update(_known_number_names(facts, "cagr", scope=scope))
-    if any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
+    monthly_names = _monthly_return_names_for_line(line, facts)
+    if monthly_names:
+        matched_context = True
+        names.update(monthly_names)
+    elif any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
         marker in line for marker in ("总收益", "累计收益", "超额收益")
     ):
         matched_context = True
@@ -576,7 +622,11 @@ def _percent_context_known_values(
     if "win rate" in lowered or "胜率" in line:
         matched_context = True
         names.update(_known_number_names(facts, "rate", scope=scope))
-    if any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
+    claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end)
+    if claim_cost_names is not None:
+        matched_context = True
+        names.update(claim_cost_names)
+    elif any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
         marker in line for marker in ("费用", "成本", "佣金", "滑点")
     ):
         matched_context = True
@@ -588,6 +638,121 @@ def _percent_context_known_values(
     if drawdown_context:
         values.extend(abs(value) for value in list(values))
     return values
+
+
+def _monthly_return_names_for_line(line: str, facts: ReportFacts) -> set[str]:
+    lowered = line.lower()
+    if "return" not in lowered and "收益" not in line:
+        return set()
+    known_months = _known_monthly_return_months(facts)
+    mentioned_months = _mentioned_months(line, known_months)
+    return {f"fact.monthly_return.{month}" for month in mentioned_months}
+
+
+def _known_monthly_return_months(facts: ReportFacts) -> set[str]:
+    prefix = "fact.monthly_return."
+    return {
+        str(item["name"])[len(prefix) :]
+        for item in facts.known_numbers
+        if isinstance(item.get("name"), str) and str(item["name"]).startswith(prefix)
+    }
+
+
+def _mentioned_months(line: str, known_months: set[str]) -> set[str]:
+    if not known_months:
+        return set()
+    mentioned: set[str] = set()
+    for match in re.finditer(r"\b(?P<year>[12]\d{3})[-/](?P<month>0?[1-9]|1[0-2])\b", line):
+        month = f"{match.group('year')}-{int(match.group('month')):02d}"
+        if month in known_months:
+            mentioned.add(month)
+    for match in re.finditer(r"(?:(?P<year>[12]\d{3})年)?(?P<month>0?[1-9]|1[0-2])月", line):
+        mentioned.update(_known_months_for_label(known_months, int(match.group("month")), match.group("year")))
+    lowered = line.lower()
+    years = set(re.findall(r"\b([12]\d{3})\b", line))
+    for name, month_number in _MONTH_NAMES.items():
+        if re.search(rf"\b{re.escape(name)}\b", lowered):
+            mentioned.update(_known_months_for_label(known_months, month_number, next(iter(years)) if len(years) == 1 else None))
+    return mentioned
+
+
+def _known_months_for_label(known_months: set[str], month_number: int, year: str | None) -> set[str]:
+    if year is not None:
+        month = f"{year}-{month_number:02d}"
+        return {month} if month in known_months else set()
+    suffix = f"-{month_number:02d}"
+    return {month for month in known_months if month.endswith(suffix)}
+
+
+def _claim_cost_names(line: str, facts: ReportFacts, claim_start: int | None, claim_end: int | None) -> set[str] | None:
+    if claim_start is None or claim_end is None:
+        return None
+    label = _nearest_claim_label(
+        _claim_label_markers(
+            line,
+            (
+                ("slippage", r"\bslippage\b|滑点"),
+                ("fee", r"\bfees?\b|\bcommissions?\b|佣金|手续费"),
+                ("cost", r"\bcosts?\b|费用|成本"),
+            ),
+        ),
+        claim_start,
+        claim_end,
+    )
+    if label is None:
+        return None
+    if label == "slippage":
+        return _known_number_names(facts, "slippage")
+    if label == "fee":
+        return _known_number_names(facts, "fee") | _known_number_names(facts, "commission")
+    names: set[str] = set()
+    for marker in ("cost", "fee", "commission", "slippage"):
+        names.update(_known_number_names(facts, marker))
+    return names
+
+
+def _claim_trade_names(line: str, facts: ReportFacts, claim_start: int | None, claim_end: int | None) -> set[str] | None:
+    if claim_start is None or claim_end is None:
+        return None
+    label = _nearest_claim_label(
+        _claim_label_markers(
+            line,
+            (
+                ("oos", r"\boos\s+trades?\b|\bout-of-sample\s+trades?\b|\bout of sample\s+trades?\b|样本外交易"),
+                ("total", r"\btotal\s+trades?\b|\btrade\s+count\b|\ball\s+trades?\b|总交易|交易总数|全部交易"),
+            ),
+        ),
+        claim_start,
+        claim_end,
+    )
+    if label is None:
+        return None
+    if label == "oos":
+        return {"metric.oos_trade_count", "fact.oos_trade_count"}
+    return {"metric.trade_count"}
+
+
+def _claim_label_markers(line: str, patterns: tuple[tuple[str, str], ...]) -> list[tuple[int, int, str]]:
+    markers: list[tuple[int, int, str]] = []
+    for label, pattern in patterns:
+        markers.extend((match.start(), match.end(), label) for match in re.finditer(pattern, line, flags=re.IGNORECASE))
+    return sorted(markers)
+
+
+def _nearest_claim_label(markers: list[tuple[int, int, str]], claim_start: int, claim_end: int) -> str | None:
+    if not markers:
+        return None
+
+    def distance(marker: tuple[int, int, str]) -> int:
+        start, end, _label = marker
+        if end < claim_start:
+            return claim_start - end
+        if start > claim_end:
+            return start - claim_end
+        return 0
+
+    nearest = min(markers, key=distance)
+    return nearest[2] if distance(nearest) <= 40 else None
 
 
 def _known_number_names(facts: ReportFacts, marker: str, *, scope: str | None = None) -> set[str]:
@@ -825,7 +990,7 @@ def _finite_float(value: Any) -> float | None:
 
 
 def _numbers_close(left: float, right: float) -> bool:
-    return math.isclose(left, right, rel_tol=1e-4, abs_tol=5e-4)
+    return math.isclose(left, right, rel_tol=1e-4, abs_tol=5e-5)
 
 
 class _ImageParser(HTMLParser):
