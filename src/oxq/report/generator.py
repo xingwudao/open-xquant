@@ -438,6 +438,17 @@ def _decision_summary(
             if zh
             else f"Research bias audit has no fatal findings ({warning_count} warning(s))."
         )
+    if warning_count:
+        risks.append(
+            f"研究偏差审计存在 {warning_count} 个需要跟进的警告。"
+            if zh
+            else f"Research bias audit has {warning_count} warning(s) that need follow-up."
+        )
+        actions.append(
+            "复核研究偏差审计警告，并在升级前补齐证据。"
+            if zh
+            else "Review research-bias warnings and close the evidence gap before promotion."
+        )
 
     oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio")
     if oos_sharpe is not None:
@@ -532,6 +543,7 @@ def _benchmark_artifact_trusted(repro_audit: dict) -> bool:
         "artifact_hashes",
         "data_manifest_hash",
         "environment_hash",
+        "missing_files",
         "run_digest",
         "equity_hash",
         "benchmark_hash",

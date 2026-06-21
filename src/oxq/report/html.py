@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from html import escape
+from html import escape, unescape
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -151,7 +151,7 @@ def _is_separator_row(row: list[str]) -> bool:
 
 def _link_repl(match: re.Match[str]) -> str:
     label = match.group("label")
-    href = match.group("href")
+    href = unescape(match.group("href"))
     if not _is_safe_href(href):
         return label
     return f'<a href="{escape(href, quote=True)}">{label}</a>'

@@ -229,7 +229,7 @@ def test_report_includes_decision_rationale_and_evidence(tmp_path) -> None:
     assert "### Recommended Next Actions" in report
 
 
-def test_report_includes_benchmark_relative_metrics(tmp_path) -> None:
+def test_report_includes_benchmark_relative_metrics(monkeypatch, tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
     spec = StrategySpec.template(
         strategy_id="report_benchmark_relative",
@@ -250,6 +250,10 @@ def test_report_includes_benchmark_relative_metrics(tmp_path) -> None:
     (run_dir / "benchmark_curve.csv").write_text(
         "date,value\n2024-01-02,200\n2024-01-03,220\n",
         encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "oxq.report.generator.audit_reproducibility",
+        lambda run_dir: {"status": "pass", "checks": [], "fatal_count": 0, "warning_count": 0},
     )
 
     report = generate_report(run_dir, lang="en")
@@ -350,6 +354,51 @@ def test_report_omits_benchmark_relative_metrics_when_artifact_hash_guard_fails(
     assert "Total return exceeds benchmark" not in report
 
 
+def test_report_omits_benchmark_relative_metrics_when_audit_files_are_missing(monkeypatch, tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_missing_hash_manifest",
+        hypothesis="missing audit files should make benchmark evidence untrusted",
+    )
+    spec.benchmark.symbols = ["SPY"]
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-02,100\n2024-01-03,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "oxq.report.generator.audit_reproducibility",
+        lambda run_dir: {
+            "status": "fail",
+            "checks": [
+                {
+                    "id": "missing_files",
+                    "severity": "fatal",
+                    "status": "fail",
+                    "message": "Missing files: ['artifact_hashes.json']",
+                }
+            ],
+            "fatal_count": 1,
+            "warning_count": 0,
+        },
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "### Benchmark Relative Metrics" not in report
+    assert "Total return exceeds benchmark" not in report
+
+
 def test_benchmark_relative_metrics_aligns_curve_dates(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -428,6 +477,28 @@ def test_decision_summary_does_not_block_on_unconfigured_benchmark_or_robustness
     assert "Verified robustness artifact is missing" not in risks
     assert "Benchmark-relative return could not be computed" not in risks
     assert summary["risks"] == ["No blocking risks were detected by configured checks."]
+
+
+def test_decision_summary_surfaces_research_audit_warnings_as_risks() -> None:
+    summary = _decision_summary(
+        "WATCHLIST",
+        {
+            "trade_count": 10,
+            "oos_trade_count": 10,
+            "oos_sharpe_ratio": 1.2,
+        },
+        repro_audit={"status": "pass"},
+        bias_audit={"fatal_count": 0, "warning_count": 2},
+        robustness_result=None,
+        benchmark_metrics=None,
+        lang="en",
+        robustness_configured=False,
+        benchmark_configured=False,
+    )
+
+    risks = "\n".join(summary["risks"])
+    assert "Research bias audit has 2 warning(s)" in risks
+    assert "No blocking risks were detected" not in risks
 
 
 def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) -> None:

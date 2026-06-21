@@ -80,3 +80,9 @@ def test_examples_do_not_reference_removed_report_write_command() -> None:
     combined = "\n".join(path.read_text(encoding="utf-8") for path in Path("examples").rglob("*.py"))
 
     assert "oxq report write" not in combined
+
+
+def test_readme_workflows_do_not_reference_removed_report_write_command() -> None:
+    text = Path("README.md").read_text(encoding="utf-8")
+
+    assert "oxq report write" not in text

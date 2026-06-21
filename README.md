@@ -80,7 +80,7 @@ oxq spec init "策略想法"
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
-  → oxq report write runs/<run_id>/
+  → /quant-report runs/<run_id>/
   → oxq experiment add runs/<run_id>/
 ```
 
@@ -252,7 +252,7 @@ oxq spec init "strategy idea"
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
-  → oxq report write runs/<run_id>/
+  → /quant-report runs/<run_id>/
   → oxq experiment add runs/<run_id>/
 ```
 

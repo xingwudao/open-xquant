@@ -91,6 +91,16 @@ def test_render_markdown_html_report_rejects_active_url_schemes() -> None:
     assert "unsafe" in html
 
 
+def test_render_markdown_html_report_escapes_href_once() -> None:
+    html = render_markdown_html_report(
+        "# Report\n\n[query](https://example.com/report?a=1&b=2)\n",
+        lang="en",
+    )
+
+    assert 'href="https://example.com/report?a=1&amp;b=2"' in html
+    assert "&amp;amp;" not in html
+
+
 def test_write_report_files_outputs_markdown_and_html_by_default(tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
 
