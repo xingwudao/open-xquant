@@ -395,36 +395,6 @@ def report_asset_list(run_dir: str):
         click.echo(f"  Hash: {asset.sha256}")
 
 
-@report.command()
-@click.argument("run_dir", type=click.Path(exists=True))
-@click.option("--out", "-o", default=None, help="Output file path")
-@click.option("--lang", default="zh", show_default=True, type=click.Choice(["zh", "en"]), help="Report language")
-@click.option(
-    "--format",
-    "output_format",
-    default="all",
-    show_default=True,
-    type=click.Choice(["all", "markdown", "html"]),
-    help="Report output format",
-)
-def write(run_dir: str, out: str | None, lang: str, output_format: str):
-    """Generate a research report from a backtest run directory.
-
-    RUN_DIR is the path to a run directory (e.g. runs/20260616_153000_strategy_id/).
-    """
-    from oxq.report import write_report_files
-
-    try:
-        outputs = write_report_files(run_dir, lang=lang, output_format=output_format, out=out)
-    except ValueError as exc:
-        raise click.ClickException(str(exc)) from exc
-
-    if outputs.markdown:
-        click.echo(f"Markdown report written to {outputs.markdown}")
-    if outputs.html:
-        click.echo(f"HTML report written to {outputs.html}")
-
-
 @main.group()
 def experiment():
     """Manage experiment registry."""

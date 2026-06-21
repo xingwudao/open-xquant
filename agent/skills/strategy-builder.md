@@ -244,7 +244,6 @@ target-weight comparisons. Do not parse human stdout for `run_dir`.
 uv run oxq audit reproducibility "$RUN_DIR"
 uv run oxq audit research "$RUN_DIR"
 uv run oxq robustness run "$RUN_DIR"
-uv run oxq report write "$RUN_DIR"
 uv run oxq experiment add "$RUN_DIR"
 ```
 
@@ -252,6 +251,8 @@ If research audit has fatal findings, mark the strategy rejected. If robustness
 returns `WARN`, keep the warning in the final report. When `robustness.json`
 exists, summarize cost stress, IS/OOS metric diff, parameter perturbation, and
 regime analysis instead of only quoting baseline Sharpe.
+Use `research-report-writer` to write `research_report.md` and render
+`research_report.html` from that final Markdown.
 
 ## Red Lines
 

@@ -12,10 +12,9 @@ You explain results after artifacts and audits exist.
 
 ## Read Artifacts First
 
-```bash
-uv run oxq report write runs/<run_id>/
-cat runs/<run_id>/research_report.md
-```
+If `runs/<run_id>/research_report.md` exists, read it. If it does not exist,
+read the run artifacts directly and use `research-report-writer` before
+presenting a final decision.
 
 Read metrics:
 

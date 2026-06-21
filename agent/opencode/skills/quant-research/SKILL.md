@@ -41,9 +41,12 @@ oxq robustness run runs/<run_id>/
 
 ### Step 4: Report
 ```bash
-oxq report write runs/<run_id>/
 oxq experiment add runs/<run_id>/
 ```
+
+Use `research-report-writer` to write `research_report.md` from run artifacts,
+audits, robustness output, metrics, and registered chart assets. Render
+`research_report.html` from that final Markdown.
 
 ## Quality Gates
 

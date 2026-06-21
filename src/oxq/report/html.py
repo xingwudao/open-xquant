@@ -5,11 +5,13 @@ from __future__ import annotations
 import re
 from html import escape
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from oxq.report.generator import generate_report
 
 _IMAGE_RE = re.compile(r"^!\[(?P<alt>.*)]\((?P<src>.*)\)$")
 _DECISIONS = {"REJECT", "NO EVIDENCE", "WATCHLIST", "PAPER TRADING CANDIDATE"}
+_SAFE_HREF_SCHEMES = {"", "http", "https", "mailto"}
 
 
 def render_html_report(run_dir: str | Path, lang: str = "zh") -> str:
@@ -150,7 +152,18 @@ def _is_separator_row(row: list[str]) -> bool:
 def _link_repl(match: re.Match[str]) -> str:
     label = match.group("label")
     href = match.group("href")
+    if not _is_safe_href(href):
+        return label
     return f'<a href="{escape(href, quote=True)}">{label}</a>'
+
+
+def _is_safe_href(href: str) -> bool:
+    stripped = href.strip()
+    if not stripped:
+        return False
+    if any(ord(char) < 32 for char in stripped):
+        return False
+    return urlsplit(stripped).scheme.lower() in _SAFE_HREF_SCHEMES
 
 
 def _stylesheet() -> str:

@@ -16,16 +16,13 @@ Generate a human-written research report with executive decision.
 4. If the user wants charts, discuss chart requirements first, write plotting
    Python, save figures under `report_assets/figures`, save scripts under
    `report_assets/scripts`, and register them with `oxq report asset add`.
-5. `oxq report write runs/<run_id>/ --lang zh --format markdown --out runs/<run_id>/report_evidence.md`
-   - Generate a deterministic evidence brief.
-   - Do not treat `oxq report write` output as the final report.
-6. Use `research-report-writer` to read the evidence brief, audits, robustness,
-   metrics, and registered chart assets, then write the final
+5. Use `research-report-writer` to read audits, robustness, metrics, execution
+   assumptions, strategy spec, and registered chart assets, then write the final
    `research_report.md` for human researchers and potential investors.
-7. Render `research_report.html` from final Markdown with
+6. Render `research_report.html` from final Markdown with
    `render_markdown_html_report`.
-8. `oxq experiment add runs/<run_id>/` — register in experiment log.
-9. Present the executive decision, key findings, and report paths.
+7. `oxq experiment add runs/<run_id>/` — register in experiment log.
+8. Present the executive decision, key findings, and report paths.
 
 ## Decision Scale
 

@@ -5,6 +5,7 @@ import json
 import yaml
 
 from oxq.report.generator import (
+    _decision_summary,
     _determine_decision,
     _format_float,
     _format_money,
@@ -237,6 +238,73 @@ def test_report_includes_benchmark_relative_metrics(tmp_path) -> None:
     assert "| Strategy Total Return | 20.00% |" in report
     assert "| Benchmark Total Return | 10.00% |" in report
     assert "| Excess Total Return | 10.00% |" in report
+
+
+def test_report_omits_benchmark_relative_metrics_when_benchmark_hash_fails(monkeypatch, tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_untrusted_benchmark",
+        hypothesis="benchmark metrics should require a trusted benchmark artifact",
+    )
+    spec.benchmark.symbols = ["SPY"]
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-02,100\n2024-01-03,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "oxq.report.generator.audit_reproducibility",
+        lambda run_dir: {
+            "status": "fail",
+            "checks": [
+                {
+                    "id": "benchmark_hash",
+                    "severity": "fatal",
+                    "status": "fail",
+                    "message": "benchmark_curve.csv hash mismatch",
+                }
+            ],
+            "fatal_count": 1,
+            "warning_count": 0,
+        },
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "### Benchmark Relative Metrics" not in report
+    assert "Total return exceeds benchmark" not in report
+
+
+def test_decision_summary_uses_chinese_empty_risk_fallback() -> None:
+    summary = _decision_summary(
+        "PAPER TRADING CANDIDATE",
+        {
+            "trade_count": 10,
+            "oos_trade_count": 10,
+            "oos_sharpe_ratio": 1.2,
+        },
+        repro_audit={"status": "pass"},
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        robustness_result={"status": "robust"},
+        benchmark_metrics={
+            "strategy_total_return": 0.2,
+            "benchmark_total_return": 0.1,
+            "excess_total_return": 0.1,
+        },
+        lang="zh",
+    )
+
+    assert summary["risks"] == ["配置检查未发现阻碍资金决策的风险。"]
 
 
 def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) -> None:

@@ -43,7 +43,7 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
     assets = list_report_assets(run_path)
-    benchmark_metrics = _benchmark_relative_metrics(run_path)
+    benchmark_metrics = _benchmark_relative_metrics(run_path) if _benchmark_artifact_trusted(repro_audit) else None
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
@@ -460,10 +460,25 @@ def _decision_summary(
 
     return {
         "primary_reason": primary,
-        "supporting": supporting or ["No supporting evidence was strong enough to highlight."],
-        "risks": risks or ["No blocking risks were detected by configured checks."],
+        "supporting": supporting or [messages(lang)["decision_fallbacks"]["no_supporting"]],
+        "risks": risks or [messages(lang)["decision_fallbacks"]["no_risks"]],
         "actions": actions,
     }
+
+
+def _benchmark_artifact_trusted(repro_audit: dict) -> bool:
+    checks = repro_audit.get("checks", [])
+    if not isinstance(checks, list):
+        return True
+    benchmark_check_ids = {"benchmark_hash", "benchmark_curve_hash", "benchmark_equity_hash", "benchmark_prices_hash"}
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if check.get("id") not in benchmark_check_ids:
+            continue
+        if check.get("severity") == "fatal" and check.get("status") == "fail":
+            return False
+    return True
 
 
 def _has_actionable_robustness_warning(robustness_result: dict | None) -> bool:

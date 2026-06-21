@@ -74,12 +74,13 @@ reproducibility checks.
 ## Report And Experiment Log
 
 ```bash
-uv run oxq report write runs/<run_id>/
 uv run oxq experiment add runs/<run_id>/
 ```
 
-The report's executive decision is a framework output, not permission to trade.
-Explain any audit warnings beside the decision.
+Use `research-report-writer` to write `research_report.md` from verified run
+artifacts, then render `research_report.html` from that final Markdown. The
+executive decision is research guidance, not permission to trade. Explain any
+audit warnings beside the decision.
 
 ## SDK Monitoring
 

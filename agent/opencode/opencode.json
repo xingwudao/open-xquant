@@ -21,13 +21,12 @@
     "quant-reporter": {
       "description": "Generate research reports from backtest artifacts",
       "prompt": "agents/quant-reporter.md",
-      "tools": ["report_write", "experiment_add"],
+      "tools": ["experiment_add"],
       "permissions": {
         "read": ["runs/", "experiments.jsonl"],
         "write": [
           "runs/*/research_report.md",
           "runs/*/research_report.html",
-          "runs/*/report_evidence.md",
           "runs/*/report_assets/**"
         ]
       }

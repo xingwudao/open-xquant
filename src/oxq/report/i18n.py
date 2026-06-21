@@ -46,6 +46,10 @@ _MESSAGES: dict[str, dict[str, Any]] = {
             "actions": "建议下一步",
             "primary_reason": "主要理由",
         },
+        "decision_fallbacks": {
+            "no_supporting": "没有足够强的支持证据需要特别强调。",
+            "no_risks": "配置检查未发现阻碍资金决策的风险。",
+        },
         "benchmark_metrics": {
             "title": "基准相对指标",
             "strategy_total_return": "策略总收益",
@@ -170,6 +174,10 @@ _MESSAGES: dict[str, dict[str, Any]] = {
             "risks": "Blocking Risks",
             "actions": "Recommended Next Actions",
             "primary_reason": "Primary reason",
+        },
+        "decision_fallbacks": {
+            "no_supporting": "No supporting evidence was strong enough to highlight.",
+            "no_risks": "No blocking risks were detected by configured checks.",
         },
         "benchmark_metrics": {
             "title": "Benchmark Relative Metrics",

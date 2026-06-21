@@ -9,31 +9,26 @@ description: >-
 # Research Report Writer
 
 Use this skill after the run artifacts, audits, robustness checks, and optional
-chart assets exist. The program may generate conclusions, evidence summaries,
-metrics tables, and figure references, but the Agent must write the final report
-for human decision-making.
+chart assets exist. The program may generate metrics, audit findings,
+robustness outputs, chart files, and asset manifests, but the Agent must write
+the final report for human decision-making.
 
 ## Inputs
 
-Create a deterministic evidence draft first:
+Read:
 
-```bash
-oxq report write runs/<run_id>/ --lang zh --format markdown --out runs/<run_id>/report_evidence.md
-```
-
-Then read:
-
-- `report_evidence.md`
 - `strategy_spec.yaml`
 - `metrics.json`
 - `execution_assumptions.json`
+- reproducibility audit output
+- research-bias audit output
 - `robustness.json` when present
 - `report_assets/manifest.json` and registered figures
 - `equity_curve.csv`, `benchmark_curve.csv`, `trades.csv`, `positions.csv`,
   and `target_weights.csv` only when needed to verify a claim
 
-Do not treat `oxq report write` output as the final report. It is an evidence
-brief and consistency check only.
+Do not call a report-writing CLI or tool. The final report narrative must be
+written by the Agent using this skill, then saved to `research_report.md`.
 
 ## Writing Goal
 

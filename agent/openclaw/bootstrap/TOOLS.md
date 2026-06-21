@@ -46,8 +46,7 @@ oxq audit research runs/<run_id>/
 # 5. Robustness tests
 oxq robustness run runs/<run_id>/
 
-# 6. Generate report
-oxq report write runs/<run_id>/
+# 6. Write final report with the research-report-writer skill
 
 # 7. Register experiment
 oxq experiment add runs/<run_id>/
@@ -123,11 +122,12 @@ Data sources: YFinance (US equities), AkShare (A-shares), WorldBank (macro facto
 |----------|-------------|
 | `oxq robustness run <run_dir>` | Run cost stress, IS/OOS comparison, parameter perturbation, and regime analysis |
 
-### report (1 command)
+### report assets (2 commands)
 
 | Command | Description |
 |----------|-------------|
-| `oxq report write <run_dir>` | Generate research_report.md with executive decision (REJECT/WATCHLIST/CANDIDATE) |
+| `oxq report asset add <run_dir> <file>` | Register a chart or attachment for the final report |
+| `oxq report asset list <run_dir>` | List registered report assets |
 
 ### experiment (1 command)
 

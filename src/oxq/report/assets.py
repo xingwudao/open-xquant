@@ -122,6 +122,25 @@ def list_report_assets(run_dir: str | Path) -> list[ReportAsset]:
     return sorted(parsed, key=_asset_sort_key)
 
 
+def _list_report_assets_for_upsert(run_dir: Path, replacing_asset_id: str) -> list[ReportAsset]:
+    path = manifest_path(run_dir)
+    if not path.exists():
+        return []
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assets = raw.get("assets", [])
+    if not isinstance(assets, list):
+        raise ValueError(f"invalid report asset manifest: {path}")
+    parsed = []
+    for item in assets:
+        if not isinstance(item, dict):
+            continue
+        asset = ReportAsset.from_dict(item)
+        if asset.id == replacing_asset_id:
+            continue
+        parsed.append(_validate_manifest_asset(run_dir, asset))
+    return sorted(parsed, key=_asset_sort_key)
+
+
 def add_report_asset(
     run_dir: str | Path,
     file_path: str | Path,
@@ -143,7 +162,7 @@ def add_report_asset(
         raise FileNotFoundError(f"asset file not found: {source_path}")
 
     asset_id = safe_asset_id(asset_id)
-    existing = [item for item in list_report_assets(run_path) if item.id != asset_id]
+    existing = _list_report_assets_for_upsert(run_path, asset_id)
     suffix = source_path.suffix.lower()
     kind = "figure" if suffix in EMBEDDED_IMAGE_EXTENSIONS else "attachment"
     subdir = "figures" if kind == "figure" else "attachments"

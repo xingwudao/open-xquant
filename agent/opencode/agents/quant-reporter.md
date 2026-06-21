@@ -5,7 +5,8 @@ findings, backtest metrics, robustness results, and registered chart assets
 into a clear research report with an executive decision.
 
 Use the `research-report-writer` skill for the final report narrative.
-The program-generated report is evidence input, not the final human report.
+Program-generated artifacts are evidence inputs; program templates must not
+write the final human report.
 
 ## Workflow
 
@@ -13,16 +14,13 @@ The program-generated report is evidence input, not the final human report.
 2. If the user wants charts, discuss chart requirements, write plotting Python,
    save scripts under `report_assets/scripts`, save figures under
    `report_assets/figures`, and register them with `oxq report asset add`.
-3. Run `oxq report write runs/<run_id>/ --lang zh --format markdown --out runs/<run_id>/report_evidence.md`
-   to generate the deterministic evidence brief.
-4. Read `report_evidence.md`, audit outputs, robustness output, metrics, and
-   registered chart assets.
-5. Use `research-report-writer` to write the final `research_report.md`.
-   Do not treat `oxq report write` output as the final report.
-6. Render `research_report.html` from the final Markdown with
+3. Read audit outputs, robustness output, metrics, execution assumptions,
+   strategy spec, and registered chart assets.
+4. Use `research-report-writer` to write the final `research_report.md`.
+5. Render `research_report.html` from the final Markdown with
    `render_markdown_html_report`.
-7. Run `oxq experiment add runs/<run_id>/` to register the experiment.
-8. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
+6. Run `oxq experiment add runs/<run_id>/` to register the experiment.
+7. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
    PAPER TRADING CANDIDATE)
    and both report paths.
 
@@ -42,4 +40,4 @@ The program-generated report is evidence input, not the final human report.
 - NEVER treat charts as a substitute for audit or robustness evidence.
 - Present the decision honestly, even if unfavorable.
 - Include the specific reasons for the decision in the report.
-- NEVER publish the deterministic `report_evidence.md` as the final report.
+- NEVER use a program template or CLI command to write the final report text.

@@ -456,11 +456,12 @@ baseline Sharpe，而应保留 fragile、warn 和 error 状态。
 
 ---
 
-## 8. Report Generator（新增）
+## 8. Report Assets And Agent Report Writing（新增）
 
-生成 `research_report.md` 和 `research_report.html`。默认语言是中文，
-也支持 `--lang en`。报告读取 run artifacts 和 `report_assets/manifest.json`，
-不会自动猜测或生成图表。
+程序负责生成 run artifacts、审计结果、稳健性结果、指标和图表资产
+manifest。最终 `research_report.md` 必须由 Agent 调用
+`research-report-writer` skill 写作，默认语言是中文；`research_report.html`
+从最终 Markdown 渲染，不重新生成报告叙事。
 
 ```text
 1. 执行结论 / Executive Decision
@@ -490,12 +491,11 @@ runs/<run_id>/
     attachments/
 ```
 
-命令：
+报告资产命令：
 
 ```bash
 oxq report asset add runs/<run_id>/ chart.png --id chart_id --title "Chart"
 oxq report asset list runs/<run_id>/
-oxq report write runs/<run_id>/ --lang zh --format all
 ```
 
 ---
@@ -522,11 +522,11 @@ oxq backtest run strategy_spec.yaml --out runs/auto --json
 oxq audit reproducibility runs/<run_id>/
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
-oxq report write runs/<run_id>/
 oxq experiment add runs/<run_id>/
 ```
 
-CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现。
+CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现；最终研究报告文本由
+Agent skill 完成。
 
 ---
 
@@ -622,7 +622,7 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 | **engine** | `engine_run`, `engine_results`, `engine_trade_list` | 回测执行 |
 | **audit** | `audit_reproducibility`, `audit_research` | 审计 |
 | **robustness** | `robustness_run` | 稳健性测试 |
-| **report** | `report_write` | Markdown/HTML 报告生成 |
+| **report** | report asset CLI only | 图表与附件资产登记 |
 | **experiment** | `experiment_add` | 实验登记 |
 | **optimize** | `grid_search`, `walk_forward`, `cross_validate` | 参数优化 |
 | **factor_eval** | `factor_evaluate`, `factor_evaluate_ts` | 因子评估 |
@@ -705,8 +705,8 @@ agent/opencode/
 
 ### Phase 3: Audit 与 Report ✅ 已完成
 - `src/oxq/audit/reproducibility.py`, `research_bias.py`
-- `src/oxq/report/generator.py`
-- CLI: `oxq audit reproducibility`, `oxq audit research`, `oxq report write`, `oxq experiment add`
+- `src/oxq/report/assets.py`, `html.py`
+- CLI: `oxq audit reproducibility`, `oxq audit research`, `oxq report asset *`, `oxq experiment add`
 
 ### Phase 4: Robustness 与 Experiment Registry ✅ 已完成
 - `src/oxq/robustness/runner.py`
@@ -751,7 +751,6 @@ oxq spec validate strategy_spec.yaml
 oxq backtest run strategy_spec.yaml --out runs/auto --json
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
-oxq report write runs/<run_id>/
 oxq experiment add runs/<run_id>/
 ```
 

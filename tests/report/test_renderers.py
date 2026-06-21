@@ -7,7 +7,7 @@ import yaml
 from oxq.report import generate_report
 from oxq.report.assets import add_report_asset
 from oxq.report.generator import write_report_files
-from oxq.report.html import render_html_report
+from oxq.report.html import render_html_report, render_markdown_html_report
 from oxq.spec.schema import StrategySpec
 
 
@@ -78,6 +78,17 @@ def test_render_html_report_adds_professional_decision_and_table_markup(tmp_path
     assert "<td>Total Return</td>" in html
     assert "markdown-table" not in html
     assert "<script" not in html.lower()
+
+
+def test_render_markdown_html_report_rejects_active_url_schemes() -> None:
+    html = render_markdown_html_report(
+        "# Report\n\n[unsafe](javascript:alert(1))\n\n[ok](https://example.com)\n",
+        lang="en",
+    )
+
+    assert "javascript:" not in html
+    assert '<a href="https://example.com">ok</a>' in html
+    assert "unsafe" in html
 
 
 def test_write_report_files_outputs_markdown_and_html_by_default(tmp_path) -> None:

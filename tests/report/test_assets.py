@@ -99,6 +99,25 @@ def test_add_report_asset_upserts_existing_id(tmp_path) -> None:
     assert (run_dir / "report_assets/figures/same.png").read_bytes() == b"second"
 
 
+def test_add_report_asset_upserts_existing_id_after_in_place_regeneration(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    source = tmp_path / "source.png"
+    source.write_bytes(b"first")
+
+    add_report_asset(run_dir, source, asset_id="same", title="First")
+    regenerated = run_dir / "report_assets/figures/same.png"
+    regenerated.write_bytes(b"regenerated")
+
+    add_report_asset(run_dir, regenerated, asset_id="same", title="Regenerated")
+
+    assets = list_report_assets(run_dir)
+    assert len(assets) == 1
+    assert assets[0].title == "Regenerated"
+    assert assets[0].sha256 != "sha256:stale"
+    assert regenerated.read_bytes() == b"regenerated"
+
+
 def test_add_report_asset_registers_attachment(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

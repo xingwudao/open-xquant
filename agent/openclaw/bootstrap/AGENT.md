@@ -58,7 +58,7 @@ Audit: oxq audit research runs/<run_id>/
     ↓
 Robustness: oxq robustness run runs/<run_id>/
     ↓
-Report: oxq report write runs/<run_id>/
+Report: use `research-report-writer` to write `research_report.md` and render HTML
     ↓
 Register: oxq experiment add runs/<run_id>/
     ↓

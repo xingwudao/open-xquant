@@ -45,16 +45,12 @@ oxq report asset add runs/<run_id>/ runs/<run_id>/report_assets/figures/<figure>
   --source-artifact equity_curve.csv
 ```
 
-5. Generate the evidence brief and hand off final writing.
+5. Hand off final writing to `research-report-writer`.
 
-```bash
-oxq report write runs/<run_id>/ --lang zh --format markdown --out runs/<run_id>/report_evidence.md
-```
-
-Then use `research-report-writer` to write the final Markdown report and render
+Use `research-report-writer` to read run artifacts, audits, robustness output,
+metrics, and registered assets, then write the final Markdown report and render
 HTML from that final Markdown. The expected outputs are:
 
-- `report_evidence.md`
 - `research_report.md`
 - `research_report.html`
 - `report_assets/manifest.json`
