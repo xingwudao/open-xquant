@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 
@@ -19,3 +20,13 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "research_report.html" in text
     assert "Do not modify metrics" in text
     assert "Do not modify audit" in text
+
+
+def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
+    config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
+
+    write_permissions = config["agents"]["quant-reporter"]["permissions"]["write"]
+
+    assert "runs/*/research_report.md" in write_permissions
+    assert "runs/*/research_report.html" in write_permissions
+    assert "runs/*/report_assets/**" in write_permissions

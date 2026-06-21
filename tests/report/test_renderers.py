@@ -91,6 +91,50 @@ def test_write_report_files_outputs_markdown_and_html_by_default(tmp_path) -> No
     assert outputs.html.read_text(encoding="utf-8").startswith("<!doctype html>")
 
 
+def test_write_report_files_format_all_uses_distinct_paths_for_html_out(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    out = tmp_path / "exports" / "report.html"
+
+    outputs = write_report_files(run_dir, output_format="all", out=out)
+
+    assert outputs.markdown == out.with_suffix(".md")
+    assert outputs.html == out
+    assert outputs.markdown.exists()
+    assert outputs.html.exists()
+    assert outputs.markdown.read_text(encoding="utf-8").startswith("# 研究报告: renderer_case")
+    assert outputs.html.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_write_report_files_copies_asset_bundle_next_to_custom_out(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    figure = tmp_path / "equity.png"
+    figure.write_bytes(b"png")
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值")
+    out = tmp_path / "exports" / "report.md"
+
+    outputs = write_report_files(run_dir, output_format="all", out=out)
+
+    assert outputs.markdown == out
+    assert outputs.html == out.with_suffix(".html")
+    assert (out.parent / "report_assets/figures/equity.png").read_bytes() == b"png"
+    assert "![策略净值](report_assets/figures/equity.png)" in out.read_text(encoding="utf-8")
+    assert 'src="report_assets/figures/equity.png"' in outputs.html.read_text(encoding="utf-8")
+
+
+def test_write_report_files_renders_html_from_same_markdown(monkeypatch, tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+
+    monkeypatch.setattr("oxq.report.generator.generate_report", lambda run_dir, lang="zh": "# One\n\nsame markdown")
+    monkeypatch.setattr("oxq.report.html.generate_report", lambda run_dir, lang="zh": "# Two\n\nstale markdown")
+
+    outputs = write_report_files(run_dir, output_format="all")
+
+    assert outputs.markdown.read_text(encoding="utf-8") == "# One\n\nsame markdown"
+    html = outputs.html.read_text(encoding="utf-8")
+    assert "same markdown" in html
+    assert "stale markdown" not in html
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="renderer_case",

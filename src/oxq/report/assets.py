@@ -7,11 +7,13 @@ import json
 import mimetypes
 import shutil
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 EMBEDDED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
 MANIFEST_SCHEMA_VERSION = 1
+URL_RESERVED_PATH_CHARS = {"#", "?"}
+ASSET_KIND_SUBDIR = {"figure": "figures", "attachment": "attachments"}
 
 
 @dataclass(frozen=True)
@@ -94,7 +96,13 @@ def manifest_path(run_dir: str | Path) -> Path:
 
 def safe_asset_id(asset_id: str) -> str:
     candidate = asset_id.strip()
-    if not candidate or candidate in {".", ".."} or "/" in candidate or "\\" in candidate:
+    if (
+        not candidate
+        or candidate in {".", ".."}
+        or "/" in candidate
+        or "\\" in candidate
+        or any(char in candidate for char in URL_RESERVED_PATH_CHARS)
+    ):
         raise ValueError(f"invalid asset id: {asset_id}")
     path = Path(candidate)
     if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
@@ -110,7 +118,7 @@ def list_report_assets(run_dir: str | Path) -> list[ReportAsset]:
     assets = raw.get("assets", [])
     if not isinstance(assets, list):
         raise ValueError(f"invalid report asset manifest: {path}")
-    parsed = [ReportAsset.from_dict(item) for item in assets if isinstance(item, dict)]
+    parsed = [_validate_manifest_asset(Path(run_dir), ReportAsset.from_dict(item)) for item in assets if isinstance(item, dict)]
     return sorted(parsed, key=_asset_sort_key)
 
 
@@ -135,6 +143,7 @@ def add_report_asset(
         raise FileNotFoundError(f"asset file not found: {source_path}")
 
     asset_id = safe_asset_id(asset_id)
+    existing = [item for item in list_report_assets(run_path) if item.id != asset_id]
     suffix = source_path.suffix.lower()
     kind = "figure" if suffix in EMBEDDED_IMAGE_EXTENSIONS else "attachment"
     subdir = "figures" if kind == "figure" else "attachments"
@@ -143,7 +152,7 @@ def add_report_asset(
     if source_path.resolve() != destination.resolve():
         shutil.copy2(source_path, destination)
 
-    copied_script = _copy_source_script(run_path, source_script)
+    copied_script = _copy_source_script(run_path, source_script, asset_id)
     asset = ReportAsset(
         id=asset_id,
         kind=kind,
@@ -160,13 +169,12 @@ def add_report_asset(
         ),
     )
 
-    existing = [item for item in list_report_assets(run_path) if item.id != asset.id]
     existing.append(asset)
     _write_manifest(run_path, existing)
     return asset
 
 
-def _copy_source_script(run_dir: Path, source_script: str | Path | None) -> str | None:
+def _copy_source_script(run_dir: Path, source_script: str | Path | None, asset_id: str) -> str | None:
     if source_script is None:
         return None
     script_path = Path(source_script)
@@ -174,17 +182,58 @@ def _copy_source_script(run_dir: Path, source_script: str | Path | None) -> str 
         raise FileNotFoundError(f"source script not found: {script_path}")
 
     assets_dir = report_assets_dir(run_dir)
+    assets_dir_resolved = assets_dir.resolve()
+    script_path_resolved = script_path.resolve()
     try:
-        return script_path.relative_to(assets_dir).as_posix()
+        return script_path_resolved.relative_to(assets_dir_resolved).as_posix()
     except ValueError:
         destination = assets_dir / "scripts" / script_path.name
+        if destination.exists() and destination.resolve() != script_path_resolved:
+            destination = destination.with_name(f"{asset_id}_{script_path.name}")
         destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(script_path, destination)
+        if destination.resolve() != script_path_resolved:
+            shutil.copy2(script_path, destination)
         return destination.relative_to(assets_dir).as_posix()
 
 
 def _relative_to_report_assets(run_dir: Path, path: Path) -> str:
     return path.relative_to(report_assets_dir(run_dir)).as_posix()
+
+
+def _validate_manifest_asset(run_dir: Path, asset: ReportAsset) -> ReportAsset:
+    relative_path = _validate_manifest_asset_path(asset)
+    asset_path = report_assets_dir(run_dir) / relative_path
+    if not asset_path.exists():
+        raise ValueError(f"missing report asset file: {asset_path}")
+    if asset.sha256:
+        actual_sha256 = _sha256(asset_path)
+        if actual_sha256 != asset.sha256:
+            raise ValueError(f"hash mismatch for report asset {asset.id}: expected {asset.sha256}, got {actual_sha256}")
+    return ReportAsset(
+        id=asset.id,
+        kind=asset.kind,
+        path=relative_path,
+        title=asset.title,
+        caption=asset.caption,
+        section=asset.section,
+        order=asset.order,
+        mime_type=asset.mime_type,
+        sha256=asset.sha256,
+        source=asset.source,
+    )
+
+
+def _validate_manifest_asset_path(asset: ReportAsset) -> str:
+    raw_path = asset.path
+    if "\\" in raw_path or any(char in raw_path for char in URL_RESERVED_PATH_CHARS):
+        raise ValueError(f"invalid report asset path for {asset.id}: {raw_path}")
+    path = PurePosixPath(raw_path)
+    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+        raise ValueError(f"invalid report asset path for {asset.id}: {raw_path}")
+    expected_subdir = ASSET_KIND_SUBDIR.get(asset.kind)
+    if expected_subdir is None or not path.parts or path.parts[0] != expected_subdir:
+        raise ValueError(f"invalid report asset path for {asset.id}: {raw_path}")
+    return path.as_posix()
 
 
 def _write_manifest(run_dir: Path, assets: list[ReportAsset]) -> None:

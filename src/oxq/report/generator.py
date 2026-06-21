@@ -5,6 +5,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import shutil
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -234,27 +235,60 @@ def write_report_files(
     run_path = Path(run_dir)
     markdown_path: Path | None = None
     html_path: Path | None = None
+    report_md: str | None = None
 
     if output_format in {"all", "markdown"}:
         report_md = generate_report(run_path, lang=lang)
-        markdown_path = Path(out) if out is not None else run_path / "research_report.md"
+        markdown_path = _markdown_output_path(run_path, output_format, out)
         markdown_path.parent.mkdir(parents=True, exist_ok=True)
         markdown_path.write_text(report_md, encoding="utf-8")
 
     if output_format in {"all", "html"}:
-        from oxq.report.html import render_html_report
+        from oxq.report.html import render_html_report, render_markdown_html_report
 
-        report_html = render_html_report(run_path, lang=lang)
-        if output_format == "all" and out is not None:
-            html_path = Path(out).with_suffix(".html")
-        elif output_format == "html" and out is not None:
-            html_path = Path(out)
-        else:
-            html_path = run_path / "research_report.html"
+        report_html = (
+            render_markdown_html_report(report_md, lang=lang)
+            if report_md is not None
+            else render_html_report(run_path, lang=lang)
+        )
+        html_path = _html_output_path(run_path, output_format, out)
         html_path.parent.mkdir(parents=True, exist_ok=True)
         html_path.write_text(report_html, encoding="utf-8")
 
+    if out is not None:
+        output_path = markdown_path or html_path
+        if output_path is not None:
+            _copy_report_asset_bundle(run_path, output_path.parent)
+
     return ReportOutputs(markdown=markdown_path, html=html_path)
+
+
+def _markdown_output_path(run_path: Path, output_format: str, out: str | Path | None) -> Path:
+    if out is None:
+        return run_path / "research_report.md"
+    out_path = Path(out)
+    if output_format == "all" and out_path.suffix.lower() == ".html":
+        return out_path.with_suffix(".md")
+    return out_path
+
+
+def _html_output_path(run_path: Path, output_format: str, out: str | Path | None) -> Path:
+    if out is None:
+        return run_path / "research_report.html"
+    out_path = Path(out)
+    if output_format == "html":
+        return out_path
+    return out_path if out_path.suffix.lower() == ".html" else out_path.with_suffix(".html")
+
+
+def _copy_report_asset_bundle(run_path: Path, output_dir: Path) -> None:
+    source = run_path / "report_assets"
+    if not source.exists():
+        return
+    destination = output_dir / "report_assets"
+    if source.resolve() == destination.resolve():
+        return
+    shutil.copytree(source, destination, dirs_exist_ok=True)
 
 
 def _determine_decision(

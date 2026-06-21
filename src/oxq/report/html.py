@@ -15,6 +15,11 @@ _DECISIONS = {"REJECT", "NO EVIDENCE", "WATCHLIST", "PAPER TRADING CANDIDATE"}
 def render_html_report(run_dir: str | Path, lang: str = "zh") -> str:
     """Render a static, offline HTML report from run artifacts."""
     markdown = generate_report(run_dir, lang=lang)
+    return render_markdown_html_report(markdown, lang=lang)
+
+
+def render_markdown_html_report(markdown: str, lang: str = "zh") -> str:
+    """Render a static, offline HTML report from an already generated Markdown report."""
     body = _markdown_to_html(markdown)
     return "\n".join(
         [

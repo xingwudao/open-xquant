@@ -57,6 +57,25 @@ def test_read_curve_csv_handles_mixed_timezone_offsets(tmp_path) -> None:
     assert curve["value"].tolist() == [100000.0, 100500.0]
 
 
+def test_read_curve_csv_preserves_local_dates_for_timezone_aware_midnight(tmp_path) -> None:
+    path = tmp_path / "equity_curve.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "date,value",
+                "2024-01-02 00:00:00+08:00,100000.0",
+                "2024-01-03 00:00:00+08:00,100500.0",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    curve, error = _read_curve_csv(path, "equity_curve.csv")
+
+    assert error is None
+    assert curve["date"].astype(str).tolist() == ["2024-01-02", "2024-01-03"]
+
+
 def test_read_trade_date_counts_handles_mixed_timezone_offsets(tmp_path) -> None:
     path = tmp_path / "trades.csv"
     path.write_text(
@@ -76,6 +95,27 @@ def test_read_trade_date_counts_handles_mixed_timezone_offsets(tmp_path) -> None
     assert {str(date): count for date, count in counts.items()} == {
         "2024-03-08": 1,
         "2024-03-11": 2,
+    }
+
+
+def test_read_trade_date_counts_preserves_local_dates_for_timezone_aware_midnight(tmp_path) -> None:
+    path = tmp_path / "trades.csv"
+    path.write_text(
+        "\n".join(
+            [
+                "symbol,side,shares,filled_price,filled_at,fee",
+                "000001.SZ,buy,1,10,2024-01-02 00:00:00+08:00,1",
+                "000001.SZ,sell,1,11,2024-01-03 00:00:00+08:00,1",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    counts = _read_trade_date_counts(path)
+
+    assert {str(date): count for date, count in counts.items()} == {
+        "2024-01-02": 1,
+        "2024-01-03": 1,
     }
 
 

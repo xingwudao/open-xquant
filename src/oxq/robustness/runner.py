@@ -458,7 +458,7 @@ def _read_curve_csv(path: Path, name: str) -> tuple[pd.DataFrame, str | None]:
         return pd.DataFrame(), f"{name} must contain date and value columns"
 
     curve = curve.loc[:, ["date", "value"]].copy()
-    curve["date"] = pd.to_datetime(curve["date"], errors="coerce", utc=True).dt.date
+    curve["date"] = _parse_local_dates(curve["date"])
     curve["value"] = pd.to_numeric(curve["value"], errors="coerce")
     curve = curve.dropna(subset=["date", "value"]).sort_values("date").reset_index(drop=True)
     return curve, None
@@ -528,9 +528,14 @@ def _read_trade_date_counts(path: Path) -> dict[Any, int]:
         return {}
     if "filled_at" not in trades.columns:
         return {}
-    dates = pd.to_datetime(trades["filled_at"], errors="coerce", utc=True).dt.date.dropna()
+    dates = _parse_local_dates(trades["filled_at"]).dropna()
     counts = dates.value_counts()
     return {date: int(count) for date, count in counts.items()}
+
+
+def _parse_local_dates(values: pd.Series) -> pd.Series:
+    parsed = values.map(lambda value: pd.to_datetime(value, errors="coerce"))
+    return parsed.map(lambda value: value.date() if not pd.isna(value) else pd.NaT)
 
 
 def _finite_float(value: object) -> float | None:

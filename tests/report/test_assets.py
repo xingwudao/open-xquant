@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -17,7 +18,7 @@ def test_safe_asset_id_accepts_simple_ids() -> None:
     assert safe_asset_id("drawdown-curve") == "drawdown-curve"
 
 
-@pytest.mark.parametrize("asset_id", ["", ".", "..", "../x", "a/b", "a\\b"])
+@pytest.mark.parametrize("asset_id", ["", ".", "..", "../x", "a/b", "a\\b", "chart#1", "chart?1"])
 def test_safe_asset_id_rejects_path_like_ids(asset_id: str) -> None:
     with pytest.raises(ValueError, match="invalid asset id"):
         safe_asset_id(asset_id)
@@ -55,6 +56,29 @@ def test_add_report_asset_copies_figure_and_writes_manifest(tmp_path) -> None:
     manifest = json.loads(manifest_path(run_dir).read_text(encoding="utf-8"))
     assert manifest["schema_version"] == 1
     assert manifest["assets"][0]["id"] == "equity_vs_benchmark"
+
+
+def test_add_report_asset_keeps_source_scripts_with_same_basename_distinct(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    figure = tmp_path / "figure.png"
+    figure.write_bytes(b"png")
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    second_dir.mkdir()
+    first_script = first_dir / "plot.py"
+    second_script = second_dir / "plot.py"
+    first_script.write_text("print('first')\n", encoding="utf-8")
+    second_script.write_text("print('second')\n", encoding="utf-8")
+
+    first = add_report_asset(run_dir, figure, asset_id="first_chart", title="First", source_script=first_script)
+    second = add_report_asset(run_dir, figure, asset_id="second_chart", title="Second", source_script=second_script)
+
+    assert first.source.script == "scripts/plot.py"
+    assert second.source.script == "scripts/second_chart_plot.py"
+    assert (run_dir / "report_assets" / first.source.script).read_text(encoding="utf-8") == "print('first')\n"
+    assert (run_dir / "report_assets" / second.source.script).read_text(encoding="utf-8") == "print('second')\n"
 
 
 def test_add_report_asset_upserts_existing_id(tmp_path) -> None:
@@ -101,6 +125,22 @@ def test_add_report_asset_accepts_file_already_in_report_assets(tmp_path) -> Non
     assert figure.read_bytes() == b"png"
 
 
+def test_add_report_asset_accepts_source_script_already_in_report_assets_with_mixed_paths(tmp_path, monkeypatch) -> None:
+    run_dir = tmp_path / "run"
+    figure = run_dir / "report_assets/figures/equity.png"
+    script = run_dir / "report_assets/scripts/plot.py"
+    figure.parent.mkdir(parents=True)
+    script.parent.mkdir(parents=True)
+    figure.write_bytes(b"png")
+    script.write_text("print('plot')\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    asset = add_report_asset(Path("run"), figure.resolve(), asset_id="equity", title="策略净值", source_script=script.resolve())
+
+    assert asset.source.script == "scripts/plot.py"
+    assert script.read_text(encoding="utf-8") == "print('plot')\n"
+
+
 def test_list_report_assets_sorts_by_section_order_and_id(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -120,3 +160,60 @@ def test_list_report_assets_returns_empty_without_manifest(tmp_path) -> None:
     run_dir.mkdir()
 
     assert list_report_assets(run_dir) == []
+
+
+@pytest.mark.parametrize(
+    "manifest_path_value",
+    ["../outside.png", "/tmp/outside.png", "scripts/plot.py", "figures/../outside.png"],
+)
+def test_list_report_assets_rejects_unsafe_manifest_paths(tmp_path, manifest_path_value: str) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    manifest = manifest_path(run_dir)
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "id": "bad",
+                        "kind": "figure",
+                        "path": manifest_path_value,
+                        "title": "Bad",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="invalid report asset path"):
+        list_report_assets(run_dir)
+
+
+def test_list_report_assets_rejects_hash_mismatch(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    figure = run_dir / "report_assets/figures/equity.png"
+    figure.parent.mkdir(parents=True)
+    figure.write_bytes(b"changed")
+    manifest_path(run_dir).write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "assets": [
+                    {
+                        "id": "equity",
+                        "kind": "figure",
+                        "path": "figures/equity.png",
+                        "title": "Equity",
+                        "sha256": "sha256:stale",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="hash mismatch"):
+        list_report_assets(run_dir)
