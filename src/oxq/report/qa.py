@@ -641,12 +641,14 @@ def _percent_context_known_values(
         if monthly_names:
             matched_context = True
             names.update(monthly_names)
-        elif any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
-            marker in line for marker in ("总收益", "累计收益", "超额收益")
+        elif "excess return" in lowered or "超额收益" in line:
+            matched_context = True
+            names.update(_known_number_names(facts, "excess_total_return", scope=scope))
+        elif any(marker in lowered for marker in ("total return", "cumulative return")) or any(
+            marker in line for marker in ("总收益", "累计收益")
         ):
             matched_context = True
             names.update(_known_number_names(facts, "total_return", scope=scope))
-            names.update(_known_number_names(facts, "excess_total_return", scope=scope))
         elif "return" in lowered or "收益" in line:
             matched_context = True
             names.update(_known_number_names(facts, "return", scope=scope))
