@@ -43,13 +43,13 @@ def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
     assert "report_write" not in config["agents"]["quant-reporter"]["tools"]
 
 
-def test_opencode_bundle_packages_report_skills() -> None:
+def test_opencode_bundle_references_single_source_skills() -> None:
     config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
 
-    assert config["skills"]["report-chart-builder"] == "skills/report-chart-builder/SKILL.md"
-    assert config["skills"]["research-report-writer"] == "skills/research-report-writer/SKILL.md"
-    assert Path("agent/opencode/skills/report-chart-builder/SKILL.md").exists()
-    assert Path("agent/opencode/skills/research-report-writer/SKILL.md").exists()
+    for skill_path in config["skills"].values():
+        assert skill_path.startswith("../skills/")
+        assert (Path("agent/opencode") / skill_path).resolve().exists()
+    assert not Path("agent/opencode/skills").exists()
 
 
 def test_research_report_writer_skill_requires_agent_authored_final_report() -> None:
@@ -88,7 +88,7 @@ def test_quant_reporter_routes_final_report_through_writer_skill() -> None:
 
 
 def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
-    text = Path("agent/opencode/skills/quant-research/SKILL.md").read_text(encoding="utf-8")
+    text = Path("agent/skills/quant-research.md").read_text(encoding="utf-8")
 
     assert "Final report QA" in text
     assert "oxq report qa" in text
@@ -100,6 +100,8 @@ def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
 def test_agent_guide_documents_runner_audit_filename_and_report_dates() -> None:
     text = Path("docs/agent-guide.md").read_text(encoding="utf-8")
 
+    assert "skill 单一来源是 `agent/skills/*.md`" in text
+    assert "不要维护 `agent/opencode/skills/`" in text
     assert "current worktree runner" in text
     assert "preferred_runner" in text
     assert "`research_bias_audit.json` is the artifact filename" in text

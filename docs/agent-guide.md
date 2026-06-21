@@ -168,6 +168,12 @@ uv run oxq agent install --target trae --yes
 - OpenClaw: `~/.openclaw/skills/`
 - TRAE: `~/.trae/skills/`
 
+仓库内的 skill 单一来源是 `agent/skills/*.md`。`oxq agent install`、
+`agent upgrade` 和各 Agent 的长期安装都从这个目录读取 skill。
+不要维护 `agent/opencode/skills/` 这样的第二份 skill 副本。
+OpenCode 集成通过 `agent/opencode/opencode.json` 引用同一组
+`agent/skills/*.md` 文件。
+
 ### 3.1 TRAE 安装与使用
 
 TRAE 支持通过 `SKILL.md` 定义技能。open-xquant 的 TRAE 全局安装
