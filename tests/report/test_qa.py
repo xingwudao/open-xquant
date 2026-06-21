@@ -224,6 +224,26 @@ def test_report_qa_does_not_match_percent_claims_against_counts(tmp_path) -> Non
     assert any(finding.id == "numeric_claim_unverified" and "200.00%" in finding.message for finding in result.findings)
 
 
+def test_report_qa_matches_percent_claims_to_metric_context(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "max_drawdown": -0.05})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The max drawdown was 20.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
+
+
 def test_report_qa_does_not_treat_generic_font_sans_serif_as_cjk_font(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     script = run_dir / "report_assets/scripts/plot.py"
@@ -306,6 +326,66 @@ def test_report_qa_rejects_figure_kind_outside_figures_dir(tmp_path) -> None:
 
     assert result.status == "fail"
     assert any(finding.id == "asset_kind_path_mismatch" for finding in result.findings)
+
+
+def test_report_qa_requires_manifest_asset_hash(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    asset_path = run_dir / "report_assets/attachments/notes.txt"
+    asset_path.parent.mkdir(parents=True)
+    asset_path.write_text("notes", encoding="utf-8")
+    _write_manifest(
+        run_dir,
+        [
+            {
+                "id": "notes",
+                "kind": "attachment",
+                "path": "attachments/notes.txt",
+                "title": "Notes",
+                "caption": "",
+                "section": "appendix",
+                "order": 10,
+                "mime_type": "text/plain",
+                "sha256": "",
+            }
+        ],
+    )
+    markdown = "# Report\n\nEffective last trading day: 2024-03-29\n\nConfigured end date: 2024-03-31\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "asset_hash_missing" for finding in result.findings)
+
+
+def test_report_qa_rejects_directory_manifest_asset_paths(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    (run_dir / "report_assets/attachments").mkdir(parents=True)
+    _write_manifest(
+        run_dir,
+        [
+            {
+                "id": "notes",
+                "kind": "attachment",
+                "path": "attachments",
+                "title": "Notes",
+                "caption": "",
+                "section": "appendix",
+                "order": 10,
+                "mime_type": "text/plain",
+                "sha256": "sha256:unused",
+            }
+        ],
+    )
+    markdown = "# Report\n\nEffective last trading day: 2024-03-29\n\nConfigured end date: 2024-03-31\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "asset_file_not_regular" for finding in result.findings)
 
 
 def test_report_qa_allows_total_and_oos_trade_counts_on_same_line(tmp_path) -> None:

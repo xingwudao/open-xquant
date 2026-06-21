@@ -263,12 +263,19 @@ def _check_manifest_assets(run_path: Path, assets: list[dict[str, Any]], finding
         if not asset_path.exists():
             findings.append(ReportQAFinding("asset_file_missing", "fatal", f"asset {asset_id} file is missing: {relative_path}"))
             continue
+        if not asset_path.is_file():
+            findings.append(
+                ReportQAFinding("asset_file_not_regular", "fatal", f"asset {asset_id} path is not a regular file: {relative_path}")
+            )
+            continue
         size = asset_path.stat().st_size
         if size <= 0:
             findings.append(ReportQAFinding("asset_file_empty", "fatal", f"asset {asset_id} file is empty: {relative_path}"))
             continue
         expected_hash = asset.get("sha256")
-        if isinstance(expected_hash, str) and expected_hash:
+        if not isinstance(expected_hash, str) or not expected_hash:
+            findings.append(ReportQAFinding("asset_hash_missing", "fatal", f"asset {asset_id} is missing sha256"))
+        else:
             actual_hash = _sha256(asset_path)
             if actual_hash != expected_hash:
                 findings.append(
@@ -379,21 +386,24 @@ def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings:
 
 def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQAFinding], *, source_label: str) -> None:
     percent_values = _known_values(facts, _is_percent_known_number)
-    for match in _PERCENT_RE.finditer(text):
-        parsed = _finite_float(match.group("value"))
-        if parsed is None:
-            continue
-        value = parsed / 100.0
-        if not any(_numbers_close(value, known) for known in percent_values):
-            findings.append(
-                ReportQAFinding(
-                    "numeric_claim_unverified",
-                    "warning",
-                    f"{source_label} percentage claim {match.group(0)} was not found in metrics or report facts",
-                )
-            )
-    all_known_values = _known_values(facts, lambda _name: True)
     lines = text.splitlines()
+    for line_number, line in enumerate(lines, start=1):
+        context_percent_values = _percent_context_known_values(line, facts)
+        known_percent_values = context_percent_values if context_percent_values is not None else percent_values
+        for match in _PERCENT_RE.finditer(line):
+            parsed = _finite_float(match.group("value"))
+            if parsed is None:
+                continue
+            value = parsed / 100.0
+            if not any(_numbers_close(value, known) for known in known_percent_values):
+                findings.append(
+                    ReportQAFinding(
+                        "numeric_claim_unverified",
+                        "warning",
+                        f"{source_label} percentage claim {match.group(0)} on line {line_number} was not found in metrics or report facts",
+                    )
+                )
+    all_known_values = _known_values(facts, lambda _name: True)
     for line_number, line in enumerate(lines, start=1):
         if _skip_plain_number_line(line):
             continue
@@ -472,6 +482,34 @@ def _context_known_values(line: str, facts: ReportFacts) -> list[float]:
     if not names:
         return []
     return _known_values(facts, lambda name: name in names)
+
+
+def _percent_context_known_values(line: str, facts: ReportFacts) -> list[float] | None:
+    lowered = line.lower()
+    names: set[str] = set()
+    drawdown_context = "drawdown" in lowered or "回撤" in line
+    if drawdown_context:
+        names.update(_known_number_names(facts, "drawdown"))
+    if any(marker in lowered for marker in ("annualized return", "annual return", "cagr")) or "年化收益" in line:
+        names.update(_known_number_names(facts, "annualized_return"))
+        names.update(_known_number_names(facts, "cagr"))
+    if any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
+        marker in line for marker in ("总收益", "累计收益", "超额收益")
+    ):
+        names.update(_known_number_names(facts, "total_return"))
+        names.update(_known_number_names(facts, "excess_total_return"))
+    elif "return" in lowered or "收益" in line:
+        names.update(_known_number_names(facts, "return"))
+    if "volatility" in lowered or "波动" in line:
+        names.update(_known_number_names(facts, "volatility"))
+    if "win rate" in lowered or "胜率" in line:
+        names.update(_known_number_names(facts, "rate"))
+    if not names:
+        return None
+    values = _known_values(facts, lambda name: name in names)
+    if drawdown_context:
+        values.extend(abs(value) for value in list(values))
+    return values
 
 
 def _known_number_names(facts: ReportFacts, marker: str) -> set[str]:

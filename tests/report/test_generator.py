@@ -912,6 +912,19 @@ def test_report_regime_only_config_does_not_claim_no_robustness_tests(tmp_path) 
     assert "(No robustness tests configured)" not in report
 
 
+def test_generated_report_discloses_configured_and_effective_dates(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-02,100\n2024-01-03,101\n",
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "**Configured end date**: 2024-01-03" in report
+    assert "**Effective last trading day**: 2024-01-03" in report
+
+
 def _write_report_run(tmp_path):
     spec = StrategySpec.template(
         strategy_id="report_execution_assumptions",

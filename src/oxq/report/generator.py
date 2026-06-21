@@ -14,7 +14,9 @@ import yaml
 
 from oxq.audit.reproducibility import audit_reproducibility
 from oxq.audit.research_bias import audit_research
+from oxq.report.artifacts import RunArtifacts
 from oxq.report.assets import ReportAsset, list_report_assets
+from oxq.report.facts import ReportFacts, build_report_facts
 from oxq.report.i18n import messages
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
@@ -37,6 +39,7 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     spec = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml"))
     spec_dict = yaml.safe_load((run_path / "strategy_spec.yaml").read_text(encoding="utf-8")) or {}
     metrics = json.loads((run_path / "metrics.json").read_text(encoding="utf-8"))
+    facts = build_report_facts(RunArtifacts.load(run_path))
     execution_assumptions = _load_execution_assumptions(run_path)
     repro_audit = audit_reproducibility(run_dir)
     robustness_result = _load_verified_robustness_result(run_path, repro_audit)
@@ -108,6 +111,7 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     lines.append(f"- **{labels['slippage']}**: {spec.cost.slippage_rate:.3%}")
     lines.append(f"- **{labels['initial_cash']}**: ${spec.execution.initial_cash:,.0f}")
     lines.append(f"- **{labels['price_adjustment']}**: {spec.data.price_adjustment}")
+    lines.extend(_format_date_fact_lines(facts, lang))
     if execution_assumptions is not None:
         lines.append("")
         lines.append(f"### {subheadings['execution_assumptions']}")
@@ -660,6 +664,14 @@ def _format_key_metric_snapshot_lines(metrics: dict, decision: str, lang: str) -
         (labels["cost_paid"], _format_money(metrics.get("cost_paid"))),
     ]
     return _format_metric_table_lines(rows, lang)
+
+
+def _format_date_fact_lines(facts: ReportFacts, lang: str) -> list[str]:
+    labels = messages(lang)["labels"]
+    return [
+        f"- **{labels['configured_end_date']}**: {facts.configured_end_date or 'N/A'}",
+        f"- **{labels['effective_last_trading_day']}**: {facts.effective_last_trading_day or 'N/A'}",
+    ]
 
 
 def _format_main_metric_lines(metrics: dict, lang: str) -> list[str]:
