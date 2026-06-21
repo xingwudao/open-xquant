@@ -9,11 +9,16 @@ or edit duplicate skills under `agent/opencode/skills/`.
 ## Usage
 
 Copy or symlink the repository `agent/` directory to your OpenCode workspace so
-`agent/opencode/opencode.json` can reference the shared `agent/skills/` files:
+`agent/opencode/opencode.json` can load the shared `agent/skills/` directory:
 
 ```bash
 cp -r agent /path/to/opencode/workspace/
 ```
+
+The canonical skill text lives in `agent/skills/*.md`. OpenCode discovers
+skills through `agent/skills/<name>/SKILL.md` symlink adapters that point back
+to those canonical files. Keep those adapters inside `agent/skills/`; never
+create a second skill copy under `agent/opencode/skills/`.
 
 ## Agent Roles
 

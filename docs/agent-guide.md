@@ -171,8 +171,10 @@ uv run oxq agent install --target trae --yes
 仓库内的 skill 单一来源是 `agent/skills/*.md`。`oxq agent install`、
 `agent upgrade` 和各 Agent 的长期安装都从这个目录读取 skill。
 不要维护 `agent/opencode/skills/` 这样的第二份 skill 副本。
-OpenCode 集成通过 `agent/opencode/opencode.json` 引用同一组
-`agent/skills/*.md` 文件。
+OpenCode 集成通过 `agent/opencode/opencode.json` 的 `skills.paths`
+加载 `agent/skills/`。为了符合 OpenCode 的 `<name>/SKILL.md` 发现规则，
+`agent/skills/<name>/SKILL.md` 可以是指向同目录 canonical `.md` 文件的
+symlink 适配器，但不能复制出第二份 skill 内容。
 
 ### 3.1 TRAE 安装与使用
 

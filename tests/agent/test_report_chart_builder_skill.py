@@ -46,10 +46,19 @@ def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
 def test_opencode_bundle_references_single_source_skills() -> None:
     config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
 
-    assert config["skills"]["research-report-reviewer"] == "../skills/research-report-reviewer.md"
-    for skill_path in config["skills"].values():
-        assert skill_path.startswith("../skills/")
-        assert (Path("agent/opencode") / skill_path).resolve().exists()
+    assert config["skills"] == {"paths": ["../skills"]}
+    opencode_skill_names = {
+        "quant-research",
+        "report-chart-builder",
+        "research-report-reviewer",
+        "research-report-writer",
+    }
+    for skill_name in opencode_skill_names:
+        canonical = Path("agent/skills") / f"{skill_name}.md"
+        adapter = Path("agent/skills") / skill_name / "SKILL.md"
+        assert canonical.exists()
+        assert adapter.is_symlink()
+        assert adapter.resolve() == canonical.resolve()
     assert not Path("agent/opencode/skills").exists()
 
 
@@ -124,6 +133,7 @@ def test_agent_guide_documents_runner_audit_filename_and_report_dates() -> None:
 
     assert "skill 单一来源是 `agent/skills/*.md`" in text
     assert "不要维护 `agent/opencode/skills/`" in text
+    assert "`skills.paths`" in text
     assert "current worktree runner" in text
     assert "preferred_runner" in text
     assert "`research_bias_audit.json` is the artifact filename" in text
