@@ -87,6 +87,32 @@ def test_report_qa_command_leaves_semantic_advisory_checks_to_skill(tmp_path) ->
     assert "cjk_font_unverified" not in finding_ids
 
 
+def test_report_qa_command_keeps_source_script_path_validation_deterministic(tmp_path) -> None:
+    run_dir = _write_cli_qa_run(tmp_path)
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    add_report_asset(run_dir, figure, asset_id="equity", title="Equity")
+    manifest_path = run_dir / "report_assets/manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["assets"][0]["source"] = {"script": "../plot.py"}
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "![Equity](report_assets/figures/equity.png)\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["report", "qa", str(run_dir), "--json"])
+
+    assert result.exit_code == 1, result.output
+    payload = json.loads(result.output)
+    finding_ids = {finding["id"] for finding in payload["findings"]}
+    assert "source_script_path_invalid" in finding_ids
+
+
 def _write_cli_qa_run(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()

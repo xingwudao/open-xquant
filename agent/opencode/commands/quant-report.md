@@ -27,7 +27,9 @@ Generate a human-written research report with executive decision.
    `oxq report qa runs/<run_id>/`.
 8. Use `research-report-reviewer` to review decision consistency, audit and
    robustness fidelity, warning triage, chart narrative, and report structure.
-   If it finds blocking issues, revise the report and rerun `oxq report qa`.
+   If it finds blocking issues, revise the Markdown report, render
+   `research_report.html` again from the updated Markdown, and rerun
+   `oxq report qa`.
 9. `oxq experiment add runs/<run_id>/` — register in experiment log.
 10. Present the executive decision, key findings, and report paths.
 

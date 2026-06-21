@@ -46,7 +46,7 @@ def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
 def test_opencode_bundle_references_single_source_skills() -> None:
     config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
 
-    assert config["skills"] == {"paths": ["../skills"]}
+    assert config["skills"] == {"paths": ["agent/skills"]}
     opencode_skill_names = {
         "quant-research",
         "report-chart-builder",
@@ -109,6 +109,7 @@ def test_quant_reporter_routes_final_report_through_writer_skill() -> None:
 
     assert "research-report-writer" in combined
     assert "research-report-reviewer" in combined
+    assert "render `research_report.html` again" in combined
     assert "render_markdown_html_report" in combined
     assert "oxq report asset add-batch" in combined
     assert "Final report QA" in combined
@@ -123,6 +124,7 @@ def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
     assert "Final report QA" in text
     assert "oxq report qa" in text
     assert "research-report-reviewer" in text
+    assert "render `research_report.html`" in text
     assert "Markdown/HTML image counts" in text
     assert "configured end date" in text
     assert "effective last trading day" in text
@@ -134,6 +136,8 @@ def test_agent_guide_documents_runner_audit_filename_and_report_dates() -> None:
     assert "skill 单一来源是 `agent/skills/*.md`" in text
     assert "不要维护 `agent/opencode/skills/`" in text
     assert "`skills.paths`" in text
+    assert "workspace root" in text
+    assert "重新渲染 `research_report.html`" in text
     assert "current worktree runner" in text
     assert "preferred_runner" in text
     assert "`research_bias_audit.json` is the artifact filename" in text

@@ -8,8 +8,10 @@ or edit duplicate skills under `agent/opencode/skills/`.
 
 ## Usage
 
-Copy or symlink the repository `agent/` directory to your OpenCode workspace so
-`agent/opencode/opencode.json` can load the shared `agent/skills/` directory:
+Copy or symlink the repository `agent/` directory to your OpenCode workspace
+root, and load OpenCode from that same workspace root, so
+`agent/opencode/opencode.json` can resolve the shared `agent/skills/`
+directory:
 
 ```bash
 cp -r agent /path/to/opencode/workspace/

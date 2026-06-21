@@ -39,6 +39,6 @@
     "quant-report": "commands/quant-report.md"
   },
   "skills": {
-    "paths": ["../skills"]
+    "paths": ["agent/skills"]
   }
 }

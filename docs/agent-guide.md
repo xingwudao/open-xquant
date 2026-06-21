@@ -172,9 +172,11 @@ uv run oxq agent install --target trae --yes
 `agent upgrade` 和各 Agent 的长期安装都从这个目录读取 skill。
 不要维护 `agent/opencode/skills/` 这样的第二份 skill 副本。
 OpenCode 集成通过 `agent/opencode/opencode.json` 的 `skills.paths`
-加载 `agent/skills/`。为了符合 OpenCode 的 `<name>/SKILL.md` 发现规则，
-`agent/skills/<name>/SKILL.md` 可以是指向同目录 canonical `.md` 文件的
-symlink 适配器，但不能复制出第二份 skill 内容。
+从 workspace root 加载 `agent/skills/`。运行 OpenCode 时，当前工作目录
+应是包含 `agent/` 的工作区根目录。为了符合 OpenCode 的
+`<name>/SKILL.md` 发现规则，`agent/skills/<name>/SKILL.md` 可以是指向
+同目录 canonical `.md` 文件的 symlink 适配器，但不能复制出第二份
+skill 内容。
 
 ### 3.1 TRAE 安装与使用
 
@@ -574,7 +576,9 @@ oxq report qa runs/<run_id>/
 - 检查图表是否支持关键结论，caption 是否准确，中文/CJK 图表是否有
   字体或乱码风险。
 - 如果 reviewer 发现 blocking issue，只改报告叙事或补图表资产；
-  不修改 metrics、audit、robustness 或 backtest artifacts。
+  不修改 metrics、audit、robustness 或 backtest artifacts。改完
+  Markdown 后，必须先从最新 Markdown 重新渲染 `research_report.html`，
+  再运行 `oxq report qa`。
 - 不要修改 `metrics.json`、audit 结果或回测产物来美化图表。
 
 组件扩展：

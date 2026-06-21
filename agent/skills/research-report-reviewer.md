@@ -35,7 +35,8 @@ Read:
 
 Do not rewrite metrics, audits, robustness output, or backtest artifacts. Do not
 rewrite the report to hide adverse evidence. If a report edit is needed, change
-only the narrative and rerun deterministic QA.
+only the narrative, render `research_report.html` again from the updated
+Markdown, and rerun deterministic QA.
 
 ## Review Checklist
 

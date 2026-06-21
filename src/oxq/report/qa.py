@@ -143,6 +143,7 @@ def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) 
     _check_markdown_images(markdown_images, registered_paths, registered_figure_paths, findings)
     _check_html_images(html_images, registered_paths, registered_figure_paths, findings)
     _check_manifest_assets(run_path, manifest_assets, findings)
+    _check_source_script_paths(manifest_assets, findings)
     _check_required_date_disclosure(markdown, html, facts, findings)
     if include_advisory_checks:
         _check_cjk_font_risk(run_path, manifest_assets, findings)
@@ -357,6 +358,21 @@ def _check_manifest_assets(run_path: Path, assets: list[dict[str, Any]], finding
                 findings.append(ReportQAFinding("image_dimensions_invalid", "fatal", f"figure {asset_id} has invalid dimensions"))
 
 
+def _check_source_script_paths(assets: list[dict[str, Any]], findings: list[ReportQAFinding]) -> None:
+    for asset in assets:
+        source = asset.get("source")
+        script_reference = source.get("script") if isinstance(source, dict) else None
+        if isinstance(script_reference, str) and not _safe_source_script_path(script_reference):
+            asset_label = "figure" if asset.get("kind") == "figure" else "asset"
+            findings.append(
+                ReportQAFinding(
+                    "source_script_path_invalid",
+                    "fatal",
+                    f"{asset_label} {asset.get('id', 'unknown')} has unsafe source script path: {script_reference}",
+                )
+            )
+
+
 def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts, findings: list[ReportQAFinding]) -> None:
     html_text = _html_text(html)
     if facts.effective_last_trading_day is None:
@@ -423,13 +439,6 @@ def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings:
         script_reference = source.get("script") if isinstance(source, dict) else None
         if isinstance(script_reference, str):
             if not _safe_source_script_path(script_reference):
-                findings.append(
-                    ReportQAFinding(
-                        "source_script_path_invalid",
-                        "fatal",
-                        f"figure {asset.get('id', 'unknown')} has unsafe source script path: {script_reference}",
-                    )
-                )
                 continue
             script_path = run_path / "report_assets" / script_reference
             script_text = _read_optional_text(script_path)

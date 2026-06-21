@@ -71,6 +71,8 @@ effective last trading day.
 Then use `research-report-reviewer` to check decision_policy consistency,
 audit/robustness fidelity, numeric warning triage, chart narrative quality,
 CJK/font risk, and whether the report structure supports the stated decision.
+If the reviewer requires Markdown report edits, render `research_report.html`
+again from the updated Markdown before rerunning `oxq report qa`.
 
 ## Quality Gates
 

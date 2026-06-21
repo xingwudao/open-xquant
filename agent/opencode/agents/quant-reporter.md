@@ -25,7 +25,8 @@ write the final human report.
 7. Use `research-report-reviewer` to check decision consistency, audit and
    robustness fidelity, numeric warning triage, chart narrative, and report
    structure. Revise only the report narrative if the review finds blocking
-   issues, then rerun deterministic QA.
+   issues. After any Markdown revision, render `research_report.html` again
+   from the updated Markdown, then rerun deterministic QA.
 8. Run `oxq experiment add runs/<run_id>/` to register the experiment.
 9. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
    PAPER TRADING CANDIDATE)
