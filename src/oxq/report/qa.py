@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import json
 import math
@@ -517,7 +518,91 @@ def _normalize_label_text(text: str) -> str:
 
 
 def _has_verified_cjk_font(script_text: str) -> bool:
-    return any(name in script_text for name in _CJK_FONT_NAMES)
+    try:
+        tree = ast.parse(script_text)
+    except SyntaxError:
+        return False
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            if any(_is_rcparams_font_target(target) for target in node.targets) and _ast_contains_cjk_font_name(node.value):
+                return True
+        elif isinstance(node, ast.AnnAssign):
+            if _is_rcparams_font_target(node.target) and _ast_contains_cjk_font_name(node.value):
+                return True
+        elif isinstance(node, ast.Call):
+            if _is_rcparams_update_font_call(node) or _is_matplotlib_rc_font_call(node):
+                return True
+    return False
+
+
+def _is_rcparams_font_target(target: ast.expr) -> bool:
+    if not isinstance(target, ast.Subscript):
+        return False
+    if not _is_rcparams_object(target.value):
+        return False
+    key = _literal_string(target.slice)
+    return key is not None and key.startswith("font.")
+
+
+def _is_rcparams_object(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "rcParams"
+    return isinstance(node, ast.Attribute) and node.attr == "rcParams"
+
+
+def _is_rcparams_update_font_call(node: ast.Call) -> bool:
+    if not (
+        isinstance(node.func, ast.Attribute)
+        and node.func.attr == "update"
+        and _is_rcparams_object(node.func.value)
+    ):
+        return False
+    payloads = [*node.args, *(keyword.value for keyword in node.keywords)]
+    return any(_dict_sets_font_key(payload) and _ast_contains_cjk_font_name(payload) for payload in payloads)
+
+
+def _is_matplotlib_rc_font_call(node: ast.Call) -> bool:
+    name = _call_name(node.func)
+    if name != "rc":
+        return False
+    if not node.args or _literal_string(node.args[0]) != "font":
+        return False
+    payloads = [*node.args[1:], *(keyword.value for keyword in node.keywords)]
+    return any(_ast_contains_cjk_font_name(payload) for payload in payloads)
+
+
+def _call_name(node: ast.expr) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return None
+
+
+def _dict_sets_font_key(node: ast.expr) -> bool:
+    if not isinstance(node, ast.Dict):
+        return False
+    return any(
+        raw_key is not None and (key := _literal_string(raw_key)) is not None and key.startswith("font.")
+        for raw_key in node.keys
+    )
+
+
+def _ast_contains_cjk_font_name(node: ast.AST | None) -> bool:
+    if node is None:
+        return False
+    for child in ast.walk(node):
+        if isinstance(child, ast.Constant) and isinstance(child.value, str):
+            if any(name in child.value for name in _CJK_FONT_NAMES):
+                return True
+    return False
+
+
+def _literal_string(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    return None
 
 
 def _known_values(facts: ReportFacts, include_name: Callable[[str], bool]) -> list[float]:
@@ -644,11 +729,18 @@ def _percent_context_known_values(
         elif "excess return" in lowered or "超额收益" in line:
             matched_context = True
             names.update(_known_number_names(facts, "excess_total_return", scope=scope))
+        elif ("benchmark" in lowered or "基准" in line) and (
+            any(marker in lowered for marker in ("total return", "cumulative return")) or any(
+                marker in line for marker in ("总收益", "累计收益")
+            )
+        ):
+            matched_context = True
+            names.update(_known_benchmark_total_return_names(facts, scope=scope))
         elif any(marker in lowered for marker in ("total return", "cumulative return")) or any(
             marker in line for marker in ("总收益", "累计收益")
         ):
             matched_context = True
-            names.update(_known_number_names(facts, "total_return", scope=scope))
+            names.update(_known_strategy_total_return_names(facts, scope=scope))
         elif "return" in lowered or "收益" in line:
             matched_context = True
             names.update(_known_number_names(facts, "return", scope=scope))
@@ -846,6 +938,33 @@ def _known_number_names(facts: ReportFacts, marker: str, *, scope: str | None = 
     return _scope_known_number_names(names, scope)
 
 
+def _known_strategy_total_return_names(facts: ReportFacts, *, scope: str | None = None) -> set[str]:
+    names = {
+        str(item["name"])
+        for item in facts.known_numbers
+        if isinstance(item.get("name"), str) and _is_strategy_total_return_name(str(item["name"]))
+    }
+    return _scope_known_number_names(names, scope)
+
+
+def _known_benchmark_total_return_names(facts: ReportFacts, *, scope: str | None = None) -> set[str]:
+    names = {
+        str(item["name"])
+        for item in facts.known_numbers
+        if isinstance(item.get("name"), str) and _is_benchmark_total_return_name(str(item["name"]))
+    }
+    return _scope_known_number_names(names, scope)
+
+
+def _is_strategy_total_return_name(name: str) -> bool:
+    leaf = name.lower().rsplit(".", maxsplit=1)[-1]
+    return leaf in {"total_return", "is_total_return", "oos_total_return", "strategy_total_return"}
+
+
+def _is_benchmark_total_return_name(name: str) -> bool:
+    return name.lower().rsplit(".", maxsplit=1)[-1] == "benchmark_total_return"
+
+
 def _scope_known_number_names(names: set[str], scope: str | None) -> set[str]:
     if scope == "oos":
         return {name for name in names if _metric_name_scope(name) == "oos"}
@@ -877,10 +996,32 @@ def _claim_metric_scope(line: str, index: int) -> str | None:
     markers = _scope_markers(line, lowered)
     if not markers:
         return None
-    before = [marker for marker in markers if marker[0] <= index]
+    segment_start, segment_end = _claim_segment_bounds(line, index)
+    segment_markers = [marker for marker in markers if segment_start <= marker[0] < segment_end]
+    before = [marker for marker in segment_markers if marker[0] <= index]
     if before:
         return max(before, key=lambda marker: marker[0])[1]
+    after = [marker for marker in segment_markers if marker[0] > index]
+    if after:
+        return min(after, key=lambda marker: marker[0])[1]
     return None
+
+
+def _claim_segment_bounds(line: str, index: int) -> tuple[int, int]:
+    boundaries = [match.start() for match in re.finditer(r"[,，;；。!?！？|]", line)]
+    boundaries.extend(
+        match.start()
+        for match in re.finditer(r"\.", line)
+        if not (
+            match.start() > 0
+            and match.start() + 1 < len(line)
+            and line[match.start() - 1].isdigit()
+            and line[match.start() + 1].isdigit()
+        )
+    )
+    start = max((position + 1 for position in boundaries if position < index), default=0)
+    end = min((position for position in boundaries if position > index), default=len(line))
+    return start, end
 
 
 def _scope_markers(line: str, lowered: str | None = None) -> list[tuple[int, str]]:
@@ -1124,9 +1265,7 @@ class _HTMLTextParser(HTMLParser):
         "section",
         "table",
         "tbody",
-        "td",
         "tfoot",
-        "th",
         "thead",
         "tr",
         "ul",

@@ -301,6 +301,26 @@ def test_report_qa_keeps_excess_return_context_exclusive(tmp_path) -> None:
     assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
 
 
+def test_report_qa_keeps_total_return_context_exclusive(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "benchmark_total_return": 0.07, "excess_total_return": 0.05})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return was 5.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "5.00%" in finding.message for finding in result.findings)
+
+
 def test_report_qa_matches_monthly_return_claims_to_mentioned_month(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     markdown = (
@@ -419,6 +439,26 @@ def test_report_qa_does_not_scope_prior_total_return_to_later_oos_label(tmp_path
     result = run_report_qa(run_dir)
 
     assert result.status == "pass"
+
+
+def test_report_qa_binds_scope_markers_after_percent_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "oos_total_return": -0.1})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "20.00% OOS total return.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
 
 
 def test_report_qa_restricts_prior_unscoped_return_on_mixed_scope_line(tmp_path) -> None:
@@ -555,6 +595,32 @@ def test_report_qa_does_not_treat_generic_font_sans_serif_as_cjk_font(tmp_path) 
     assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
 
 
+def test_report_qa_requires_actual_cjk_font_configuration(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    script = run_dir / "report_assets/scripts/plot.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        (
+            "import matplotlib.pyplot as plt\n"
+            "# Noto Sans CJK SC should be configured by callers.\n"
+            "font_candidates = ['Noto Sans CJK SC']\n"
+            "plt.title('策略净值')\n"
+        ),
+        encoding="utf-8",
+    )
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值", source_script=script)
+    markdown = "# 研究报告\n\n有效数据最后交易日：2024-03-29\n\n配置结束日：2024-03-31\n\n![策略净值](report_assets/figures/equity.png)\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
 def test_report_qa_checks_numeric_claims_in_html_text(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     markdown = (
@@ -578,6 +644,36 @@ def test_report_qa_checks_numeric_claims_in_html_text(tmp_path) -> None:
     assert result.status == "warn"
     assert any(
         finding.id == "numeric_claim_unverified" and "HTML" in finding.message and "99.00%" in finding.message
+        for finding in result.findings
+    )
+
+
+def test_report_qa_preserves_html_table_row_context_for_numbers(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "max_drawdown": -0.05})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The total return was 20.00%.\n"
+    )
+    html = (
+        "<!doctype html><html><body>"
+        "<p>Effective last trading day: 2024-03-29</p>"
+        "<p>Configured end date: 2024-03-31</p>"
+        "<table><tr><td>Max drawdown</td><td>20.00%</td></tr></table>"
+        "</body></html>"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(html, encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(
+        finding.id == "numeric_claim_unverified" and "HTML" in finding.message and "20.00%" in finding.message
         for finding in result.findings
     )
 
