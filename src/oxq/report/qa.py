@@ -392,13 +392,20 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
     percent_values = _known_values(facts, _is_percent_known_number)
     lines = text.splitlines()
     for line_number, line in enumerate(lines, start=1):
-        context_percent_values = _percent_context_known_values(line, facts)
-        known_percent_values = context_percent_values if context_percent_values is not None else percent_values
+        has_scope_marker = bool(_scope_markers(line))
         for match in _PERCENT_RE.finditer(line):
             parsed = _finite_float(match.group("value"))
             if parsed is None:
                 continue
             value = parsed / 100.0
+            claim_scope = _claim_metric_scope(line, match.start())
+            context_percent_values = _percent_context_known_values(
+                line,
+                facts,
+                scope_override=claim_scope,
+                use_line_scope=not has_scope_marker,
+            )
+            known_percent_values = context_percent_values if context_percent_values is not None else percent_values
             if not any(_numbers_close(value, known) for known in known_percent_values):
                 findings.append(
                     ReportQAFinding(
@@ -412,12 +419,19 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
         scan_line = _plain_number_scan_line(line)
         if scan_line is None:
             continue
-        context_values = _context_known_values(scan_line, facts)
-        known_values = context_values if context_values is not None else all_known_values
+        has_scope_marker = bool(_scope_markers(scan_line))
         for match in _PLAIN_NUMBER_RE.finditer(scan_line):
             parsed = _finite_float(match.group("value"))
             if parsed is None:
                 continue
+            claim_scope = _claim_metric_scope(scan_line, match.start())
+            context_values = _context_known_values(
+                scan_line,
+                facts,
+                scope_override=claim_scope,
+                use_line_scope=not has_scope_marker,
+            )
+            known_values = context_values if context_values is not None else all_known_values
             if not any(_numbers_close(parsed, known) for known in known_values):
                 findings.append(
                     ReportQAFinding(
@@ -433,7 +447,7 @@ def _has_labeled_date(text: str, expected_date: str, labels: tuple[str, ...]) ->
     for label in labels:
         label_pattern = re.escape(_normalize_label_text(label))
         date_pattern = re.escape(expected_date)
-        if re.search(rf"{label_pattern}[^\n\r\d]{{0,80}}{date_pattern}", normalized):
+        if re.search(rf"{label_pattern}[^\d]{{0,80}}{date_pattern}", normalized):
             return True
     return False
 
@@ -441,7 +455,7 @@ def _has_labeled_date(text: str, expected_date: str, labels: tuple[str, ...]) ->
 def _normalize_label_text(text: str) -> str:
     normalized = text.replace("`", "").replace("*", "").replace("_", "").lower()
     normalized = re.sub(r"<[^>]+>", " ", normalized)
-    return re.sub(r"[ \t]+", " ", normalized)
+    return re.sub(r"\s+", " ", normalized).strip()
 
 
 def _has_verified_cjk_font(script_text: str) -> bool:
@@ -480,9 +494,15 @@ def _is_percent_known_number(name: str) -> bool:
     )
 
 
-def _context_known_values(line: str, facts: ReportFacts) -> list[float] | None:
+def _context_known_values(
+    line: str,
+    facts: ReportFacts,
+    *,
+    scope_override: str | None = None,
+    use_line_scope: bool = True,
+) -> list[float] | None:
     lowered = line.lower()
-    scope = _line_metric_scope(line, lowered)
+    scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
     names: set[str] = set()
     matched_context = False
     if ("oos" in lowered or "样本外" in line) and ("trade" in lowered or "交易" in line):
@@ -522,9 +542,15 @@ def _context_known_values(line: str, facts: ReportFacts) -> list[float] | None:
     return _known_values(facts, lambda name: name in names)
 
 
-def _percent_context_known_values(line: str, facts: ReportFacts) -> list[float] | None:
+def _percent_context_known_values(
+    line: str,
+    facts: ReportFacts,
+    *,
+    scope_override: str | None = None,
+    use_line_scope: bool = True,
+) -> list[float] | None:
     lowered = line.lower()
-    scope = _line_metric_scope(line, lowered)
+    scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
     names: set[str] = set()
     matched_context = False
     drawdown_context = "drawdown" in lowered or "回撤" in line
@@ -591,11 +617,33 @@ def _metric_name_scope(name: str) -> str | None:
 
 
 def _line_metric_scope(line: str, lowered: str) -> str | None:
-    oos = bool(re.search(r"\boos\b", lowered)) or "out-of-sample" in lowered or "out of sample" in lowered or "样本外" in line
-    is_scope = bool(re.search(r"\bIS\b", line)) or "in-sample" in lowered or "in sample" in lowered or "样本内" in line
-    if oos == is_scope:
+    scopes = {scope for _, scope in _scope_markers(line, lowered)}
+    if len(scopes) != 1:
         return None
-    return "oos" if oos else "is"
+    return next(iter(scopes))
+
+
+def _claim_metric_scope(line: str, index: int) -> str | None:
+    lowered = line.lower()
+    markers = _scope_markers(line, lowered)
+    if not markers:
+        return None
+    before = [marker for marker in markers if marker[0] <= index]
+    if before:
+        return max(before, key=lambda marker: marker[0])[1]
+    return None
+
+
+def _scope_markers(line: str, lowered: str | None = None) -> list[tuple[int, str]]:
+    lowered = line.lower() if lowered is None else lowered
+    markers: list[tuple[int, str]] = []
+    markers.extend((match.start(), "oos") for match in re.finditer(r"\boos\b", lowered))
+    markers.extend((match.start(), "oos") for match in re.finditer(r"out-of-sample|out of sample", lowered))
+    markers.extend((match.start(), "oos") for match in re.finditer("样本外", line))
+    markers.extend((match.start(), "is") for match in re.finditer(r"\bIS\b", line))
+    markers.extend((match.start(), "is") for match in re.finditer(r"in-sample|in sample", lowered))
+    markers.extend((match.start(), "is") for match in re.finditer("样本内", line))
+    return sorted(markers)
 
 
 def _plain_number_scan_line(line: str) -> str | None:

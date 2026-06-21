@@ -125,6 +125,23 @@ def test_report_qa_flags_missing_html_date_disclosures(tmp_path) -> None:
     assert "html_configured_end_date_missing" in finding_ids
 
 
+def test_report_qa_allows_table_date_disclosures(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "| Field | Value |\n"
+        "| --- | --- |\n"
+        "| Effective last trading day | 2024-03-29 |\n"
+        "| Configured end date | 2024-03-31 |\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+
+
 def test_report_qa_flags_same_count_different_html_image_sources(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     equity = tmp_path / "equity.png"
@@ -262,6 +279,47 @@ def test_report_qa_respects_oos_scope_for_percent_claims(tmp_path) -> None:
 
     assert result.status == "warn"
     assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_keeps_is_oos_percent_claims_scoped_on_mixed_lines(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"is_total_return": 0.1, "oos_total_return": 0.2})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "IS total return 20.00%, OOS total return 10.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    messages = "\n".join(finding.message for finding in result.findings if finding.id == "numeric_claim_unverified")
+    assert "20.00%" in messages
+    assert "10.00%" in messages
+
+
+def test_report_qa_does_not_scope_prior_total_return_to_later_oos_label(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.1, "oos_total_return": 0.2})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return 10.00%, OOS total return 20.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
 
 
 def test_report_qa_checks_numbers_inside_ordered_list_items(tmp_path) -> None:

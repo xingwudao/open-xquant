@@ -46,6 +46,9 @@ def test_report_facts_compute_dates_months_oos_trades_and_known_numbers(tmp_path
     assert any(item["name"] == "spec.cost.fee_rate" and item["value"] == 0.001 for item in facts.known_numbers)
     assert any(item["name"] == "spec.cost.slippage_rate" and item["value"] == 0.0005 for item in facts.known_numbers)
     assert any(item["name"] == "spec.execution.initial_cash" and item["value"] == 100000.0 for item in facts.known_numbers)
+    assert any(item["name"] == "spec.signal.indicators.momentum.params.window" and item["value"] == 20.0 for item in facts.known_numbers)
+    assert any(item["name"] == "spec.execution.rebalance.interval_days" and item["value"] == 5.0 for item in facts.known_numbers)
+    assert any(item["name"] == "spec.universe.symbols.count" and item["value"] == 3.0 for item in facts.known_numbers)
     assert any(item["name"] == "fact.positive_month_count" and item["value"] == 2.0 for item in facts.known_numbers)
 
 
@@ -57,10 +60,19 @@ def _write_run_with_curves(tmp_path):
     spec.cost.fee_rate = 0.001
     spec.cost.slippage_rate = 0.0005
     spec.execution.initial_cash = 100000
+    spec.execution.rebalance.interval_days = 5
+    spec_dict = spec.to_dict()
+    spec_dict.setdefault("universe", {})["symbols"] = ["AAA", "BBB", "CCC"]
+    spec_dict.setdefault("signal", {})["indicators"] = {
+        "momentum": {
+            "type": "ROC",
+            "params": {"window": 20},
+        }
+    }
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "strategy_spec.yaml").write_text(
-        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        yaml.safe_dump(spec_dict, sort_keys=False),
         encoding="utf-8",
     )
     (run_dir / "metrics.json").write_text(
