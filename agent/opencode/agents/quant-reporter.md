@@ -21,18 +21,27 @@ write the final human report.
 4. Use `research-report-writer` to write the final `research_report.md`.
 5. Render `research_report.html` from the final Markdown with
    `render_markdown_html_report`.
-6. Run Final report QA with `oxq report qa runs/<run_id>/`.
-7. Run `oxq experiment add runs/<run_id>/` to register the experiment.
-8. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
+6. Run deterministic artifact QA with `oxq report qa runs/<run_id>/`.
+7. Use `research-report-reviewer` to check decision consistency, audit and
+   robustness fidelity, numeric warning triage, chart narrative, and report
+   structure. Revise only the report narrative if the review finds blocking
+   issues, then rerun deterministic QA.
+8. Run `oxq experiment add runs/<run_id>/` to register the experiment.
+9. Present the executive decision (REJECT / NO EVIDENCE / WATCHLIST /
    PAPER TRADING CANDIDATE)
    and both report paths.
 
-## Final Report QA
+## Final report QA
 
-`oxq report qa` must check Markdown/HTML image counts, registered asset paths,
-manifest order and hash, CJK font risk, key numeric claims, configured end
-date, and effective last trading day. Fatal findings block presentation as a
-complete report; warnings must be disclosed.
+`oxq report qa` is deterministic artifact QA. It checks Markdown/HTML image
+counts, registered asset paths, manifest order and hash, configured end date,
+and effective last trading day. Fatal findings block presentation as a complete
+report.
+
+`research-report-reviewer` handles semantic report QA that should not be
+hard-coded into the CLI: decision_policy consistency, audit and robustness
+interpretation, numeric warning triage, CJK/font risk, chart narrative quality,
+and whether the report explains risks before promotion.
 
 ## Decision Rules
 

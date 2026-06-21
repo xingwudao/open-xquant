@@ -60,6 +60,33 @@ def test_report_qa_command_can_emit_json(tmp_path) -> None:
     assert payload["facts"]["effective_last_trading_day"] == "2024-03-29"
 
 
+def test_report_qa_command_leaves_semantic_advisory_checks_to_skill(tmp_path) -> None:
+    run_dir = _write_cli_qa_run(tmp_path)
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    script = run_dir / "report_assets/scripts/plot.py"
+    script.parent.mkdir(parents=True)
+    script.write_text('import matplotlib.pyplot as plt\nplt.title("策略净值")\n', encoding="utf-8")
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值", source_script=script)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return was 999.00% and Sharpe was 99.00.\n\n"
+        "![策略净值](report_assets/figures/equity.png)\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["report", "qa", str(run_dir), "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    finding_ids = {finding["id"] for finding in payload["findings"]}
+    assert "numeric_claim_unverified" not in finding_ids
+    assert "cjk_font_unverified" not in finding_ids
+
+
 def _write_cli_qa_run(tmp_path):
     run_dir = tmp_path / "run"
     run_dir.mkdir()

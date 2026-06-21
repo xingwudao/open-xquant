@@ -23,22 +23,31 @@ Generate a human-written research report with executive decision.
    `research_report.md` for human researchers and potential investors.
 6. Render `research_report.html` from final Markdown with
    `render_markdown_html_report`.
-7. Run Final report QA:
+7. Run deterministic artifact QA:
    `oxq report qa runs/<run_id>/`.
-8. `oxq experiment add runs/<run_id>/` — register in experiment log.
-9. Present the executive decision, key findings, and report paths.
+8. Use `research-report-reviewer` to review decision consistency, audit and
+   robustness fidelity, warning triage, chart narrative, and report structure.
+   If it finds blocking issues, revise the report and rerun `oxq report qa`.
+9. `oxq experiment add runs/<run_id>/` — register in experiment log.
+10. Present the executive decision, key findings, and report paths.
 
-## Final Report QA
+## Final report QA
 
-Before presenting the report, `oxq report qa` must pass without fatal findings.
-Review warnings explicitly:
+Before presenting the report, deterministic `oxq report qa` must pass without
+fatal findings. It checks:
 
 - Markdown/HTML image counts match.
 - HTML images only use `report_assets/...` paths.
 - Manifest order and hash checks pass.
-- CJK font risk is reviewed for Chinese charts.
-- Key numbers in prose trace back to artifacts or facts.
 - The report discloses configured end date and effective last trading day.
+
+Then use `research-report-reviewer` for non-deterministic semantic QA:
+
+- Final decision matches `decision_policy`, metrics, audits, and robustness.
+- Audit and robustness warnings are faithfully explained.
+- Numeric warnings are triaged instead of treated as warning flood.
+- CJK/font and chart quality are inspected from final report context.
+- Report structure supports human research decisions.
 
 ## Decision Scale
 

@@ -109,8 +109,13 @@ class ReportQAResult:
         }
 
 
-def run_report_qa(run_dir: str | Path) -> ReportQAResult:
-    """Run final report QA checks for a backtest run directory."""
+def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) -> ReportQAResult:
+    """Run report QA checks for a backtest run directory.
+
+    Deterministic artifact checks always run. Advisory semantic checks are kept
+    available for targeted tests and tooling, but the CLI leaves them to the
+    research-report-reviewer skill by default.
+    """
     run_path = Path(run_dir)
     artifacts = RunArtifacts.load(run_path)
     facts = build_report_facts(artifacts)
@@ -139,9 +144,10 @@ def run_report_qa(run_dir: str | Path) -> ReportQAResult:
     _check_html_images(html_images, registered_paths, registered_figure_paths, findings)
     _check_manifest_assets(run_path, manifest_assets, findings)
     _check_required_date_disclosure(markdown, html, facts, findings)
-    _check_cjk_font_risk(run_path, manifest_assets, findings)
-    _check_numeric_claims(markdown, facts, findings, source_label="Markdown")
-    _check_numeric_claims(_html_text(html), facts, findings, source_label="HTML")
+    if include_advisory_checks:
+        _check_cjk_font_risk(run_path, manifest_assets, findings)
+        _check_numeric_claims(markdown, facts, findings, source_label="Markdown")
+        _check_numeric_claims(_html_text(html), facts, findings, source_label="HTML")
 
     status = "fail" if any(f.severity == "fatal" for f in findings) else ("warn" if findings else "pass")
     return ReportQAResult(status=status, findings=findings, facts=facts)

@@ -422,11 +422,11 @@ def report_asset_list(run_dir: str):
 @click.argument("run_dir", type=click.Path(exists=True, file_okay=False))
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON")
 def report_qa(run_dir: str, as_json: bool):
-    """Run QA checks on final Markdown and HTML reports."""
+    """Run deterministic QA checks on final Markdown and HTML reports."""
     from oxq.report.qa import run_report_qa
 
     try:
-        result = run_report_qa(run_dir)
+        result = run_report_qa(run_dir, include_advisory_checks=False)
     except Exception as exc:
         raise click.ClickException(str(exc)) from exc
 
@@ -438,6 +438,7 @@ def report_qa(run_dir: str, as_json: bool):
         click.echo(f"Fatal: {result.fatal_count}, Warnings: {result.warning_count}")
         click.echo(f"Configured end date: {facts.configured_end_date or 'N/A'}")
         click.echo(f"Effective last trading day: {facts.effective_last_trading_day or 'N/A'}")
+        click.echo("Semantic report review: use research-report-reviewer")
         for finding in result.findings:
             click.echo(f"  [{finding.severity}] {finding.id}: {finding.message}")
 

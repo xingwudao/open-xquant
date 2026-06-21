@@ -549,8 +549,30 @@ Skill 文件位于 `agent/skills/`。
 - 最终报告必须披露 effective last trading day 和 configured end date。
   中文报告写作时对应“有效数据最后交易日”和“配置结束日”。
 - 生成 `research_report.md` 和 `research_report.html` 后运行
-  `oxq report qa runs/<run_id>/`，检查 Markdown/HTML 图片数量、
-  manifest 顺序和 hash、HTML 图片路径、字体风险和正文关键数字来源。
+  deterministic artifact QA：
+
+```bash
+oxq report qa runs/<run_id>/
+```
+
+- `oxq report qa` 只负责 deterministic artifact QA：报告文件、
+  Markdown/HTML 图片引用、`report_assets/...` 路径、manifest 顺序和 hash、
+  图片尺寸、configured end date、effective last trading day。
+- 不要把 `oxq report qa` 当成完整研究审稿器。
+
+最终报告语义审查：
+
+- 加载 `agent/skills/research-report-reviewer.md`。
+- 检查最终决策是否符合 `decision_policy`、`metrics.json`、
+  audit artifacts 和 `robustness.json`。
+- 检查 audit warning、robustness warning、regime analysis、
+  perturbation 结果和关键风险是否在报告中被忠实解释。
+- 对 `numeric_claim_unverified` 一类 warning 做归因：报告错误、
+  facts registry 缺口、精度/格式问题或低影响附录数字。
+- 检查图表是否支持关键结论，caption 是否准确，中文/CJK 图表是否有
+  字体或乱码风险。
+- 如果 reviewer 发现 blocking issue，只改报告叙事或补图表资产；
+  不修改 metrics、audit、robustness 或 backtest artifacts。
 - 不要修改 `metrics.json`、audit 结果或回测产物来美化图表。
 
 组件扩展：
