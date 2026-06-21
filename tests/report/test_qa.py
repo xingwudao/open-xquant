@@ -245,6 +245,124 @@ def test_report_qa_does_not_treat_generic_font_sans_serif_as_cjk_font(tmp_path) 
     assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
 
 
+def test_report_qa_checks_numeric_claims_in_html_text(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The total return was 20.00%.\n"
+    )
+    html = (
+        "<!doctype html><html><body>"
+        "<p>Effective last trading day: 2024-03-29</p>"
+        "<p>Configured end date: 2024-03-31</p>"
+        "<p>The total return was 99.00%.</p>"
+        "</body></html>"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(html, encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(
+        finding.id == "numeric_claim_unverified" and "HTML" in finding.message and "99.00%" in finding.message
+        for finding in result.findings
+    )
+
+
+def test_report_qa_rejects_figure_kind_outside_figures_dir(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    asset_path = run_dir / "report_assets/attachments/equity.png"
+    asset_path.parent.mkdir(parents=True)
+    _write_png(asset_path)
+    _write_manifest(
+        run_dir,
+        [
+            {
+                "id": "equity",
+                "kind": "figure",
+                "path": "attachments/equity.png",
+                "title": "Equity",
+                "caption": "",
+                "section": "results",
+                "order": 10,
+                "mime_type": "image/png",
+                "sha256": "",
+            }
+        ],
+    )
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "![Equity](report_assets/attachments/equity.png)\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "asset_kind_path_mismatch" for finding in result.findings)
+
+
+def test_report_qa_allows_total_and_oos_trade_counts_on_same_line(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The run had 2 total trades and 1 OOS trade.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+
+
+def test_report_qa_skips_numbered_markdown_headings(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "## 7. Executive Decision\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+
+
+def test_report_qa_reports_unsafe_source_script_path(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值")
+    manifest = json.loads((run_dir / "report_assets/manifest.json").read_text(encoding="utf-8"))
+    manifest["assets"][0]["source"] = {"script": "../plot.py"}
+    (run_dir / "report_assets/manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    markdown = (
+        "# 研究报告\n\n"
+        "有效数据最后交易日：2024-03-29\n\n"
+        "配置结束日：2024-03-31\n\n"
+        "![策略净值](report_assets/figures/equity.png)\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "source_script_path_invalid" for finding in result.findings)
+
+
 def _write_qa_run(tmp_path):
     spec = StrategySpec.template(strategy_id="qa_case", hypothesis="qa should validate final reports")
     spec.validation.train_period = ["2024-01-02", "2024-01-31"]
@@ -278,3 +396,9 @@ def _write_qa_run(tmp_path):
 
 def _write_png(path) -> None:
     path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR4nGNgYGAAAAAEAAHIiY1AAAAAAElFTkSuQmCC"))
+
+
+def _write_manifest(run_dir, assets: list[dict]) -> None:
+    path = run_dir / "report_assets/manifest.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"schema_version": 1, "assets": assets}), encoding="utf-8")

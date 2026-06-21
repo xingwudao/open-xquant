@@ -42,6 +42,7 @@ _CJK_FONT_NAMES = (
     "Meiryo",
     "Malgun Gothic",
 )
+_ASSET_KIND_REQUIRED_PREFIX = {"figure": "figures", "attachment": "attachments"}
 
 
 @dataclass(frozen=True)
@@ -96,11 +97,7 @@ def run_report_qa(run_dir: str | Path) -> ReportQAResult:
         for asset in manifest_assets
         if isinstance(asset.get("path"), str)
     }
-    registered_figure_paths = {
-        f"report_assets/{asset.get('path')}"
-        for asset in manifest_assets
-        if asset.get("kind") == "figure" and isinstance(asset.get("path"), str)
-    }
+    registered_figure_paths = _registered_figure_paths(manifest_assets)
 
     markdown_images = _markdown_image_sources(markdown)
     html_images = _html_image_sources(html)
@@ -112,7 +109,8 @@ def run_report_qa(run_dir: str | Path) -> ReportQAResult:
     _check_manifest_assets(run_path, manifest_assets, findings)
     _check_required_date_disclosure(markdown, html, facts, findings)
     _check_cjk_font_risk(run_path, manifest_assets, findings)
-    _check_numeric_claims(markdown, facts, findings)
+    _check_numeric_claims(markdown, facts, findings, source_label="Markdown")
+    _check_numeric_claims(_html_text(html), facts, findings, source_label="HTML")
 
     status = "fail" if any(f.severity == "fatal" for f in findings) else ("warn" if findings else "pass")
     return ReportQAResult(status=status, findings=findings, facts=facts)
@@ -159,6 +157,19 @@ def _asset_sort_key(asset: dict[str, Any]) -> tuple[str, int, str]:
     return (str(asset.get("section", "results")), _int_value(asset.get("order"), 100), str(asset.get("id", "")))
 
 
+def _registered_figure_paths(assets: list[dict[str, Any]]) -> set[str]:
+    paths: set[str] = set()
+    for asset in assets:
+        relative_path = asset.get("path")
+        if (
+            asset.get("kind") == "figure"
+            and isinstance(relative_path, str)
+            and _manifest_path_matches_kind(asset.get("kind"), relative_path)
+        ):
+            paths.add(f"report_assets/{relative_path}")
+    return paths
+
+
 def _markdown_image_sources(markdown: str) -> list[str]:
     return [match.group("src").strip() for match in _MD_IMAGE_RE.finditer(markdown)]
 
@@ -167,6 +178,12 @@ def _html_image_sources(html: str) -> list[str]:
     parser = _ImageParser()
     parser.feed(html)
     return parser.sources
+
+
+def _html_text(html: str) -> str:
+    parser = _HTMLTextParser()
+    parser.feed(html)
+    return parser.text()
 
 
 def _check_image_counts(markdown_images: list[str], html_images: list[str], findings: list[ReportQAFinding]) -> None:
@@ -231,6 +248,16 @@ def _check_manifest_assets(run_path: Path, assets: list[dict[str, Any]], finding
         relative_path = asset.get("path")
         if not isinstance(relative_path, str) or not _safe_manifest_asset_path(relative_path):
             findings.append(ReportQAFinding("asset_path_invalid", "fatal", f"asset {asset_id} has unsafe path: {relative_path}"))
+            continue
+        if not _manifest_path_matches_kind(asset.get("kind"), relative_path):
+            expected_prefix = _expected_asset_kind_prefix(asset.get("kind"))
+            findings.append(
+                ReportQAFinding(
+                    "asset_kind_path_mismatch",
+                    "fatal",
+                    f"asset {asset_id} kind {asset.get('kind')} must use {expected_prefix}/ path: {relative_path}",
+                )
+            )
             continue
         asset_path = run_path / "report_assets" / relative_path
         if not asset_path.exists():
@@ -323,8 +350,18 @@ def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings:
         source = asset.get("source")
         script_text = ""
         script_path = None
-        if isinstance(source, dict) and isinstance(source.get("script"), str):
-            script_path = run_path / "report_assets" / source["script"]
+        script_reference = source.get("script") if isinstance(source, dict) else None
+        if isinstance(script_reference, str):
+            if not _safe_source_script_path(script_reference):
+                findings.append(
+                    ReportQAFinding(
+                        "source_script_path_invalid",
+                        "fatal",
+                        f"figure {asset.get('id', 'unknown')} has unsafe source script path: {script_reference}",
+                    )
+                )
+                continue
+            script_path = run_path / "report_assets" / script_reference
             script_text = _read_optional_text(script_path)
         has_cjk = _contains_cjk(title_caption) or _contains_cjk(script_text)
         if not has_cjk:
@@ -340,9 +377,9 @@ def _check_cjk_font_risk(run_path: Path, assets: list[dict[str, Any]], findings:
             )
 
 
-def _check_numeric_claims(markdown: str, facts: ReportFacts, findings: list[ReportQAFinding]) -> None:
+def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQAFinding], *, source_label: str) -> None:
     percent_values = _known_values(facts, _is_percent_known_number)
-    for match in _PERCENT_RE.finditer(markdown):
+    for match in _PERCENT_RE.finditer(text):
         parsed = _finite_float(match.group("value"))
         if parsed is None:
             continue
@@ -352,11 +389,11 @@ def _check_numeric_claims(markdown: str, facts: ReportFacts, findings: list[Repo
                 ReportQAFinding(
                     "numeric_claim_unverified",
                     "warning",
-                    f"percentage claim {match.group(0)} was not found in metrics or report facts",
+                    f"{source_label} percentage claim {match.group(0)} was not found in metrics or report facts",
                 )
             )
     all_known_values = _known_values(facts, lambda _name: True)
-    lines = markdown.splitlines()
+    lines = text.splitlines()
     for line_number, line in enumerate(lines, start=1):
         if _skip_plain_number_line(line):
             continue
@@ -371,7 +408,7 @@ def _check_numeric_claims(markdown: str, facts: ReportFacts, findings: list[Repo
                     ReportQAFinding(
                         "numeric_claim_unverified",
                         "warning",
-                        f"numeric claim {match.group(0)} on line {line_number} was not found in metrics or report facts",
+                        f"{source_label} numeric claim {match.group(0)} on line {line_number} was not found in metrics or report facts",
                     )
                 )
 
@@ -415,6 +452,8 @@ def _context_known_values(line: str, facts: ReportFacts) -> list[float]:
     names: set[str] = set()
     if ("oos" in lowered or "样本外" in line) and ("trade" in lowered or "交易" in line):
         names.update({"metric.oos_trade_count", "fact.oos_trade_count"})
+        if _mentions_total_trades(line, lowered):
+            names.add("metric.trade_count")
     elif "trade" in lowered or "交易" in line:
         names.update({"metric.trade_count", "metric.oos_trade_count", "fact.oos_trade_count"})
     if "positive month" in lowered or "positive months" in lowered or "正收益月份" in line or "正收益月" in line:
@@ -447,11 +486,21 @@ def _skip_plain_number_line(line: str) -> bool:
     stripped = line.strip()
     if not stripped:
         return True
+    if stripped.startswith("#"):
+        return True
+    if re.match(r"^(?:\d+[.)]|\d+(?:\.\d+)+)\s+\D", stripped):
+        return True
     if stripped.startswith("!["):
         return True
     if re.match(r"^(图|figure)\s+\d+[\s.:：]", stripped, flags=re.IGNORECASE):
         return True
     return False
+
+
+def _mentions_total_trades(line: str, lowered: str) -> bool:
+    if any(marker in lowered for marker in ("total trade", "total trades", "trade count", "all trades")):
+        return True
+    return any(marker in line for marker in ("总交易", "交易总数", "全部交易"))
 
 
 def _safe_report_asset_src(src: str) -> bool:
@@ -473,6 +522,27 @@ def _safe_manifest_asset_path(path: str) -> bool:
         return False
     parts = path.split("/")
     return parts[0] in {"figures", "attachments"} and all(part not in {"", ".", ".."} for part in parts)
+
+
+def _manifest_path_matches_kind(kind: Any, path: str) -> bool:
+    return isinstance(kind, str) and path.split("/", 1)[0] == _ASSET_KIND_REQUIRED_PREFIX.get(kind)
+
+
+def _expected_asset_kind_prefix(kind: Any) -> str:
+    return _ASSET_KIND_REQUIRED_PREFIX.get(kind, "figure|attachment")
+
+
+def _safe_source_script_path(path: str) -> bool:
+    stripped = path.strip()
+    if not stripped or stripped.startswith("/") or "\\" in stripped or "%" in stripped:
+        return False
+    if any(ord(char) < 32 for char in stripped):
+        return False
+    parsed = urlsplit(stripped)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        return False
+    parts = parsed.path.split("/")
+    return parts[0] == "scripts" and all(part not in {"", ".", ".."} for part in parts)
 
 
 def _sha256(path: Path) -> str:
@@ -572,3 +642,80 @@ class _ImageParser(HTMLParser):
             if name.lower() == "src" and value is not None:
                 self.sources.append(value.strip())
                 return
+
+
+class _HTMLTextParser(HTMLParser):
+    _BLOCK_TAGS = {
+        "address",
+        "article",
+        "aside",
+        "blockquote",
+        "br",
+        "caption",
+        "div",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "li",
+        "main",
+        "nav",
+        "ol",
+        "p",
+        "section",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "tr",
+        "ul",
+    }
+    _IGNORED_TAGS = {"script", "style", "noscript"}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._lines: list[str] = []
+        self._current: list[str] = []
+        self._ignored_stack: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        del attrs
+        lowered = tag.lower()
+        if lowered in self._IGNORED_TAGS:
+            self._ignored_stack.append(lowered)
+            return
+        if lowered in self._BLOCK_TAGS:
+            self._flush()
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered = tag.lower()
+        if self._ignored_stack and lowered == self._ignored_stack[-1]:
+            self._ignored_stack.pop()
+            return
+        if lowered in self._BLOCK_TAGS:
+            self._flush()
+
+    def handle_data(self, data: str) -> None:
+        if self._ignored_stack:
+            return
+        text = " ".join(data.split())
+        if text:
+            self._current.append(text)
+
+    def text(self) -> str:
+        self._flush()
+        return "\n".join(self._lines)
+
+    def _flush(self) -> None:
+        if not self._current:
+            return
+        self._lines.append(" ".join(self._current))
+        self._current = []
