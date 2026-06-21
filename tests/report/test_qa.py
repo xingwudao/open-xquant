@@ -361,6 +361,26 @@ def test_report_qa_does_not_scope_prior_total_return_to_later_oos_label(tmp_path
     assert result.status == "pass"
 
 
+def test_report_qa_restricts_prior_unscoped_return_on_mixed_scope_line(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.1, "oos_total_return": 0.2})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return 20.00%, OOS total return 20.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
+
+
 def test_report_qa_checks_numbers_inside_ordered_list_items(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     markdown = (
@@ -376,6 +396,22 @@ def test_report_qa_checks_numbers_inside_ordered_list_items(tmp_path) -> None:
 
     assert result.status == "warn"
     assert any(finding.id == "numeric_claim_unverified" and "9.99" in finding.message for finding in result.findings)
+
+
+def test_report_qa_skips_generated_timestamp_clock_components(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "**Generated**: 2024-03-31 12:34:56 UTC\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
 
 
 def test_report_qa_accepts_registered_webp_dimensions(tmp_path) -> None:
@@ -582,6 +618,19 @@ def test_report_qa_rejects_directory_manifest_asset_paths(tmp_path) -> None:
     assert any(finding.id == "asset_file_not_regular" for finding in result.findings)
 
 
+def test_report_qa_rejects_non_object_manifest_entries(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    _write_manifest(run_dir, ["bad"])
+    markdown = "# Report\n\nEffective last trading day: 2024-03-29\n\nConfigured end date: 2024-03-31\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "fail"
+    assert any(finding.id == "manifest_asset_invalid" for finding in result.findings)
+
+
 def test_report_qa_allows_total_and_oos_trade_counts_on_same_line(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     markdown = (
@@ -615,6 +664,84 @@ def test_report_qa_keeps_total_and_oos_trade_counts_claim_specific(tmp_path) -> 
     messages = "\n".join(finding.message for finding in result.findings if finding.id == "numeric_claim_unverified")
     assert "1" in messages
     assert "2" in messages
+
+
+def test_report_qa_does_not_validate_generic_trade_claims_with_oos_count(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The run had 1 trade overall.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "1" in finding.message for finding in result.findings)
+
+
+def test_report_qa_allows_rounded_plain_number_ratio_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"sharpe_ratio": 1.234})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Sharpe Ratio | 1.23\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+
+
+def test_report_qa_matches_win_rate_claims_only_to_win_rate_metrics(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    spec = yaml.safe_load((run_dir / "strategy_spec.yaml").read_text(encoding="utf-8"))
+    spec["cost"] = {"fee_rate": 0.001, "slippage_rate": 0.0005}
+    (run_dir / "strategy_spec.yaml").write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Win rate was 0.10%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "0.10%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_binds_same_line_ratio_claims_to_labels(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"sharpe_ratio": 1.0, "calmar_ratio": 2.0})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Sharpe 2.00, Calmar 1.00.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    messages = "\n".join(finding.message for finding in result.findings if finding.id == "numeric_claim_unverified")
+    assert "2.00" in messages
+    assert "1.00" in messages
 
 
 def test_report_qa_skips_numbered_markdown_headings(tmp_path) -> None:

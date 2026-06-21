@@ -49,6 +49,7 @@ def test_report_facts_compute_dates_months_oos_trades_and_known_numbers(tmp_path
     assert any(item["name"] == "spec.signal.indicators.momentum.params.window" and item["value"] == 20.0 for item in facts.known_numbers)
     assert any(item["name"] == "spec.execution.rebalance.interval_days" and item["value"] == 5.0 for item in facts.known_numbers)
     assert any(item["name"] == "spec.universe.symbols.count" and item["value"] == 3.0 for item in facts.known_numbers)
+    assert any(item["name"] == "metric.metric_assumptions.annualization_days" and item["value"] == 252.0 for item in facts.known_numbers)
     assert any(item["name"] == "fact.positive_month_count" and item["value"] == 2.0 for item in facts.known_numbers)
 
 
@@ -76,7 +77,15 @@ def _write_run_with_curves(tmp_path):
         encoding="utf-8",
     )
     (run_dir / "metrics.json").write_text(
-        json.dumps({"run_id": "facts-run", "trade_count": 3, "oos_trade_count": 2, "sharpe_ratio": 1.23}),
+        json.dumps(
+            {
+                "run_id": "facts-run",
+                "trade_count": 3,
+                "oos_trade_count": 2,
+                "sharpe_ratio": 1.23,
+                "metric_assumptions": {"annualization_days": 252},
+            }
+        ),
         encoding="utf-8",
     )
     (run_dir / "equity_curve.csv").write_text(

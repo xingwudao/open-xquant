@@ -169,7 +169,18 @@ def _manifest_assets(run_path: Path, findings: list[ReportQAFinding]) -> list[di
     if not isinstance(assets, list):
         findings.append(ReportQAFinding("manifest_invalid", "fatal", "report asset manifest must contain an assets array"))
         return []
-    typed_assets = [asset for asset in assets if isinstance(asset, dict)]
+    typed_assets = []
+    for index, asset in enumerate(assets):
+        if not isinstance(asset, dict):
+            findings.append(
+                ReportQAFinding(
+                    "manifest_asset_invalid",
+                    "fatal",
+                    f"report asset manifest entry {index} must be an object",
+                )
+            )
+            continue
+        typed_assets.append(asset)
     expected = sorted(typed_assets, key=_asset_sort_key)
     if typed_assets != expected:
         findings.append(
@@ -425,12 +436,13 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
                 continue
             value = parsed / 100.0
             claim_scope = _claim_metric_scope(line, match.start())
+            scope_override = claim_scope if claim_scope is not None else ("overall" if has_scope_marker else None)
             context_percent_values = _percent_context_known_values(
                 line,
                 facts,
                 claim_start=match.start(),
                 claim_end=match.end(),
-                scope_override=claim_scope,
+                scope_override=scope_override,
                 use_line_scope=not has_scope_marker,
             )
             known_percent_values = context_percent_values if context_percent_values is not None else percent_values
@@ -453,16 +465,17 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
             if parsed is None:
                 continue
             claim_scope = _claim_metric_scope(scan_line, match.start())
+            scope_override = claim_scope if claim_scope is not None else ("overall" if has_scope_marker else None)
             context_values = _context_known_values(
                 scan_line,
                 facts,
                 claim_start=match.start(),
                 claim_end=match.end(),
-                scope_override=claim_scope,
+                scope_override=scope_override,
                 use_line_scope=not has_scope_marker,
             )
             known_values = context_values if context_values is not None else all_known_values
-            if not any(_numbers_close(parsed, known) for known in known_values):
+            if not any(_plain_numbers_close(parsed, known) for known in known_values):
                 findings.append(
                     ReportQAFinding(
                         "numeric_claim_unverified",
@@ -548,22 +561,27 @@ def _context_known_values(
             names.add("metric.trade_count")
     elif "trade" in lowered or "交易" in line:
         matched_context = True
-        names.update({"metric.trade_count", "metric.oos_trade_count", "fact.oos_trade_count"})
+        names.add("metric.trade_count")
     if "positive month" in lowered or "positive months" in lowered or "正收益月份" in line or "正收益月" in line:
         matched_context = True
         names.add("fact.positive_month_count")
     if "negative month" in lowered or "negative months" in lowered or "负收益月份" in line or "负收益月" in line:
         matched_context = True
         names.add("fact.negative_month_count")
-    if "sharpe" in lowered or "夏普" in line:
+    claim_ratio_names = _claim_ratio_names(line, facts, claim_start, claim_end, scope)
+    if claim_ratio_names is not None:
         matched_context = True
-        names.update(_known_number_names(facts, "sharpe", scope=scope))
-    if "calmar" in lowered or "卡玛" in line:
-        matched_context = True
-        names.update(_known_number_names(facts, "calmar", scope=scope))
-    if "sortino" in lowered:
-        matched_context = True
-        names.update(_known_number_names(facts, "sortino", scope=scope))
+        names.update(claim_ratio_names)
+    else:
+        if "sharpe" in lowered or "夏普" in line:
+            matched_context = True
+            names.update(_known_number_names(facts, "sharpe", scope=scope))
+        if "calmar" in lowered or "卡玛" in line:
+            matched_context = True
+            names.update(_known_number_names(facts, "calmar", scope=scope))
+        if "sortino" in lowered:
+            matched_context = True
+            names.update(_known_number_names(facts, "sortino", scope=scope))
     claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end)
     if claim_cost_names is not None:
         matched_context = True
@@ -621,7 +639,8 @@ def _percent_context_known_values(
         names.update(_known_number_names(facts, "volatility", scope=scope))
     if "win rate" in lowered or "胜率" in line:
         matched_context = True
-        names.update(_known_number_names(facts, "rate", scope=scope))
+        names.update(_known_number_names(facts, "win_rate", scope=scope))
+        names.update(_known_number_names(facts, "winrate", scope=scope))
     claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end)
     if claim_cost_names is not None:
         matched_context = True
@@ -732,6 +751,32 @@ def _claim_trade_names(line: str, facts: ReportFacts, claim_start: int | None, c
     return {"metric.trade_count"}
 
 
+def _claim_ratio_names(
+    line: str,
+    facts: ReportFacts,
+    claim_start: int | None,
+    claim_end: int | None,
+    scope: str | None,
+) -> set[str] | None:
+    if claim_start is None or claim_end is None:
+        return None
+    label = _nearest_claim_label(
+        _claim_label_markers(
+            line,
+            (
+                ("sharpe", r"\bsharpe(?:\s+ratio)?\b|夏普"),
+                ("calmar", r"\bcalmar(?:\s+ratio)?\b|卡玛"),
+                ("sortino", r"\bsortino(?:\s+ratio)?\b"),
+            ),
+        ),
+        claim_start,
+        claim_end,
+    )
+    if label is None:
+        return None
+    return _known_number_names(facts, label, scope=scope)
+
+
 def _claim_label_markers(line: str, patterns: tuple[tuple[str, str], ...]) -> list[tuple[int, int, str]]:
     markers: list[tuple[int, int, str]] = []
     for label, pattern in patterns:
@@ -769,6 +814,8 @@ def _scope_known_number_names(names: set[str], scope: str | None) -> set[str]:
         return {name for name in names if _metric_name_scope(name) == "oos"}
     if scope == "is":
         return {name for name in names if _metric_name_scope(name) == "is"}
+    if scope == "overall":
+        return {name for name in names if _metric_name_scope(name) is None}
     return names
 
 
@@ -820,6 +867,7 @@ def _plain_number_scan_line(line: str) -> str | None:
     if re.match(r"^\d+(?:\.\d+)+\s+\D", stripped):
         return None
     stripped = re.sub(r"^\d+[.)]\s+", "", stripped)
+    stripped = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:UTC|Z))?\b", "", stripped)
     if stripped.startswith("!["):
         return None
     if re.match(r"^(图|figure)\s+\d+[\s.:：]", stripped, flags=re.IGNORECASE):
@@ -989,8 +1037,13 @@ def _finite_float(value: Any) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
-def _numbers_close(left: float, right: float) -> bool:
-    return math.isclose(left, right, rel_tol=1e-4, abs_tol=5e-5)
+def _numbers_close(left: float, right: float, *, abs_tol: float = 5e-5) -> bool:
+    return math.isclose(left, right, rel_tol=1e-4, abs_tol=abs_tol)
+
+
+def _plain_numbers_close(left: float, right: float) -> bool:
+    abs_tol = 5e-3 if max(abs(left), abs(right)) >= 1 else 5e-5
+    return _numbers_close(left, right, abs_tol=abs_tol)
 
 
 class _ImageParser(HTMLParser):

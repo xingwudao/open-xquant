@@ -137,10 +137,7 @@ def _known_numbers(
     oos_trade_count: int | None,
 ) -> list[dict[str, float | str]]:
     numbers: list[dict[str, float | str]] = []
-    for key, value in artifacts.metrics.items():
-        parsed = _finite_float(value)
-        if parsed is not None:
-            numbers.append({"name": f"metric.{key}", "value": parsed})
+    _append_nested_numbers(numbers, "metric", artifacts.metrics)
     for item in monthly_returns:
         parsed = _finite_float(item.get("return"))
         if parsed is not None:
@@ -155,25 +152,25 @@ def _known_numbers(
 
 def _strategy_spec_numbers(strategy_spec: dict[str, Any]) -> list[dict[str, float | str]]:
     numbers: list[dict[str, float | str]] = []
-    _append_strategy_spec_numbers(numbers, "spec", strategy_spec)
+    _append_nested_numbers(numbers, "spec", strategy_spec)
     execution = strategy_spec.get("execution")
     if not (isinstance(execution, dict) and "initial_cash" in execution):
         _append_number(numbers, "spec.execution.initial_cash", 100_000.0)
     return numbers
 
 
-def _append_strategy_spec_numbers(numbers: list[dict[str, float | str]], name: str, value: Any) -> None:
+def _append_nested_numbers(numbers: list[dict[str, float | str]], name: str, value: Any) -> None:
     if isinstance(value, bool) or value is None:
         return
     if isinstance(value, dict):
         for key, child in value.items():
             if isinstance(key, str) and key:
-                _append_strategy_spec_numbers(numbers, f"{name}.{key}", child)
+                _append_nested_numbers(numbers, f"{name}.{key}", child)
         return
     if isinstance(value, list):
         _append_number(numbers, f"{name}.count", len(value))
         for index, child in enumerate(value):
-            _append_strategy_spec_numbers(numbers, f"{name}.{index}", child)
+            _append_nested_numbers(numbers, f"{name}.{index}", child)
         return
     _append_number(numbers, name, value)
 
