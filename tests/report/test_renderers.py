@@ -91,6 +91,25 @@ def test_render_markdown_html_report_rejects_active_url_schemes() -> None:
     assert "unsafe" in html
 
 
+def test_render_markdown_html_report_rejects_unsafe_image_sources() -> None:
+    html = render_markdown_html_report(
+        "# Report\n\n"
+        "![unsafe](javascript:alert(1))\n\n"
+        "![local](file:///tmp/equity.png)\n\n"
+        "![remote](https://example.com/equity.png)\n\n"
+        "![encoded](report_assets/%2e%2e/equity.png)\n\n"
+        "![safe](report_assets/figures/equity.png)\n",
+        lang="en",
+    )
+
+    assert "<script" not in html.lower()
+    assert "javascript:" not in html
+    assert "file:///tmp/equity.png" not in html
+    assert "https://example.com/equity.png" not in html
+    assert "report_assets/%2e%2e/equity.png" not in html
+    assert 'src="report_assets/figures/equity.png"' in html
+
+
 def test_render_markdown_html_report_escapes_href_once() -> None:
     html = render_markdown_html_report(
         "# Report\n\n[query](https://example.com/report?a=1&b=2)\n",
@@ -154,6 +173,19 @@ def test_write_report_files_renders_html_from_same_markdown(monkeypatch, tmp_pat
     html = outputs.html.read_text(encoding="utf-8")
     assert "same markdown" in html
     assert "stale markdown" not in html
+
+
+def test_write_report_files_html_only_uses_existing_authored_markdown(monkeypatch, tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "research_report.md").write_text("# Final\n\nagent-authored markdown", encoding="utf-8")
+    monkeypatch.setattr("oxq.report.html.generate_report", lambda run_dir, lang="zh": "# Template\n\nregenerated template")
+
+    outputs = write_report_files(run_dir, output_format="html")
+
+    assert outputs.markdown is None
+    html = outputs.html.read_text(encoding="utf-8")
+    assert "agent-authored markdown" in html
+    assert "regenerated template" not in html
 
 
 def _write_report_run(tmp_path):

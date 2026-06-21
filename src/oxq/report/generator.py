@@ -263,6 +263,8 @@ def write_report_files(
     if output_format in {"all", "html"}:
         from oxq.report.html import render_html_report, render_markdown_html_report
 
+        if report_md is None:
+            report_md = _read_existing_report_markdown(run_path)
         report_html = (
             render_markdown_html_report(report_md, lang=lang)
             if report_md is not None
@@ -278,6 +280,11 @@ def write_report_files(
             _copy_report_asset_bundle(run_path, output_path.parent)
 
     return ReportOutputs(markdown=markdown_path, html=html_path)
+
+
+def _read_existing_report_markdown(run_path: Path) -> str | None:
+    path = run_path / "research_report.md"
+    return path.read_text(encoding="utf-8") if path.exists() else None
 
 
 def _markdown_output_path(run_path: Path, output_format: str, out: str | Path | None) -> Path:
@@ -334,6 +341,9 @@ def _determine_decision(
 
     if _has_no_trade_evidence(metrics):
         return "NO EVIDENCE"
+
+    if _robustness_configured(spec_dict) and robustness_result is None:
+        return "WATCHLIST"
 
     reject_if = decision_policy.get("reject_if", {})
     # OOS policy thresholds require OOS-only metrics.

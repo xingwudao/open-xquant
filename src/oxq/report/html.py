@@ -53,16 +53,20 @@ def _markdown_to_html(markdown: str) -> str:
         line = lines[i]
         image = _IMAGE_RE.match(line)
         if image:
+            src = image.group("src")
+            alt = image.group("alt")
             caption = ""
             skip_until = i + 1
             if i + 2 < len(lines) and not lines[i + 1].strip() and _looks_like_figure_caption(lines[i + 2]):
                 caption = lines[i + 2]
                 skip_until = i + 3
+            if not _is_safe_image_src(src):
+                if alt:
+                    html_lines.append(f"<p>{escape(alt)}</p>")
+                i = skip_until
+                continue
             html_lines.append("<figure>")
-            html_lines.append(
-                f'<img src="{escape(image.group("src"), quote=True)}" '
-                f'alt="{escape(image.group("alt"), quote=True)}">'
-            )
+            html_lines.append(f'<img src="{escape(src, quote=True)}" alt="{escape(alt, quote=True)}">')
             if caption:
                 html_lines.append(f"<figcaption>{escape(caption)}</figcaption>")
             html_lines.append("</figure>")
@@ -164,6 +168,21 @@ def _is_safe_href(href: str) -> bool:
     if any(ord(char) < 32 for char in stripped):
         return False
     return urlsplit(stripped).scheme.lower() in _SAFE_HREF_SCHEMES
+
+
+def _is_safe_image_src(src: str) -> bool:
+    stripped = src.strip()
+    if not stripped or "\\" in stripped or "%" in stripped:
+        return False
+    if any(ord(char) < 32 for char in stripped):
+        return False
+    parsed = urlsplit(stripped)
+    if parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+        return False
+    path = parsed.path
+    if not path.startswith("report_assets/"):
+        return False
+    return all(part not in {"", ".", ".."} for part in path.split("/"))
 
 
 def _stylesheet() -> str:

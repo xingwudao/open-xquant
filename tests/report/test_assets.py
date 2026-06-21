@@ -85,6 +85,34 @@ def test_add_report_asset_keeps_source_scripts_with_same_basename_distinct(tmp_p
     assert (run_dir / "report_assets" / second.source.script).read_text(encoding="utf-8") == "print('second')\n"
 
 
+def test_add_report_asset_avoids_existing_asset_prefixed_script_collision(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    figure = tmp_path / "figure.png"
+    figure.write_bytes(b"png")
+    first_dir = tmp_path / "first"
+    occupied_dir = tmp_path / "occupied"
+    second_dir = tmp_path / "second"
+    first_dir.mkdir()
+    occupied_dir.mkdir()
+    second_dir.mkdir()
+    first_script = first_dir / "plot.py"
+    occupied_script = occupied_dir / "second_chart_plot.py"
+    second_script = second_dir / "plot.py"
+    first_script.write_text("print('first')\n", encoding="utf-8")
+    occupied_script.write_text("print('occupied')\n", encoding="utf-8")
+    second_script.write_text("print('second')\n", encoding="utf-8")
+
+    add_report_asset(run_dir, figure, asset_id="first_chart", title="First", source_script=first_script)
+    occupied = add_report_asset(run_dir, figure, asset_id="occupied_chart", title="Occupied", source_script=occupied_script)
+    second = add_report_asset(run_dir, figure, asset_id="second_chart", title="Second", source_script=second_script)
+
+    assert occupied.source.script == "scripts/second_chart_plot.py"
+    assert second.source.script != "scripts/second_chart_plot.py"
+    assert (run_dir / "report_assets" / occupied.source.script).read_text(encoding="utf-8") == "print('occupied')\n"
+    assert (run_dir / "report_assets" / second.source.script).read_text(encoding="utf-8") == "print('second')\n"
+
+
 def test_add_report_asset_upserts_existing_id(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

@@ -322,12 +322,27 @@ def _copy_source_script(run_dir: Path, source_script: str | Path | None, asset_i
         return script_path_resolved.relative_to(assets_dir_resolved).as_posix()
     except ValueError:
         destination = assets_dir / "scripts" / script_path.name
-        if destination.exists() and destination.resolve() != script_path_resolved:
-            destination = destination.with_name(f"{asset_id}_{script_path.name}")
+        destination = _available_source_script_destination(destination, script_path_resolved, asset_id)
         destination.parent.mkdir(parents=True, exist_ok=True)
         if destination.resolve() != script_path_resolved:
             shutil.copy2(script_path, destination)
         return destination.relative_to(assets_dir).as_posix()
+
+
+def _available_source_script_destination(default_destination: Path, source_resolved: Path, asset_id: str) -> Path:
+    if not default_destination.exists() or default_destination.resolve() == source_resolved:
+        return default_destination
+
+    candidate = default_destination.with_name(f"{asset_id}_{default_destination.name}")
+    if not candidate.exists() or candidate.resolve() == source_resolved:
+        return candidate
+
+    counter = 2
+    while True:
+        candidate = default_destination.with_name(f"{asset_id}_{counter}_{default_destination.name}")
+        if not candidate.exists() or candidate.resolve() == source_resolved:
+            return candidate
+        counter += 1
 
 
 def _relative_to_report_assets(run_dir: Path, path: Path) -> str:

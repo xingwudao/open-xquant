@@ -78,6 +78,21 @@ def test_decision_watchlists_when_promote_oos_metric_is_below_threshold() -> Non
     assert decision == "WATCHLIST"
 
 
+def test_decision_watchlists_when_configured_robustness_is_unverified() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={
+            "robustness": {"cost_multiplier": [2.0]},
+            "decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}},
+        },
+        metrics={"trade_count": 12, "oos_trade_count": 12, "oos_sharpe_ratio": 2.0},
+        repro_audit={"status": "pass"},
+        robustness_result=None,
+    )
+
+    assert decision == "WATCHLIST"
+
+
 def test_decision_rejects_fragile_robustness_result() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
