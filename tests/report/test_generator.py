@@ -99,6 +99,18 @@ def test_decision_rejects_unverified_robustness_result() -> None:
     assert decision == "REJECT"
 
 
+def test_decision_returns_no_evidence_when_oos_has_no_trades() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}}},
+        metrics={"trade_count": 20, "oos_trade_count": 0, "oos_sharpe_ratio": 3.0},
+        repro_audit={"status": "pass"},
+        robustness_result={"status": "warn", "tests": []},
+    )
+
+    assert decision == "NO EVIDENCE"
+
+
 def test_decision_watchlists_warn_robustness_before_promotion() -> None:
     decision = _determine_decision(
         bias_audit={"fatal_count": 0, "warning_count": 0},
@@ -183,6 +195,50 @@ def test_validation_classification_reports_unclassified_failures() -> None:
     assert "- **unclassified**: fatal:metrics_profile_unsupported" in lines
 
 
+def test_report_includes_decision_rationale_and_evidence(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "### Decision Rationale" in report
+    assert "- **Primary reason**:" in report
+    assert "### Supporting Evidence" in report
+    assert "Research bias audit has no fatal findings" in report
+    assert "### Blocking Risks" in report
+    assert "### Recommended Next Actions" in report
+
+
+def test_report_includes_benchmark_relative_metrics(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_benchmark_relative",
+        hypothesis="benchmark relative results should be visible",
+    )
+    spec.benchmark.symbols = ["SPY"]
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-02,100\n2024-01-03,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "### Benchmark Relative Metrics" in report
+    assert "| Strategy Total Return | 20.00% |" in report
+    assert "| Benchmark Total Return | 10.00% |" in report
+    assert "| Excess Total Return | 10.00% |" in report
+
+
 def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
     (run_dir / "execution_assumptions.json").write_text(
@@ -214,6 +270,53 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
     assert "- **default_lot_size**: 100" in report
     assert "- **calendar**: XSHE" in report
     assert "- **runtime_calendar**: XSHG" in report
+
+
+def test_chinese_report_localizes_professional_metric_sections(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "execution_assumptions.json").write_text(
+        json.dumps(
+            {
+                "order_timing": "next_session_open",
+                "price_bar": "next_session",
+                "price_type": "open",
+                "fill_price_mode": "next_open",
+                "cash_annual_return": 0.025,
+            }
+        ),
+        encoding="utf-8",
+    )
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update(
+        {
+            "is_total_return": 0.06,
+            "is_annualized_return": 0.12,
+            "is_annualized_volatility": 0.10,
+            "is_max_drawdown": -0.02,
+            "is_sharpe_ratio": 1.45,
+            "is_calmar_ratio": 6.0,
+            "oos_total_return": 0.04,
+            "oos_annualized_return": 0.08,
+            "oos_annualized_volatility": 0.12,
+            "oos_calmar_ratio": 2.67,
+            "sortino_ratio": 1.4,
+            "calmar_ratio": 1.6,
+            "cost_paid": 3.0,
+        }
+    )
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+
+    report = generate_report(run_dir, lang="zh")
+
+    assert "### 执行假设" in report
+    assert "### 指标口径" in report
+    assert "### IS/OOS 指标" in report
+    assert "| 总收益 | 10.00% |" in report
+    assert "| 样本内夏普比率 | 1.45 |" in report
+    assert "| 样本外 Calmar 比率 | 2.67 |" in report
+    assert "### Execution Assumptions" not in report
+    assert "### Metrics Profile" not in report
+    assert "| Metric | Value |" not in report
 
 
 def test_report_generation_does_not_fail_without_execution_assumptions(tmp_path) -> None:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 import math
 from dataclasses import dataclass
@@ -30,6 +31,7 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     run_path = Path(run_dir)
     msg = messages(lang)
     headings = msg["headings"]
+    subheadings = msg["subheadings"]
     labels = msg["labels"]
     spec = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml"))
     spec_dict = yaml.safe_load((run_path / "strategy_spec.yaml").read_text(encoding="utf-8")) or {}
@@ -40,10 +42,12 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
     assets = list_report_assets(run_path)
+    benchmark_metrics = _benchmark_relative_metrics(run_path)
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
     decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit, robustness_result)
+    decision_summary = _decision_summary(decision, metrics, repro_audit, bias_audit, robustness_result, benchmark_metrics, lang)
 
     lines: list[str] = []
     lines.append(f"# {msg['report_title'].format(strategy_id=strategy_id)}")
@@ -58,6 +62,8 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     lines.append(f"**{decision}**")
     lines.append("")
     lines.append(f"_{_decision_explanation(lang)}_")
+    lines.append("")
+    lines.extend(_format_decision_summary_lines(decision_summary, lang))
     lines.append("")
 
     # 2. Hypothesis
@@ -86,7 +92,7 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     lines.append(f"- **{labels['price_adjustment']}**: {spec.data.price_adjustment}")
     if execution_assumptions is not None:
         lines.append("")
-        lines.append("### Execution Assumptions")
+        lines.append(f"### {subheadings['execution_assumptions']}")
         lines.append("")
         lines.extend(_format_execution_assumption_lines(execution_assumptions))
     lines.append("")
@@ -94,37 +100,34 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     # 5. Backtest Metrics
     lines.append(f"## 5. {headings['metrics']}")
     lines.append("")
-    lines.append("### Metrics Profile")
+    lines.append(f"### {msg['key_metrics']['title']}")
     lines.append("")
-    lines.extend(_format_metric_assumption_lines(metrics, spec))
+    lines.extend(_format_key_metric_snapshot_lines(metrics, decision, lang))
     lines.append("")
-    lines.append("| Metric | Value |")
-    lines.append("|--------|-------|")
-    lines.append(f"| Total Return | {_format_percent(metrics.get('total_return'))} |")
-    lines.append(f"| Annualized Return | {_format_percent(metrics.get('annualized_return'))} |")
-    lines.append(f"| Annualized Volatility | {_format_percent(metrics.get('annualized_volatility'))} |")
-    lines.append(f"| Max Drawdown | {_format_percent(metrics.get('max_drawdown'))} |")
-    lines.append(f"| Sharpe Ratio | {_format_float(metrics.get('sharpe_ratio'))} |")
-    lines.append(f"| Sortino Ratio | {_format_float(metrics.get('sortino_ratio'))} |")
-    lines.append(f"| Calmar Ratio | {_format_float(metrics.get('calmar_ratio'))} |")
-    lines.append(f"| Trade Count | {metrics.get('trade_count', 0)} |")
-    lines.append(f"| Cost Paid | {_format_money(metrics.get('cost_paid'))} |")
+    lines.append(f"### {subheadings['metrics_profile']}")
+    lines.append("")
+    lines.extend(_format_metric_assumption_lines(metrics, spec, lang))
+    lines.append("")
+    lines.extend(_format_main_metric_lines(metrics, lang))
     lines.append("")
     if _has_is_oos_metrics(metrics):
-        lines.append("### IS/OOS Metrics")
+        lines.append(f"### {subheadings['is_oos_metrics']}")
         lines.append("")
-        lines.append("| Metric | Value |")
-        lines.append("|--------|-------|")
-        lines.extend(_format_is_oos_metric_lines(metrics))
+        lines.extend(_format_is_oos_metric_lines(metrics, lang))
         lines.append("")
 
     # 6. Benchmark Comparison
     lines.append(f"## 6. {headings['benchmark']}")
     lines.append("")
     if spec.benchmark.symbols:
-        lines.append(f"Benchmark: {', '.join(spec.benchmark.symbols)}")
+        lines.append(f"{labels['benchmark']}: {', '.join(spec.benchmark.symbols)}")
     else:
         lines.append(f"({msg['no_benchmark']})")
+    if benchmark_metrics is not None:
+        lines.append("")
+        lines.append(f"### {msg['benchmark_metrics']['title']}")
+        lines.append("")
+        lines.extend(_format_benchmark_metric_lines(benchmark_metrics, lang))
     lines.append("")
 
     # 7. Report Assets
@@ -155,7 +158,7 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
         icon = "PASS" if c["status"] == "pass" else ("INFO" if c["status"] == "info" else "FAIL")
         lines.append(f"- [{c['severity'].upper()}] {icon} **{c['id']}**: {c['message']}")
     lines.append("")
-    lines.append("### Validation Classification")
+    lines.append(f"### {subheadings['validation_classification']}")
     lines.append("")
     lines.extend(_format_validation_classification_lines(validation_result.to_dict()))
     lines.append("")
@@ -186,11 +189,11 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     fatal_checks = [c for c in bias_audit["checks"] if c["severity"] == "fatal" and c["status"] == "fail"]
     warning_checks = [c for c in bias_audit["checks"] if c["severity"] == "warning" and c["status"] == "fail"]
     if fatal_checks:
-        lines.append("### Fatal Issues")
+        lines.append(f"### {subheadings['fatal_issues']}")
         for c in fatal_checks:
             lines.append(f"- **{c['id']}**: {c['message']}")
     if warning_checks:
-        lines.append("### Warnings")
+        lines.append(f"### {subheadings['warnings']}")
         for c in warning_checks:
             lines.append(f"- **{c['id']}**: {c['message']}")
     if not fatal_checks and not warning_checks:
@@ -203,6 +206,8 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     next_actions = msg["next_actions"]
     if decision == "REJECT":
         lines.append(next_actions["reject"])
+    elif decision == "NO EVIDENCE":
+        lines.append(next_actions["no_evidence"])
     elif decision == "WATCHLIST":
         lines.append(next_actions["watchlist_1"])
         lines.append(next_actions["watchlist_2"])
@@ -273,6 +278,9 @@ def _determine_decision(
     if bias_audit.get("fatal_count", 0) > 0:
         return "REJECT"
 
+    if _has_no_trade_evidence(metrics):
+        return "NO EVIDENCE"
+
     reject_if = decision_policy.get("reject_if", {})
     # OOS policy thresholds require OOS-only metrics.
     policy_oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio")
@@ -310,6 +318,118 @@ def _determine_decision(
         return "WATCHLIST"
 
     return "PAPER TRADING CANDIDATE"
+
+
+def _has_no_trade_evidence(metrics: dict) -> bool:
+    oos_trades = metrics.get("oos_trade_count")
+    if oos_trades is not None:
+        return _as_finite_float(oos_trades) == 0.0
+    trades = metrics.get("trade_count")
+    return _as_finite_float(trades) == 0.0
+
+
+def _decision_summary(
+    decision: str,
+    metrics: dict,
+    repro_audit: dict,
+    bias_audit: dict,
+    robustness_result: dict | None,
+    benchmark_metrics: dict[str, float] | None,
+    lang: str,
+) -> dict[str, list[str] | str]:
+    supporting: list[str] = []
+    risks: list[str] = []
+    actions: list[str] = []
+    zh = lang == "zh"
+
+    if repro_audit.get("status") == "pass":
+        supporting.append("复现性审计通过。" if zh else "Reproducibility audit passed.")
+    else:
+        risks.append("复现性审计未通过。" if zh else "Reproducibility audit did not pass.")
+
+    fatal_count = int(bias_audit.get("fatal_count", 0) or 0)
+    warning_count = int(bias_audit.get("warning_count", 0) or 0)
+    if fatal_count:
+        risks.append(
+            f"研究偏差审计存在 {fatal_count} 个致命问题。"
+            if zh
+            else f"Research bias audit has {fatal_count} fatal finding(s)."
+        )
+    else:
+        supporting.append(
+            f"研究偏差审计无致命问题（{warning_count} 个警告）。"
+            if zh
+            else f"Research bias audit has no fatal findings ({warning_count} warning(s))."
+        )
+
+    oos_sharpe = _finite_metric(metrics, "oos_sharpe_ratio")
+    if oos_sharpe is not None:
+        if oos_sharpe > 0:
+            supporting.append(
+                f"OOS 夏普为正（{_format_float(oos_sharpe)}）。"
+                if zh
+                else f"OOS Sharpe is positive at {_format_float(oos_sharpe)}."
+            )
+        else:
+            risks.append(
+                f"OOS 夏普不为正（{_format_float(oos_sharpe)}）。"
+                if zh
+                else f"OOS Sharpe is not positive ({_format_float(oos_sharpe)})."
+            )
+
+    oos_trades = metrics.get("oos_trade_count")
+    if _as_finite_float(oos_trades) == 0.0:
+        risks.append(
+            "OOS 交易次数为 0，因此没有可执行的样本外证据。"
+            if zh
+            else "OOS trade count is 0, so the experiment has no executable out-of-sample evidence."
+        )
+        actions.append(
+            "先生成有足够 OOS 交易样本的 run，再考虑资金配置。"
+            if zh
+            else "Generate a run with enough OOS trades before considering capital allocation."
+        )
+    elif oos_trades is not None:
+        supporting.append(f"OOS 交易次数为 {oos_trades}。" if zh else f"OOS trade count is {oos_trades}.")
+
+    robustness_status = str((robustness_result or {}).get("status", "missing")).upper()
+    if robustness_result is None:
+        risks.append("缺少已验证的稳健性结果。" if zh else "Verified robustness artifact is missing.")
+    elif robustness_status in {"ROBUST", "PASS"}:
+        supporting.append("稳健性检查通过。" if zh else "Robustness checks passed.")
+    elif robustness_status == "WARN":
+        risks.append("稳健性检查存在需要跟进的警告。" if zh else "Robustness checks have warnings that need follow-up.")
+    elif robustness_status == "FRAGILE":
+        risks.append("稳健性检查将策略判定为 fragile。" if zh else "Robustness checks classify the strategy as fragile.")
+    elif robustness_status == "ERROR":
+        risks.append("稳健性检查出错，不能支持升级。" if zh else "Robustness checks errored and cannot support promotion.")
+
+    if benchmark_metrics is None:
+        risks.append("无法计算相对基准收益。" if zh else "Benchmark-relative return could not be computed.")
+    else:
+        excess = benchmark_metrics["excess_total_return"]
+        if excess > 0:
+            supporting.append(
+                f"总收益跑赢基准 {_format_percent(excess)}。"
+                if zh
+                else f"Total return exceeds benchmark by {_format_percent(excess)}."
+            )
+        else:
+            risks.append(
+                f"总收益落后基准 {_format_percent(abs(excess))}。"
+                if zh
+                else f"Total return trails benchmark by {_format_percent(abs(excess))}."
+            )
+
+    primary, action = _decision_primary_and_action(decision, zh)
+    actions.append(action)
+
+    return {
+        "primary_reason": primary,
+        "supporting": supporting or ["No supporting evidence was strong enough to highlight."],
+        "risks": risks or ["No blocking risks were detected by configured checks."],
+        "actions": actions,
+    }
 
 
 def _has_actionable_robustness_warning(robustness_result: dict | None) -> bool:
@@ -364,6 +484,139 @@ def _as_finite_float(value: object) -> float | None:
     return parsed if math.isfinite(parsed) else None
 
 
+def _format_decision_summary_lines(summary: dict[str, list[str] | str], lang: str) -> list[str]:
+    sections = messages(lang)["decision_sections"]
+    lines = [
+        f"### {sections['rationale']}",
+        "",
+        f"- **{sections['primary_reason']}**: {summary['primary_reason']}",
+        "",
+        f"### {sections['supporting']}",
+        "",
+    ]
+    lines.extend(f"- {item}" for item in _as_string_list(summary.get("supporting")))
+    lines.extend(["", f"### {sections['risks']}", ""])
+    lines.extend(f"- {item}" for item in _as_string_list(summary.get("risks")))
+    lines.extend(["", f"### {sections['actions']}", ""])
+    lines.extend(f"- {item}" for item in _as_string_list(summary.get("actions")))
+    return lines
+
+
+def _as_string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    return [str(value)] if value is not None else []
+
+
+def _format_key_metric_snapshot_lines(metrics: dict, decision: str, lang: str) -> list[str]:
+    labels = messages(lang)["key_metrics"]
+    rows = [
+        (labels["decision"], decision),
+        (labels["total_return"], _format_percent(metrics.get("total_return"))),
+        (labels["annualized_return"], _format_percent(metrics.get("annualized_return"))),
+        (labels["sharpe_ratio"], _format_float(metrics.get("sharpe_ratio"))),
+        (labels["max_drawdown"], _format_percent(metrics.get("max_drawdown"))),
+        (labels["oos_sharpe_ratio"], _format_float(metrics.get("oos_sharpe_ratio"))),
+        (labels["oos_trade_count"], str(metrics.get("oos_trade_count", "N/A"))),
+        (labels["cost_paid"], _format_money(metrics.get("cost_paid"))),
+    ]
+    return _format_metric_table_lines(rows, lang)
+
+
+def _format_main_metric_lines(metrics: dict, lang: str) -> list[str]:
+    labels = messages(lang)["metric_labels"]
+    rows = [
+        (labels["total_return"], _format_percent(metrics.get("total_return"))),
+        (labels["annualized_return"], _format_percent(metrics.get("annualized_return"))),
+        (labels["annualized_volatility"], _format_percent(metrics.get("annualized_volatility"))),
+        (labels["max_drawdown"], _format_percent(metrics.get("max_drawdown"))),
+        (labels["sharpe_ratio"], _format_float(metrics.get("sharpe_ratio"))),
+        (labels["sortino_ratio"], _format_float(metrics.get("sortino_ratio"))),
+        (labels["calmar_ratio"], _format_float(metrics.get("calmar_ratio"))),
+        (labels["trade_count"], str(metrics.get("trade_count", 0))),
+        (labels["cost_paid"], _format_money(metrics.get("cost_paid"))),
+    ]
+    return _format_metric_table_lines(rows, lang)
+
+
+def _format_metric_table_lines(rows: list[tuple[str, str]], lang: str) -> list[str]:
+    metric_header, value_header = _metric_table_headers(lang)
+    return [f"| {metric_header} | {value_header} |", "|--------|-------|", *[f"| {name} | {value} |" for name, value in rows]]
+
+
+def _benchmark_relative_metrics(run_path: Path) -> dict[str, float] | None:
+    equity_return = _curve_total_return(run_path / "equity_curve.csv")
+    benchmark_return = _curve_total_return(run_path / "benchmark_curve.csv")
+    if equity_return is None or benchmark_return is None:
+        return None
+    return {
+        "strategy_total_return": equity_return,
+        "benchmark_total_return": benchmark_return,
+        "excess_total_return": equity_return - benchmark_return,
+    }
+
+
+def _curve_total_return(path: Path) -> float | None:
+    if not path.exists():
+        return None
+    values: list[float] = []
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            for row in csv.DictReader(handle):
+                value = _as_finite_float(row.get("value"))
+                if value is not None:
+                    values.append(value)
+    except OSError:
+        return None
+    if len(values) < 2 or values[0] == 0:
+        return None
+    return values[-1] / values[0] - 1.0
+
+
+def _format_benchmark_metric_lines(metrics: dict[str, float], lang: str) -> list[str]:
+    labels = messages(lang)["benchmark_metrics"]
+    rows = [
+        (labels["strategy_total_return"], _format_percent(metrics.get("strategy_total_return"))),
+        (labels["benchmark_total_return"], _format_percent(metrics.get("benchmark_total_return"))),
+        (labels["excess_total_return"], _format_percent(metrics.get("excess_total_return"))),
+    ]
+    return _format_metric_table_lines(rows, lang)
+
+
+def _metric_table_headers(lang: str) -> tuple[str, str]:
+    return ("指标", "数值") if lang == "zh" else ("Metric", "Value")
+
+
+def _decision_primary_and_action(decision: str, zh: bool) -> tuple[str, str]:
+    if zh:
+        if decision == "REJECT":
+            return "在阻碍因素修复前，不应继续推进资金投入。", "修复失败证据项后重新生成报告。"
+        if decision == "NO EVIDENCE":
+            return "该 run 没有足够交易证据支撑资金决策。", "重新设计实验或扩展样本后再解读绩效。"
+        if decision == "WATCHLIST":
+            return "该 run 有可用证据，但仍有未解决风险，暂不适合升级。", "处理警告、重跑稳健性检查，并复核相对基准表现。"
+        return "该 run 通过基础检查，可进入模拟交易评估。", "先进行带监控的模拟交易，再考虑真实资金。"
+    if decision == "REJECT":
+        return (
+            "Do not continue toward capital deployment until blocking risks are fixed.",
+            "Fix the failing evidence items and rerun the report.",
+        )
+    if decision == "NO EVIDENCE":
+        return (
+            "The run does not contain enough trade evidence to support a capital decision.",
+            "Redesign the experiment or extend the sample before interpreting performance.",
+        )
+    if decision == "WATCHLIST":
+        return (
+            "The run has usable evidence, but unresolved risks prevent promotion.",
+            "Resolve warnings, rerun robustness checks, and compare against benchmark-relative results.",
+        )
+    return (
+        "The run clears baseline checks and may proceed to paper trading evaluation.",
+        "Paper trade with monitoring before any live capital allocation.",
+    )
+
+
 def _format_percent(value: object) -> str:
     parsed = _as_finite_float(value)
     return "N/A" if parsed is None else f"{parsed:.2%}"
@@ -379,8 +632,9 @@ def _format_money(value: object) -> str:
     return "N/A" if parsed is None else f"${parsed:.2f}"
 
 
-def _format_metric_assumption_lines(metrics: dict, spec: StrategySpec) -> list[str]:
+def _format_metric_assumption_lines(metrics: dict, spec: StrategySpec, lang: str) -> list[str]:
     del spec
+    labels = messages(lang)["metric_assumptions"]
     profile = metrics.get("metrics_profile") or "open_xquant_default"
     assumptions = metrics.get("metric_assumptions")
     if not isinstance(assumptions, dict):
@@ -391,13 +645,13 @@ def _format_metric_assumption_lines(metrics: dict, spec: StrategySpec) -> list[s
             "calmar_denominator": "max_drawdown",
             "evaluation_window": "full",
         }
-    lines = [f"- **Profile**: {_format_assumption_value(profile)}"]
+    lines = [f"- **{labels['profile']}**: {_format_assumption_value(profile)}"]
     for key in ("return_type", "risk_free_rate", "annualization_days", "calmar_denominator", "evaluation_window"):
         value = assumptions.get(key)
         formatted = _format_percent(value) if key == "risk_free_rate" else _format_assumption_value(value)
-        lines.append(f"- **{key}**: {formatted}")
+        lines.append(f"- **{labels[key]}**: {formatted}")
     if profile != "open_xquant_default":
-        lines.append("- **Note**: Non-default metrics profile; compare results only against runs using the same assumptions.")
+        lines.append(f"- **{labels['non_default_note']}**")
     return lines
 
 
@@ -419,23 +673,24 @@ def _has_is_oos_metrics(metrics: dict) -> bool:
     ))
 
 
-def _format_is_oos_metric_lines(metrics: dict) -> list[str]:
+def _format_is_oos_metric_lines(metrics: dict, lang: str) -> list[str]:
+    labels = messages(lang)["is_oos_metrics"]
     rows = [
-        ("IS Total Return", _format_percent(metrics.get("is_total_return"))),
-        ("IS Annualized Return", _format_percent(metrics.get("is_annualized_return"))),
-        ("IS Annualized Volatility", _format_percent(metrics.get("is_annualized_volatility"))),
-        ("IS Max Drawdown", _format_percent(metrics.get("is_max_drawdown"))),
-        ("IS Sharpe Ratio", _format_float(metrics.get("is_sharpe_ratio"))),
-        ("IS Calmar Ratio", _format_float(metrics.get("is_calmar_ratio"))),
-        ("OOS Total Return", _format_percent(metrics.get("oos_total_return"))),
-        ("OOS Annualized Return", _format_percent(metrics.get("oos_annualized_return"))),
-        ("OOS Annualized Volatility", _format_percent(metrics.get("oos_annualized_volatility"))),
-        ("OOS Max Drawdown", _format_percent(metrics.get("oos_max_drawdown"))),
-        ("OOS Sharpe Ratio", _format_float(metrics.get("oos_sharpe_ratio"))),
-        ("OOS Calmar Ratio", _format_float(metrics.get("oos_calmar_ratio"))),
-        ("OOS Trade Count", str(metrics.get("oos_trade_count", "N/A"))),
+        (labels["is_total_return"], _format_percent(metrics.get("is_total_return"))),
+        (labels["is_annualized_return"], _format_percent(metrics.get("is_annualized_return"))),
+        (labels["is_annualized_volatility"], _format_percent(metrics.get("is_annualized_volatility"))),
+        (labels["is_max_drawdown"], _format_percent(metrics.get("is_max_drawdown"))),
+        (labels["is_sharpe_ratio"], _format_float(metrics.get("is_sharpe_ratio"))),
+        (labels["is_calmar_ratio"], _format_float(metrics.get("is_calmar_ratio"))),
+        (labels["oos_total_return"], _format_percent(metrics.get("oos_total_return"))),
+        (labels["oos_annualized_return"], _format_percent(metrics.get("oos_annualized_return"))),
+        (labels["oos_annualized_volatility"], _format_percent(metrics.get("oos_annualized_volatility"))),
+        (labels["oos_max_drawdown"], _format_percent(metrics.get("oos_max_drawdown"))),
+        (labels["oos_sharpe_ratio"], _format_float(metrics.get("oos_sharpe_ratio"))),
+        (labels["oos_calmar_ratio"], _format_float(metrics.get("oos_calmar_ratio"))),
+        (labels["oos_trade_count"], str(metrics.get("oos_trade_count", "N/A"))),
     ]
-    return [f"| {name} | {value} |" for name, value in rows]
+    return _format_metric_table_lines(rows, lang)
 
 
 def _format_asset_lines(assets: list[ReportAsset], lang: str) -> list[str]:

@@ -9,6 +9,7 @@ from pathlib import Path
 from oxq.report.generator import generate_report
 
 _IMAGE_RE = re.compile(r"^!\[(?P<alt>.*)]\((?P<src>.*)\)$")
+_DECISIONS = {"REJECT", "NO EVIDENCE", "WATCHLIST", "PAPER TRADING CANDIDATE"}
 
 
 def render_html_report(run_dir: str | Path, lang: str = "zh") -> str:
@@ -76,12 +77,18 @@ def _markdown_to_html(markdown: str) -> str:
             while i < len(lines) and lines[i].startswith("|"):
                 table_lines.append(lines[i])
                 i += 1
-            html_lines.append(f'<pre class="markdown-table">{escape(chr(10).join(table_lines))}</pre>')
+            html_lines.append(_markdown_table_to_html(table_lines))
             continue
         elif line.startswith("- "):
             html_lines.append(f"<p class=\"bullet\">{_inline_markdown(line)}</p>")
         else:
-            html_lines.append(f"<p>{_inline_markdown(line)}</p>")
+            decision = _decision_text(line)
+            if decision is not None:
+                html_lines.append(
+                    f'<p class="decision-badge decision-{_decision_class(decision)}"><strong>{escape(decision)}</strong></p>'
+                )
+            else:
+                html_lines.append(f"<p>{_inline_markdown(line)}</p>")
         i += 1
     return "\n".join(html_lines)
 
@@ -95,6 +102,44 @@ def _inline_markdown(text: str) -> str:
     escaped = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", escaped)
     escaped = re.sub(r"\[(?P<label>[^]]+)]\((?P<href>[^)]+)\)", _link_repl, escaped)
     return escaped
+
+
+def _decision_text(line: str) -> str | None:
+    stripped = line.strip()
+    if not (stripped.startswith("**") and stripped.endswith("**")):
+        return None
+    candidate = stripped.strip("*")
+    return candidate if candidate in _DECISIONS else None
+
+
+def _decision_class(decision: str) -> str:
+    return decision.lower().replace(" ", "-")
+
+
+def _markdown_table_to_html(lines: list[str]) -> str:
+    rows = [_split_table_row(line) for line in lines]
+    rows = [row for row in rows if row and not _is_separator_row(row)]
+    if not rows:
+        return ""
+    header = rows[0]
+    body_rows = rows[1:]
+    html = ["<table>", "<thead>", "<tr>"]
+    html.extend(f"<th>{_inline_markdown(cell)}</th>" for cell in header)
+    html.extend(["</tr>", "</thead>", "<tbody>"])
+    for row in body_rows:
+        html.append("<tr>")
+        html.extend(f"<td>{_inline_markdown(cell)}</td>" for cell in row)
+        html.append("</tr>")
+    html.extend(["</tbody>", "</table>"])
+    return "\n".join(html)
+
+
+def _split_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def _is_separator_row(row: list[str]) -> bool:
+    return all(cell and set(cell) <= {"-", ":"} for cell in row)
 
 
 def _link_repl(match: re.Match[str]) -> str:
@@ -165,7 +210,53 @@ figcaption {
   color: var(--muted);
   font-size: 14px;
 }
-.markdown-table {
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0 20px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+}
+th, td {
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+th {
+  background: #eef6f4;
+  color: #143c37;
+  font-weight: 650;
+}
+.decision-badge {
+  display: inline-block;
+  margin: 4px 0 12px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 18px;
+  letter-spacing: 0;
+}
+.decision-reject {
+  background: #fee2e2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+.decision-no-evidence {
+  background: #fef3c7;
+  color: #92400e;
+  border: 1px solid #fde68a;
+}
+.decision-watchlist {
+  background: #e0f2fe;
+  color: #075985;
+  border: 1px solid #bae6fd;
+}
+.decision-paper-trading-candidate {
+  background: #dcfce7;
+  color: #166534;
+  border: 1px solid #bbf7d0;
+}
+pre {
   overflow-x: auto;
   padding: 12px;
   border: 1px solid var(--border);

@@ -67,6 +67,19 @@ def test_render_html_report_is_static_and_embeds_registered_figures(tmp_path) ->
     assert "<script" not in html.lower()
 
 
+def test_render_html_report_adds_professional_decision_and_table_markup(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+
+    html = render_html_report(run_dir, lang="en")
+
+    assert 'class="decision-badge decision-' in html
+    assert "<table>" in html
+    assert "<th>Metric</th>" in html
+    assert "<td>Total Return</td>" in html
+    assert "markdown-table" not in html
+    assert "<script" not in html.lower()
+
+
 def test_write_report_files_outputs_markdown_and_html_by_default(tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
 
