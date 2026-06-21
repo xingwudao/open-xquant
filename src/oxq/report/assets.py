@@ -6,6 +6,7 @@ import hashlib
 import json
 import mimetypes
 import shutil
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
@@ -86,6 +87,18 @@ class ReportAsset:
         return data
 
 
+@dataclass(frozen=True)
+class ReportAssetBatchEntry:
+    asset_id: str
+    file_path: Path
+    title: str
+    caption: str = ""
+    section: str = "results"
+    order: int = 100
+    source_script: Path | None = None
+    source_artifacts: list[str] = field(default_factory=list)
+
+
 def report_assets_dir(run_dir: str | Path) -> Path:
     return Path(run_dir) / "report_assets"
 
@@ -122,7 +135,7 @@ def list_report_assets(run_dir: str | Path) -> list[ReportAsset]:
     return sorted(parsed, key=_asset_sort_key)
 
 
-def _list_report_assets_for_upsert(run_dir: Path, replacing_asset_id: str) -> list[ReportAsset]:
+def _list_report_assets_excluding(run_dir: Path, replacing_asset_ids: set[str]) -> list[ReportAsset]:
     path = manifest_path(run_dir)
     if not path.exists():
         return []
@@ -135,7 +148,7 @@ def _list_report_assets_for_upsert(run_dir: Path, replacing_asset_id: str) -> li
         if not isinstance(item, dict):
             continue
         asset = ReportAsset.from_dict(item)
-        if asset.id == replacing_asset_id:
+        if asset.id in replacing_asset_ids:
             continue
         parsed.append(_validate_manifest_asset(run_dir, asset))
     return sorted(parsed, key=_asset_sort_key)
@@ -162,7 +175,110 @@ def add_report_asset(
         raise FileNotFoundError(f"asset file not found: {source_path}")
 
     asset_id = safe_asset_id(asset_id)
-    existing = _list_report_assets_for_upsert(run_path, asset_id)
+    existing = _list_report_assets_excluding(run_path, {asset_id})
+    asset = _build_report_asset(
+        run_path,
+        source_path,
+        asset_id=asset_id,
+        title=title,
+        caption=caption,
+        section=section,
+        order=order,
+        source_script=source_script,
+        source_artifacts=source_artifacts or [],
+    )
+    existing.append(asset)
+    _write_manifest(run_path, existing)
+    return asset
+
+
+def add_report_assets(run_dir: str | Path, entries: Iterable[Mapping[str, Any]]) -> list[ReportAsset]:
+    """Register multiple report assets in one manifest update."""
+    run_path = Path(run_dir)
+    if not run_path.exists():
+        raise FileNotFoundError(f"run directory not found: {run_path}")
+
+    parsed_entries = [_parse_batch_entry(raw) for raw in entries]
+    if not parsed_entries:
+        raise ValueError("report asset batch is empty")
+    id_counts: dict[str, int] = {}
+    for entry in parsed_entries:
+        id_counts[entry.asset_id] = id_counts.get(entry.asset_id, 0) + 1
+    duplicate_ids = sorted(asset_id for asset_id, count in id_counts.items() if count > 1)
+    if duplicate_ids:
+        raise ValueError(f"duplicate report asset id in batch: {', '.join(duplicate_ids)}")
+
+    replacing_ids = {entry.asset_id for entry in parsed_entries}
+    existing = _list_report_assets_excluding(run_path, replacing_ids)
+    assets = [
+        _build_report_asset(
+            run_path,
+            entry.file_path,
+            asset_id=entry.asset_id,
+            title=entry.title,
+            caption=entry.caption,
+            section=entry.section,
+            order=entry.order,
+            source_script=entry.source_script,
+            source_artifacts=entry.source_artifacts,
+        )
+        for entry in parsed_entries
+    ]
+    _write_manifest(run_path, existing + assets)
+    return assets
+
+
+def _parse_batch_entry(raw: Mapping[str, Any]) -> ReportAssetBatchEntry:
+    if not isinstance(raw, Mapping):
+        raise ValueError("report asset batch item must be an object")
+    missing = [key for key in ("id", "file_path", "title") if key not in raw]
+    if missing:
+        raise ValueError(f"report asset batch item missing required field(s): {', '.join(missing)}")
+
+    asset_id = safe_asset_id(str(raw["id"]))
+    file_path = Path(str(raw["file_path"]))
+    if not file_path.exists():
+        raise FileNotFoundError(f"asset file not found: {file_path}")
+
+    source_script = None
+    if raw.get("source_script") is not None:
+        source_script = Path(str(raw["source_script"]))
+        if not source_script.exists():
+            raise FileNotFoundError(f"source script not found: {source_script}")
+
+    source_artifacts = raw.get("source_artifacts", [])
+    if not isinstance(source_artifacts, list):
+        raise ValueError("source_artifacts must be a list")
+
+    try:
+        order = int(raw.get("order", 100))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("order must be an integer") from exc
+
+    return ReportAssetBatchEntry(
+        asset_id=asset_id,
+        file_path=file_path,
+        title=str(raw["title"]),
+        caption=str(raw.get("caption", "")),
+        section=str(raw.get("section", "results")),
+        order=order,
+        source_script=source_script,
+        source_artifacts=[str(item) for item in source_artifacts],
+    )
+
+
+def _build_report_asset(
+    run_path: Path,
+    source_path: Path,
+    *,
+    asset_id: str,
+    title: str,
+    caption: str,
+    section: str,
+    order: int,
+    source_script: str | Path | None,
+    source_artifacts: list[str],
+) -> ReportAsset:
     suffix = source_path.suffix.lower()
     kind = "figure" if suffix in EMBEDDED_IMAGE_EXTENSIONS else "attachment"
     subdir = "figures" if kind == "figure" else "attachments"
@@ -184,12 +300,9 @@ def add_report_asset(
         sha256=_sha256(destination),
         source=AssetSource(
             script=copied_script,
-            input_artifacts=[str(item) for item in source_artifacts or []],
+            input_artifacts=[str(item) for item in source_artifacts],
         ),
     )
-
-    existing.append(asset)
-    _write_manifest(run_path, existing)
     return asset
 
 

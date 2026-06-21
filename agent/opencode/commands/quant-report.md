@@ -16,6 +16,8 @@ Generate a human-written research report with executive decision.
 4. If the user wants charts, discuss chart requirements first, write plotting
    Python, save figures under `report_assets/figures`, save scripts under
    `report_assets/scripts`, and register them with `oxq report asset add`.
+   If one script regenerates multiple figures, register them with
+   `oxq report asset add-batch`.
 5. Use `research-report-writer` to read audits, robustness, metrics, execution
    assumptions, strategy spec, and registered chart assets, then write the final
    `research_report.md` for human researchers and potential investors.

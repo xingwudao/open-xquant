@@ -7,6 +7,7 @@ import pytest
 
 from oxq.report.assets import (
     add_report_asset,
+    add_report_assets,
     list_report_assets,
     manifest_path,
     safe_asset_id,
@@ -116,6 +117,73 @@ def test_add_report_asset_upserts_existing_id_after_in_place_regeneration(tmp_pa
     assert assets[0].title == "Regenerated"
     assert assets[0].sha256 != "sha256:stale"
     assert regenerated.read_bytes() == b"regenerated"
+
+
+def test_add_report_assets_upserts_multiple_in_place_regenerated_assets(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    equity_source = tmp_path / "equity.png"
+    drawdown_source = tmp_path / "drawdown.png"
+    equity_source.write_bytes(b"equity-first")
+    drawdown_source.write_bytes(b"drawdown-first")
+
+    add_report_asset(run_dir, equity_source, asset_id="equity", title="Equity")
+    add_report_asset(run_dir, drawdown_source, asset_id="drawdown", title="Drawdown")
+    (run_dir / "report_assets/figures/equity.png").write_bytes(b"equity-regenerated")
+    (run_dir / "report_assets/figures/drawdown.png").write_bytes(b"drawdown-regenerated")
+
+    assets = add_report_assets(
+        run_dir,
+        [
+            {
+                "id": "equity",
+                "file_path": str(run_dir / "report_assets/figures/equity.png"),
+                "title": "Equity Updated",
+                "section": "results",
+                "order": 10,
+            },
+            {
+                "id": "drawdown",
+                "file_path": str(run_dir / "report_assets/figures/drawdown.png"),
+                "title": "Drawdown Updated",
+                "section": "risk",
+                "order": 20,
+            },
+        ],
+    )
+
+    assert [asset.id for asset in assets] == ["equity", "drawdown"]
+    listed = list_report_assets(run_dir)
+    assert [asset.id for asset in listed] == ["equity", "drawdown"]
+    assert [asset.title for asset in listed] == ["Equity Updated", "Drawdown Updated"]
+    assert (run_dir / "report_assets/figures/equity.png").read_bytes() == b"equity-regenerated"
+    assert (run_dir / "report_assets/figures/drawdown.png").read_bytes() == b"drawdown-regenerated"
+
+
+def test_add_report_assets_still_validates_assets_outside_batch(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    equity_source = tmp_path / "equity.png"
+    stale_source = tmp_path / "stale.png"
+    equity_source.write_bytes(b"equity")
+    stale_source.write_bytes(b"stale")
+
+    add_report_asset(run_dir, equity_source, asset_id="equity", title="Equity")
+    add_report_asset(run_dir, stale_source, asset_id="stale", title="Stale")
+    (run_dir / "report_assets/figures/stale.png").write_bytes(b"changed outside batch")
+    (run_dir / "report_assets/figures/equity.png").write_bytes(b"equity-regenerated")
+
+    with pytest.raises(ValueError, match="hash mismatch for report asset stale"):
+        add_report_assets(
+            run_dir,
+            [
+                {
+                    "id": "equity",
+                    "file_path": str(run_dir / "report_assets/figures/equity.png"),
+                    "title": "Equity Updated",
+                }
+            ],
+        )
 
 
 def test_add_report_asset_registers_attachment(tmp_path) -> None:

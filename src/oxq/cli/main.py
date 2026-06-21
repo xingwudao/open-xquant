@@ -376,6 +376,29 @@ def report_asset_add(
     click.echo(f"  Hash: {asset.sha256}")
 
 
+@report_asset.command(name="add-batch")
+@click.argument("run_dir", type=click.Path(exists=True, file_okay=False))
+@click.argument("items_json", type=click.Path(exists=True, dir_okay=False))
+def report_asset_add_batch(run_dir: str, items_json: str):
+    """Register multiple report assets from a JSON array."""
+    from oxq.report.assets import add_report_assets
+
+    try:
+        raw = json.loads(Path(items_json).read_text(encoding="utf-8"))
+        if not isinstance(raw, list):
+            raise ValueError("report asset batch JSON must be an array")
+        assets = add_report_assets(run_dir, raw)
+    except (FileNotFoundError, ValueError, json.JSONDecodeError) as exc:
+        raise click.ClickException(str(exc)) from exc
+
+    click.echo(f"Added {len(assets)} report assets")
+    for asset in assets:
+        click.echo(f"  {asset.id}")
+        click.echo(f"    Kind: {asset.kind}")
+        click.echo(f"    Path: {asset.path}")
+        click.echo(f"    Hash: {asset.sha256}")
+
+
 @report_asset.command(name="list")
 @click.argument("run_dir", type=click.Path(exists=True, file_okay=False))
 def report_asset_list(run_dir: str):

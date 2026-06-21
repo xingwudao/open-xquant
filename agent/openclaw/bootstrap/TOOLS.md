@@ -122,11 +122,12 @@ Data sources: YFinance (US equities), AkShare (A-shares), WorldBank (macro facto
 |----------|-------------|
 | `oxq robustness run <run_dir>` | Run cost stress, IS/OOS comparison, parameter perturbation, and regime analysis |
 
-### report assets (2 commands)
+### report assets (3 commands)
 
 | Command | Description |
 |----------|-------------|
 | `oxq report asset add <run_dir> <file>` | Register a chart or attachment for the final report |
+| `oxq report asset add-batch <run_dir> <items_json>` | Register multiple regenerated assets in one manifest update |
 | `oxq report asset list <run_dir>` | List registered report assets |
 
 ### experiment (1 command)

@@ -495,6 +495,7 @@ runs/<run_id>/
 
 ```bash
 oxq report asset add runs/<run_id>/ chart.png --id chart_id --title "Chart"
+oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
 oxq report asset list runs/<run_id>/
 ```
 

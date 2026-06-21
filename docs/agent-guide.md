@@ -529,6 +529,9 @@ Skill 文件位于 `agent/skills/`。
 - 生成的图片放入 `report_assets/figures/`。
 - 用 `oxq report asset add` 登记资产后，交给
   `research-report-writer` 写最终报告。
+- 如果同一个脚本一次重绘多张已登记图片，写
+  `report_assets/assets.json` 后使用 `oxq report asset add-batch`，
+  避免逐个登记时遇到旧 hash 冲突。
 - 不要修改 `metrics.json`、audit 结果或回测产物来美化图表。
 
 组件扩展：
@@ -629,6 +632,7 @@ uv run oxq report asset add runs/<run_id>/ chart.png \
   --caption "由 equity_curve.csv 和 benchmark_curve.csv 生成。" \
   --source-script plot_equity.py \
   --source-artifact equity_curve.csv
+uv run oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
 ```
 
 最终报告由 Agent 调用 `research-report-writer` 写入

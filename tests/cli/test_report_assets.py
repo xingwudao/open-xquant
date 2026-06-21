@@ -91,6 +91,54 @@ def test_report_asset_list_prints_empty_state(tmp_path) -> None:
     assert "No report assets registered." in result.output
 
 
+def test_report_asset_add_batch_registers_multiple_assets(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    equity = tmp_path / "equity.png"
+    drawdown = tmp_path / "drawdown.png"
+    script = tmp_path / "plot.py"
+    equity.write_bytes(b"equity")
+    drawdown.write_bytes(b"drawdown")
+    script.write_text("print('plot')\n", encoding="utf-8")
+    batch = tmp_path / "assets.json"
+    batch.write_text(
+        json.dumps(
+            [
+                {
+                    "id": "equity",
+                    "file_path": str(equity),
+                    "title": "净值曲线",
+                    "caption": "由 equity_curve.csv 生成。",
+                    "section": "results",
+                    "order": 10,
+                    "source_script": str(script),
+                    "source_artifacts": ["equity_curve.csv"],
+                },
+                {
+                    "id": "drawdown",
+                    "file_path": str(drawdown),
+                    "title": "回撤曲线",
+                    "section": "risk",
+                    "order": 20,
+                    "source_script": str(script),
+                    "source_artifacts": ["equity_curve.csv"],
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(main, ["report", "asset", "add-batch", str(run_dir), str(batch)])
+
+    assert result.exit_code == 0, result.output
+    assert "Added 2 report assets" in result.output
+    assert "equity" in result.output
+    assert "drawdown" in result.output
+    manifest = json.loads((run_dir / "report_assets/manifest.json").read_text(encoding="utf-8"))
+    assert [entry["id"] for entry in manifest["assets"]] == ["equity", "drawdown"]
+    assert manifest["assets"][0]["source"]["script"] == "scripts/plot.py"
+
+
 def test_report_write_command_is_not_registered(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

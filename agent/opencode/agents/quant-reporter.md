@@ -14,6 +14,8 @@ write the final human report.
 2. If the user wants charts, discuss chart requirements, write plotting Python,
    save scripts under `report_assets/scripts`, save figures under
    `report_assets/figures`, and register them with `oxq report asset add`.
+   When one script regenerates multiple figures, write
+   `report_assets/assets.json` and use `oxq report asset add-batch`.
 3. Read audit outputs, robustness output, metrics, execution assumptions,
    strategy spec, and registered chart assets.
 4. Use `research-report-writer` to write the final `research_report.md`.

@@ -34,6 +34,8 @@ handing the final narrative to `research-report-writer`.
 
 4. Register generated assets.
 
+For one asset, use `asset add`:
+
 ```bash
 oxq report asset add runs/<run_id>/ runs/<run_id>/report_assets/figures/<figure>.png \
   --id <stable_id> \
@@ -43,6 +45,39 @@ oxq report asset add runs/<run_id>/ runs/<run_id>/report_assets/figures/<figure>
   --order 10 \
   --source-script runs/<run_id>/report_assets/scripts/<script>.py \
   --source-artifact equity_curve.csv
+```
+
+When one plotting script regenerates multiple already-registered figures, use a
+batch JSON file and `asset add-batch` so all replaced asset hashes update in one
+manifest write:
+
+```json
+[
+  {
+    "id": "equity_curve",
+    "file_path": "runs/<run_id>/report_assets/figures/equity_curve.png",
+    "title": "Equity curve vs benchmark",
+    "caption": "Generated from equity_curve.csv and benchmark_curve.csv.",
+    "section": "results",
+    "order": 10,
+    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_artifacts": ["equity_curve.csv", "benchmark_curve.csv"]
+  },
+  {
+    "id": "drawdown",
+    "file_path": "runs/<run_id>/report_assets/figures/drawdown.png",
+    "title": "Drawdown curve",
+    "caption": "Generated from equity_curve.csv.",
+    "section": "risk",
+    "order": 20,
+    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_artifacts": ["equity_curve.csv"]
+  }
+]
+```
+
+```bash
+oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
 ```
 
 5. Hand off final writing to `research-report-writer`.

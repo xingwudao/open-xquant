@@ -15,6 +15,8 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "report_assets/figures" in text
     assert "report_assets/scripts" in text
     assert "oxq report asset add" in text
+    assert "oxq report asset add-batch" in text
+    assert "source_artifacts" in text
     assert "research_report.md" in text
     assert "research_report.html" in text
     assert "research-report-writer" in text
@@ -60,5 +62,6 @@ def test_quant_reporter_routes_final_report_through_writer_skill() -> None:
 
     assert "research-report-writer" in combined
     assert "render_markdown_html_report" in combined
+    assert "oxq report asset add-batch" in combined
     assert "report_evidence.md" not in combined
     assert "oxq report write" not in combined
