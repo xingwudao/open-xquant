@@ -19,7 +19,10 @@ def test_safe_asset_id_accepts_simple_ids() -> None:
     assert safe_asset_id("drawdown-curve") == "drawdown-curve"
 
 
-@pytest.mark.parametrize("asset_id", ["", ".", "..", "../x", "a/b", "a\\b", "chart#1", "chart?1", "chart%2e"])
+@pytest.mark.parametrize(
+    "asset_id",
+    ["", ".", "..", "../x", "a/b", "a\\b", "chart#1", "chart?1", "chart%2e", "chart 1", "chart)1", "chart&1"],
+)
 def test_safe_asset_id_rejects_path_like_ids(asset_id: str) -> None:
     with pytest.raises(ValueError, match="invalid asset id"):
         safe_asset_id(asset_id)
@@ -251,7 +254,15 @@ def test_list_report_assets_returns_empty_without_manifest(tmp_path) -> None:
 
 @pytest.mark.parametrize(
     "manifest_path_value",
-    ["../outside.png", "/tmp/outside.png", "scripts/plot.py", "figures/../outside.png", "figures/%2e%2e/outside.png"],
+    [
+        "../outside.png",
+        "/tmp/outside.png",
+        "scripts/plot.py",
+        "figures/../outside.png",
+        "figures/%2e%2e/outside.png",
+        "figures/chart 1.png",
+        "figures/chart)1.png",
+    ],
 )
 def test_list_report_assets_rejects_unsafe_manifest_paths(tmp_path, manifest_path_value: str) -> None:
     run_dir = tmp_path / "run"

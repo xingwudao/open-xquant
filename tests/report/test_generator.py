@@ -434,6 +434,25 @@ def test_benchmark_relative_metrics_requires_two_overlapping_dates(tmp_path) -> 
     assert _benchmark_relative_metrics(run_dir) is None
 
 
+def test_benchmark_relative_metrics_normalizes_timestamp_dates(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-02 00:00:00+08:00,100\n2024-01-03 00:00:00+08:00,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+
+    metrics = _benchmark_relative_metrics(run_dir)
+
+    assert metrics is not None
+    assert metrics["strategy_total_return"] == pytest.approx(0.2)
+    assert metrics["benchmark_total_return"] == pytest.approx(0.1)
+
+
 def test_decision_summary_uses_chinese_empty_risk_fallback() -> None:
     summary = _decision_summary(
         "PAPER TRADING CANDIDATE",
@@ -721,8 +740,28 @@ def test_report_missing_metric_assumptions_uses_legacy_defaults(tmp_path) -> Non
     assert "Non-default metrics profile" not in report
 
 
-def test_report_includes_robustness_artifact_summary(tmp_path) -> None:
+def test_report_includes_robustness_artifact_summary(tmp_path, monkeypatch) -> None:
     run_dir = _write_report_run(tmp_path)
+    (run_dir / "artifact_hashes.json").write_text(
+        json.dumps({"robustness.json": "sha256:unused"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "oxq.report.generator.audit_reproducibility",
+        lambda *_args, **_kwargs: {
+            "status": "pass",
+            "checks": [
+                {
+                    "id": "robustness_hash",
+                    "severity": "fatal",
+                    "status": "pass",
+                    "message": "robustness.json hash: OK",
+                }
+            ],
+            "fatal_count": 0,
+            "warning_count": 0,
+        },
+    )
     (run_dir / "robustness.json").write_text(
         json.dumps(
             {
@@ -822,6 +861,19 @@ def test_report_does_not_trust_unhashed_robustness_artifact(tmp_path) -> None:
 
     assert "## 1. Executive Decision\n\n**REJECT**" in report
     assert "**Status**: ROBUST" not in report
+
+
+def test_report_does_not_trust_robustness_without_artifact_hashes(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "robustness.json").write_text(
+        json.dumps({"status": "robust", "baseline_sharpe": 1.1, "tests": []}),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "**Status**: ROBUST" not in report
+    assert "Robustness checks passed" not in report
 
 
 def test_report_regime_only_config_does_not_claim_no_robustness_tests(tmp_path) -> None:

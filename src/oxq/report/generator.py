@@ -703,13 +703,20 @@ def _curve_values_by_date(path: Path) -> dict[str, float] | None:
     try:
         with path.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
-                date = str(row.get("date", "")).strip()
+                date = _normalize_curve_date(row.get("date"))
                 value = _as_finite_float(row.get("value"))
                 if date and value is not None:
                     values[date] = value
     except OSError:
         return None
     return values or None
+
+
+def _normalize_curve_date(value: object) -> str:
+    raw = str(value or "").strip()
+    if len(raw) >= 10 and raw[4] == "-" and raw[7] == "-":
+        return raw[:10]
+    return raw
 
 
 def _format_benchmark_metric_lines(metrics: dict[str, float], lang: str) -> list[str]:
@@ -892,18 +899,17 @@ def _load_verified_robustness_result(run_path: Path, repro_audit: dict) -> dict 
         return None
 
     artifact_hashes_path = run_path / "artifact_hashes.json"
-    if artifact_hashes_path.exists():
-        artifact_hashes = _load_json_object(artifact_hashes_path)
-        if not artifact_hashes or "robustness.json" not in artifact_hashes:
-            return None
-        checks = repro_audit.get("checks", [])
-        if not any(
-            isinstance(check, dict)
-            and check.get("id") == "robustness_hash"
-            and check.get("status") == "pass"
-            for check in checks
-        ):
-            return None
+    artifact_hashes = _load_json_object(artifact_hashes_path)
+    if not artifact_hashes or "robustness.json" not in artifact_hashes:
+        return None
+    checks = repro_audit.get("checks", [])
+    if not any(
+        isinstance(check, dict)
+        and check.get("id") == "robustness_hash"
+        and check.get("status") == "pass"
+        for check in checks
+    ):
+        return None
 
     return _load_json_object(robustness_path)
 

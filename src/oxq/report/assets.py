@@ -13,7 +13,8 @@ from typing import Any
 
 EMBEDDED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
 MANIFEST_SCHEMA_VERSION = 1
-URL_RESERVED_PATH_CHARS = {"#", "?", "%"}
+ASSET_ID_ALLOWED_CHARS = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+URL_RESERVED_PATH_CHARS = {"#", "?", "%", " ", "(", ")", "[", "]", "&"}
 ASSET_KIND_SUBDIR = {"figure": "figures", "attachment": "attachments"}
 
 
@@ -115,6 +116,7 @@ def safe_asset_id(asset_id: str) -> str:
         or "/" in candidate
         or "\\" in candidate
         or any(char in candidate for char in URL_RESERVED_PATH_CHARS)
+        or any(char not in ASSET_ID_ALLOWED_CHARS for char in candidate)
     ):
         raise ValueError(f"invalid asset id: {asset_id}")
     path = Path(candidate)
