@@ -244,6 +244,103 @@ def test_report_qa_matches_percent_claims_to_metric_context(tmp_path) -> None:
     assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
 
 
+def test_report_qa_respects_oos_scope_for_percent_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "oos_total_return": -0.1})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The OOS total return was 20.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_checks_numbers_inside_ordered_list_items(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "1. Sharpe ratio was 9.99.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "9.99" in finding.message for finding in result.findings)
+
+
+def test_report_qa_accepts_registered_webp_dimensions(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    figure = tmp_path / "equity.webp"
+    _write_webp_vp8x(figure, width=2, height=3)
+    add_report_asset(run_dir, figure, asset_id="equity", title="Equity", section="results", order=10)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "![Equity](report_assets/figures/equity.webp)\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+    assert not any(finding.id == "image_dimensions_unreadable" for finding in result.findings)
+
+
+def test_report_qa_requires_date_labels_when_required_dates_are_equal(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    spec = yaml.safe_load((run_dir / "strategy_spec.yaml").read_text(encoding="utf-8"))
+    spec["validation"]["test_period"][1] = "2024-03-29"
+    (run_dir / "strategy_spec.yaml").write_text(yaml.safe_dump(spec, sort_keys=False), encoding="utf-8")
+    markdown = "# Report\n\nEffective last trading day: 2024-03-29\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    finding_ids = {finding.id for finding in result.findings}
+    assert result.status == "fail"
+    assert "markdown_configured_end_date_missing" in finding_ids
+    assert "html_configured_end_date_missing" in finding_ids
+
+
+def test_report_qa_allows_strategy_spec_cost_and_cash_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    spec = StrategySpec.from_yaml(str(run_dir / "strategy_spec.yaml"))
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.0005
+    spec.execution.initial_cash = 100000
+    (run_dir / "strategy_spec.yaml").write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Fee: 0.100%.\n\n"
+        "Slippage: 0.050%.\n\n"
+        "Initial Cash: $100,000.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+
+
 def test_report_qa_does_not_treat_generic_font_sans_serif_as_cjk_font(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     script = run_dir / "report_assets/scripts/plot.py"
@@ -476,6 +573,13 @@ def _write_qa_run(tmp_path):
 
 def _write_png(path) -> None:
     path.write_bytes(base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADElEQVR4nGNgYGAAAAAEAAHIiY1AAAAAAElFTkSuQmCC"))
+
+
+def _write_webp_vp8x(path, *, width: int, height: int) -> None:
+    payload = b"\x00\x00\x00\x00" + (width - 1).to_bytes(3, "little") + (height - 1).to_bytes(3, "little")
+    chunk = b"VP8X" + len(payload).to_bytes(4, "little") + payload
+    data = b"WEBP" + chunk
+    path.write_bytes(b"RIFF" + len(data).to_bytes(4, "little") + data)
 
 
 def _write_manifest(run_dir, assets: list[dict]) -> None:

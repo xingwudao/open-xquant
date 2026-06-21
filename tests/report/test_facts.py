@@ -43,6 +43,9 @@ def test_report_facts_compute_dates_months_oos_trades_and_known_numbers(tmp_path
         {"month": "2024-03", "return": pytest.approx(120.0 / 99.0 - 1.0)},
     ]
     assert any(item["name"] == "metric.sharpe_ratio" and item["value"] == 1.23 for item in facts.known_numbers)
+    assert any(item["name"] == "spec.cost.fee_rate" and item["value"] == 0.001 for item in facts.known_numbers)
+    assert any(item["name"] == "spec.cost.slippage_rate" and item["value"] == 0.0005 for item in facts.known_numbers)
+    assert any(item["name"] == "spec.execution.initial_cash" and item["value"] == 100000.0 for item in facts.known_numbers)
     assert any(item["name"] == "fact.positive_month_count" and item["value"] == 2.0 for item in facts.known_numbers)
 
 
@@ -51,6 +54,9 @@ def _write_run_with_curves(tmp_path):
     spec.validation.train_period = ["2024-01-02", "2024-01-31"]
     spec.validation.test_period = ["2024-02-01", "2024-03-31"]
     spec.validation.required_oos = True
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.0005
+    spec.execution.initial_cash = 100000
     run_dir = tmp_path / "run"
     run_dir.mkdir()
     (run_dir / "strategy_spec.yaml").write_text(

@@ -18,8 +18,9 @@ from oxq.report.artifacts import RunArtifacts
 from oxq.report.facts import ReportFacts, build_report_facts
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*]\((?P<src>[^)]+)\)")
+_NUMBER_PATTERN = r"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _PERCENT_RE = re.compile(r"(?<![\w.])(?P<value>-?\d+(?:\.\d+)?)%")
-_PLAIN_NUMBER_RE = re.compile(r"(?<![\w.%/-])(?P<value>-?\d+(?:\.\d+)?)(?!(?:\.\d)|[\w%/-])")
+_PLAIN_NUMBER_RE = re.compile(rf"(?<![\w.%/-])(?P<value>{_NUMBER_PATTERN})(?!(?:\.\d)|[\w%/-])")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _CJK_FONT_NAMES = (
     "Noto Sans CJK",
@@ -43,6 +44,8 @@ _CJK_FONT_NAMES = (
     "Malgun Gothic",
 )
 _ASSET_KIND_REQUIRED_PREFIX = {"figure": "figures", "attachment": "attachments"}
+_EFFECTIVE_LAST_TRADING_DAY_LABELS = ("effective last trading day", "有效数据最后交易日")
+_CONFIGURED_END_DATE_LABELS = ("configured end date", "配置结束日")
 
 
 @dataclass(frozen=True)
@@ -296,6 +299,7 @@ def _check_manifest_assets(run_path: Path, assets: list[dict[str, Any]], finding
 
 
 def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts, findings: list[ReportQAFinding]) -> None:
+    html_text = _html_text(html)
     if facts.effective_last_trading_day is None:
         findings.append(
             ReportQAFinding(
@@ -305,7 +309,7 @@ def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts
             )
         )
     else:
-        if facts.effective_last_trading_day not in markdown:
+        if not _has_labeled_date(markdown, facts.effective_last_trading_day, _EFFECTIVE_LAST_TRADING_DAY_LABELS):
             findings.append(
                 ReportQAFinding(
                     "markdown_effective_last_trading_day_missing",
@@ -313,7 +317,7 @@ def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts
                     f"Markdown report must disclose effective last trading day {facts.effective_last_trading_day}",
                 )
             )
-        if facts.effective_last_trading_day not in html:
+        if not _has_labeled_date(html_text, facts.effective_last_trading_day, _EFFECTIVE_LAST_TRADING_DAY_LABELS):
             findings.append(
                 ReportQAFinding(
                     "html_effective_last_trading_day_missing",
@@ -331,7 +335,7 @@ def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts
             )
         )
     else:
-        if facts.configured_end_date not in markdown:
+        if not _has_labeled_date(markdown, facts.configured_end_date, _CONFIGURED_END_DATE_LABELS):
             findings.append(
                 ReportQAFinding(
                     "markdown_configured_end_date_missing",
@@ -339,7 +343,7 @@ def _check_required_date_disclosure(markdown: str, html: str, facts: ReportFacts
                     f"Markdown report must disclose configured end date {facts.configured_end_date}",
                 )
             )
-        if facts.configured_end_date not in html:
+        if not _has_labeled_date(html_text, facts.configured_end_date, _CONFIGURED_END_DATE_LABELS):
             findings.append(
                 ReportQAFinding(
                     "html_configured_end_date_missing",
@@ -405,11 +409,12 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
                 )
     all_known_values = _known_values(facts, lambda _name: True)
     for line_number, line in enumerate(lines, start=1):
-        if _skip_plain_number_line(line):
+        scan_line = _plain_number_scan_line(line)
+        if scan_line is None:
             continue
-        context_values = _context_known_values(line, facts)
-        known_values = context_values if context_values else all_known_values
-        for match in _PLAIN_NUMBER_RE.finditer(line):
+        context_values = _context_known_values(scan_line, facts)
+        known_values = context_values if context_values is not None else all_known_values
+        for match in _PLAIN_NUMBER_RE.finditer(scan_line):
             parsed = _finite_float(match.group("value"))
             if parsed is None:
                 continue
@@ -421,6 +426,22 @@ def _check_numeric_claims(text: str, facts: ReportFacts, findings: list[ReportQA
                         f"{source_label} numeric claim {match.group(0)} on line {line_number} was not found in metrics or report facts",
                     )
                 )
+
+
+def _has_labeled_date(text: str, expected_date: str, labels: tuple[str, ...]) -> bool:
+    normalized = _normalize_label_text(text)
+    for label in labels:
+        label_pattern = re.escape(_normalize_label_text(label))
+        date_pattern = re.escape(expected_date)
+        if re.search(rf"{label_pattern}[^\n\r\d]{{0,80}}{date_pattern}", normalized):
+            return True
+    return False
+
+
+def _normalize_label_text(text: str) -> str:
+    normalized = text.replace("`", "").replace("*", "").replace("_", "").lower()
+    normalized = re.sub(r"<[^>]+>", " ", normalized)
+    return re.sub(r"[ \t]+", " ", normalized)
 
 
 def _has_verified_cjk_font(script_text: str) -> bool:
@@ -441,6 +462,8 @@ def _known_values(facts: ReportFacts, include_name: Callable[[str], bool]) -> li
 
 def _is_percent_known_number(name: str) -> bool:
     lowered = name.lower()
+    if "fee_rate" in lowered or "slippage_rate" in lowered:
+        return True
     if any(marker in lowered for marker in ("count", "trade", "cost", "fee", "commission", "sharpe", "calmar", "sortino")):
         return False
     return any(
@@ -457,82 +480,138 @@ def _is_percent_known_number(name: str) -> bool:
     )
 
 
-def _context_known_values(line: str, facts: ReportFacts) -> list[float]:
+def _context_known_values(line: str, facts: ReportFacts) -> list[float] | None:
     lowered = line.lower()
+    scope = _line_metric_scope(line, lowered)
     names: set[str] = set()
+    matched_context = False
     if ("oos" in lowered or "样本外" in line) and ("trade" in lowered or "交易" in line):
+        matched_context = True
         names.update({"metric.oos_trade_count", "fact.oos_trade_count"})
         if _mentions_total_trades(line, lowered):
             names.add("metric.trade_count")
     elif "trade" in lowered or "交易" in line:
+        matched_context = True
         names.update({"metric.trade_count", "metric.oos_trade_count", "fact.oos_trade_count"})
     if "positive month" in lowered or "positive months" in lowered or "正收益月份" in line or "正收益月" in line:
+        matched_context = True
         names.add("fact.positive_month_count")
     if "negative month" in lowered or "negative months" in lowered or "负收益月份" in line or "负收益月" in line:
+        matched_context = True
         names.add("fact.negative_month_count")
     if "sharpe" in lowered or "夏普" in line:
-        names.update(_known_number_names(facts, "sharpe"))
+        matched_context = True
+        names.update(_known_number_names(facts, "sharpe", scope=scope))
     if "calmar" in lowered or "卡玛" in line:
-        names.update(_known_number_names(facts, "calmar"))
+        matched_context = True
+        names.update(_known_number_names(facts, "calmar", scope=scope))
     if "sortino" in lowered:
-        names.update(_known_number_names(facts, "sortino"))
-    if any(marker in lowered for marker in ("cost", "fee", "commission")) or any(marker in line for marker in ("费用", "成本", "佣金")):
-        for marker in ("cost", "fee", "commission"):
+        matched_context = True
+        names.update(_known_number_names(facts, "sortino", scope=scope))
+    if any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
+        marker in line for marker in ("费用", "成本", "佣金", "滑点")
+    ):
+        matched_context = True
+        for marker in ("cost", "fee", "commission", "slippage"):
             names.update(_known_number_names(facts, marker))
+    if "initial cash" in lowered or "初始资金" in line or "初始现金" in line:
+        matched_context = True
+        names.update(_known_number_names(facts, "initial_cash"))
     if not names:
-        return []
+        return [] if matched_context else None
     return _known_values(facts, lambda name: name in names)
 
 
 def _percent_context_known_values(line: str, facts: ReportFacts) -> list[float] | None:
     lowered = line.lower()
+    scope = _line_metric_scope(line, lowered)
     names: set[str] = set()
+    matched_context = False
     drawdown_context = "drawdown" in lowered or "回撤" in line
     if drawdown_context:
-        names.update(_known_number_names(facts, "drawdown"))
+        matched_context = True
+        names.update(_known_number_names(facts, "drawdown", scope=scope))
     if any(marker in lowered for marker in ("annualized return", "annual return", "cagr")) or "年化收益" in line:
-        names.update(_known_number_names(facts, "annualized_return"))
-        names.update(_known_number_names(facts, "cagr"))
+        matched_context = True
+        names.update(_known_number_names(facts, "annualized_return", scope=scope))
+        names.update(_known_number_names(facts, "cagr", scope=scope))
     if any(marker in lowered for marker in ("total return", "cumulative return", "excess return")) or any(
         marker in line for marker in ("总收益", "累计收益", "超额收益")
     ):
-        names.update(_known_number_names(facts, "total_return"))
-        names.update(_known_number_names(facts, "excess_total_return"))
+        matched_context = True
+        names.update(_known_number_names(facts, "total_return", scope=scope))
+        names.update(_known_number_names(facts, "excess_total_return", scope=scope))
     elif "return" in lowered or "收益" in line:
-        names.update(_known_number_names(facts, "return"))
+        matched_context = True
+        names.update(_known_number_names(facts, "return", scope=scope))
     if "volatility" in lowered or "波动" in line:
-        names.update(_known_number_names(facts, "volatility"))
+        matched_context = True
+        names.update(_known_number_names(facts, "volatility", scope=scope))
     if "win rate" in lowered or "胜率" in line:
-        names.update(_known_number_names(facts, "rate"))
+        matched_context = True
+        names.update(_known_number_names(facts, "rate", scope=scope))
+    if any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
+        marker in line for marker in ("费用", "成本", "佣金", "滑点")
+    ):
+        matched_context = True
+        for marker in ("cost", "fee", "commission", "slippage"):
+            names.update(_known_number_names(facts, marker))
     if not names:
-        return None
+        return [] if matched_context else None
     values = _known_values(facts, lambda name: name in names)
     if drawdown_context:
         values.extend(abs(value) for value in list(values))
     return values
 
 
-def _known_number_names(facts: ReportFacts, marker: str) -> set[str]:
-    return {
+def _known_number_names(facts: ReportFacts, marker: str, *, scope: str | None = None) -> set[str]:
+    names = {
         str(item["name"])
         for item in facts.known_numbers
         if isinstance(item.get("name"), str) and marker in str(item["name"]).lower()
     }
+    return _scope_known_number_names(names, scope)
 
 
-def _skip_plain_number_line(line: str) -> bool:
+def _scope_known_number_names(names: set[str], scope: str | None) -> set[str]:
+    if scope == "oos":
+        return {name for name in names if _metric_name_scope(name) == "oos"}
+    if scope == "is":
+        return {name for name in names if _metric_name_scope(name) == "is"}
+    return names
+
+
+def _metric_name_scope(name: str) -> str | None:
+    lowered = name.lower()
+    if ".oos_" in lowered:
+        return "oos"
+    if ".is_" in lowered:
+        return "is"
+    return None
+
+
+def _line_metric_scope(line: str, lowered: str) -> str | None:
+    oos = bool(re.search(r"\boos\b", lowered)) or "out-of-sample" in lowered or "out of sample" in lowered or "样本外" in line
+    is_scope = bool(re.search(r"\bIS\b", line)) or "in-sample" in lowered or "in sample" in lowered or "样本内" in line
+    if oos == is_scope:
+        return None
+    return "oos" if oos else "is"
+
+
+def _plain_number_scan_line(line: str) -> str | None:
     stripped = line.strip()
     if not stripped:
-        return True
+        return None
     if stripped.startswith("#"):
-        return True
-    if re.match(r"^(?:\d+[.)]|\d+(?:\.\d+)+)\s+\D", stripped):
-        return True
+        return None
+    if re.match(r"^\d+(?:\.\d+)+\s+\D", stripped):
+        return None
+    stripped = re.sub(r"^\d+[.)]\s+", "", stripped)
     if stripped.startswith("!["):
-        return True
+        return None
     if re.match(r"^(图|figure)\s+\d+[\s.:：]", stripped, flags=re.IGNORECASE):
-        return True
-    return False
+        return None
+    return stripped
 
 
 def _mentions_total_trades(line: str, lowered: str) -> bool:
@@ -598,11 +677,42 @@ def _image_dimensions(path: Path) -> tuple[int, int] | None:
         return struct.unpack(">II", data[16:24])
     if suffix in {".jpg", ".jpeg"}:
         return _jpeg_dimensions(data)
+    if suffix == ".webp":
+        return _webp_dimensions(data)
     if suffix == ".svg":
         text = data[:4096].decode("utf-8", errors="ignore")
         width = _svg_dimension(text, "width")
         height = _svg_dimension(text, "height")
         return (width, height) if width is not None and height is not None else None
+    return None
+
+
+def _webp_dimensions(data: bytes) -> tuple[int, int] | None:
+    if len(data) < 20 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+        return None
+    index = 12
+    while index + 8 <= len(data):
+        chunk_type = data[index:index + 4]
+        chunk_size = int.from_bytes(data[index + 4:index + 8], "little")
+        chunk_start = index + 8
+        chunk_end = chunk_start + chunk_size
+        if chunk_end > len(data):
+            return None
+        payload = data[chunk_start:chunk_end]
+        if chunk_type == b"VP8X" and len(payload) >= 10:
+            width = int.from_bytes(payload[4:7] + b"\x00", "little") + 1
+            height = int.from_bytes(payload[7:10] + b"\x00", "little") + 1
+            return width, height
+        if chunk_type == b"VP8L" and len(payload) >= 5 and payload[0] == 0x2F:
+            bits = int.from_bytes(payload[1:5], "little")
+            width = (bits & 0x3FFF) + 1
+            height = ((bits >> 14) & 0x3FFF) + 1
+            return width, height
+        if chunk_type == b"VP8 " and len(payload) >= 10 and payload[3:6] == b"\x9d\x01\x2a":
+            width = int.from_bytes(payload[6:8], "little") & 0x3FFF
+            height = int.from_bytes(payload[8:10], "little") & 0x3FFF
+            return width, height
+        index = chunk_end + (chunk_size % 2)
     return None
 
 
@@ -657,6 +767,8 @@ def _int_value(value: Any, default: int) -> int:
 
 
 def _finite_float(value: Any) -> float | None:
+    if isinstance(value, str):
+        value = value.replace(",", "")
     try:
         parsed = float(value)
     except (TypeError, ValueError):

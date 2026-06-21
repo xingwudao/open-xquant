@@ -145,11 +145,32 @@ def _known_numbers(
         parsed = _finite_float(item.get("return"))
         if parsed is not None:
             numbers.append({"name": f"fact.monthly_return.{item['month']}", "value": parsed})
+    numbers.extend(_strategy_spec_numbers(artifacts.strategy_spec))
     numbers.append({"name": "fact.positive_month_count", "value": float(positive_month_count)})
     numbers.append({"name": "fact.negative_month_count", "value": float(negative_month_count)})
     if oos_trade_count is not None:
         numbers.append({"name": "fact.oos_trade_count", "value": float(oos_trade_count)})
     return numbers
+
+
+def _strategy_spec_numbers(strategy_spec: dict[str, Any]) -> list[dict[str, float | str]]:
+    numbers: list[dict[str, float | str]] = []
+    cost = strategy_spec.get("cost")
+    if isinstance(cost, dict):
+        _append_number(numbers, "spec.cost.fee_rate", cost.get("fee_rate"))
+        _append_number(numbers, "spec.cost.slippage_rate", cost.get("slippage_rate"))
+    execution = strategy_spec.get("execution")
+    if isinstance(execution, dict):
+        _append_number(numbers, "spec.execution.initial_cash", execution.get("initial_cash", 100_000.0))
+    else:
+        _append_number(numbers, "spec.execution.initial_cash", 100_000.0)
+    return numbers
+
+
+def _append_number(numbers: list[dict[str, float | str]], name: str, value: Any) -> None:
+    parsed = _finite_float(value)
+    if parsed is not None:
+        numbers.append({"name": name, "value": parsed})
 
 
 def _parse_dates(values: pd.Series) -> pd.Series:
