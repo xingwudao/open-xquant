@@ -261,6 +261,26 @@ def test_report_qa_matches_percent_claims_to_metric_context(tmp_path) -> None:
     assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
 
 
+def test_report_qa_treats_unscoped_drawdown_as_overall(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"max_drawdown": -0.05, "oos_max_drawdown": -0.1})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Max drawdown was 10.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "10.00%" in finding.message for finding in result.findings)
+
+
 def test_report_qa_keeps_annualized_return_context_exclusive(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
@@ -351,6 +371,26 @@ def test_report_qa_binds_strategy_and_benchmark_returns_per_claim(tmp_path) -> N
         "Effective last trading day: 2024-03-29\n\n"
         "Configured end date: 2024-03-31\n\n"
         "Strategy total return 5.00%; benchmark total return 5.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "5.00%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_binds_generic_strategy_return_to_strategy_total_return(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "benchmark_total_return": 0.05, "excess_total_return": 0.05})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The strategy returned 5.00%.\n"
     )
     (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
     (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
@@ -909,6 +949,25 @@ def test_report_qa_keeps_total_and_oos_trade_counts_claim_specific(tmp_path) -> 
         "Effective last trading day: 2024-03-29\n\n"
         "Configured end date: 2024-03-31\n\n"
         "The run had 1 total trades and 2 OOS trades.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    messages = "\n".join(finding.message for finding in result.findings if finding.id == "numeric_claim_unverified")
+    assert "1" in messages
+    assert "2" in messages
+
+
+def test_report_qa_keeps_positive_and_negative_month_counts_claim_specific(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Positive months 1, negative months 2.\n"
     )
     (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
     (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")

@@ -649,6 +649,9 @@ def _context_known_values(
     lowered = line.lower()
     scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
     ratio_scope = scope if scope is not None else "overall"
+    claim_month_names = _claim_month_count_names(line, claim_start, claim_end)
+    if claim_month_names is not None:
+        return _known_values(facts, lambda name: name in claim_month_names)
     claim_metric_names = _claim_trade_or_ratio_names(line, facts, claim_start, claim_end, ratio_scope)
     if claim_metric_names is not None:
         return _known_values(facts, lambda name: name in claim_metric_names)
@@ -723,7 +726,7 @@ def _percent_context_known_values(
     drawdown_context = "drawdown" in context_lowered or "回撤" in context_line
     if drawdown_context:
         matched_context = True
-        names.update(_known_number_names(facts, "drawdown", scope=scope))
+        names.update(_known_number_names(facts, "drawdown", scope=return_scope))
     if any(marker in context_lowered for marker in ("annualized return", "annual return", "cagr")) or "年化收益" in context_line:
         matched_context = True
         names.update(_known_number_names(facts, "annualized_return", scope=return_scope))
@@ -748,9 +751,17 @@ def _percent_context_known_values(
         ):
             matched_context = True
             names.update(_known_strategy_total_return_names(facts, scope=return_scope))
+        elif ("benchmark" in context_lowered or "基准" in context_line) and (
+            "return" in context_lowered or "收益" in context_line
+        ):
+            matched_context = True
+            names.update(_known_benchmark_total_return_names(facts, scope=return_scope))
+        elif "excess" in context_lowered or "超额" in context_line:
+            matched_context = True
+            names.update(_known_number_names(facts, "excess_total_return", scope=return_scope))
         elif "return" in context_lowered or "收益" in context_line:
             matched_context = True
-            names.update(_known_number_names(facts, "return", scope=return_scope))
+            names.update(_known_strategy_total_return_names(facts, scope=return_scope))
     if "volatility" in context_lowered or "波动" in context_line:
         matched_context = True
         names.update(_known_number_names(facts, "volatility", scope=return_scope))
@@ -887,6 +898,28 @@ def _claim_trade_names(line: str, facts: ReportFacts, claim_start: int | None, c
     if label == "oos":
         return {"metric.oos_trade_count", "fact.oos_trade_count"}
     return {"metric.trade_count"}
+
+
+def _claim_month_count_names(line: str, claim_start: int | None, claim_end: int | None) -> set[str] | None:
+    if claim_start is None or claim_end is None:
+        return None
+    label = _nearest_claim_label(
+        line,
+        _claim_label_markers(
+            line,
+            (
+                ("positive", r"\bpositive\s+months?\b|\bpositive\s+return\s+months?\b|正收益月份|正收益月"),
+                ("negative", r"\bnegative\s+months?\b|\bnegative\s+return\s+months?\b|负收益月份|负收益月"),
+            ),
+        ),
+        claim_start,
+        claim_end,
+    )
+    if label is None:
+        return None
+    if label == "positive":
+        return {"fact.positive_month_count"}
+    return {"fact.negative_month_count"}
 
 
 def _claim_trade_or_ratio_names(
