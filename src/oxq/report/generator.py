@@ -43,12 +43,29 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     bias_audit = audit_research(run_dir)
     validation_result = validate(spec)
     assets = list_report_assets(run_path)
-    benchmark_metrics = _benchmark_relative_metrics(run_path) if _benchmark_artifact_trusted(repro_audit) else None
+    benchmark_configured = bool(spec.benchmark.symbols)
+    robustness_configured = _robustness_configured(spec_dict)
+    benchmark_metrics = (
+        _benchmark_relative_metrics(run_path)
+        if benchmark_configured and _benchmark_artifact_trusted(repro_audit)
+        else None
+    )
 
     strategy_id = spec.strategy_id or "unknown"
     hypothesis = spec.research.hypothesis or ""
     decision = _determine_decision(bias_audit, spec_dict, metrics, repro_audit, robustness_result)
-    decision_summary = _decision_summary(decision, metrics, repro_audit, bias_audit, robustness_result, benchmark_metrics, lang)
+    decision_summary = _decision_summary(
+        decision,
+        metrics,
+        repro_audit,
+        bias_audit,
+        robustness_result,
+        benchmark_metrics,
+        lang,
+        robustness_configured=robustness_configured,
+        benchmark_configured=benchmark_configured,
+        oos_evidence_required=_requires_oos_trade_evidence(spec_dict),
+    )
 
     lines: list[str] = []
     lines.append(f"# {msg['report_title'].format(strategy_id=strategy_id)}")
@@ -312,6 +329,9 @@ def _determine_decision(
     if bias_audit.get("fatal_count", 0) > 0:
         return "REJECT"
 
+    if _requires_oos_trade_evidence(spec_dict) and _as_finite_float(metrics.get("oos_trade_count")) is None:
+        return "NO EVIDENCE"
+
     if _has_no_trade_evidence(metrics):
         return "NO EVIDENCE"
 
@@ -362,6 +382,25 @@ def _has_no_trade_evidence(metrics: dict) -> bool:
     return _as_finite_float(trades) == 0.0
 
 
+def _requires_oos_trade_evidence(spec_dict: dict) -> bool:
+    validation = spec_dict.get("validation", {})
+    if not isinstance(validation, dict):
+        return False
+    test_period = validation.get("test_period")
+    return isinstance(test_period, list) and len(test_period) >= 2
+
+
+def _robustness_configured(spec_dict: dict) -> bool:
+    robustness = spec_dict.get("robustness", {})
+    if not isinstance(robustness, dict):
+        return False
+    return bool(
+        robustness.get("cost_multiplier")
+        or robustness.get("parameter_perturbation")
+        or robustness.get("regime_analysis")
+    )
+
+
 def _decision_summary(
     decision: str,
     metrics: dict,
@@ -370,6 +409,10 @@ def _decision_summary(
     robustness_result: dict | None,
     benchmark_metrics: dict[str, float] | None,
     lang: str,
+    *,
+    robustness_configured: bool = True,
+    benchmark_configured: bool = True,
+    oos_evidence_required: bool = False,
 ) -> dict[str, list[str] | str]:
     supporting: list[str] = []
     risks: list[str] = []
@@ -425,10 +468,22 @@ def _decision_summary(
         )
     elif oos_trades is not None:
         supporting.append(f"OOS 交易次数为 {oos_trades}。" if zh else f"OOS trade count is {oos_trades}.")
+    elif oos_evidence_required:
+        risks.append(
+            "缺少 OOS 交易次数，不能评估样本外交易证据。"
+            if zh
+            else "OOS trade count is missing, so out-of-sample trade evidence cannot be assessed."
+        )
+        actions.append(
+            "重新生成包含 OOS 交易统计的 run，再考虑资金配置。"
+            if zh
+            else "Regenerate the run with OOS trade statistics before considering capital allocation."
+        )
 
     robustness_status = str((robustness_result or {}).get("status", "missing")).upper()
     if robustness_result is None:
-        risks.append("缺少已验证的稳健性结果。" if zh else "Verified robustness artifact is missing.")
+        if robustness_configured:
+            risks.append("缺少已验证的稳健性结果。" if zh else "Verified robustness artifact is missing.")
     elif robustness_status in {"ROBUST", "PASS"}:
         supporting.append("稳健性检查通过。" if zh else "Robustness checks passed.")
     elif robustness_status == "WARN":
@@ -439,7 +494,10 @@ def _decision_summary(
         risks.append("稳健性检查出错，不能支持升级。" if zh else "Robustness checks errored and cannot support promotion.")
 
     if benchmark_metrics is None:
-        risks.append("无法计算相对基准收益。" if zh else "Benchmark-relative return could not be computed.")
+        if not benchmark_configured:
+            pass
+        else:
+            risks.append("无法计算相对基准收益。" if zh else "Benchmark-relative return could not be computed.")
     else:
         excess = benchmark_metrics["excess_total_return"]
         if excess > 0:
@@ -470,11 +528,21 @@ def _benchmark_artifact_trusted(repro_audit: dict) -> bool:
     checks = repro_audit.get("checks", [])
     if not isinstance(checks, list):
         return True
-    benchmark_check_ids = {"benchmark_hash", "benchmark_curve_hash", "benchmark_equity_hash", "benchmark_prices_hash"}
+    benchmark_guard_ids = {
+        "artifact_hashes",
+        "data_manifest_hash",
+        "environment_hash",
+        "run_digest",
+        "equity_hash",
+        "benchmark_hash",
+        "benchmark_curve_hash",
+        "benchmark_equity_hash",
+        "benchmark_prices_hash",
+    }
     for check in checks:
         if not isinstance(check, dict):
             continue
-        if check.get("id") not in benchmark_check_ids:
+        if check.get("id") not in benchmark_guard_ids:
             continue
         if check.get("severity") == "fatal" and check.get("status") == "fail":
             return False
@@ -594,10 +662,21 @@ def _format_metric_table_lines(rows: list[tuple[str, str]], lang: str) -> list[s
 
 
 def _benchmark_relative_metrics(run_path: Path) -> dict[str, float] | None:
-    equity_return = _curve_total_return(run_path / "equity_curve.csv")
-    benchmark_return = _curve_total_return(run_path / "benchmark_curve.csv")
-    if equity_return is None or benchmark_return is None:
+    equity_values = _curve_values_by_date(run_path / "equity_curve.csv")
+    benchmark_values = _curve_values_by_date(run_path / "benchmark_curve.csv")
+    if not equity_values or not benchmark_values:
         return None
+    common_dates = sorted(set(equity_values).intersection(benchmark_values))
+    if len(common_dates) < 2:
+        return None
+    first_date = common_dates[0]
+    last_date = common_dates[-1]
+    equity_start = equity_values[first_date]
+    benchmark_start = benchmark_values[first_date]
+    if equity_start == 0 or benchmark_start == 0:
+        return None
+    equity_return = equity_values[last_date] / equity_start - 1.0
+    benchmark_return = benchmark_values[last_date] / benchmark_start - 1.0
     return {
         "strategy_total_return": equity_return,
         "benchmark_total_return": benchmark_return,
@@ -605,21 +684,20 @@ def _benchmark_relative_metrics(run_path: Path) -> dict[str, float] | None:
     }
 
 
-def _curve_total_return(path: Path) -> float | None:
+def _curve_values_by_date(path: Path) -> dict[str, float] | None:
     if not path.exists():
         return None
-    values: list[float] = []
+    values: dict[str, float] = {}
     try:
         with path.open(newline="", encoding="utf-8") as handle:
             for row in csv.DictReader(handle):
+                date = str(row.get("date", "")).strip()
                 value = _as_finite_float(row.get("value"))
-                if value is not None:
-                    values.append(value)
+                if date and value is not None:
+                    values[date] = value
     except OSError:
         return None
-    if len(values) < 2 or values[0] == 0:
-        return None
-    return values[-1] / values[0] - 1.0
+    return values or None
 
 
 def _format_benchmark_metric_lines(metrics: dict[str, float], lang: str) -> list[str]:

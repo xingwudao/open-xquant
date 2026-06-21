@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 
+import pytest
 import yaml
 
 from oxq.report.generator import (
+    _benchmark_relative_metrics,
     _decision_summary,
     _determine_decision,
     _format_float,
@@ -105,6 +107,24 @@ def test_decision_returns_no_evidence_when_oos_has_no_trades() -> None:
         bias_audit={"fatal_count": 0, "warning_count": 0},
         spec_dict={"decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}}},
         metrics={"trade_count": 20, "oos_trade_count": 0, "oos_sharpe_ratio": 3.0},
+        repro_audit={"status": "pass"},
+        robustness_result={"status": "warn", "tests": []},
+    )
+
+    assert decision == "NO EVIDENCE"
+
+
+def test_decision_returns_no_evidence_when_oos_trade_count_is_missing_for_test_period() -> None:
+    decision = _determine_decision(
+        bias_audit={"fatal_count": 0, "warning_count": 1},
+        spec_dict={
+            "validation": {
+                "test_period": ["2024-01-01", "2024-12-31"],
+                "required_oos": False,
+            },
+            "decision_policy": {"promote_if": {"oos_sharpe_gte": 1.0}},
+        },
+        metrics={"trade_count": 25, "oos_sharpe_ratio": 3.0, "oos_max_drawdown": -0.05},
         repro_audit={"status": "pass"},
         robustness_result={"status": "warn", "tests": []},
     )
@@ -285,6 +305,86 @@ def test_report_omits_benchmark_relative_metrics_when_benchmark_hash_fails(monke
     assert "Total return exceeds benchmark" not in report
 
 
+def test_report_omits_benchmark_relative_metrics_when_artifact_hash_guard_fails(monkeypatch, tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="report_untrusted_benchmark_guard",
+        hypothesis="benchmark metrics should require a trusted hash manifest",
+    )
+    spec.benchmark.symbols = ["SPY"]
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-03"]
+    spec.validation.required_oos = False
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-02,100\n2024-01-03,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "oxq.report.generator.audit_reproducibility",
+        lambda run_dir: {
+            "status": "fail",
+            "checks": [
+                {
+                    "id": "artifact_hashes",
+                    "severity": "fatal",
+                    "status": "fail",
+                    "message": "artifact_hashes.json missing required keys: ['benchmark_curve.csv']",
+                }
+            ],
+            "fatal_count": 1,
+            "warning_count": 0,
+        },
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "### Benchmark Relative Metrics" not in report
+    assert "Total return exceeds benchmark" not in report
+
+
+def test_benchmark_relative_metrics_aligns_curve_dates(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-01,100\n2024-01-02,110\n2024-01-03,120\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+
+    metrics = _benchmark_relative_metrics(run_dir)
+
+    assert metrics is not None
+    assert metrics["strategy_total_return"] == pytest.approx(120 / 110 - 1.0)
+    assert metrics["benchmark_total_return"] == pytest.approx(220 / 200 - 1.0)
+    assert metrics["excess_total_return"] == pytest.approx((120 / 110) - (220 / 200))
+
+
+def test_benchmark_relative_metrics_requires_two_overlapping_dates(tmp_path) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "equity_curve.csv").write_text(
+        "date,value\n2024-01-01,100\n2024-01-02,110\n",
+        encoding="utf-8",
+    )
+    (run_dir / "benchmark_curve.csv").write_text(
+        "date,value\n2024-01-02,200\n2024-01-03,220\n",
+        encoding="utf-8",
+    )
+
+    assert _benchmark_relative_metrics(run_dir) is None
+
+
 def test_decision_summary_uses_chinese_empty_risk_fallback() -> None:
     summary = _decision_summary(
         "PAPER TRADING CANDIDATE",
@@ -305,6 +405,29 @@ def test_decision_summary_uses_chinese_empty_risk_fallback() -> None:
     )
 
     assert summary["risks"] == ["配置检查未发现阻碍资金决策的风险。"]
+
+
+def test_decision_summary_does_not_block_on_unconfigured_benchmark_or_robustness() -> None:
+    summary = _decision_summary(
+        "PAPER TRADING CANDIDATE",
+        {
+            "trade_count": 10,
+            "oos_trade_count": 10,
+            "oos_sharpe_ratio": 1.2,
+        },
+        repro_audit={"status": "pass"},
+        bias_audit={"fatal_count": 0, "warning_count": 0},
+        robustness_result=None,
+        benchmark_metrics=None,
+        lang="en",
+        robustness_configured=False,
+        benchmark_configured=False,
+    )
+
+    risks = "\n".join(summary["risks"])
+    assert "Verified robustness artifact is missing" not in risks
+    assert "Benchmark-relative return could not be computed" not in risks
+    assert summary["risks"] == ["No blocking risks were detected by configured checks."]
 
 
 def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) -> None:

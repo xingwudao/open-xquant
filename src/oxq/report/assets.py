@@ -13,7 +13,7 @@ from typing import Any
 
 EMBEDDED_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".svg"}
 MANIFEST_SCHEMA_VERSION = 1
-URL_RESERVED_PATH_CHARS = {"#", "?"}
+URL_RESERVED_PATH_CHARS = {"#", "?", "%"}
 ASSET_KIND_SUBDIR = {"figure": "figures", "attachment": "attachments"}
 
 

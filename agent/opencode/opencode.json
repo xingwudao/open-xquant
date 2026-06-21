@@ -39,6 +39,8 @@
     "quant-report": "commands/quant-report.md"
   },
   "skills": {
-    "quant-research": "skills/quant-research/SKILL.md"
+    "quant-research": "skills/quant-research/SKILL.md",
+    "report-chart-builder": "skills/report-chart-builder/SKILL.md",
+    "research-report-writer": "skills/research-report-writer/SKILL.md"
   }
 }

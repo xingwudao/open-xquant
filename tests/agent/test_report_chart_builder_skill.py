@@ -38,6 +38,15 @@ def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
     assert "report_write" not in config["agents"]["quant-reporter"]["tools"]
 
 
+def test_opencode_bundle_packages_report_skills() -> None:
+    config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
+
+    assert config["skills"]["report-chart-builder"] == "skills/report-chart-builder/SKILL.md"
+    assert config["skills"]["research-report-writer"] == "skills/research-report-writer/SKILL.md"
+    assert Path("agent/opencode/skills/report-chart-builder/SKILL.md").exists()
+    assert Path("agent/opencode/skills/research-report-writer/SKILL.md").exists()
+
+
 def test_research_report_writer_skill_requires_agent_authored_final_report() -> None:
     skill = Path("agent/skills/research-report-writer.md")
 
@@ -64,4 +73,10 @@ def test_quant_reporter_routes_final_report_through_writer_skill() -> None:
     assert "render_markdown_html_report" in combined
     assert "oxq report asset add-batch" in combined
     assert "report_evidence.md" not in combined
+    assert "oxq report write" not in combined
+
+
+def test_examples_do_not_reference_removed_report_write_command() -> None:
+    combined = "\n".join(path.read_text(encoding="utf-8") for path in Path("examples").rglob("*.py"))
+
     assert "oxq report write" not in combined

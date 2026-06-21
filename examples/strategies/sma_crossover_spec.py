@@ -212,12 +212,12 @@ print(f"  Decision:   {decision}")
 # ---------------------------------------------------------------------------
 print(f"""
 {'='*60}
-CLI one-shot pipeline:
+CLI + Agent pipeline:
   oxq spec validate {spec_path}
   oxq backtest run {spec_path} --out {OUT_DIR}/runs/auto --json
   oxq audit research {run_dir}/
   oxq robustness run {run_dir}/
-  oxq report write {run_dir}/
+  /quant-report {run_dir}/
   oxq experiment add {run_dir}/
 {'='*60}
 """)

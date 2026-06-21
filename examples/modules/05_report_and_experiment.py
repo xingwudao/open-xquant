@@ -82,8 +82,8 @@ print(f"  tail -40 {report_path}")
 # ---------------------------------------------------------------------------
 print(f"""
 {'='*60}
-CLI equivalents:
-  oxq report write {run_dir}/ --lang zh --format all
+Agent workflow:
+  /quant-report {run_dir}/
   oxq experiment add {run_dir}/ --registry {registry_path}
 {'='*60}
 """)
