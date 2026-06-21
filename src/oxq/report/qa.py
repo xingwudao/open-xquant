@@ -19,7 +19,7 @@ from oxq.report.artifacts import RunArtifacts
 from oxq.report.facts import ReportFacts, build_report_facts
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*]\((?P<src>[^)]+)\)")
-_NUMBER_PATTERN = r"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+_NUMBER_PATTERN = r"[+-]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
 _PERCENT_RE = re.compile(r"(?<![\w.])(?P<value>[+-]?\d+(?:\.\d+)?)%")
 _PLAIN_NUMBER_RE = re.compile(rf"(?<![\w.%/-])(?P<value>{_NUMBER_PATTERN})(?!(?:\.\d)|[\w%/-])")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
@@ -648,7 +648,8 @@ def _context_known_values(
 ) -> list[float] | None:
     lowered = line.lower()
     scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
-    claim_metric_names = _claim_trade_or_ratio_names(line, facts, claim_start, claim_end, scope)
+    ratio_scope = scope if scope is not None else "overall"
+    claim_metric_names = _claim_trade_or_ratio_names(line, facts, claim_start, claim_end, ratio_scope)
     if claim_metric_names is not None:
         return _known_values(facts, lambda name: name in claim_metric_names)
     names: set[str] = set()
@@ -671,20 +672,20 @@ def _context_known_values(
     if "negative month" in lowered or "negative months" in lowered or "负收益月份" in line or "负收益月" in line:
         matched_context = True
         names.add("fact.negative_month_count")
-    claim_ratio_names = _claim_ratio_names(line, facts, claim_start, claim_end, scope)
+    claim_ratio_names = _claim_ratio_names(line, facts, claim_start, claim_end, ratio_scope)
     if claim_ratio_names is not None:
         matched_context = True
         names.update(claim_ratio_names)
     else:
         if "sharpe" in lowered or "夏普" in line:
             matched_context = True
-            names.update(_known_number_names(facts, "sharpe", scope=scope))
+            names.update(_known_number_names(facts, "sharpe", scope=ratio_scope))
         if "calmar" in lowered or "卡玛" in line:
             matched_context = True
-            names.update(_known_number_names(facts, "calmar", scope=scope))
+            names.update(_known_number_names(facts, "calmar", scope=ratio_scope))
         if "sortino" in lowered:
             matched_context = True
-            names.update(_known_number_names(facts, "sortino", scope=scope))
+            names.update(_known_number_names(facts, "sortino", scope=ratio_scope))
     claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end)
     if claim_cost_names is not None:
         matched_context = True
@@ -1006,7 +1007,7 @@ def _known_benchmark_total_return_names(facts: ReportFacts, *, scope: str | None
 
 def _is_strategy_total_return_name(name: str) -> bool:
     leaf = name.lower().rsplit(".", maxsplit=1)[-1]
-    return leaf in {"total_return", "is_total_return", "oos_total_return", "strategy_total_return"}
+    return leaf in {"total_return", "is_total_return", "oos_total_return"}
 
 
 def _is_benchmark_total_return_name(name: str) -> bool:
@@ -1097,15 +1098,36 @@ def _plain_number_scan_line(line: str) -> str | None:
         return None
     if stripped.startswith("#"):
         return None
-    if re.match(r"^\d+(?:\.\d+)+\s+\D", stripped):
+    if re.match(r"^\d+(?:\.\d+)+\s+\D", stripped) and not _plain_number_line_has_metric_context(stripped):
         return None
     stripped = re.sub(r"^\d+[.)]\s+", "", stripped)
     stripped = re.sub(r"\b\d{1,2}:\d{2}(?::\d{2})?(?:\s*(?:UTC|Z))?\b", "", stripped)
     if stripped.startswith("!["):
         return None
-    if re.match(r"^(图|figure)\s+\d+[\s.:：]", stripped, flags=re.IGNORECASE):
+    stripped = re.sub(r"^(图|figure)\s+\d+[\s.:：]\s*", "", stripped, count=1, flags=re.IGNORECASE)
+    if not stripped:
         return None
     return stripped
+
+
+def _plain_number_line_has_metric_context(line: str) -> bool:
+    lowered = line.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "return",
+            "drawdown",
+            "volatility",
+            "sharpe",
+            "calmar",
+            "sortino",
+            "win rate",
+            "fee",
+            "commission",
+            "slippage",
+            "trade",
+        )
+    ) or any(marker in line for marker in ("收益", "回撤", "波动", "夏普", "卡玛", "胜率", "费用", "佣金", "滑点", "交易"))
 
 
 def _mentions_total_trades(line: str, lowered: str) -> bool:
