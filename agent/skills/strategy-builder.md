@@ -28,9 +28,11 @@ installed as long-lived Agent capability, not as a package in that directory.
 Before running commands:
 
 1. Read `~/.config/open-xquant/agent.yaml`.
-2. Use `preferred_runner` in place of `uv run oxq`.
+2. Prefer `preferred_runner_argv` when the shell tool accepts argv; otherwise
+   use `preferred_runner` in place of `uv run oxq`.
 3. If it is missing or fails, read `~/.config/open-xquant/agent-install.json`,
-   take `source.path`, and use `uv run --project <source.path> oxq`.
+   take `sdk_bundle.runner.argv` or `sdk_bundle.runner.oxq`, and use that
+   cached runner.
 
 Keep the shell in the user's research directory. Do not search the user's home
 directory for unrelated open-xquant checkouts, and do not switch to a different

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import yaml
 from click.testing import CliRunner
 
@@ -41,3 +43,69 @@ def test_research_init_defaults_to_market_data_directory(tmp_path) -> None:
         assert result.exit_code == 0, result.output
         workspace = yaml.safe_load((cwd_path / ".open-xquant/workspace.yaml").read_text(encoding="utf-8"))
         assert workspace["data"]["market_data_dir"] == "~/.oxq/data/market"
+
+
+def test_research_init_sdk_installs_from_agent_bundle(monkeypatch, tmp_path) -> None:
+    installed: list[tuple[Path, Path, bool]] = []
+
+    def install(cwd: Path, venv: Path, *, force: bool = False) -> dict:
+        installed.append((cwd, venv, force))
+        return {
+            "enabled": True,
+            "bundle_id": "bundle-test",
+            "profile": "full-research",
+            "venv": ".venv",
+            "runner": ".venv/bin/oxq",
+            "python": ".venv/bin/python",
+            "wheel_sha256": "wheel-sha",
+            "lock_sha256": "lock-sha",
+        }
+
+    monkeypatch.setattr("oxq.cli.research.install_workspace_sdk", install, raising=False)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+
+        result = runner.invoke(main, ["research", "init", "--sdk"])
+
+        assert result.exit_code == 0, result.output
+        assert installed == [(cwd_path.resolve(), cwd_path.resolve() / ".venv", False)]
+        workspace = yaml.safe_load((cwd_path / ".open-xquant/workspace.yaml").read_text(encoding="utf-8"))
+        assert workspace["sdk"] == {
+            "enabled": True,
+            "bundle_id": "bundle-test",
+            "profile": "full-research",
+            "venv": ".venv",
+            "runner": ".venv/bin/oxq",
+            "python": ".venv/bin/python",
+            "wheel_sha256": "wheel-sha",
+            "lock_sha256": "lock-sha",
+        }
+
+
+def test_research_init_sdk_allows_custom_venv(monkeypatch, tmp_path) -> None:
+    installed: list[Path] = []
+
+    def install(cwd: Path, venv: Path, *, force: bool = False) -> dict:
+        del cwd, force
+        installed.append(venv)
+        return {
+            "enabled": True,
+            "bundle_id": "bundle-test",
+            "profile": "full-research",
+            "venv": "envs/oxq",
+            "runner": "envs/oxq/bin/oxq",
+            "python": "envs/oxq/bin/python",
+            "wheel_sha256": "wheel-sha",
+            "lock_sha256": "lock-sha",
+        }
+
+    monkeypatch.setattr("oxq.cli.research.install_workspace_sdk", install, raising=False)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+
+        result = runner.invoke(main, ["research", "init", "--sdk", "--sdk-venv", "envs/oxq"])
+
+        assert result.exit_code == 0, result.output
+        assert installed == [cwd_path.resolve() / "envs/oxq"]

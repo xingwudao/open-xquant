@@ -168,6 +168,24 @@ uv run oxq agent install --target trae --yes
 - OpenClaw: `~/.openclaw/skills/`
 - TRAE: `~/.trae/skills/`
 
+安装还会构建 cached SDK bundle：
+
+```text
+~/.config/open-xquant/sdk-bundles/<bundle_id>/
+```
+
+该 bundle 包含：
+
+- open-xquant wheel。
+- `full-research` dependency lock。
+- 安装过 open-xquant 和依赖的 runner venv。
+- 供后续项目安装复用的 uv cache。
+
+默认 `full-research` profile 包含 `chart`、`scipy`、`yfinance`、
+`akshare`、`live`、`mcp`、`agent`，并排除 `dev`、`docs`、`talib`。
+安装完成后，`preferred_runner` 指向 cached runner。用户删除最初的
+open-xquant 源码目录后，Agent 仍应使用 cached runner 启动 `oxq`。
+
 仓库内的 skill 单一来源是 `agent/skills/*.md`。`oxq agent install`、
 `agent upgrade` 和各 Agent 的长期安装都从这个目录读取 skill。
 不要维护 `agent/opencode/skills/` 这样的第二份 skill 副本。
@@ -195,7 +213,8 @@ uv run oxq agent status
 
 这会把 `agent/skills/*.md` 渲染为 TRAE 可读取的目录结构，并写入
 `~/.config/open-xquant/agent.yaml`。TRAE 中的 open-xquant skills 之后应读取
-该文件里的 `preferred_runner`，在任意研究目录中调用同一套 `oxq`。
+该文件里的 `preferred_runner_argv` 或 `preferred_runner`，在任意研究目录中
+调用 cached runner。
 
 如果只希望当前项目使用 open-xquant skills，可以改用 TRAE 项目目录：
 
@@ -244,6 +263,9 @@ uv run oxq agent upgrade --all-targets --from-local . --yes
 - `uninstall` 只删除 manifest 记录且带 managed marker 的 skill 目录。
 - 不删除 `~/.oxq/data`。
 - 不删除任何研究目录、`runs/`、`reports/` 或 `experiments.jsonl`。
+- `agent uninstall --all-targets --purge-config` 才会删除
+  `~/.config/open-xquant/agent-install.json`、`agent.yaml` 和 manifest
+  记录的 managed SDK bundle。
 
 ---
 
@@ -256,17 +278,23 @@ uv run oxq agent upgrade --all-targets --from-local . --yes
 cat ~/.config/open-xquant/agent.yaml
 ```
 
-读取 `preferred_runner`，后续把文档里的 `uv run oxq` 替换成这个 runner。
+优先读取 `preferred_runner_argv`；如果当前工具只能执行 shell 字符串，
+再读取 `preferred_runner`。后续把文档里的 `uv run oxq` 替换成这个
+runner。它默认指向 `~/.config/open-xquant/sdk-bundles/` 下的 cached
+runner，而不是最初安装时的源码目录。
+
 例如，如果它是：
 
 ```yaml
-preferred_runner: uv run --project /path/to/open-xquant oxq
+preferred_runner: /home/user/.config/open-xquant/sdk-bundles/<bundle>/runner/.venv/bin/oxq
+preferred_runner_argv:
+  - /home/user/.config/open-xquant/sdk-bundles/<bundle>/runner/.venv/bin/oxq
 ```
 
 则在当前研究目录运行：
 
 ```bash
-uv run --project /path/to/open-xquant oxq doctor --json
+<preferred_runner> doctor --json
 ```
 
 如果当前目录是 open-xquant 源码 worktree，或用户明确要求在当前
@@ -280,16 +308,20 @@ worktree 中复现/开发，优先使用 current worktree runner，例如
 cat ~/.config/open-xquant/agent-install.json
 ```
 
-使用其中的 `source.path`：
-
-```bash
-uv run --project "<source.path>" oxq doctor --json
-```
+使用其中的 `sdk_bundle.runner.argv` 或 `sdk_bundle.runner.oxq`。
+不要默认回到 `source.path`；用户可能已经删除最初的 open-xquant
+源码目录。
 
 如果 workspace 缺失，初始化当前目录：
 
 ```bash
-uv run --project "<source.path>" oxq research init
+<preferred_runner> research init
+```
+
+如果用户要基于 SDK 写自定义研究代码，默认初始化并安装项目虚拟环境：
+
+```bash
+<preferred_runner> research init --sdk
 ```
 
 这会创建：
@@ -625,6 +657,7 @@ uv run oxq agent uninstall --all-targets --yes
 
 ```bash
 uv run oxq research init
+uv run oxq research init --sdk
 uv run oxq doctor
 uv run oxq doctor --json
 ```
@@ -818,6 +851,29 @@ validation:
 - 用户需要组合多个 run、读取 artifacts 或做二次分析。
 - 当前 CLI 尚未覆盖用户明确需要的能力。
 
+用户需要 SDK 时，在研究目录运行：
+
+```bash
+<preferred_runner> research init --sdk
+```
+
+这会从 `~/.config/open-xquant/agent-install.json` 记录的 SDK bundle
+安装 open-xquant 和默认 `full-research` 依赖到当前研究目录 `.venv`。
+默认 profile 包含 `chart`、`scipy`、`yfinance`、`akshare`、`live`、
+`mcp`、`agent`，并排除 `dev`、`docs`、`talib`。
+
+后续 SDK 脚本使用项目环境：
+
+```bash
+.venv/bin/python scripts/my_research.py
+```
+
+Windows PowerShell 使用：
+
+```powershell
+.\.venv\Scripts\python.exe .\scripts\my_research.py
+```
+
 最小 SDK 回测形态如下。它仍然读取 spec，并写出标准 artifacts：
 
 ```python
@@ -862,9 +918,11 @@ print(metrics["sharpe_ratio"])
 - 如果当前目录不是 open-xquant 源码目录，不要搜索其他源码副本。
 - 如果当前目录是源码 worktree，先尝试 current worktree runner
   `uv run oxq --help` 或 `uv run --project . oxq --help`。
-- 读取 `~/.config/open-xquant/agent.yaml` 的 `preferred_runner`。
-- 如果缺失，读取 `~/.config/open-xquant/agent-install.json` 的 `source.path`。
-- 在研究目录中运行 `uv run --project "<source.path>" oxq --help`。
+- 读取 `~/.config/open-xquant/agent.yaml` 的 `preferred_runner_argv` 或
+  `preferred_runner`。
+- 如果缺失，读取 `~/.config/open-xquant/agent-install.json` 的
+  `sdk_bundle.runner.argv` 或 `sdk_bundle.runner.oxq`。
+- 不要依赖 `source.path`，用户可能已经删除源码目录。
 - 只有在 open-xquant 源码目录内，才运行 `uv sync --all-extras`
   或其他 `uv sync --extra ...` 安装命令。
 

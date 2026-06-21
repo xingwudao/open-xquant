@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 
 from oxq.cli.doctor import _check_data, _check_deps
@@ -16,6 +17,40 @@ def _write_source(root: Path) -> None:
         "---\nname: strategy-builder\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
         encoding="utf-8",
     )
+
+
+@pytest.fixture(autouse=True)
+def fake_sdk_bundle(monkeypatch):
+    def build(source_root: Path, config_root: Path, *, dry_run: bool = False) -> dict:
+        del source_root
+        root = config_root / "sdk-bundles" / "bundle-test"
+        wheel = root / "dist" / "open_xquant-0.1.0-py3-none-any.whl"
+        lock = root / "requirements.lock.txt"
+        runner = root / "runner" / ".venv" / "bin" / "oxq"
+        if not dry_run:
+            wheel.parent.mkdir(parents=True, exist_ok=True)
+            wheel.write_text("wheel", encoding="utf-8")
+            lock.write_text("open-xquant @ file://wheel\n", encoding="utf-8")
+            runner.parent.mkdir(parents=True, exist_ok=True)
+            runner.write_text("#!/bin/sh\n", encoding="utf-8")
+        return {
+            "id": "bundle-test",
+            "root": str(root),
+            "profile": "full-research",
+            "extras": ["chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent"],
+            "excluded_extras": ["dev", "docs", "talib"],
+            "wheel": {"path": str(wheel), "sha256": "wheel-sha", "version": "0.1.0", "source_commit": "commit-sha"},
+            "dependencies": {
+                "lock_file": str(lock),
+                "lock_sha256": "lock-sha",
+                "packages_file": str(root / "packages.json"),
+                "packages_count": 1,
+            },
+            "runner": {"venv": str(root / "runner" / ".venv"), "oxq": str(runner), "argv": [str(runner)]},
+            "uv_cache_dir": str(root / "uv-cache"),
+        }
+
+    monkeypatch.setattr("oxq.cli.agent.build_sdk_bundle", build)
 
 
 def test_doctor_json_reports_missing_workspace_fix(monkeypatch, tmp_path) -> None:
