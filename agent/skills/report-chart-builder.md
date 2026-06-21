@@ -10,7 +10,7 @@ description: >-
 Use this skill after a run exists and the user wants charts in the experiment
 report. The Agent should discuss chart requirements, write plotting Python when
 needed, save generated figures as experiment assets, and register them before
-regenerating the report.
+handing the final narrative to `research-report-writer`.
 
 ## Workflow
 
@@ -45,14 +45,16 @@ oxq report asset add runs/<run_id>/ runs/<run_id>/report_assets/figures/<figure>
   --source-artifact equity_curve.csv
 ```
 
-5. Regenerate both report formats.
+5. Generate the evidence brief and hand off final writing.
 
 ```bash
-oxq report write runs/<run_id>/ --lang zh --format all
+oxq report write runs/<run_id>/ --lang zh --format markdown --out runs/<run_id>/report_evidence.md
 ```
 
-The expected outputs are:
+Then use `research-report-writer` to write the final Markdown report and render
+HTML from that final Markdown. The expected outputs are:
 
+- `report_evidence.md`
 - `research_report.md`
 - `research_report.html`
 - `report_assets/manifest.json`
