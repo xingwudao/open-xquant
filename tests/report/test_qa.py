@@ -321,6 +321,66 @@ def test_report_qa_keeps_total_return_context_exclusive(tmp_path) -> None:
     assert any(finding.id == "numeric_claim_unverified" and "5.00%" in finding.message for finding in result.findings)
 
 
+def test_report_qa_treats_unscoped_total_return_as_overall(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.1, "oos_total_return": 0.2})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return was 20.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "20.00%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_binds_strategy_and_benchmark_returns_per_claim(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2, "benchmark_total_return": 0.05})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Strategy total return 5.00%; benchmark total return 5.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "5.00%" in finding.message for finding in result.findings)
+
+
+def test_report_qa_parses_signed_positive_percentage_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"total_return": 0.2})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "Total return was +99.00%.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "+99.00%" in finding.message for finding in result.findings)
+
+
 def test_report_qa_matches_monthly_return_claims_to_mentioned_month(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     markdown = (
@@ -911,6 +971,26 @@ def test_report_qa_binds_same_line_ratio_claims_to_labels(tmp_path) -> None:
     messages = "\n".join(finding.message for finding in result.findings if finding.id == "numeric_claim_unverified")
     assert "2.00" in messages
     assert "1.00" in messages
+
+
+def test_report_qa_keeps_trade_counts_out_of_ratio_claims(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update({"trade_count": 2, "sharpe_ratio": 1.0})
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The run had 2 total trades and Sharpe 2.00.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "numeric_claim_unverified" and "2.00" in finding.message for finding in result.findings)
 
 
 def test_report_qa_skips_numbered_markdown_headings(tmp_path) -> None:

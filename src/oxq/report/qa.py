@@ -20,7 +20,7 @@ from oxq.report.facts import ReportFacts, build_report_facts
 
 _MD_IMAGE_RE = re.compile(r"!\[[^\]]*]\((?P<src>[^)]+)\)")
 _NUMBER_PATTERN = r"-?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
-_PERCENT_RE = re.compile(r"(?<![\w.])(?P<value>-?\d+(?:\.\d+)?)%")
+_PERCENT_RE = re.compile(r"(?<![\w.])(?P<value>[+-]?\d+(?:\.\d+)?)%")
 _PLAIN_NUMBER_RE = re.compile(rf"(?<![\w.%/-])(?P<value>{_NUMBER_PATTERN})(?!(?:\.\d)|[\w%/-])")
 _CJK_RE = re.compile(r"[\u3400-\u9fff]")
 _CJK_FONT_NAMES = (
@@ -648,6 +648,9 @@ def _context_known_values(
 ) -> list[float] | None:
     lowered = line.lower()
     scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
+    claim_metric_names = _claim_trade_or_ratio_names(line, facts, claim_start, claim_end, scope)
+    if claim_metric_names is not None:
+        return _known_values(facts, lambda name: name in claim_metric_names)
     names: set[str] = set()
     matched_context = False
     claim_trade_names = _claim_trade_names(line, facts, claim_start, claim_end)
@@ -711,52 +714,55 @@ def _percent_context_known_values(
 ) -> list[float] | None:
     lowered = line.lower()
     scope = scope_override if scope_override is not None else (_line_metric_scope(line, lowered) if use_line_scope else None)
+    context_line = _claim_context_text(line, claim_start)
+    context_lowered = context_line.lower()
+    return_scope = scope if scope is not None else "overall"
     names: set[str] = set()
     matched_context = False
-    drawdown_context = "drawdown" in lowered or "回撤" in line
+    drawdown_context = "drawdown" in context_lowered or "回撤" in context_line
     if drawdown_context:
         matched_context = True
         names.update(_known_number_names(facts, "drawdown", scope=scope))
-    if any(marker in lowered for marker in ("annualized return", "annual return", "cagr")) or "年化收益" in line:
+    if any(marker in context_lowered for marker in ("annualized return", "annual return", "cagr")) or "年化收益" in context_line:
         matched_context = True
-        names.update(_known_number_names(facts, "annualized_return", scope=scope))
-        names.update(_known_number_names(facts, "cagr", scope=scope))
+        names.update(_known_number_names(facts, "annualized_return", scope=return_scope))
+        names.update(_known_number_names(facts, "cagr", scope=return_scope))
     else:
-        monthly_names = _monthly_return_names_for_line(line, facts)
+        monthly_names = _monthly_return_names_for_line(context_line, facts)
         if monthly_names:
             matched_context = True
             names.update(monthly_names)
-        elif "excess return" in lowered or "超额收益" in line:
+        elif "excess return" in context_lowered or "超额收益" in context_line:
             matched_context = True
-            names.update(_known_number_names(facts, "excess_total_return", scope=scope))
-        elif ("benchmark" in lowered or "基准" in line) and (
-            any(marker in lowered for marker in ("total return", "cumulative return")) or any(
-                marker in line for marker in ("总收益", "累计收益")
+            names.update(_known_number_names(facts, "excess_total_return", scope=return_scope))
+        elif ("benchmark" in context_lowered or "基准" in context_line) and (
+            any(marker in context_lowered for marker in ("total return", "cumulative return")) or any(
+                marker in context_line for marker in ("总收益", "累计收益")
             )
         ):
             matched_context = True
-            names.update(_known_benchmark_total_return_names(facts, scope=scope))
-        elif any(marker in lowered for marker in ("total return", "cumulative return")) or any(
-            marker in line for marker in ("总收益", "累计收益")
+            names.update(_known_benchmark_total_return_names(facts, scope=return_scope))
+        elif any(marker in context_lowered for marker in ("total return", "cumulative return")) or any(
+            marker in context_line for marker in ("总收益", "累计收益")
         ):
             matched_context = True
-            names.update(_known_strategy_total_return_names(facts, scope=scope))
-        elif "return" in lowered or "收益" in line:
+            names.update(_known_strategy_total_return_names(facts, scope=return_scope))
+        elif "return" in context_lowered or "收益" in context_line:
             matched_context = True
-            names.update(_known_number_names(facts, "return", scope=scope))
-    if "volatility" in lowered or "波动" in line:
+            names.update(_known_number_names(facts, "return", scope=return_scope))
+    if "volatility" in context_lowered or "波动" in context_line:
         matched_context = True
-        names.update(_known_number_names(facts, "volatility", scope=scope))
-    if "win rate" in lowered or "胜率" in line:
+        names.update(_known_number_names(facts, "volatility", scope=return_scope))
+    if "win rate" in context_lowered or "胜率" in context_line:
         matched_context = True
-        names.update(_known_number_names(facts, "win_rate", scope=scope))
-        names.update(_known_number_names(facts, "winrate", scope=scope))
+        names.update(_known_number_names(facts, "win_rate", scope=return_scope))
+        names.update(_known_number_names(facts, "winrate", scope=return_scope))
     claim_cost_names = _claim_cost_names(line, facts, claim_start, claim_end, rate_only=True)
     if claim_cost_names is not None:
         matched_context = True
         names.update(claim_cost_names)
-    elif any(marker in lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
-        marker in line for marker in ("费用", "成本", "佣金", "滑点")
+    elif any(marker in context_lowered for marker in ("cost", "fee", "commission", "slippage")) or any(
+        marker in context_line for marker in ("费用", "成本", "佣金", "滑点")
     ):
         matched_context = True
         for marker in ("cost", "fee", "commission", "slippage"):
@@ -824,6 +830,7 @@ def _claim_cost_names(
     if claim_start is None or claim_end is None:
         return None
     label = _nearest_claim_label(
+        line,
         _claim_label_markers(
             line,
             (
@@ -863,6 +870,7 @@ def _claim_trade_names(line: str, facts: ReportFacts, claim_start: int | None, c
     if claim_start is None or claim_end is None:
         return None
     label = _nearest_claim_label(
+        line,
         _claim_label_markers(
             line,
             (
@@ -880,6 +888,39 @@ def _claim_trade_names(line: str, facts: ReportFacts, claim_start: int | None, c
     return {"metric.trade_count"}
 
 
+def _claim_trade_or_ratio_names(
+    line: str,
+    facts: ReportFacts,
+    claim_start: int | None,
+    claim_end: int | None,
+    scope: str | None,
+) -> set[str] | None:
+    if claim_start is None or claim_end is None:
+        return None
+    label = _nearest_claim_label(
+        line,
+        _claim_label_markers(
+            line,
+            (
+                ("trade:oos", r"\boos\s+trades?\b|\bout-of-sample\s+trades?\b|\bout of sample\s+trades?\b|样本外交易"),
+                ("trade:total", r"\btotal\s+trades?\b|\btrade\s+count\b|\ball\s+trades?\b|总交易|交易总数|全部交易"),
+                ("ratio:sharpe", r"\bsharpe(?:\s+ratio)?\b|夏普"),
+                ("ratio:calmar", r"\bcalmar(?:\s+ratio)?\b|卡玛"),
+                ("ratio:sortino", r"\bsortino(?:\s+ratio)?\b"),
+            ),
+        ),
+        claim_start,
+        claim_end,
+    )
+    if label is None:
+        return None
+    if label == "trade:oos":
+        return {"metric.oos_trade_count", "fact.oos_trade_count"}
+    if label == "trade:total":
+        return {"metric.trade_count"}
+    return _known_number_names(facts, label.removeprefix("ratio:"), scope=scope)
+
+
 def _claim_ratio_names(
     line: str,
     facts: ReportFacts,
@@ -890,6 +931,7 @@ def _claim_ratio_names(
     if claim_start is None or claim_end is None:
         return None
     label = _nearest_claim_label(
+        line,
         _claim_label_markers(
             line,
             (
@@ -913,7 +955,13 @@ def _claim_label_markers(line: str, patterns: tuple[tuple[str, str], ...]) -> li
     return sorted(markers)
 
 
-def _nearest_claim_label(markers: list[tuple[int, int, str]], claim_start: int, claim_end: int) -> str | None:
+def _nearest_claim_label(
+    line: str, markers: list[tuple[int, int, str]], claim_start: int, claim_end: int
+) -> str | None:
+    if not markers:
+        return None
+    segment_start, segment_end = _claim_segment_bounds(line, claim_start)
+    markers = [marker for marker in markers if segment_start <= marker[0] < segment_end]
     if not markers:
         return None
 
@@ -1022,6 +1070,13 @@ def _claim_segment_bounds(line: str, index: int) -> tuple[int, int]:
     start = max((position + 1 for position in boundaries if position < index), default=0)
     end = min((position for position in boundaries if position > index), default=len(line))
     return start, end
+
+
+def _claim_context_text(line: str, index: int | None) -> str:
+    if index is None:
+        return line
+    start, end = _claim_segment_bounds(line, index)
+    return line[start:end]
 
 
 def _scope_markers(line: str, lowered: str | None = None) -> list[tuple[int, str]]:
