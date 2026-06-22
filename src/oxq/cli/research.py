@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import click
 
-from oxq.cli.agent_manifest import expand_path, read_yaml_file, upsert_marker_block, write_text_file, write_yaml_file
+from oxq.cli.agent_manifest import read_yaml_file, upsert_marker_block, write_text_file, write_yaml_file
 from oxq.cli.sdk_bundle import install_workspace_sdk
 
 WORKSPACE_BLOCK = """This is an open-xquant research workspace.
@@ -100,7 +101,7 @@ def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state:
 
 
 def _resolve_sdk_venv(cwd: Path, raw_path: str) -> Path:
-    path = expand_path(raw_path)
-    if Path(raw_path).expanduser().is_absolute():
-        return path
-    return (cwd / raw_path).resolve()
+    expanded = Path(os.path.expandvars(os.path.expanduser(raw_path)))
+    if expanded.is_absolute():
+        return expanded.resolve()
+    return (cwd / expanded).resolve()

@@ -26,13 +26,19 @@ def fake_sdk_bundle(monkeypatch):
         root = config_root / "sdk-bundles" / "bundle-test"
         wheel = root / "dist" / "open_xquant-0.1.0-py3-none-any.whl"
         lock = root / "requirements.lock.txt"
+        packages = root / "packages.json"
+        python = root / "runner" / ".venv" / "bin" / "python"
         runner = root / "runner" / ".venv" / "bin" / "oxq"
         if not dry_run:
             wheel.parent.mkdir(parents=True, exist_ok=True)
             wheel.write_text("wheel", encoding="utf-8")
             lock.write_text("open-xquant @ file://wheel\n", encoding="utf-8")
+            packages.write_text("[]\n", encoding="utf-8")
             runner.parent.mkdir(parents=True, exist_ok=True)
-            runner.write_text("#!/bin/sh\n", encoding="utf-8")
+            python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            python.chmod(0o755)
+            runner.chmod(0o755)
         return {
             "id": "bundle-test",
             "root": str(root),
@@ -41,12 +47,17 @@ def fake_sdk_bundle(monkeypatch):
             "excluded_extras": ["dev", "docs", "talib"],
             "wheel": {"path": str(wheel), "sha256": "wheel-sha", "version": "0.1.0", "source_commit": "commit-sha"},
             "dependencies": {
-                "lock_file": str(lock),
-                "lock_sha256": "lock-sha",
-                "packages_file": str(root / "packages.json"),
-                "packages_count": 1,
+                    "lock_file": str(lock),
+                    "lock_sha256": "lock-sha",
+                    "packages_file": str(packages),
+                    "packages_count": 1,
+                },
+            "runner": {
+                "venv": str(root / "runner" / ".venv"),
+                "python": str(python),
+                "oxq": str(runner),
+                "argv": [str(runner)],
             },
-            "runner": {"venv": str(root / "runner" / ".venv"), "oxq": str(runner), "argv": [str(runner)]},
             "uv_cache_dir": str(root / "uv-cache"),
         }
 

@@ -63,7 +63,7 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
     tmp_root.mkdir(parents=True)
     try:
         dist_tmp = tmp_root / "dist"
-        _run(["uv", "build", "--wheel", "--out-dir", str(dist_tmp), str(source_root)])
+        _run(_uv_cmd(["build", "--wheel", "--out-dir", str(dist_tmp), "."], directory=source_root))
         wheel_tmp = _single_wheel(dist_tmp)
         wheel_sha = sha256_file(wheel_tmp)
         bundle_id = _bundle_id(version, source_commit, wheel_sha)
@@ -92,57 +92,63 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         requirement = f"open-xquant[{','.join(SDK_EXTRAS)}] @ {wheel_path.as_uri()}\n"
         write_text_file(req_in, requirement)
         _run(
-            [
-                "uv",
-                "pip",
-                "compile",
-                str(req_in),
-                "--generate-hashes",
-                "--output-file",
-                str(lock_path),
-                "--no-header",
-                "--no-annotate",
-                "--cache-dir",
-                str(uv_cache_dir),
-            ]
+            _uv_cmd(
+                [
+                    "pip",
+                    "compile",
+                    str(req_in),
+                    "--generate-hashes",
+                    "--output-file",
+                    str(lock_path),
+                    "--no-header",
+                    "--no-annotate",
+                    "--cache-dir",
+                    str(uv_cache_dir),
+                ],
+                directory=bundle_root,
+            )
         )
         lock_sha = sha256_file(lock_path)
 
         runner_venv = bundle_root / "runner" / ".venv"
-        _run(["uv", "venv", str(runner_venv)])
+        _run(_uv_cmd(["venv", "--python", sys.executable, str(runner_venv)], directory=bundle_root))
         runner_python = _venv_executable(runner_venv, "python")
         _run(
-            [
-                "uv",
-                "pip",
-                "sync",
-                "--python",
-                str(runner_python),
-                "--require-hashes",
-                "--strict",
-                "--cache-dir",
-                str(uv_cache_dir),
-                str(lock_path),
-            ]
+            _uv_cmd(
+                [
+                    "pip",
+                    "sync",
+                    "--python",
+                    str(runner_python),
+                    "--require-hashes",
+                    "--strict",
+                    "--cache-dir",
+                    str(uv_cache_dir),
+                    str(lock_path),
+                ],
+                directory=bundle_root,
+            )
         )
         _run([str(runner_python), "-c", "import oxq"])
-        _run(["uv", "pip", "check", "--python", str(runner_python), "--cache-dir", str(uv_cache_dir)])
+        _run(_uv_cmd(["pip", "check", "--python", str(runner_python), "--cache-dir", str(uv_cache_dir)], directory=bundle_root))
         runner_oxq = _venv_executable(runner_venv, "oxq")
         _run([str(runner_oxq), "--help"])
 
         packages_path = bundle_root / "packages.json"
         packages = _run_json(
-            [
-                "uv",
-                "pip",
-                "list",
-                "--format",
-                "json",
-                "--python",
-                str(runner_python),
-                "--cache-dir",
-                str(uv_cache_dir),
-            ]
+            _uv_cmd(
+                [
+                    "pip",
+                    "list",
+                    "--format",
+                    "json",
+                    "--python",
+                    str(runner_python),
+                    "--cache-dir",
+                    str(uv_cache_dir),
+                ],
+                directory=bundle_root,
+            )
         )
         write_json_file(packages_path, {"packages": packages})
         packages_count = len(packages) if isinstance(packages, list) else 0
@@ -174,6 +180,7 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
 
     cwd = cwd.resolve()
     venv = venv.resolve()
+    _validate_workspace_venv(cwd, venv)
     manifest_path = default_manifest_path()
     if not manifest_path.exists():
         raise click.ClickException("Missing agent-install.json. Run `oxq agent install` first.")
@@ -190,27 +197,29 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
         runner = _require_dict(bundle, "runner")
         bundle_python = runner.get("python")
         python_arg = str(expand_path(bundle_python)) if isinstance(bundle_python, str) and bundle_python else "3.12"
-        _run(["uv", "venv", "--python", python_arg, str(venv)])
+        _run(_uv_cmd(["venv", "--python", python_arg, str(venv)], directory=cwd))
 
     lock_path = expand_path(bundle["dependencies"]["lock_file"])
     uv_cache_dir = expand_path(bundle["uv_cache_dir"])
     _run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            str(python),
-            "--requirements",
-            str(lock_path),
-            "--require-hashes",
-            "--strict",
-            "--cache-dir",
-            str(uv_cache_dir),
-        ]
+        _uv_cmd(
+            [
+                "pip",
+                "install",
+                "--python",
+                str(python),
+                "--requirements",
+                str(lock_path),
+                "--require-hashes",
+                "--strict",
+                "--cache-dir",
+                str(uv_cache_dir),
+            ],
+            directory=cwd,
+        )
     )
     _run([str(python), "-c", "import oxq"])
-    _run(["uv", "pip", "check", "--python", str(python), "--cache-dir", str(uv_cache_dir)])
+    _run(_uv_cmd(["pip", "check", "--python", str(python), "--cache-dir", str(uv_cache_dir)], directory=cwd))
     runner_oxq = _venv_executable(venv, "oxq")
     _run([str(runner_oxq), "--help"])
 
@@ -232,10 +241,12 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
     root_value = bundle.get("root")
     if not isinstance(root_value, str):
         return False
-    root = expand_path(root_value)
+    root = _stored_path(root_value)
     bundles_root = (config_root / "sdk-bundles").resolve()
     if not root.is_relative_to(bundles_root):
         return False
+    if not root.exists():
+        return True
     try:
         _verify_bundle(bundle)
     except click.ClickException:
@@ -246,14 +257,16 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
 
 
 def _verify_bundle(bundle: dict[str, Any]) -> None:
-    root = expand_path(_require_str(bundle, "root"))
-    wheel = expand_path(_require_str(_require_dict(bundle, "wheel"), "path"))
-    lock = expand_path(_require_str(_require_dict(bundle, "dependencies"), "lock_file"))
-    packages = expand_path(_require_str(_require_dict(bundle, "dependencies"), "packages_file"))
-    runner = expand_path(_require_str(_require_dict(bundle, "runner"), "oxq"))
+    root = _stored_path(_require_str(bundle, "root"))
+    wheel = _stored_path(_require_str(_require_dict(bundle, "wheel"), "path"))
+    lock = _stored_path(_require_str(_require_dict(bundle, "dependencies"), "lock_file"))
+    packages = _stored_path(_require_str(_require_dict(bundle, "dependencies"), "packages_file"))
+    runner_meta = _require_dict(bundle, "runner")
+    runner_python = _stored_path(_require_str(runner_meta, "python"))
+    runner = _stored_path(_require_str(runner_meta, "oxq"))
     if not root.exists():
         raise click.ClickException(f"SDK bundle directory is missing: {root}")
-    for path in (wheel, lock, packages, runner):
+    for path in (wheel, lock, packages, runner_python, runner):
         if not path.is_relative_to(root):
             raise click.ClickException(f"SDK bundle path escapes bundle root: {path}")
         if not path.exists():
@@ -264,6 +277,28 @@ def _verify_bundle(bundle: dict[str, Any]) -> None:
     expected_lock_sha = _require_str(_require_dict(bundle, "dependencies"), "lock_sha256")
     if sha256_file(lock) != expected_lock_sha:
         raise click.ClickException(f"SDK bundle lock hash mismatch: {lock}")
+    _run([str(runner_python), "-c", "import oxq"])
+    _run([str(runner), "--help"])
+
+
+def _validate_workspace_venv(cwd: Path, venv: Path) -> None:
+    if venv == cwd or cwd.is_relative_to(venv):
+        raise click.ClickException(
+            f"Refusing to use the research directory or a parent as the SDK virtualenv: {venv}"
+        )
+    if not venv.exists():
+        return
+    if not venv.is_dir():
+        raise click.ClickException(f"SDK virtualenv path exists but is not a directory: {venv}")
+    if not _is_virtualenv_dir(venv) and any(venv.iterdir()):
+        raise click.ClickException(
+            "Refusing to use or replace an existing non-virtualenv path for --sdk-venv: "
+            f"{venv}"
+        )
+
+
+def _is_virtualenv_dir(path: Path) -> bool:
+    return (path / "pyvenv.cfg").is_file()
 
 
 def _require_dict(mapping: dict[str, Any], key: str) -> dict[str, Any]:
@@ -382,6 +417,14 @@ def _display_path(cwd: Path, path: Path) -> str:
 
 def _absolute_path(path: Path) -> str:
     return str(Path(os.path.abspath(path)))
+
+
+def _stored_path(path: str | Path) -> Path:
+    return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(str(path)))))
+
+
+def _uv_cmd(args: list[str], *, directory: Path) -> list[str]:
+    return ["uv", "--directory", str(directory), "--no-config", *args]
 
 
 def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:

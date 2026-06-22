@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 import shutil
 import subprocess
 from datetime import UTC, datetime
@@ -63,7 +64,6 @@ def default_agent_config() -> dict[str, Any]:
         "auto_init_workspace": True,
         "allow_auto_download": "ask",
         "preferred_runner": "uv run oxq",
-        "preferred_runner_argv": ["uv", "run", "oxq"],
     }
 
 
@@ -154,7 +154,7 @@ def install(target: str | None, all_targets: bool, from_local: str | None, dry_r
     manifest.setdefault("installed_at", now)
     manifest["updated_at"] = now
     manifest["source"] = _source_metadata(source_root, "local")
-    manifest["sdk_bundle"] = sdk_bundle
+    _record_sdk_bundle(manifest, sdk_bundle)
     manifest.setdefault("targets", {})
 
     installed: list[str] = []
@@ -206,9 +206,18 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
             state["updated_at"] = _now()
     if not dry_run:
         if purge_config and all_targets:
-            sdk_bundle = manifest.get("sdk_bundle")
-            if isinstance(sdk_bundle, dict):
-                remove_sdk_bundle(sdk_bundle, config_dir())
+            failed = [
+                _bundle_label(bundle)
+                for bundle in _manifest_sdk_bundles(manifest)
+                if not remove_sdk_bundle(bundle, config_dir())
+            ]
+            if failed:
+                manifest["updated_at"] = _now()
+                write_json_file(manifest_path(), manifest)
+                raise click.ClickException(
+                    "Refusing to purge config because SDK bundle removal was not verified: "
+                    + ", ".join(failed)
+                )
             if agent_config_path().exists():
                 agent_config_path().unlink()
             if manifest_path().exists():
@@ -286,7 +295,7 @@ def upgrade(
     if not dry_run:
         manifest["updated_at"] = _now()
         manifest["source"] = _source_metadata(source_root, "local" if from_local else "git")
-        manifest["sdk_bundle"] = sdk_bundle
+        _record_sdk_bundle(manifest, sdk_bundle)
         write_json_file(manifest_path(), manifest)
     _ensure_agent_config(dry_run=dry_run, installed_targets=updated, sdk_bundle=sdk_bundle)
     click.echo("Upgrade complete: " + ", ".join(updated))
@@ -572,6 +581,11 @@ def _load_agent_config() -> dict[str, Any]:
     loaded = read_yaml_file(agent_config_path())
     merged = default_agent_config()
     merged.update(loaded)
+    if (
+        merged.get("preferred_runner_argv") == ["uv", "run", "oxq"]
+        and not _should_update_preferred_runner(merged.get("preferred_runner"))
+    ):
+        merged.pop("preferred_runner_argv", None)
     return merged
 
 
@@ -588,9 +602,10 @@ def _ensure_agent_config(
     if sdk_bundle is not None and _should_update_preferred_runner(config.get("preferred_runner")):
         runner = sdk_bundle.get("runner", {})
         if isinstance(runner, dict) and isinstance(runner.get("oxq"), str):
-            config["preferred_runner"] = runner["oxq"]
+            runner_oxq = runner["oxq"]
+            config["preferred_runner"] = shlex.quote(runner_oxq)
             argv = runner.get("argv")
-            config["preferred_runner_argv"] = argv if isinstance(argv, list) else [runner["oxq"]]
+            config["preferred_runner_argv"] = [item for item in argv if isinstance(item, str)] if isinstance(argv, list) else [runner_oxq]
     if not dry_run:
         write_yaml_file(agent_config_path(), config)
 
@@ -598,9 +613,50 @@ def _ensure_agent_config(
 def _should_update_preferred_runner(value: Any) -> bool:
     if value in (None, "", "uv run oxq"):
         return True
-    if isinstance(value, str) and value.startswith("uv run --project ") and value.endswith(" oxq"):
+    if not isinstance(value, str):
+        return False
+    normalized = value.replace("\\", "/")
+    if normalized.startswith("uv run --project ") and normalized.endswith(" oxq"):
         return True
-    return isinstance(value, str) and "/sdk-bundles/" in value
+    return "/sdk-bundles/" in normalized
+
+
+def _record_sdk_bundle(manifest: dict[str, Any], sdk_bundle: dict[str, Any]) -> None:
+    bundles = _manifest_sdk_bundles(manifest)
+    bundles.append(sdk_bundle)
+    manifest["sdk_bundle"] = sdk_bundle
+    manifest["sdk_bundles"] = _dedupe_sdk_bundles(bundles)
+
+
+def _manifest_sdk_bundles(manifest: dict[str, Any]) -> list[dict[str, Any]]:
+    bundles: list[dict[str, Any]] = []
+    current = manifest.get("sdk_bundle")
+    if isinstance(current, dict):
+        bundles.append(current)
+    historical = manifest.get("sdk_bundles")
+    if isinstance(historical, list):
+        bundles.extend(bundle for bundle in historical if isinstance(bundle, dict))
+    return _dedupe_sdk_bundles(bundles)
+
+
+def _dedupe_sdk_bundles(bundles: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for bundle in bundles:
+        key = _bundle_label(bundle)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(bundle)
+    return deduped
+
+
+def _bundle_label(bundle: dict[str, Any]) -> str:
+    root = bundle.get("root")
+    if isinstance(root, str) and root:
+        return root
+    bundle_id = bundle.get("id")
+    return str(bundle_id) if bundle_id else "<unknown-sdk-bundle>"
 
 
 def _status_payload() -> dict[str, Any]:

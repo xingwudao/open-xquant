@@ -2,10 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 from click.testing import CliRunner
 
 from oxq.cli.main import main
+from oxq.cli.sdk_bundle import install_workspace_sdk
 
 
 def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> None:
@@ -109,3 +111,45 @@ def test_research_init_sdk_allows_custom_venv(monkeypatch, tmp_path) -> None:
 
         assert result.exit_code == 0, result.output
         assert installed == [cwd_path.resolve() / "envs/oxq"]
+
+
+def test_research_init_sdk_expands_env_absolute_venv(monkeypatch, tmp_path) -> None:
+    installed: list[Path] = []
+    target_venv = tmp_path / "external venv"
+
+    def install(cwd: Path, venv: Path, *, force: bool = False) -> dict:
+        del cwd, force
+        installed.append(venv)
+        return {
+            "enabled": True,
+            "bundle_id": "bundle-test",
+            "profile": "full-research",
+            "venv": str(target_venv),
+            "runner": str(target_venv / "bin/oxq"),
+            "python": str(target_venv / "bin/python"),
+            "wheel_sha256": "wheel-sha",
+            "lock_sha256": "lock-sha",
+        }
+
+    monkeypatch.setenv("OXQ_TEST_VENV", str(target_venv))
+    monkeypatch.setattr("oxq.cli.research.install_workspace_sdk", install, raising=False)
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        result = runner.invoke(main, ["research", "init", "--sdk", "--sdk-venv", "$OXQ_TEST_VENV"])
+
+    assert result.exit_code == 0, result.output
+    assert installed == [target_venv.resolve()]
+
+
+def test_install_workspace_sdk_rejects_research_directory_as_venv(tmp_path) -> None:
+    with pytest.raises(Exception, match="research directory"):
+        install_workspace_sdk(tmp_path, tmp_path, force=True)
+
+
+def test_install_workspace_sdk_rejects_existing_non_venv_path(tmp_path) -> None:
+    venv = tmp_path / "not-a-venv"
+    venv.mkdir()
+    (venv / "README.txt").write_text("project files\n", encoding="utf-8")
+
+    with pytest.raises(Exception, match="non-virtualenv"):
+        install_workspace_sdk(tmp_path, venv, force=True)

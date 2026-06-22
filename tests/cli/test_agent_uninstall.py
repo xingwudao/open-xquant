@@ -27,6 +27,7 @@ def fake_sdk_bundle(monkeypatch):
         wheel = root / "dist" / "open_xquant-0.1.0-py3-none-any.whl"
         lock = root / "requirements.lock.txt"
         packages = root / "packages.json"
+        python = root / "runner" / ".venv" / "bin" / "python"
         runner = root / "runner" / ".venv" / "bin" / "oxq"
         if not dry_run:
             wheel.parent.mkdir(parents=True, exist_ok=True)
@@ -34,7 +35,10 @@ def fake_sdk_bundle(monkeypatch):
             lock.write_text("open-xquant @ file://wheel\n", encoding="utf-8")
             packages.write_text("[]\n", encoding="utf-8")
             runner.parent.mkdir(parents=True, exist_ok=True)
-            runner.write_text("#!/bin/sh\n", encoding="utf-8")
+            python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            python.chmod(0o755)
+            runner.chmod(0o755)
         wheel_sha = hashlib.sha256(b"wheel").hexdigest()
         lock_sha = hashlib.sha256(b"open-xquant @ file://wheel\n").hexdigest()
         return {
@@ -50,7 +54,12 @@ def fake_sdk_bundle(monkeypatch):
                 "packages_file": str(packages),
                 "packages_count": 1,
             },
-            "runner": {"venv": str(root / "runner" / ".venv"), "oxq": str(runner), "argv": [str(runner)]},
+            "runner": {
+                "venv": str(root / "runner" / ".venv"),
+                "python": str(python),
+                "oxq": str(runner),
+                "argv": [str(runner)],
+            },
             "uv_cache_dir": str(root / "uv-cache"),
         }
 
@@ -113,3 +122,29 @@ def test_agent_uninstall_purge_config_removes_managed_sdk_bundle(monkeypatch, tm
     assert not bundle.exists()
     assert not manifest.exists()
     assert not (home / ".config/open-xquant/agent.yaml").exists()
+
+
+def test_agent_uninstall_keeps_manifest_when_sdk_bundle_purge_fails(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+
+    install = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
+    )
+    assert install.exit_code == 0, install.output
+    bundle = home / ".config/open-xquant/sdk-bundles/bundle-test"
+    manifest = home / ".config/open-xquant/agent-install.json"
+    (bundle / "requirements.lock.txt").write_text("corrupted\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "uninstall", "--all-targets", "--purge-config", "--yes"],
+    )
+
+    assert result.exit_code != 0
+    assert "Refusing to purge config" in result.output
+    assert bundle.exists()
+    assert manifest.exists()
