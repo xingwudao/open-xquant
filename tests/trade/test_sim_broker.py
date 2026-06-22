@@ -537,6 +537,39 @@ class TestFillPriceMode:
         assert fills[0].filled_price == Decimal("102")
         assert fills[0].filled_at == dates[1].isoformat()
 
+    def test_next_open_preserves_positive_timezone_session_date(self):
+        """NEXT_OPEN should preserve local session dates for tz-aware bars."""
+        dates = pd.DatetimeIndex(
+            [
+                pd.Timestamp("2025-02-07 00:00:00+08:00"),
+                pd.Timestamp("2025-02-10 00:00:00+08:00"),
+            ]
+        )
+        mktdata = {
+            "510300.SS": pd.DataFrame(
+                {
+                    "open": [100.0, 101.0],
+                    "high": [100.0, 101.0],
+                    "low": [100.0, 101.0],
+                    "close": [100.0, 101.0],
+                    "volume": [1000, 1000],
+                },
+                index=dates,
+            )
+        }
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XSHG")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="510300.SS", side="BUY", shares=10))
+
+        broker.on_bar_close(mktdata, dates[0])
+        broker.on_bar_open(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].filled_price == Decimal("101.0")
+        assert fills[0].filled_at == dates[1].isoformat()
+        assert broker.get_all_orders()[0].status == "filled"
+
     def test_next_open_without_current_date_uses_close_bar_as_submission_time(self):
         mktdata, dates = self._make_mktdata()
         broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")

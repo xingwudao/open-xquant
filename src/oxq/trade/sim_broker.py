@@ -441,7 +441,7 @@ class SimBroker:
         cal = xcals.get_calendar(self._market_calendar or "XNYS")
         session_date = pd.Timestamp(date)
         if session_date.tz is not None:
-            session_date = session_date.tz_convert(None)
+            session_date = session_date.tz_localize(None)
         session_date = session_date.normalize()
         if cal.is_session(session_date):
             return pd.Timestamp(cal.next_session(session_date))
