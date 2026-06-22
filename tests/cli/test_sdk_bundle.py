@@ -130,6 +130,24 @@ def test_build_sdk_bundle_selects_all_research_extras_except_excluded(monkeypatc
     assert payload["excluded_extras"] == ["dev", "docs", "talib"]
 
 
+def test_build_sdk_bundle_rebuilds_malformed_existing_manifest(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'open-xquant'\nversion = '0.1.0'\n", encoding="utf-8")
+    wheel_sha = hashlib.sha256(b"wheel").hexdigest()
+    bundle_root = config_root / "sdk-bundles" / f"0.1.0-no-git-{wheel_sha[:12]}"
+    bundle_root.mkdir(parents=True)
+    (bundle_root / "manifest.json").write_text("{broken", encoding="utf-8")
+    commands: list[list[str]] = []
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+
+    payload = build_sdk_bundle(source, config_root)
+
+    assert payload["id"] == bundle_root.name
+    assert any(cmd[0] == "uv" and "compile" in cmd for cmd in commands)
+
+
 def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(monkeypatch, tmp_path) -> None:
     source = tmp_path / "site-packages/open_xquant"
     config_root = tmp_path / "config/open-xquant"
@@ -195,7 +213,14 @@ def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(mon
     class FakeDistribution:
         version = "0.1.0"
 
+    def build_installed_wheel(_source_root: Path, dist_tmp: Path) -> Path:
+        dist_tmp.mkdir(parents=True, exist_ok=True)
+        wheel = dist_tmp / "open_xquant-0.1.0-py3-none-any.whl"
+        wheel.write_text("wheel", encoding="utf-8")
+        return wheel
+
     monkeypatch.setattr("oxq.cli.sdk_bundle.metadata.distribution", lambda _name: FakeDistribution())
+    monkeypatch.setattr("oxq.cli.sdk_bundle._build_installed_distribution_wheel", build_installed_wheel)
     monkeypatch.setattr("oxq.cli.sdk_bundle._run", lambda cmd: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0))
 
     assert build_sdk_bundle(source, config_root) == bundle
@@ -203,6 +228,46 @@ def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(mon
         [bundle["runner"]["python"], "-c", "import oxq"],
         [bundle["runner"]["oxq"], "--help"],
     ]
+
+
+def test_build_sdk_bundle_rebuilds_stale_same_version_installed_bundle(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "site-packages/open_xquant"
+    config_root = tmp_path / "config/open-xquant"
+    (source / "agent/skills").mkdir(parents=True)
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/bundle-test")
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    site = tmp_path / "fake-site"
+    dist_info = site / "open_xquant-0.1.0.dist-info"
+    (site / "oxq").mkdir(parents=True)
+    dist_info.mkdir(parents=True)
+    (site / "oxq/__init__.py").write_text("new installed content\n", encoding="utf-8")
+    (dist_info / "METADATA").write_text("Name: open-xquant\nVersion: 0.1.0\n", encoding="utf-8")
+    (dist_info / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n", encoding="utf-8")
+    (dist_info / "RECORD").write_text("", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    class FakeDistribution:
+        version = "0.1.0"
+        metadata = {"Name": "open-xquant"}
+        files = [
+            Path("oxq/__init__.py"),
+            Path("open_xquant-0.1.0.dist-info/METADATA"),
+            Path("open_xquant-0.1.0.dist-info/WHEEL"),
+            Path("open_xquant-0.1.0.dist-info/RECORD"),
+        ]
+
+        def locate_file(self, path: Path) -> Path:
+            return site / path
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle.metadata.distribution", lambda _name: FakeDistribution())
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+
+    payload = build_sdk_bundle(source, config_root)
+
+    assert payload["id"] != bundle["id"]
+    assert payload["wheel"]["sha256"] != bundle["wheel"]["sha256"]
+    assert any(cmd[0] == "uv" and "compile" in cmd for cmd in commands)
 
 
 def test_build_sdk_bundle_treats_invalid_cached_installed_bundle_as_cache_miss(monkeypatch, tmp_path) -> None:

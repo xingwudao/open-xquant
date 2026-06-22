@@ -67,13 +67,6 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         )
 
     config_root.mkdir(parents=True, exist_ok=True)
-    if not buildable_source:
-        try:
-            cached_bundle = _installed_sdk_bundle(config_root)
-        except click.ClickException:
-            cached_bundle = None
-        if cached_bundle is not None and _bundle_version(cached_bundle) == version and _bundle_extras(cached_bundle) == sdk_extras:
-            return cached_bundle
 
     tmp_root = config_root / "sdk-bundles" / ".build-tmp"
     if tmp_root.exists():
@@ -83,19 +76,31 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         dist_tmp = tmp_root / "dist"
         wheel_tmp = _build_source_wheel(source_root, dist_tmp, buildable_source=buildable_source)
         wheel_sha = sha256_file(wheel_tmp)
+        if not buildable_source:
+            cached_bundle = _installed_sdk_bundle(config_root, invalid_as_miss=True)
+            if (
+                cached_bundle is not None
+                and _bundle_version(cached_bundle) == version
+                and _bundle_extras(cached_bundle) == sdk_extras
+                and _bundle_wheel_sha(cached_bundle) == wheel_sha
+            ):
+                return cached_bundle
         bundle_id = _bundle_id(version, source_commit, wheel_sha)
         bundle_root = config_root / "sdk-bundles" / bundle_id
         existing_manifest = bundle_root / "manifest.json"
         if existing_manifest.exists():
-            existing_payload = read_json_file(existing_manifest)
-            try:
-                _verify_bundle(existing_payload)
-            except click.ClickException:
+            existing_payload = _read_bundle_manifest(existing_manifest)
+            if existing_payload is None:
                 shutil.rmtree(bundle_root)
             else:
-                if _bundle_extras(existing_payload) == sdk_extras:
-                    return existing_payload
-                shutil.rmtree(bundle_root)
+                try:
+                    _verify_bundle(existing_payload)
+                except click.ClickException:
+                    shutil.rmtree(bundle_root)
+                else:
+                    if _bundle_extras(existing_payload) == sdk_extras:
+                        return existing_payload
+                    shutil.rmtree(bundle_root)
         if bundle_root.exists():
             shutil.rmtree(bundle_root)
         bundle_root.mkdir(parents=True)
@@ -290,6 +295,19 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
     return True
 
 
+def sdk_bundle_contains_active_runner(bundle: dict[str, Any], config_root: Path) -> bool:
+    """Return whether the current Python executable is inside a managed SDK bundle."""
+
+    root_value = bundle.get("root")
+    if not isinstance(root_value, str):
+        return False
+    root = _stored_path(root_value).resolve()
+    bundles_root = (config_root / "sdk-bundles").resolve()
+    if not root.is_relative_to(bundles_root) or not root.exists():
+        return False
+    return _path_is_relative_to(_stored_path(sys.executable), root)
+
+
 def _verify_bundle(bundle: dict[str, Any]) -> None:
     root = _stored_path(_require_str(bundle, "root"))
     wheel = _stored_path(_require_str(_require_dict(bundle, "wheel"), "path"))
@@ -324,6 +342,14 @@ def _bundle_version(bundle: dict[str, Any]) -> str | None:
     if not isinstance(wheel, dict):
         return None
     value = wheel.get("version")
+    return str(value) if isinstance(value, str) and value else None
+
+
+def _bundle_wheel_sha(bundle: dict[str, Any]) -> str | None:
+    wheel = bundle.get("wheel")
+    if not isinstance(wheel, dict):
+        return None
+    value = wheel.get("sha256")
     return str(value) if isinstance(value, str) and value else None
 
 
@@ -463,7 +489,7 @@ def _wheel_safe_version(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.!+]+", "_", value)
 
 
-def _installed_sdk_bundle(config_root: Path) -> dict[str, Any] | None:
+def _installed_sdk_bundle(config_root: Path, *, invalid_as_miss: bool = False) -> dict[str, Any] | None:
     manifest_path = config_root / "agent-install.json"
     if not manifest_path.exists():
         return None
@@ -477,8 +503,18 @@ def _installed_sdk_bundle(config_root: Path) -> dict[str, Any] | None:
     try:
         _verify_bundle(bundle)
     except click.ClickException as exc:
+        if invalid_as_miss:
+            return None
         raise click.ClickException(f"Cached SDK bundle is invalid: {exc}") from exc
     return bundle
+
+
+def _read_bundle_manifest(path: Path) -> dict[str, Any] | None:
+    try:
+        payload = read_json_file(path)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
 
 
 def _validate_workspace_venv(cwd: Path, venv: Path) -> None:

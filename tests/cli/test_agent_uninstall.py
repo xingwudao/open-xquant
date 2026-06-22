@@ -148,3 +148,31 @@ def test_agent_uninstall_keeps_manifest_when_sdk_bundle_purge_fails(monkeypatch,
     assert "Refusing to purge config" in result.output
     assert bundle.exists()
     assert manifest.exists()
+
+
+def test_agent_uninstall_purge_refuses_active_cached_runner_before_mutating_targets(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+
+    install = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
+    )
+    assert install.exit_code == 0, install.output
+    bundle = home / ".config/open-xquant/sdk-bundles/bundle-test"
+    runner_python = bundle / "runner/.venv/bin/python"
+    skill_dir = home / ".config/opencode/skills/strategy-builder"
+    manifest = home / ".config/open-xquant/agent-install.json"
+    monkeypatch.setattr("oxq.cli.sdk_bundle.sys.executable", str(runner_python))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "uninstall", "--all-targets", "--purge-config", "--yes"],
+    )
+
+    assert result.exit_code != 0
+    assert "active cached SDK runner" in result.output
+    assert skill_dir.exists()
+    assert json.loads(manifest.read_text(encoding="utf-8"))["targets"]["opencode"]["installed"] is True

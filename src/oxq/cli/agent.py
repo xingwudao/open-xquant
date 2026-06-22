@@ -37,7 +37,7 @@ from oxq.cli.agent_targets import (
     resolve_source_root,
     resolve_target,
 )
-from oxq.cli.sdk_bundle import build_sdk_bundle, remove_sdk_bundle
+from oxq.cli.sdk_bundle import build_sdk_bundle, remove_sdk_bundle, sdk_bundle_contains_active_runner
 
 MANAGED_MARKER = ".open-xquant-managed.json"
 CONFIG_SCHEMA_VERSION = 1
@@ -196,6 +196,18 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
     manifest = _require_manifest()
     targets = manifest.get("targets", {})
     selected = list(targets) if all_targets else [target]
+    if not dry_run and purge_config and all_targets:
+        active_bundles = [
+            _bundle_label(bundle)
+            for bundle in _manifest_sdk_bundles(manifest)
+            if sdk_bundle_contains_active_runner(bundle, config_dir())
+        ]
+        if active_bundles:
+            raise click.ClickException(
+                "Refusing to purge config while running from the active cached SDK runner: "
+                + ", ".join(active_bundles)
+                + ". Re-run this command from a non-cached open-xquant checkout or installed Python environment."
+            )
     for target_id in selected:
         state = targets.get(target_id)
         if not isinstance(state, dict) or not state.get("installed"):
