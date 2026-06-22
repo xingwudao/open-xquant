@@ -53,7 +53,7 @@ def initialize_workspace(
     workspace_file = config_dir / "workspace.yaml"
     sdk_state = None
     if sdk:
-        sdk_state = install_workspace_sdk(cwd, _resolve_sdk_venv(cwd, sdk_venv), force=force)
+        sdk_state = install_workspace_sdk(cwd, _resolve_sdk_venv(cwd, sdk_venv))
     if workspace_file.exists() and not force:
         click.echo("open-xquant workspace already initialized")
         if sdk_state is not None:

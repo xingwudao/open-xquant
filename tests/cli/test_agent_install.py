@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from oxq.cli.agent import _should_update_preferred_runner
+from oxq.cli.agent import _quote_runner_for_shell, _should_update_preferred_runner
 from oxq.cli.agent_manifest import read_yaml_file
 from oxq.cli.main import main
 
@@ -208,6 +208,19 @@ def test_agent_runner_update_recognizes_windows_sdk_bundle_path() -> None:
     runner = r"C:\Users\Alice\.config\open-xquant\sdk-bundles\old\runner\.venv\Scripts\oxq.exe"
 
     assert _should_update_preferred_runner(runner) is True
+
+
+def test_agent_runner_shell_quote_uses_windows_command_line_quotes() -> None:
+    runner = r"C:\Users\Alice Smith\.config\open-xquant\sdk-bundles\bundle\runner\.venv\Scripts\oxq.exe"
+
+    assert _quote_runner_for_shell(runner) == f'"{runner}"'
+
+
+def test_agent_runner_shell_quote_uses_powershell_call_operator_on_windows(monkeypatch) -> None:
+    runner = r"C:\Users\Alice Smith\.config\open-xquant\sdk-bundles\bundle\runner\.venv\Scripts\oxq.exe"
+    monkeypatch.setattr("oxq.cli.agent.sys.platform", "win32")
+
+    assert _quote_runner_for_shell(runner) == f'& "{runner}"'
 
 
 def test_agent_status_json_reports_installed_targets(monkeypatch, tmp_path) -> None:

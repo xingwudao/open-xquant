@@ -7,6 +7,7 @@ import json
 import shlex
 import shutil
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -603,11 +604,23 @@ def _ensure_agent_config(
         runner = sdk_bundle.get("runner", {})
         if isinstance(runner, dict) and isinstance(runner.get("oxq"), str):
             runner_oxq = runner["oxq"]
-            config["preferred_runner"] = shlex.quote(runner_oxq)
+            config["preferred_runner"] = _quote_runner_for_shell(runner_oxq)
             argv = runner.get("argv")
             config["preferred_runner_argv"] = [item for item in argv if isinstance(item, str)] if isinstance(argv, list) else [runner_oxq]
     if not dry_run:
         write_yaml_file(agent_config_path(), config)
+
+
+def _quote_runner_for_shell(value: str) -> str:
+    if _looks_like_windows_runner(value):
+        quoted = subprocess.list2cmdline([value])
+        return f"& {quoted}" if sys.platform == "win32" else quoted
+    return shlex.quote(value)
+
+
+def _looks_like_windows_runner(value: str) -> bool:
+    has_drive = len(value) >= 3 and value[1] == ":" and value[2] in {"\\", "/"}
+    return sys.platform == "win32" or has_drive or ("\\" in value and value.lower().endswith(".exe"))
 
 
 def _should_update_preferred_runner(value: Any) -> bool:

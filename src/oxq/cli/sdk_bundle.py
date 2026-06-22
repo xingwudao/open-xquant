@@ -57,6 +57,16 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         )
 
     config_root.mkdir(parents=True, exist_ok=True)
+    if not _is_buildable_source(source_root):
+        cached_bundle = _installed_sdk_bundle(config_root)
+        if cached_bundle is not None:
+            return cached_bundle
+        raise click.ClickException(
+            "Cannot build the SDK bundle because the resolved open-xquant source "
+            f"is not a project checkout: {source_root}. Re-run `oxq agent install` "
+            "from an open-xquant checkout to refresh the cached SDK bundle."
+        )
+
     tmp_root = config_root / "sdk-bundles" / ".build-tmp"
     if tmp_root.exists():
         shutil.rmtree(tmp_root)
@@ -178,6 +188,7 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
 def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict[str, Any]:
     """Install the cached SDK bundle into a research workspace virtualenv."""
 
+    del force
     cwd = cwd.resolve()
     venv = venv.resolve()
     _validate_workspace_venv(cwd, venv)
@@ -191,8 +202,6 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
     _verify_bundle(bundle)
 
     python = _venv_executable(venv, "python")
-    if force and venv.exists():
-        shutil.rmtree(venv)
     if not python.exists():
         runner = _require_dict(bundle, "runner")
         bundle_python = runner.get("python")
@@ -279,6 +288,28 @@ def _verify_bundle(bundle: dict[str, Any]) -> None:
         raise click.ClickException(f"SDK bundle lock hash mismatch: {lock}")
     _run([str(runner_python), "-c", "import oxq"])
     _run([str(runner), "--help"])
+
+
+def _is_buildable_source(source_root: Path) -> bool:
+    return (source_root / "pyproject.toml").is_file()
+
+
+def _installed_sdk_bundle(config_root: Path) -> dict[str, Any] | None:
+    manifest_path = config_root / "agent-install.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = read_json_file(manifest_path)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise click.ClickException(f"Cannot read cached SDK bundle manifest: {manifest_path}") from exc
+    bundle = manifest.get("sdk_bundle")
+    if not isinstance(bundle, dict):
+        return None
+    try:
+        _verify_bundle(bundle)
+    except click.ClickException as exc:
+        raise click.ClickException(f"Cached SDK bundle is invalid: {exc}") from exc
+    return bundle
 
 
 def _validate_workspace_venv(cwd: Path, venv: Path) -> None:
