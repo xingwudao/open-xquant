@@ -53,8 +53,9 @@ the resolved runner before creating strategy artifacts. Use
 ## Task Routing
 
 - Agent install, upgrade, uninstall, cached runner, or target directory
-  questions: read `docs/agent-guide.md`. That document is installation
-  guidance, not the research workflow.
+  questions: use the embedded "Install And Upgrade Questions" section below.
+  If the source checkout is available, `docs/agent-guide.md` has the longer
+  installation guide, but installed Agents must not depend on that file.
 - New strategy idea, strategy spec creation, spec validation, or audited
   backtest workflow: use `strategy-builder`.
 - Complete idea-to-report research workflow: use `quant-research`.
@@ -72,6 +73,8 @@ the resolved runner before creating strategy artifacts. Use
   `performance-reviewer`.
 - Factor IC, Rank IC, ICIR, decay, hit rate, or factor predictiveness: use
   `factor-evaluator`.
+- Value, quality, momentum, multi-factor screening, or candidate-list
+  generation: use `factor-screening`.
 - Parameter optimization, grid search, walk-forward, or overfitting checks:
   use `parameter-tuner`.
 - Indicator overlays or quick chart inspection: use `chart-indicator`.
@@ -86,6 +89,44 @@ the resolved runner before creating strategy artifacts. Use
   `component-creator`, then follow its routed creation skill.
 - Broker connectivity, paper trading, live trading, account checks, or order
   submission: use `live-trader`.
+
+## Install And Upgrade Questions
+
+This section must work from an installed Agent home or a later research
+directory where the original source checkout may have been deleted.
+
+Use the cached metadata first:
+
+1. Read `~/.config/open-xquant/agent.yaml` for `preferred_runner_argv` or
+   `preferred_runner`.
+2. If missing, read `~/.config/open-xquant/agent-install.json` for
+   `sdk_bundle.runner.argv` or `sdk_bundle.runner.oxq`.
+3. Do not search unrelated home directories for another checkout.
+4. If the current directory is an open-xquant source worktree and the user is
+   installing from that checkout, use `uv run oxq ...`.
+
+Common commands:
+
+```bash
+<runner> agent status
+<runner> agent install --repair --yes
+<runner> agent upgrade --all-targets --yes
+<runner> agent uninstall --all-targets --yes
+<runner> agent uninstall --all-targets --purge-config --yes
+```
+
+Supported target skill roots:
+
+- Codex: `${CODEX_HOME:-~/.codex}/skills/`
+- OpenCode: `~/.config/opencode/skills/`
+- Claude Code: `~/.claude/skills/`
+- Cursor: `~/.cursor/skills/`
+- OpenClaw: `~/.openclaw/skills/`
+- TRAE: `~/.trae/skills/`
+
+The installed skills are flat peer directories such as `open-xquant/`,
+`strategy-builder/`, and `research-report-writer/`. Do not nest leaf skills
+under `open-xquant/`.
 
 ## Common Sequences
 

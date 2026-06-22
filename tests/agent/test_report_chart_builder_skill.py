@@ -47,16 +47,11 @@ def test_opencode_bundle_references_single_source_skills() -> None:
     config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
 
     assert config["skills"] == {"paths": ["agent/skills"]}
-    opencode_skill_names = {
-        "open-xquant",
-        "quant-research",
-        "report-chart-builder",
-        "research-report-reviewer",
-        "research-report-writer",
-    }
-    for skill_name in opencode_skill_names:
-        canonical = Path("agent/skills") / f"{skill_name}.md"
-        adapter = Path("agent/skills") / skill_name / "SKILL.md"
+    canonical_skills = sorted(Path("agent/skills").glob("*.md"))
+    assert canonical_skills
+    for canonical in canonical_skills:
+        skill_name = canonical.stem
+        adapter = canonical.with_suffix("") / "SKILL.md"
         assert canonical.exists()
         assert adapter.is_symlink()
         assert adapter.resolve() == canonical.resolve()
@@ -97,6 +92,9 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "Router Contract" in text
     assert "Do not run `oxq`" in text
     assert "Do not write report files directly" in text
+    assert "Install And Upgrade Questions" in text
+    assert "installed Agents must not depend on that file" in text
+    assert "<runner> agent status" in text
     for leaf_skill in [
         "strategy-builder",
         "quant-research",
@@ -106,6 +104,7 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
         "research-report-reviewer",
         "performance-reviewer",
         "factor-evaluator",
+        "factor-screening",
         "parameter-tuner",
         "component-creator",
         "live-trader",
@@ -176,6 +175,13 @@ def test_agent_guide_is_install_only_and_points_to_router_skill() -> None:
     assert "Spec 最小模板" not in text
     assert "CLI 速查" not in text
     assert "策略想法或新策略" not in text
+
+
+def test_human_guide_first_use_prompt_uses_runnable_status_command() -> None:
+    text = Path("docs/human-guide.md").read_text(encoding="utf-8")
+
+    assert "安装后运行 uv run oxq agent status" in text
+    assert "安装后运行 oxq agent status" not in text
 
 
 def test_examples_do_not_reference_removed_report_write_command() -> None:

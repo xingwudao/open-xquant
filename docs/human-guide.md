@@ -32,7 +32,7 @@ cd open-xquant
 ```text
 请阅读 docs/agent-guide.md。
 完成 open-xquant 的长期 Agent 能力安装。
-安装后运行 oxq agent status，确认以后我可以在新目录里直接说策略想法。
+安装后运行 uv run oxq agent status，确认以后我可以在新目录里直接说策略想法。
 ```
 
 Agent 应该完成这些事：
