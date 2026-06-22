@@ -130,6 +130,20 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
         assert leaf_skill in text
 
 
+def test_open_xquant_router_resumes_writer_after_chart_builder_before_rendering() -> None:
+    text = Path("agent/skills/open-xquant.md").read_text(encoding="utf-8")
+
+    start = text.index('- "Write the final report":')
+    end = text.index('- "Review whether this can be traded":')
+    sequence = text[start:end]
+
+    chart_step = sequence.index("`report-chart-builder` if the user wants figures")
+    resume_step = sequence.index("resume `research-report-writer`")
+    render_step = sequence.index("render HTML")
+
+    assert chart_step < resume_step < render_step
+
+
 def test_research_report_reviewer_skill_covers_semantic_report_qa() -> None:
     skill = Path("agent/skills/research-report-reviewer.md")
 
