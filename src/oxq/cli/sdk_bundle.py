@@ -64,6 +64,11 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         )
 
     config_root.mkdir(parents=True, exist_ok=True)
+    if not buildable_source:
+        cached_bundle = _installed_sdk_bundle(config_root)
+        if cached_bundle is not None and _bundle_version(cached_bundle) == version:
+            return cached_bundle
+
     tmp_root = config_root / "sdk-bundles" / ".build-tmp"
     if tmp_root.exists():
         shutil.rmtree(tmp_root)
@@ -201,6 +206,8 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
 
     python = _venv_executable(venv, "python")
     if not python.exists():
+        if _is_virtualenv_dir(venv):
+            raise click.ClickException(f"SDK virtualenv is missing Python interpreter: {python}")
         runner = _require_dict(bundle, "runner")
         bundle_python = runner.get("python")
         python_arg = str(expand_path(bundle_python)) if isinstance(bundle_python, str) and bundle_python else "3.12"
@@ -250,7 +257,7 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
     root_value = bundle.get("root")
     if not isinstance(root_value, str):
         return False
-    root = _stored_path(root_value)
+    root = _stored_path(root_value).resolve()
     bundles_root = (config_root / "sdk-bundles").resolve()
     if not root.is_relative_to(bundles_root):
         return False
@@ -297,6 +304,14 @@ def _verify_bundle(bundle: dict[str, Any]) -> None:
 
 def _is_buildable_source(source_root: Path) -> bool:
     return (source_root / "pyproject.toml").is_file()
+
+
+def _bundle_version(bundle: dict[str, Any]) -> str | None:
+    wheel = bundle.get("wheel")
+    if not isinstance(wheel, dict):
+        return None
+    value = wheel.get("version")
+    return str(value) if isinstance(value, str) and value else None
 
 
 def _build_source_wheel(source_root: Path, dist_tmp: Path, *, buildable_source: bool) -> Path:

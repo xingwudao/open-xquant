@@ -138,6 +138,28 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
         assert "agent/skills/strategy-builder.md" in wheel.namelist()
 
 
+def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "site-packages/open_xquant"
+    config_root = tmp_path / "config/open-xquant"
+    (source / "agent/skills").mkdir(parents=True)
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/bundle-test")
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    commands: list[list[str]] = []
+
+    class FakeDistribution:
+        version = "0.1.0"
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle.metadata.distribution", lambda _name: FakeDistribution())
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", lambda cmd: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+
+    assert build_sdk_bundle(source, config_root) == bundle
+    assert commands == [
+        [bundle["runner"]["python"], "-c", "import oxq"],
+        [bundle["runner"]["oxq"], "--help"],
+    ]
+
+
 def test_build_sdk_bundle_requires_project_or_installed_distribution(monkeypatch, tmp_path) -> None:
     source = tmp_path / "site-packages/open_xquant"
     (source / "agent/skills").mkdir(parents=True)
@@ -201,6 +223,32 @@ def test_install_workspace_sdk_uses_copy_link_mode(monkeypatch, tmp_path) -> Non
     assert install_cmd[install_cmd.index("--link-mode") + 1] == "copy"
 
 
+def test_install_workspace_sdk_rejects_existing_venv_missing_python(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    config_root = home / ".config/open-xquant"
+    workspace = tmp_path / "workspace"
+    venv = workspace / ".venv"
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/bundle-test")
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    venv.mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = test\n", encoding="utf-8")
+    (venv / "sentinel.txt").write_text("keep\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        if cmd[0] == "uv" and "venv" in cmd:
+            pytest.fail(f"broken existing venv must be rejected before running: {cmd}")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
+
+    with pytest.raises(Exception, match="missing Python interpreter"):
+        install_workspace_sdk(workspace, venv)
+
+    assert (venv / "sentinel.txt").read_text(encoding="utf-8") == "keep\n"
+
+
 def test_remove_sdk_bundle_refuses_active_cached_runner(monkeypatch, tmp_path) -> None:
     config_root = tmp_path / "config/open-xquant"
     root = config_root / "sdk-bundles/bundle-test"
@@ -212,6 +260,47 @@ def test_remove_sdk_bundle_refuses_active_cached_runner(monkeypatch, tmp_path) -
     )
 
     assert remove_sdk_bundle(bundle, config_root) is False
+
+
+def test_remove_sdk_bundle_resolves_root_before_purge(monkeypatch, tmp_path) -> None:
+    config_root = tmp_path / "config/open-xquant"
+    escaped_root = config_root / "sdk-bundles/../outside"
+    actual_root = config_root / "outside"
+    bundle = _write_valid_bundle(escaped_root)
+    monkeypatch.setattr(
+        "oxq.cli.sdk_bundle.shutil.rmtree",
+        lambda _path: pytest.fail("escaped bundle root must not be deleted"),
+    )
+
+    assert actual_root.exists()
+    assert remove_sdk_bundle(bundle, config_root) is False
+    assert actual_root.exists()
+
+
+def test_remove_sdk_bundle_rejects_symlinked_root_before_purge(monkeypatch, tmp_path) -> None:
+    config_root = tmp_path / "config/open-xquant"
+    actual_root = tmp_path / "outside-bundle"
+    bundle = _write_valid_bundle(actual_root)
+    link_root = config_root / "sdk-bundles/link"
+    link_root.parent.mkdir(parents=True)
+    try:
+        link_root.symlink_to(actual_root, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    bundle["root"] = str(link_root)
+    bundle["wheel"]["path"] = str(link_root / "dist/open_xquant-0.1.0-py3-none-any.whl")
+    bundle["dependencies"]["lock_file"] = str(link_root / "requirements.lock.txt")
+    bundle["dependencies"]["packages_file"] = str(link_root / "packages.json")
+    bundle["runner"]["python"] = str(link_root / "runner/.venv/bin/python")
+    bundle["runner"]["oxq"] = str(link_root / "runner/.venv/bin/oxq")
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", lambda cmd: subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(
+        "oxq.cli.sdk_bundle.shutil.rmtree",
+        lambda _path: pytest.fail("symlinked bundle root must not be deleted"),
+    )
+
+    assert remove_sdk_bundle(bundle, config_root) is False
+    assert actual_root.exists()
 
 
 def test_verify_bundle_requires_runner_python(tmp_path) -> None:
