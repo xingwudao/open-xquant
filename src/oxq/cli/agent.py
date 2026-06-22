@@ -37,7 +37,12 @@ from oxq.cli.agent_targets import (
     resolve_source_root,
     resolve_target,
 )
-from oxq.cli.sdk_bundle import build_sdk_bundle, remove_sdk_bundle, sdk_bundle_contains_active_runner
+from oxq.cli.sdk_bundle import (
+    build_sdk_bundle,
+    remove_sdk_bundle,
+    sdk_bundle_can_be_removed,
+    sdk_bundle_contains_active_runner,
+)
 
 MANAGED_MARKER = ".open-xquant-managed.json"
 CONFIG_SCHEMA_VERSION = 1
@@ -224,10 +229,12 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
     manifest = _require_manifest()
     targets = manifest.get("targets", {})
     selected = list(targets) if all_targets else [target]
+    bundles_to_purge: list[dict[str, Any]] = []
     if not dry_run and purge_config and all_targets:
+        bundles_to_purge = _manifest_sdk_bundles(manifest)
         active_bundles = [
             _bundle_label(bundle)
-            for bundle in _manifest_sdk_bundles(manifest)
+            for bundle in bundles_to_purge
             if sdk_bundle_contains_active_runner(bundle, config_dir())
         ]
         if active_bundles:
@@ -235,6 +242,16 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
                 "Refusing to purge config while running from the active cached SDK runner: "
                 + ", ".join(active_bundles)
                 + ". Re-run this command from a non-cached open-xquant checkout or installed Python environment."
+            )
+        failed = [
+            _bundle_label(bundle)
+            for bundle in bundles_to_purge
+            if not sdk_bundle_can_be_removed(bundle, config_dir())
+        ]
+        if failed:
+            raise click.ClickException(
+                "Refusing to purge config because SDK bundle removal was not verified: "
+                + ", ".join(failed)
             )
     for target_id in selected:
         state = targets.get(target_id)
@@ -249,7 +266,7 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
         if purge_config and all_targets:
             failed = [
                 _bundle_label(bundle)
-                for bundle in _manifest_sdk_bundles(manifest)
+                for bundle in bundles_to_purge
                 if not remove_sdk_bundle(bundle, config_dir())
             ]
             if failed:

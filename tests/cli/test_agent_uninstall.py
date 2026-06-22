@@ -150,6 +150,72 @@ def test_agent_uninstall_keeps_manifest_when_sdk_bundle_purge_fails(monkeypatch,
     assert manifest.exists()
 
 
+def test_agent_uninstall_purge_preflights_all_sdk_bundles_before_deleting(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+
+    install = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
+    )
+    assert install.exit_code == 0, install.output
+    config_root = home / ".config/open-xquant"
+    current_bundle = config_root / "sdk-bundles/bundle-test"
+    broken_bundle = config_root / "sdk-bundles/broken-bundle"
+    broken_wheel = broken_bundle / "dist/open_xquant-0.1.0-py3-none-any.whl"
+    broken_lock = broken_bundle / "requirements.lock.txt"
+    broken_packages = broken_bundle / "packages.json"
+    broken_python = broken_bundle / "runner/.venv/bin/python"
+    broken_oxq = broken_bundle / "runner/.venv/bin/oxq"
+    broken_wheel.parent.mkdir(parents=True)
+    broken_python.parent.mkdir(parents=True)
+    broken_wheel.write_text("wheel", encoding="utf-8")
+    broken_lock.write_text("corrupted\n", encoding="utf-8")
+    broken_packages.write_text("[]\n", encoding="utf-8")
+    broken_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    broken_oxq.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    broken_python.chmod(0o755)
+    broken_oxq.chmod(0o755)
+    manifest = config_root / "agent-install.json"
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    broken_payload = dict(payload["sdk_bundle"])
+    broken_payload["id"] = "broken-bundle"
+    broken_payload["root"] = str(broken_bundle)
+    broken_payload["wheel"] = {
+        **broken_payload["wheel"],
+        "path": str(broken_wheel),
+        "sha256": hashlib.sha256(b"wheel").hexdigest(),
+    }
+    broken_payload["dependencies"] = {
+        **broken_payload["dependencies"],
+        "lock_file": str(broken_lock),
+        "lock_sha256": hashlib.sha256(b"expected-lock\n").hexdigest(),
+        "packages_file": str(broken_packages),
+    }
+    broken_payload["runner"] = {
+        **broken_payload["runner"],
+        "venv": str(broken_bundle / "runner/.venv"),
+        "python": str(broken_python),
+        "oxq": str(broken_oxq),
+        "argv": [str(broken_oxq)],
+    }
+    payload["sdk_bundles"] = [payload["sdk_bundle"], broken_payload]
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "uninstall", "--all-targets", "--purge-config", "--yes"],
+    )
+
+    assert result.exit_code != 0
+    assert "Refusing to purge config" in result.output
+    assert current_bundle.exists()
+    assert broken_bundle.exists()
+    assert manifest.exists()
+
+
 def test_agent_uninstall_purge_refuses_active_cached_runner_before_mutating_targets(monkeypatch, tmp_path) -> None:
     source = tmp_path / "source"
     home = tmp_path / "home"

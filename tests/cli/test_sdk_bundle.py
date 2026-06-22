@@ -506,7 +506,10 @@ def test_install_workspace_sdk_rejects_existing_venv_missing_python(monkeypatch,
     assert (venv / "sentinel.txt").read_text(encoding="utf-8") == "keep\n"
 
 
-@pytest.mark.parametrize("sdk_venv", [".open-xquant", "strategy_specs", "experiments.jsonl"])
+@pytest.mark.parametrize(
+    "sdk_venv",
+    [".open-xquant", "strategy_specs", "runs", "reports", "experiments.jsonl", "AGENTS.md"],
+)
 def test_install_workspace_sdk_rejects_reserved_workspace_paths(tmp_path, sdk_venv) -> None:
     with pytest.raises(Exception, match="reserved workspace path"):
         install_workspace_sdk(tmp_path / "workspace", tmp_path / "workspace" / sdk_venv)

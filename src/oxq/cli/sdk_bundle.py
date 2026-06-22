@@ -26,7 +26,7 @@ SDK_PROFILE = "full-research"
 SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
 EXCLUDED_EXTRAS = ("dev", "docs", "talib")
 WHEEL_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
-RESERVED_WORKSPACE_PATHS = (".open-xquant", "strategy_specs", "experiments.jsonl")
+RESERVED_WORKSPACE_PATHS = (".open-xquant", "strategy_specs", "runs", "reports", "experiments.jsonl", "AGENTS.md")
 
 
 def default_config_dir() -> Path:
@@ -276,12 +276,24 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
 def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
     """Remove a managed SDK bundle after validating that it is under config_root."""
 
-    root_value = bundle.get("root")
-    if not isinstance(root_value, str):
+    if not sdk_bundle_can_be_removed(bundle, config_root):
         return False
-    root = _stored_path(root_value).resolve()
-    bundles_root = (config_root / "sdk-bundles").resolve()
-    if not root.is_relative_to(bundles_root):
+    root = _managed_bundle_root(bundle, config_root)
+    if root is None:
+        return False
+    if root.exists():
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            return False
+    return True
+
+
+def sdk_bundle_can_be_removed(bundle: dict[str, Any], config_root: Path) -> bool:
+    """Return whether a managed SDK bundle passes purge preflight checks."""
+
+    root = _managed_bundle_root(bundle, config_root)
+    if root is None:
         return False
     if not root.exists():
         return True
@@ -289,14 +301,18 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
         _verify_bundle(bundle)
     except (OSError, click.ClickException):
         return False
-    if root.exists():
-        if _path_is_relative_to(_stored_path(sys.executable), root):
-            return False
-        try:
-            shutil.rmtree(root)
-        except OSError:
-            return False
-    return True
+    return not _path_is_relative_to(_stored_path(sys.executable), root)
+
+
+def _managed_bundle_root(bundle: dict[str, Any], config_root: Path) -> Path | None:
+    root_value = bundle.get("root")
+    if not isinstance(root_value, str):
+        return None
+    root = _stored_path(root_value).resolve()
+    bundles_root = (config_root / "sdk-bundles").resolve()
+    if not root.is_relative_to(bundles_root):
+        return None
+    return root
 
 
 def _remove_bundle_root_for_rebuild(bundle_root: Path) -> None:
