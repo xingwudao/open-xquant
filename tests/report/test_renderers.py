@@ -60,7 +60,7 @@ def test_render_html_report_is_static_and_embeds_registered_figures(tmp_path) ->
 
     assert html.startswith("<!doctype html>")
     assert '<html lang="zh">' in html
-    assert "<figure>" in html
+    assert 'class="figure-card"' in html
     assert 'src="report_assets/figures/drawdown.png"' in html
     assert 'alt="最大回撤曲线"' in html
     assert "<figcaption>图 1. 由 equity_curve.csv 生成。</figcaption>" in html
@@ -77,6 +77,30 @@ def test_render_html_report_adds_professional_decision_and_table_markup(tmp_path
     assert "<th>Metric</th>" in html
     assert "<td>Total Return</td>" in html
     assert "markdown-table" not in html
+    assert "<script" not in html.lower()
+
+
+def test_render_markdown_html_report_adds_institutional_layout_classes() -> None:
+    html = render_markdown_html_report(
+        "# Strategy Report\n\n"
+        "**WATCHLIST**\n\n"
+        "Decision summary paragraph.\n\n"
+        "| Metric | Value |\n"
+        "| --- | --- |\n"
+        "| Sharpe | 1.20 |\n"
+        "| Max Drawdown | -8.00% |\n\n"
+        "![Equity](report_assets/figures/equity.png)\n\n"
+        "Figure 1. Generated from equity_curve.csv.\n",
+        lang="en",
+    )
+
+    assert 'class="report-shell"' in html
+    assert 'class="report-hero"' in html
+    assert 'class="report-kicker"' in html
+    assert 'class="report-content"' in html
+    assert 'class="table-wrap metric-table-wrap"' in html
+    assert 'class="figure-card"' in html
+    assert "@media print" in html
     assert "<script" not in html.lower()
 
 

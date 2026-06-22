@@ -240,6 +240,39 @@ echo "$RUN_DIR"
 Use `artifacts.target_weights_csv` from `backtest_result.json` for baseline
 target-weight comparisons. Do not parse human stdout for `run_dir`.
 
+## Report Artifact Readiness
+
+If the run may become a professional report, verify that the spec and backtest
+workflow can produce the evidence needed by `research-report-writer` and
+`report-chart-builder`.
+
+Required baseline artifacts:
+
+- `metrics.json`
+- `equity_curve.csv`
+- `trades.csv`
+- `positions.csv`
+- `orders.csv`
+- `target_weights.csv`
+- `execution_assumptions.json`
+- `artifact_hashes.json`
+
+Recommended artifacts for a professional report:
+
+- `benchmark_curve.csv`: configure a benchmark whenever the user's research
+  question implies relative performance.
+- `robustness.json`: keep `robustness.cost_multiplier` populated; add
+  `robustness.parameter_perturbation` for tunable strategies; set
+  `robustness.regime_analysis: true` when the available data supports regime
+  segmentation.
+- `research_bias_audit.json` and `reproducibility_audit.json`: run both audits
+  before report writing.
+
+Do not promise unavailable charts. If the spec omits a benchmark, the report
+cannot show benchmark-relative equity or benchmark return contribution. If
+`parameter_perturbation` or `regime_analysis` is absent, the chart builder must
+skip those professional chart pack items and disclose the missing artifact.
+
 ## Phase 5: Audit And Report
 
 ```bash

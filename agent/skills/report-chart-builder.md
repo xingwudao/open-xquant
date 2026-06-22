@@ -24,6 +24,9 @@ handing the final narrative to `research-report-writer`.
    - Ask what decision the chart should support.
    - Clarify chart type, time range, benchmark, grouping, and labels.
    - Explain when the requested chart cannot be produced from available data.
+   - If the user does not give a chart list, propose the Default Professional
+     Chart Pack and ask whether to build the full pack, a smaller subset, or a
+     custom set.
 
 3. Write plotting Python.
    - Prefer a small script under `report_assets/scripts`.
@@ -92,6 +95,8 @@ After registration, verify every generated figure:
 - The figure is present in `report_assets/manifest.json`.
 - The manifest hash matches the current file.
 - Chinese charts either use a verified CJK font or default to English labels.
+- The chart is not blank or visually empty.
+- The caption names the source artifact and the interpretation limit.
 
 Use `oxq report qa runs/<run_id>/` after final Markdown and HTML exist to
 re-check image references, fonts, and manifest state.
@@ -117,6 +122,36 @@ HTML from that final Markdown. The expected outputs are:
 - Turnover or trade count by period.
 - Cost impact summary.
 - IS/OOS metric comparison.
+
+## Default Professional Chart Pack
+
+Use this pack when the user wants a professional report but does not specify
+charts. Skip any chart whose source artifact is unavailable, and say why.
+
+- equity curve vs benchmark: source artifact `equity_curve.csv` and
+  `benchmark_curve.csv`; use a message title that states whether the strategy
+  outperformed, tracked, or lagged the benchmark.
+- drawdown: source artifact `equity_curve.csv`; show depth and recovery
+  behavior, not just the maximum drawdown number.
+- monthly return heatmap or monthly return bars: source artifact
+  `equity_curve.csv`; show positive/negative month distribution and clustering.
+- IS/OOS comparison: source artifact `metrics.json` and facts API values; show
+  whether out-of-sample evidence supports the in-sample thesis.
+- cost sensitivity: source artifact `robustness.json`; show the effect of
+  `cost_multiplier` scenarios when present.
+- parameter perturbation: source artifact `robustness.json`; show whether
+  nearby parameters preserve or destroy the thesis when
+  `parameter_perturbation` exists.
+- regime analysis: source artifact `robustness.json`; show performance by
+  market regime when `regime_analysis` is available.
+- position exposure: source artifact `positions.csv` or `target_weights.csv`;
+  show concentration, cash exposure, and large allocation shifts.
+- trade PnL distribution: source artifact `trades.csv`; show whether results
+  depend on a few outliers when closed-trade PnL is available.
+
+Every professional chart must have a message title, a caption, and registered
+metadata that names each source artifact. A chart may make the report more
+readable, but it does not replace artifact-backed evidence.
 
 ## Red Lines
 

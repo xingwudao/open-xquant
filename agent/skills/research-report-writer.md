@@ -67,6 +67,29 @@ The report must make the decision easy to audit:
 
 Default language is Chinese unless the user asks otherwise.
 
+## Institutional Report Standard
+
+Write a layered institutional research report: professional enough for a
+potential investor to trust at a glance, and rigorous enough for the researcher
+to audit before risking capital.
+
+- 30-second investor view: start with an Executive Snapshot containing the
+  decision, one-line thesis, metric scorecard, trust and audit status, top
+  risks near the decision, and the next gate before any capital allocation.
+- 3-minute research view: follow with the evidence chain, chart narrative,
+  robustness interpretation, and a clear explanation of what supports or
+  weakens the thesis.
+- professional appendix: keep methodology, assumptions, artifact sources,
+  audit details, limitations, and reproducibility notes available without
+  interrupting the main reading flow.
+- Use message-first section openings. Each major section should begin with the
+  point the reader should take away, then present the supporting evidence.
+- Use compact tables and short paragraphs. Redundant explanation is acceptable
+  only when it helps a non-specialist understand the decision without weakening
+  professional precision.
+- Put risks near the decision, not only at the end. A report that looks
+  attractive but hides blocking risks is unacceptable.
+
 ## Required Structure
 
 Write `research_report.md` with:
@@ -75,6 +98,8 @@ Write `research_report.md` with:
    - Use `REJECT`, `NO EVIDENCE`, `WATCHLIST`, or
      `PAPER TRADING CANDIDATE`.
    - Include one concise decision paragraph before details.
+   - Include an Executive Snapshot table with metric scorecard, trust and
+     audit status, top risks, and next gate.
 
 2. Evidence chain.
    - Cover reproducibility, research-bias audit, robustness, IS/OOS behavior,
