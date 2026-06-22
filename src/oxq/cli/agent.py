@@ -317,17 +317,26 @@ def upgrade(
 
     del yes
     manifest = _require_manifest()
-    source_root = _upgrade_source(from_local, repo, git_ref)
-    skills = _discover_skills_or_raise(source_root)
-    sdk_bundle = build_sdk_bundle(source_root, config_dir(), dry_run=dry_run)
     targets = manifest.get("targets", {})
     selected = list(targets) if all_targets or target is None else [target]
-    updated: list[str] = []
+    upgrade_ids: list[str] = []
     for target_id in selected:
-        state = targets.get(target_id)
+        state = targets.get(target_id) if isinstance(targets, dict) else None
         if not isinstance(state, dict) or not state.get("installed"):
             click.echo(f"{target_id}: not installed")
             continue
+        upgrade_ids.append(target_id)
+    if not upgrade_ids:
+        click.echo("Upgrade complete: ")
+        return
+
+    source_root = _upgrade_source(from_local, repo, git_ref)
+    skills = _discover_skills_or_raise(source_root)
+    sdk_bundle = build_sdk_bundle(source_root, config_dir(), dry_run=dry_run)
+    updated: list[str] = []
+    for target_id in upgrade_ids:
+        state = targets.get(target_id)
+        assert isinstance(state, dict)
         target_obj = resolve_target(target_id)
         skipped = _upgrade_target(target_obj, state, skills, source_root, dry_run=dry_run)
         updated.append(target_id)

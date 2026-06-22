@@ -11,7 +11,14 @@ from typing import Any
 
 import pytest
 
-from oxq.cli.sdk_bundle import _uv_cmd, _verify_bundle, build_sdk_bundle, install_workspace_sdk, remove_sdk_bundle
+from oxq.cli.sdk_bundle import (
+    _build_installed_distribution_wheel,
+    _uv_cmd,
+    _verify_bundle,
+    build_sdk_bundle,
+    install_workspace_sdk,
+    remove_sdk_bundle,
+)
 
 
 def _write_valid_bundle(root) -> dict:
@@ -209,6 +216,44 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
         assert "../../../bin/oxq" not in names
 
 
+def test_build_installed_distribution_wheel_uses_deterministic_archive_metadata(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "site-packages/open_xquant"
+    site = tmp_path / "fake-site"
+    dist_info = site / "open_xquant-0.2.0.dist-info"
+    (source / "agent/skills").mkdir(parents=True)
+    (site / "oxq").mkdir(parents=True)
+    dist_info.mkdir(parents=True)
+    (site / "oxq/a.py").write_text("a = 1\n", encoding="utf-8")
+    (site / "oxq/z.py").write_text("z = 1\n", encoding="utf-8")
+    (dist_info / "METADATA").write_text("Name: open-xquant\nVersion: 0.2.0\n", encoding="utf-8")
+    (dist_info / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n", encoding="utf-8")
+    (dist_info / "RECORD").write_text("", encoding="utf-8")
+
+    class FakeDistribution:
+        version = "0.2.0"
+        metadata = {"Name": "open-xquant"}
+        files = [
+            Path("oxq/z.py"),
+            Path("open_xquant-0.2.0.dist-info/WHEEL"),
+            Path("oxq/a.py"),
+            Path("open_xquant-0.2.0.dist-info/METADATA"),
+            Path("open_xquant-0.2.0.dist-info/RECORD"),
+        ]
+
+        def locate_file(self, path: Path) -> Path:
+            return site / path
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle.metadata.distribution", lambda _name: FakeDistribution())
+
+    wheel_path = _build_installed_distribution_wheel(source, tmp_path / "dist")
+
+    with zipfile.ZipFile(wheel_path) as wheel:
+        infos = wheel.infolist()
+        names = [info.filename for info in infos]
+        assert names == sorted(names)
+        assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in infos)
+
+
 def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(monkeypatch, tmp_path) -> None:
     source = tmp_path / "site-packages/open_xquant"
     config_root = tmp_path / "config/open-xquant"
@@ -355,7 +400,13 @@ def test_install_workspace_sdk_force_keeps_existing_virtualenv(monkeypatch, tmp_
     runner_python.chmod(0o755)
     runner.chmod(0o755)
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr("oxq.cli.sdk_bundle._run", lambda cmd: None)
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        if len(cmd) >= 3 and cmd[1] == "-c" and "version_info" in cmd[2]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="3.13\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
 
     install_workspace_sdk(workspace, venv, force=True)
 
@@ -380,7 +431,13 @@ def test_install_workspace_sdk_uses_copy_link_mode(monkeypatch, tmp_path) -> Non
     runner.chmod(0o755)
     commands: list[list[str]] = []
     monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setattr("oxq.cli.sdk_bundle._run", lambda cmd: commands.append(cmd) or subprocess.CompletedProcess(cmd, 0))
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        stdout = "3.13\n" if len(cmd) >= 3 and cmd[1] == "-c" and "version_info" in cmd[2] else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
 
     install_workspace_sdk(workspace, venv)
 
@@ -414,6 +471,38 @@ def test_install_workspace_sdk_rejects_existing_venv_missing_python(monkeypatch,
     assert (venv / "sentinel.txt").read_text(encoding="utf-8") == "keep\n"
 
 
+def test_install_workspace_sdk_rejects_existing_venv_python_version_mismatch(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    config_root = home / ".config/open-xquant"
+    workspace = tmp_path / "workspace"
+    venv = workspace / ".venv"
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/bundle-test")
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    runner_python = venv / "bin/python"
+    runner = venv / "bin/oxq"
+    runner.parent.mkdir(parents=True)
+    (venv / "pyvenv.cfg").write_text("home = test\n", encoding="utf-8")
+    runner_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runner.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runner_python.chmod(0o755)
+    runner.chmod(0o755)
+    monkeypatch.setenv("HOME", str(home))
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        if len(cmd) >= 3 and cmd[1] == "-c" and "version_info" in cmd[2]:
+            version = "3.12\n" if cmd[0] == bundle["runner"]["python"] else "3.13\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=version, stderr="")
+        if cmd[0] == "uv" and "install" in cmd:
+            pytest.fail(f"mismatched existing venv must be rejected before install: {cmd}")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
+
+    with pytest.raises(Exception, match="Python version"):
+        install_workspace_sdk(workspace, venv)
+
+
 def test_remove_sdk_bundle_refuses_active_cached_runner(monkeypatch, tmp_path) -> None:
     config_root = tmp_path / "config/open-xquant"
     root = config_root / "sdk-bundles/bundle-test"
@@ -425,6 +514,26 @@ def test_remove_sdk_bundle_refuses_active_cached_runner(monkeypatch, tmp_path) -
     )
 
     assert remove_sdk_bundle(bundle, config_root) is False
+
+
+def test_remove_sdk_bundle_converts_verification_oserror_to_safe_failure(monkeypatch, tmp_path) -> None:
+    config_root = tmp_path / "config/open-xquant"
+    root = config_root / "sdk-bundles/bundle-test"
+    bundle = _write_valid_bundle(root)
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        if cmd == [bundle["runner"]["python"], "-c", "import oxq"]:
+            raise OSError("runner is no longer executable")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
+    monkeypatch.setattr(
+        "oxq.cli.sdk_bundle.shutil.rmtree",
+        lambda _path: pytest.fail("corrupted bundle must not be deleted"),
+    )
+
+    assert remove_sdk_bundle(bundle, config_root) is False
+    assert root.exists()
 
 
 def test_remove_sdk_bundle_refuses_active_symlinked_cached_runner(monkeypatch, tmp_path) -> None:

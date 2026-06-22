@@ -22,8 +22,10 @@ def _write_source(root: Path, body: str) -> None:
 
 @pytest.fixture(autouse=True)
 def fake_sdk_bundle(monkeypatch):
+    calls: list[tuple[Path, Path, bool]] = []
+
     def build(source_root: Path, config_root: Path, *, dry_run: bool = False) -> dict:
-        del source_root
+        calls.append((source_root, config_root, dry_run))
         root = config_root / "sdk-bundles" / "bundle-test"
         wheel = root / "dist" / "open_xquant-0.1.0-py3-none-any.whl"
         lock = root / "requirements.lock.txt"
@@ -63,6 +65,7 @@ def fake_sdk_bundle(monkeypatch):
         }
 
     monkeypatch.setattr("oxq.cli.agent.build_sdk_bundle", build)
+    return calls
 
 
 def test_agent_upgrade_replaces_unmodified_managed_skill(monkeypatch, tmp_path) -> None:
@@ -115,6 +118,37 @@ def test_agent_upgrade_skips_locally_modified_skill(monkeypatch, tmp_path) -> No
     assert "local edit" in installed.read_text(encoding="utf-8")
     assert "new workflow" not in installed.read_text(encoding="utf-8")
     assert "modified" in result.output
+
+
+def test_agent_upgrade_missing_target_does_not_build_or_update_sdk_bundle(monkeypatch, tmp_path, fake_sdk_bundle) -> None:
+    source_v1 = tmp_path / "source-v1"
+    source_v2 = tmp_path / "source-v2"
+    home = tmp_path / "home"
+    _write_source(source_v1, "old workflow")
+    _write_source(source_v2, "new workflow")
+    monkeypatch.setenv("HOME", str(home))
+
+    install = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "cursor", "--from-local", str(source_v1), "--yes"],
+    )
+    assert install.exit_code == 0, install.output
+    manifest_path = home / ".config/open-xquant/agent-install.json"
+    config_path = home / ".config/open-xquant/agent.yaml"
+    manifest_before = json.loads(manifest_path.read_text(encoding="utf-8"))
+    config_before = config_path.read_text(encoding="utf-8")
+    build_calls_before = list(fake_sdk_bundle)
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "upgrade", "--target", "opencode", "--from-local", str(source_v2), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "opencode: not installed" in result.output
+    assert fake_sdk_bundle == build_calls_before
+    assert json.loads(manifest_path.read_text(encoding="utf-8")) == manifest_before
+    assert config_path.read_text(encoding="utf-8") == config_before
 
 
 def test_agent_upgrade_tracks_previous_sdk_bundle(monkeypatch, tmp_path) -> None:

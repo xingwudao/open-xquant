@@ -25,6 +25,7 @@ from oxq.cli.agent_manifest import expand_path, read_json_file, sha256_file, wri
 SDK_PROFILE = "full-research"
 SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
 EXCLUDED_EXTRAS = ("dev", "docs", "talib")
+WHEEL_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 
 
 def default_config_dir() -> Path:
@@ -221,15 +222,16 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
     if not isinstance(bundle, dict):
         raise click.ClickException("agent-install.json has no sdk_bundle. Re-run `oxq agent install`.")
     _verify_bundle(bundle)
+    runner = _require_dict(bundle, "runner")
+    bundle_python = _stored_path(_require_str(runner, "python"))
 
     python = _venv_executable(venv, "python")
     if not python.exists():
         if _is_virtualenv_dir(venv):
             raise click.ClickException(f"SDK virtualenv is missing Python interpreter: {python}")
-        runner = _require_dict(bundle, "runner")
-        bundle_python = runner.get("python")
-        python_arg = str(expand_path(bundle_python)) if isinstance(bundle_python, str) and bundle_python else "3.12"
-        _run(_uv_cmd(["venv", "--python", python_arg, str(venv)], directory=cwd))
+        _run(_uv_cmd(["venv", "--python", str(bundle_python), str(venv)], directory=cwd))
+    else:
+        _verify_python_version_matches(bundle_python, python)
 
     lock_path = expand_path(bundle["dependencies"]["lock_file"])
     uv_cache_dir = expand_path(bundle["uv_cache_dir"])
@@ -283,7 +285,7 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
         return True
     try:
         _verify_bundle(bundle)
-    except click.ClickException:
+    except (OSError, click.ClickException):
         return False
     if root.exists():
         if _path_is_relative_to(_stored_path(sys.executable), root):
@@ -434,29 +436,37 @@ def _build_installed_distribution_wheel(source_root: Path, dist_tmp: Path) -> Pa
     dist_name = _wheel_safe_name(str(dist.metadata.get("Name") or "open-xquant"))
     version = _wheel_safe_version(str(dist.version or "unknown"))
     wheel_path = dist_tmp / f"{dist_name}-{version}-py3-none-any.whl"
-    records: list[str] = []
+    entries: list[tuple[str, bytes]] = []
     dist_info_dir: str | None = None
+    for file in sorted(files, key=lambda item: str(item).replace("\\", "/")):
+        archive_name = str(file).replace("\\", "/")
+        if not _is_safe_wheel_archive_name(archive_name) or archive_name.endswith("/RECORD"):
+            continue
+        parts = PurePosixPath(archive_name).parts
+        for index, part in enumerate(parts):
+            if part.endswith(".dist-info"):
+                dist_info_dir = "/".join(parts[: index + 1])
+                break
+        source = Path(dist.locate_file(file))
+        if not source.is_file():
+            continue
+        entries.append((archive_name, source.read_bytes()))
     with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as wheel:
-        for file in files:
-            archive_name = str(file).replace("\\", "/")
-            if not _is_safe_wheel_archive_name(archive_name) or archive_name.endswith("/RECORD"):
-                continue
-            parts = PurePosixPath(archive_name).parts
-            for index, part in enumerate(parts):
-                if part.endswith(".dist-info"):
-                    dist_info_dir = "/".join(parts[: index + 1])
-                    break
-            source = Path(dist.locate_file(file))
-            if not source.is_file():
-                continue
-            data = source.read_bytes()
-            wheel.writestr(archive_name, data)
-            records.append(_wheel_record_line(archive_name, data))
         if dist_info_dir is None:
             raise click.ClickException("Cannot build the SDK bundle because installed distribution metadata is incomplete.")
         record_name = f"{dist_info_dir}/RECORD"
-        wheel.writestr(record_name, "\n".join([*records, _csv_line([record_name, "", ""])]) + "\n")
+        records = [_wheel_record_line(archive_name, data) for archive_name, data in entries]
+        record_data = ("\n".join([*records, _csv_line([record_name, "", ""])]) + "\n").encode("utf-8")
+        for archive_name, data in sorted([*entries, (record_name, record_data)]):
+            _write_wheel_entry(wheel, archive_name, data)
     return wheel_path
+
+
+def _write_wheel_entry(wheel: zipfile.ZipFile, archive_name: str, data: bytes) -> None:
+    info = zipfile.ZipInfo(archive_name, WHEEL_ZIP_DATE)
+    info.compress_type = zipfile.ZIP_DEFLATED
+    info.external_attr = 0o644 << 16
+    wheel.writestr(info, data)
 
 
 def _is_safe_wheel_archive_name(value: str) -> bool:
@@ -464,6 +474,31 @@ def _is_safe_wheel_archive_name(value: str) -> bool:
         return False
     path = PurePosixPath(value)
     return not path.is_absolute() and ".." not in path.parts
+
+
+def _verify_python_version_matches(expected_python: Path, actual_python: Path) -> None:
+    expected = _python_major_minor(expected_python)
+    actual = _python_major_minor(actual_python)
+    if expected != actual:
+        raise click.ClickException(
+            "Existing SDK virtualenv Python version does not match the cached SDK bundle: "
+            f"{actual_python} uses {actual}, bundle runner uses {expected}. "
+            "Use a matching --sdk-venv or remove the existing virtualenv before retrying."
+        )
+
+
+def _python_major_minor(python: Path) -> str:
+    result = _run(
+        [
+            str(python),
+            "-c",
+            "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')",
+        ]
+    )
+    version = result.stdout.strip()
+    if not version:
+        raise click.ClickException(f"Cannot determine Python version for SDK interpreter: {python}")
+    return version
 
 
 def _installed_distribution_version(source_root: Path) -> str:
