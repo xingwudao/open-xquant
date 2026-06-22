@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import base64
+import csv
+import hashlib
+import io
 import json
 import os
 import re
@@ -9,7 +13,9 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from pathlib import Path
+import zipfile
+from importlib import metadata
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 import click
@@ -34,8 +40,9 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
 
     source_root = source_root.resolve()
     config_root = config_root.resolve()
-    version = _package_version(source_root)
-    source_commit = _current_commit(source_root)
+    buildable_source = _is_buildable_source(source_root)
+    version = _package_version(source_root) if buildable_source else _installed_distribution_version(source_root)
+    source_commit = _current_commit(source_root) if buildable_source else "installed-distribution"
     if dry_run:
         bundle_root = config_root / "sdk-bundles" / f"{_slug(version)}-dry-run"
         oxq = _venv_executable(bundle_root / "runner" / ".venv", "oxq")
@@ -57,24 +64,13 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         )
 
     config_root.mkdir(parents=True, exist_ok=True)
-    if not _is_buildable_source(source_root):
-        cached_bundle = _installed_sdk_bundle(config_root)
-        if cached_bundle is not None:
-            return cached_bundle
-        raise click.ClickException(
-            "Cannot build the SDK bundle because the resolved open-xquant source "
-            f"is not a project checkout: {source_root}. Re-run `oxq agent install` "
-            "from an open-xquant checkout to refresh the cached SDK bundle."
-        )
-
     tmp_root = config_root / "sdk-bundles" / ".build-tmp"
     if tmp_root.exists():
         shutil.rmtree(tmp_root)
     tmp_root.mkdir(parents=True)
     try:
         dist_tmp = tmp_root / "dist"
-        _run(_uv_cmd(["build", "--wheel", "--out-dir", str(dist_tmp), "."], directory=source_root))
-        wheel_tmp = _single_wheel(dist_tmp)
+        wheel_tmp = _build_source_wheel(source_root, dist_tmp, buildable_source=buildable_source)
         wheel_sha = sha256_file(wheel_tmp)
         bundle_id = _bundle_id(version, source_commit, wheel_sha)
         bundle_root = config_root / "sdk-bundles" / bundle_id
@@ -107,6 +103,8 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
                     "pip",
                     "compile",
                     str(req_in),
+                    "--python",
+                    sys.executable,
                     "--generate-hashes",
                     "--output-file",
                     str(lock_path),
@@ -221,6 +219,8 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
                 str(lock_path),
                 "--require-hashes",
                 "--strict",
+                "--link-mode",
+                "copy",
                 "--cache-dir",
                 str(uv_cache_dir),
             ],
@@ -261,7 +261,12 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
     except click.ClickException:
         return False
     if root.exists():
-        shutil.rmtree(root)
+        if _path_is_relative_to(_stored_path(sys.executable), root):
+            return False
+        try:
+            shutil.rmtree(root)
+        except OSError:
+            return False
     return True
 
 
@@ -292,6 +297,87 @@ def _verify_bundle(bundle: dict[str, Any]) -> None:
 
 def _is_buildable_source(source_root: Path) -> bool:
     return (source_root / "pyproject.toml").is_file()
+
+
+def _build_source_wheel(source_root: Path, dist_tmp: Path, *, buildable_source: bool) -> Path:
+    if buildable_source:
+        _run(_uv_cmd(["build", "--wheel", "--out-dir", str(dist_tmp), "."], directory=source_root))
+        return _single_wheel(dist_tmp)
+    return _build_installed_distribution_wheel(source_root, dist_tmp)
+
+
+def _build_installed_distribution_wheel(source_root: Path, dist_tmp: Path) -> Path:
+    try:
+        dist = metadata.distribution("open-xquant")
+    except metadata.PackageNotFoundError as exc:
+        raise click.ClickException(
+            "Cannot build the SDK bundle because the resolved open-xquant source "
+            f"is not a project checkout and the installed package metadata is unavailable: {source_root}. "
+            "Re-run `oxq agent install` from an open-xquant checkout or a wheel-installed `oxq` command."
+        ) from exc
+    files = list(dist.files or [])
+    if not files:
+        raise click.ClickException(
+            "Cannot build the SDK bundle because the installed open-xquant distribution "
+            "does not expose installed file metadata."
+        )
+    dist_tmp.mkdir(parents=True, exist_ok=True)
+    dist_name = _wheel_safe_name(str(dist.metadata.get("Name") or "open-xquant"))
+    version = _wheel_safe_version(str(dist.version or "unknown"))
+    wheel_path = dist_tmp / f"{dist_name}-{version}-py3-none-any.whl"
+    records: list[str] = []
+    dist_info_dir: str | None = None
+    with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as wheel:
+        for file in files:
+            archive_name = str(file).replace("\\", "/")
+            if not archive_name or archive_name.endswith("/RECORD"):
+                continue
+            parts = PurePosixPath(archive_name).parts
+            for index, part in enumerate(parts):
+                if part.endswith(".dist-info"):
+                    dist_info_dir = "/".join(parts[: index + 1])
+                    break
+            source = Path(dist.locate_file(file))
+            if not source.is_file():
+                continue
+            data = source.read_bytes()
+            wheel.writestr(archive_name, data)
+            records.append(_wheel_record_line(archive_name, data))
+        if dist_info_dir is None:
+            raise click.ClickException("Cannot build the SDK bundle because installed distribution metadata is incomplete.")
+        record_name = f"{dist_info_dir}/RECORD"
+        wheel.writestr(record_name, "\n".join([*records, _csv_line([record_name, "", ""])]) + "\n")
+    return wheel_path
+
+
+def _installed_distribution_version(source_root: Path) -> str:
+    try:
+        return str(metadata.distribution("open-xquant").version or "unknown")
+    except metadata.PackageNotFoundError as exc:
+        raise click.ClickException(
+            "Cannot build the SDK bundle because the resolved open-xquant source "
+            f"is not a project checkout and the installed package metadata is unavailable: {source_root}. "
+            "Re-run `oxq agent install` from an open-xquant checkout or a wheel-installed `oxq` command."
+        ) from exc
+
+
+def _wheel_record_line(path: str, data: bytes) -> str:
+    digest = base64.urlsafe_b64encode(hashlib.sha256(data).digest()).rstrip(b"=").decode("ascii")
+    return _csv_line([path, f"sha256={digest}", str(len(data))])
+
+
+def _csv_line(row: list[str]) -> str:
+    output = io.StringIO(newline="")
+    csv.writer(output, lineterminator="").writerow(row)
+    return output.getvalue()
+
+
+def _wheel_safe_name(value: str) -> str:
+    return re.sub(r"[-_.]+", "_", value).lower()
+
+
+def _wheel_safe_version(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.!+]+", "_", value)
 
 
 def _installed_sdk_bundle(config_root: Path) -> dict[str, Any] | None:
@@ -452,6 +538,13 @@ def _absolute_path(path: Path) -> str:
 
 def _stored_path(path: str | Path) -> Path:
     return Path(os.path.abspath(os.path.expandvars(os.path.expanduser(str(path)))))
+
+
+def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(parent.resolve())
+    except OSError:
+        return path.is_relative_to(parent)
 
 
 def _uv_cmd(args: list[str], *, directory: Path) -> list[str]:

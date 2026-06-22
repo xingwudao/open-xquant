@@ -582,9 +582,9 @@ def _load_agent_config() -> dict[str, Any]:
     loaded = read_yaml_file(agent_config_path())
     merged = default_agent_config()
     merged.update(loaded)
-    if (
-        merged.get("preferred_runner_argv") == ["uv", "run", "oxq"]
-        and not _should_update_preferred_runner(merged.get("preferred_runner"))
+    if _should_drop_preferred_runner_argv(
+        merged.get("preferred_runner"),
+        merged.get("preferred_runner_argv"),
     ):
         merged.pop("preferred_runner_argv", None)
     return merged
@@ -632,6 +632,18 @@ def _should_update_preferred_runner(value: Any) -> bool:
     if normalized.startswith("uv run --project ") and normalized.endswith(" oxq"):
         return True
     return "/sdk-bundles/" in normalized
+
+
+def _should_drop_preferred_runner_argv(preferred_runner: Any, argv: Any) -> bool:
+    if _should_update_preferred_runner(preferred_runner):
+        return False
+    return argv == ["uv", "run", "oxq"] or _runner_argv_points_to_sdk_bundle(argv)
+
+
+def _runner_argv_points_to_sdk_bundle(argv: Any) -> bool:
+    if not isinstance(argv, list):
+        return False
+    return any(isinstance(item, str) and "/sdk-bundles/" in item.replace("\\", "/") for item in argv)
 
 
 def _record_sdk_bundle(manifest: dict[str, Any], sdk_bundle: dict[str, Any]) -> None:

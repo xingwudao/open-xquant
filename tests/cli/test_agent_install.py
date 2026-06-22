@@ -204,6 +204,34 @@ def test_agent_install_preserves_custom_runner_without_default_argv(monkeypatch,
     assert "preferred_runner_argv" not in config
 
 
+def test_agent_install_drops_stale_sdk_bundle_argv_for_custom_runner(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    config_dir = home / ".config/open-xquant"
+    old_runner = home / ".config/open-xquant/sdk-bundles/old/runner/.venv/bin/oxq"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+    config_dir.mkdir(parents=True)
+    (config_dir / "agent.yaml").write_text(
+        "schema_version: 1\n"
+        "preferred_runner: custom-oxq\n"
+        "preferred_runner_argv:\n"
+        f"  - {old_runner}\n"
+        "installed_targets: []\n",
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    config = read_yaml_file(config_dir / "agent.yaml")
+    assert config["preferred_runner"] == "custom-oxq"
+    assert "preferred_runner_argv" not in config
+
+
 def test_agent_runner_update_recognizes_windows_sdk_bundle_path() -> None:
     runner = r"C:\Users\Alice\.config\open-xquant\sdk-bundles\old\runner\.venv\Scripts\oxq.exe"
 
