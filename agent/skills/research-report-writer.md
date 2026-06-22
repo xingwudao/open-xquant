@@ -24,6 +24,19 @@ If the Agent recognizes that this skill applies and starts to think "I can just
 write the report directly", stop. Continue from this skill and follow its input,
 structure, fact, and red-line rules before writing the report.
 
+## Chart Decision Gate
+
+Before drafting the final report, inspect `report_assets/manifest.json` if it
+exists, then ask the user whether report charts should be created or updated.
+
+- If the user wants charts, stop report writing and use `report-chart-builder`
+  first. Resume this skill only after the generated figures are saved under
+  `report_assets/figures` and registered in the manifest.
+- If the user declines charts, continue with the original report workflow and
+  state in the report that no chart assets were requested.
+- If registered chart assets already exist, still ask whether they are enough
+  for the final report or should be refreshed.
+
 ## Inputs
 
 Read:

@@ -135,15 +135,16 @@ under `open-xquant/`.
 ## Common Sequences
 
 - "Build and test this idea":
-  `strategy-builder` -> `strategy-monitor` -> `report-chart-builder` when
-  figures are needed -> `research-report-writer` ->
-  `research-report-reviewer`.
+  `strategy-builder` -> `strategy-monitor` -> ask the user whether charts are needed ->
+  `report-chart-builder` if the user wants figures ->
+  `research-report-writer` -> `research-report-reviewer`.
 - "Generate charts for this run":
   `report-chart-builder` -> update report through `research-report-writer` ->
   run deterministic `oxq report qa` -> use `research-report-reviewer`.
 - "Write the final report":
-  `research-report-writer` -> render HTML from the same Markdown ->
-  deterministic `oxq report qa` -> `research-report-reviewer`.
+  `research-report-writer` asks about chart assets first ->
+  `report-chart-builder` if the user wants figures -> render HTML from the same
+  Markdown -> deterministic `oxq report qa` -> `research-report-reviewer`.
 - "Review whether this can be traded":
   `performance-reviewer` and `research-report-reviewer`; route to
   `live-trader` only after the user explicitly asks for broker execution.
