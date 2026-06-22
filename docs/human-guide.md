@@ -11,8 +11,9 @@
               -> 产出可复现、可审计的研究报告
 ```
 
-`docs/agent-guide.md` 是给 Agent 读的执行手册。你第一次使用时把它交给
-Agent；之后在新目录里通常只需要直接说策略想法。
+`docs/agent-guide.md` 是给 Agent 读的安装指南。你第一次使用时把它交给
+Agent 完成长期能力安装；之后在新目录里通常只需要直接说策略想法，
+已安装的 `open-xquant` skill 会负责路由到具体能力。
 
 ---
 
@@ -31,7 +32,7 @@ cd open-xquant
 ```text
 请阅读 docs/agent-guide.md。
 完成 open-xquant 的长期 Agent 能力安装。
-安装后做一次最小环境验证研究，确认以后我可以在新目录里直接说策略想法。
+安装后运行 oxq agent status，确认以后我可以在新目录里直接说策略想法。
 ```
 
 Agent 应该完成这些事：
@@ -39,8 +40,8 @@ Agent 应该完成这些事：
 - 检查 Python、`uv` 和项目环境。
 - 安装 open-xquant skills 到你的长期 Agent 能力目录。
 - 写入 `~/.config/open-xquant/agent.yaml`。
-- 跑通一次最小研究闭环。
-- 告诉你验证结果和报告路径。
+- 写入 cached SDK bundle 和 runner 信息。
+- 告诉你安装状态。
 
 这一步通常只需要做一次。
 
@@ -48,7 +49,7 @@ Agent 应该完成这些事：
 
 ## 2. 以后在新目录使用
 
-此后，你就不必再在open-xquant 下从事量化研究了。
+此后，你就不必再在 open-xquant 下从事量化研究了。
 
 假如你新建一个研究目录：
 
@@ -69,7 +70,8 @@ cd my-research
 如果长期能力安装成功，Agent 会自动：
 
 - 识别 open-xquant 相关任务。
-- 读取已安装的 `strategy-builder` 等 skills。
+- 先加载已安装的 `open-xquant` router skill。
+- 再由它路由到 `strategy-builder` 等具体 skills。
 - 在当前目录初始化研究 workspace。
 - 生成并验证 `strategy_spec.yaml`。
 - 准备或请求行情数据。
@@ -226,7 +228,7 @@ Agent 的最终回答应该明确区分：
 
 ### 我想手动使用 CLI 怎么办？
 
-可以让 Agent 打开 `docs/agent-guide.md` 或直接运行：
+`docs/agent-guide.md` 只覆盖 Agent 安装。CLI 帮助入口是：
 
 ```bash
 uv run oxq --help

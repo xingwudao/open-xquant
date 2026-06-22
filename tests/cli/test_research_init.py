@@ -29,6 +29,8 @@ def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> No
         agents_text = (cwd_path / "AGENTS.md").read_text(encoding="utf-8")
         assert "user note" in agents_text
         assert "open-xquant-workspace:begin" in agents_text
+        assert "use the installed `open-xquant` skill first" in agents_text
+        assert "Do not run `oxq`" in agents_text
 
         again = runner.invoke(main, ["research", "init"])
         assert again.exit_code == 0, again.output

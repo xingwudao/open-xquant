@@ -58,6 +58,10 @@ Use `research-report-writer` to write `research_report.md` from run artifacts,
 audits, robustness output, metrics, and registered chart assets. Render
 `research_report.html` from that final Markdown.
 
+This is a mandatory handoff. Do not write the final report directly after
+recognizing that `research-report-writer` applies, even if all artifacts are
+already in context.
+
 Run deterministic Final report QA before presenting results:
 
 ```bash
@@ -95,3 +99,5 @@ again from the updated Markdown before rerunning `oxq report qa`.
 2. Never skip audit; unaudited backtests have no decision value.
 3. Never beautify failures; report the truth, not what sounds good.
 4. Every run gets an experiment entry to prevent selective memory.
+5. Applicable open-xquant skills are routing gates, not suggestions; use the
+   matching skill before running tools or writing outputs.

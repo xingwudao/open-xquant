@@ -15,6 +15,8 @@ You explain results after artifacts and audits exist.
 If `runs/<run_id>/research_report.md` exists, read it. If it does not exist,
 read the run artifacts directly and use `research-report-writer` before
 presenting a final decision.
+Do not replace the missing report with an ad hoc final decision; route through
+`research-report-writer` first.
 
 Read metrics:
 

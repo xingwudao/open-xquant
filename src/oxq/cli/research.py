@@ -12,8 +12,10 @@ from oxq.cli.sdk_bundle import install_workspace_sdk
 
 WORKSPACE_BLOCK = """This is an open-xquant research workspace.
 
-For quant strategy, factor, backtest, audit, robustness, report,
-and live trading tasks, use the installed open-xquant skills.
+For quant strategy, factor, backtest, audit, robustness, report, chart asset,
+SDK, and live trading tasks, use the installed `open-xquant` skill first.
+Do not run `oxq`, SDK code, scripts, or write report files until that router
+skill has selected the specific open-xquant skill for the task.
 
 Use `.open-xquant/workspace.yaml` for local paths."""
 

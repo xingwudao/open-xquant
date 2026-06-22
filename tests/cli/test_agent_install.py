@@ -163,6 +163,31 @@ def test_agent_install_writes_cached_runner(monkeypatch, tmp_path, fake_sdk_bund
     assert "preferred_runner_argv" in instructions
 
 
+def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_path) -> None:
+    source = Path.cwd()
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    router = home / ".config/opencode/skills/open-xquant/SKILL.md"
+    assert router.exists()
+    assert "Router Contract" in router.read_text(encoding="utf-8")
+
+    instructions = (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
+    assert "use the installed `open-xquant` skill first" in instructions
+    assert "Do not run `oxq`" in instructions
+    assert "Default workflow" not in instructions
+
+    manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
+    names = {record["name"] for record in manifest["targets"]["opencode"]["skills"]}
+    assert "open-xquant" in names
+
+
 def test_agent_install_generic_does_not_advertise_cached_runner(monkeypatch, tmp_path, fake_sdk_bundle) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))

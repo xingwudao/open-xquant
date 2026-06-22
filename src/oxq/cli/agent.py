@@ -77,12 +77,12 @@ GLOBAL_AGENT_BLOCK = """## open-xquant
 
 When the user asks about quant strategy, backtest, factor evaluation,
 parameter tuning, audit, robustness, report, broker connectivity, or live
-trading, use the installed open-xquant skills.
+trading, use the installed `open-xquant` skill first.
 
-If the current directory has no `.open-xquant/workspace.yaml`, run
-`<preferred runner> research init` before creating strategy artifacts.
+Do not run `oxq`, SDK code, scripts, or write report files until the
+`open-xquant` skill routes the task to a more specific open-xquant skill.
 
-Before running open-xquant commands in a new directory:
+Before any routed skill runs open-xquant commands in a new directory:
 - Read `~/.config/open-xquant/agent.yaml`.
 - Prefer `preferred_runner_argv` when your shell tool accepts argv; otherwise
   use `preferred_runner` in place of `oxq` or `uv run oxq`.
@@ -90,27 +90,19 @@ Before running open-xquant commands in a new directory:
   `~/.config/open-xquant/sdk-bundles/`, not the original source checkout.
 - If runner metadata is needed, read `~/.config/open-xquant/agent-install.json`.
 - Keep the shell in the user's research directory. Do not search unrelated
-  home directories for another open-xquant checkout.
-
-Default workflow:
-`strategy_spec.yaml` -> validate -> backtest -> audit -> robustness -> report.
-
-Stable spec fields include explicit execution assumptions
-(`order_timing`, `price_bar`, `price_type`, `cash_annual_return`,
-`lot_size_config`), supported calendars (`XNYS`, `ARCX`, `XSHG`, `XSHE`),
-and metrics profiles (`open_xquant_default`, `xquant_production`)."""
+  home directories for another open-xquant checkout."""
 
 
 CLAUDE_AGENT_BLOCK = """## open-xquant
 
 When the user asks about quant strategy, backtest, factor evaluation,
 parameter tuning, audit, robustness, report, broker connectivity, or live
-trading, use the installed open-xquant skills.
+trading, use the installed `open-xquant` skill first.
 
-If the current directory has no `.open-xquant/workspace.yaml`, run
-`<preferred runner> research init` before creating strategy artifacts.
+Do not run `oxq`, SDK code, scripts, or write report files until the
+`open-xquant` skill routes the task to a more specific open-xquant skill.
 
-Before running open-xquant commands in a new directory:
+Before any routed skill runs open-xquant commands in a new directory:
 - Read `~/.config/open-xquant/agent.yaml`.
 - Prefer `preferred_runner_argv` when your shell tool accepts argv; otherwise
   use `preferred_runner` in place of `oxq` or `uv run oxq`.
@@ -121,24 +113,19 @@ Before running open-xquant commands in a new directory:
   home directories for another open-xquant checkout.
 
 If this project has an `AGENTS.md`, also read it when it is relevant to
-open-xquant work.
-
-Stable spec fields include explicit execution assumptions
-(`order_timing`, `price_bar`, `price_type`, `cash_annual_return`,
-`lot_size_config`), supported calendars (`XNYS`, `ARCX`, `XSHG`, `XSHE`),
-and metrics profiles (`open_xquant_default`, `xquant_production`)."""
+open-xquant work."""
 
 
 GENERIC_AGENT_BLOCK = """## open-xquant
 
 When the user asks about quant strategy, backtest, factor evaluation,
 parameter tuning, audit, robustness, report, broker connectivity, or live
-trading, use the installed open-xquant skills.
+trading, use the installed `open-xquant` skill first.
 
-If the current directory has no `.open-xquant/workspace.yaml`, run
-`<preferred runner> research init` before creating strategy artifacts.
+Do not run `oxq`, SDK code, scripts, or write report files until the
+`open-xquant` skill routes the task to a more specific open-xquant skill.
 
-Before running open-xquant commands in a new directory:
+Before any routed skill runs open-xquant commands in a new directory:
 - Read `~/.config/open-xquant/agent.yaml`.
 - Use `preferred_runner` in place of `oxq` or `uv run oxq`.
 - For generic installs, this runner is only valid where the open-xquant
@@ -146,15 +133,7 @@ Before running open-xquant commands in a new directory:
   `oxq agent install` with a concrete target such as `codex`, `opencode`,
   `claude-code`, `cursor`, `openclaw`, or `trae`.
 - Keep the shell in the user's research directory. Do not search unrelated
-  home directories for another open-xquant checkout.
-
-Default workflow:
-`strategy_spec.yaml` -> validate -> backtest -> audit -> robustness -> report.
-
-Stable spec fields include explicit execution assumptions
-(`order_timing`, `price_bar`, `price_type`, `cash_annual_return`,
-`lot_size_config`), supported calendars (`XNYS`, `ARCX`, `XSHG`, `XSHE`),
-and metrics profiles (`open_xquant_default`, `xquant_production`)."""
+  home directories for another open-xquant checkout."""
 
 
 @click.group()
