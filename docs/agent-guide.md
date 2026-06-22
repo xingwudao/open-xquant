@@ -181,8 +181,9 @@ uv run oxq agent install --target trae --yes
 - 安装过 open-xquant 和依赖的 runner venv。
 - 供后续项目安装复用的 uv cache。
 
-默认 `full-research` profile 包含 `chart`、`scipy`、`yfinance`、
-`akshare`、`live`、`mcp`、`agent`，并排除 `dev`、`docs`、`talib`。
+默认 `full-research` profile 会安装 `pyproject.toml` 中除 `dev`、
+`docs`、`talib` 以外的所有 optional extras。当前版本包含 `agent`、
+`akshare`、`chart`、`live`、`mcp`、`scipy`、`yfinance`。
 安装完成后，`preferred_runner` 指向 cached runner。用户删除最初的
 open-xquant 源码目录后，Agent 仍应使用 cached runner 启动 `oxq`。
 
@@ -859,8 +860,9 @@ validation:
 
 这会从 `~/.config/open-xquant/agent-install.json` 记录的 SDK bundle
 安装 open-xquant 和默认 `full-research` 依赖到当前研究目录 `.venv`。
-默认 profile 包含 `chart`、`scipy`、`yfinance`、`akshare`、`live`、
-`mcp`、`agent`，并排除 `dev`、`docs`、`talib`。
+默认 profile 会安装除 `dev`、`docs`、`talib` 以外的所有 optional
+extras；当前版本包含 `agent`、`akshare`、`chart`、`live`、`mcp`、
+`scipy`、`yfinance`。
 
 后续 SDK 脚本使用项目环境：
 

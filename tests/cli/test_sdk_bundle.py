@@ -33,6 +33,8 @@ def _write_valid_bundle(root) -> dict:
         "id": root.name,
         "root": str(root),
         "profile": "full-research",
+        "extras": ["agent", "akshare", "chart", "live", "mcp", "scipy", "yfinance"],
+        "excluded_extras": ["dev", "docs", "talib"],
         "wheel": {
             "path": str(wheel),
             "sha256": hashlib.sha256(b"wheel").hexdigest(),
@@ -93,6 +95,41 @@ def test_build_sdk_bundle_resolves_lock_with_runner_python(monkeypatch, tmp_path
     assert compile_cmd[compile_cmd.index("--python") + 1] == sys.executable
 
 
+def test_build_sdk_bundle_selects_all_research_extras_except_excluded(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        "\n".join(
+            [
+                "[project]",
+                "name = 'open-xquant'",
+                "version = '0.1.0'",
+                "",
+                "[project.optional-dependencies]",
+                "chart = ['matplotlib']",
+                "researchx = ['duckdb']",
+                "dev = ['pytest']",
+                "docs = ['mkdocs-material']",
+                "talib = ['TA-Lib']",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+
+    payload = build_sdk_bundle(source, config_root)
+
+    req = (Path(payload["root"]) / "requirements.in").read_text(encoding="utf-8")
+    assert req.startswith("open-xquant[chart,researchx] @ ")
+    assert "dev" not in req
+    assert "docs" not in req
+    assert "talib" not in req
+    assert payload["extras"] == ["chart", "researchx"]
+    assert payload["excluded_extras"] == ["dev", "docs", "talib"]
+
+
 def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(monkeypatch, tmp_path) -> None:
     source = tmp_path / "site-packages/open_xquant"
     config_root = tmp_path / "config/open-xquant"
@@ -112,9 +149,15 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
     (dist_info / "RECORD").write_text("", encoding="utf-8")
     commands: list[list[str]] = []
 
+    class FakeMetadata(dict):
+        def get_all(self, key: str, default: list[str] | None = None) -> list[str]:
+            if key == "Provides-Extra":
+                return ["chart", "researchx", "dev", "docs", "talib"]
+            return default or []
+
     class FakeDistribution:
         version = "0.2.0"
-        metadata = {"Name": "open-xquant"}
+        metadata = FakeMetadata({"Name": "open-xquant"})
         files = [
             Path("oxq/__init__.py"),
             Path("agent/skills/strategy-builder.md"),
@@ -134,6 +177,8 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
     assert payload["wheel"]["version"] == "0.2.0"
     assert payload["id"] != bundle["id"]
     assert not any(cmd[0] == "uv" and "build" in cmd for cmd in commands)
+    req = (Path(payload["root"]) / "requirements.in").read_text(encoding="utf-8")
+    assert req.startswith("open-xquant[chart,researchx] @ ")
     with zipfile.ZipFile(payload["wheel"]["path"]) as wheel:
         assert "agent/skills/strategy-builder.md" in wheel.namelist()
 

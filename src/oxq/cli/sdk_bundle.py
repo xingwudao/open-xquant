@@ -23,7 +23,7 @@ import click
 from oxq.cli.agent_manifest import expand_path, read_json_file, sha256_file, write_json_file, write_text_file
 
 SDK_PROFILE = "full-research"
-SDK_EXTRAS = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
+SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
 EXCLUDED_EXTRAS = ("dev", "docs", "talib")
 
 
@@ -42,6 +42,7 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
     config_root = config_root.resolve()
     buildable_source = _is_buildable_source(source_root)
     version = _package_version(source_root) if buildable_source else _installed_distribution_version(source_root)
+    sdk_extras = _selected_sdk_extras(source_root, buildable_source=buildable_source)
     source_commit = _current_commit(source_root) if buildable_source else "installed-distribution"
     if dry_run:
         bundle_root = config_root / "sdk-bundles" / f"{_slug(version)}-dry-run"
@@ -61,12 +62,14 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
             runner_python=_venv_executable(bundle_root / "runner" / ".venv", "python"),
             runner_oxq=oxq,
             uv_cache_dir=bundle_root / "uv-cache",
+            extras=sdk_extras,
+            excluded_extras=EXCLUDED_EXTRAS,
         )
 
     config_root.mkdir(parents=True, exist_ok=True)
     if not buildable_source:
         cached_bundle = _installed_sdk_bundle(config_root)
-        if cached_bundle is not None and _bundle_version(cached_bundle) == version:
+        if cached_bundle is not None and _bundle_version(cached_bundle) == version and _bundle_extras(cached_bundle) == sdk_extras:
             return cached_bundle
 
     tmp_root = config_root / "sdk-bundles" / ".build-tmp"
@@ -87,7 +90,9 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
             except click.ClickException:
                 shutil.rmtree(bundle_root)
             else:
-                return existing_payload
+                if _bundle_extras(existing_payload) == sdk_extras:
+                    return existing_payload
+                shutil.rmtree(bundle_root)
         if bundle_root.exists():
             shutil.rmtree(bundle_root)
         bundle_root.mkdir(parents=True)
@@ -100,7 +105,10 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         uv_cache_dir = bundle_root / "uv-cache"
         lock_path = bundle_root / "requirements.lock.txt"
         req_in = bundle_root / "requirements.in"
-        requirement = f"open-xquant[{','.join(SDK_EXTRAS)}] @ {wheel_path.as_uri()}\n"
+        requirement_name = "open-xquant"
+        if sdk_extras:
+            requirement_name = f"{requirement_name}[{','.join(sdk_extras)}]"
+        requirement = f"{requirement_name} @ {wheel_path.as_uri()}\n"
         write_text_file(req_in, requirement)
         _run(
             _uv_cmd(
@@ -180,6 +188,8 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
             runner_python=runner_python,
             runner_oxq=runner_oxq,
             uv_cache_dir=uv_cache_dir,
+            extras=sdk_extras,
+            excluded_extras=EXCLUDED_EXTRAS,
         )
         write_json_file(bundle_root / "manifest.json", payload)
         return payload
@@ -312,6 +322,61 @@ def _bundle_version(bundle: dict[str, Any]) -> str | None:
         return None
     value = wheel.get("version")
     return str(value) if isinstance(value, str) and value else None
+
+
+def _bundle_extras(bundle: dict[str, Any]) -> tuple[str, ...] | None:
+    extras = bundle.get("extras")
+    if not isinstance(extras, list) or not all(isinstance(extra, str) for extra in extras):
+        return None
+    return tuple(sorted(_normalize_extra(extra) for extra in extras))
+
+
+def _selected_sdk_extras(source_root: Path, *, buildable_source: bool) -> tuple[str, ...]:
+    extras = _project_optional_extras(source_root) if buildable_source else _installed_optional_extras()
+    if not extras:
+        extras = SDK_EXTRA_FALLBACK
+    excluded = {_normalize_extra(extra) for extra in EXCLUDED_EXTRAS}
+    return tuple(sorted({_normalize_extra(extra) for extra in extras if _normalize_extra(extra) not in excluded}))
+
+
+def _project_optional_extras(source_root: Path) -> tuple[str, ...]:
+    pyproject = source_root / "pyproject.toml"
+    if not pyproject.exists():
+        return ()
+    data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    project = data.get("project", {})
+    optional = project.get("optional-dependencies") if isinstance(project, dict) else None
+    if not isinstance(optional, dict):
+        return ()
+    return tuple(str(extra) for extra in optional)
+
+
+def _installed_optional_extras() -> tuple[str, ...]:
+    try:
+        dist = metadata.distribution("open-xquant")
+    except metadata.PackageNotFoundError:
+        return ()
+    dist_metadata = getattr(dist, "metadata", None)
+    if dist_metadata is None:
+        return ()
+    values = _metadata_get_all(dist_metadata, "Provides-Extra")
+    return tuple(str(value) for value in values)
+
+
+def _metadata_get_all(message: Any, key: str) -> list[Any]:
+    get_all = getattr(message, "get_all", None)
+    if callable(get_all):
+        return list(get_all(key, []))
+    value = message.get(key) if hasattr(message, "get") else None
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _normalize_extra(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
 
 
 def _build_source_wheel(source_root: Path, dist_tmp: Path, *, buildable_source: bool) -> Path:
@@ -463,13 +528,15 @@ def _bundle_payload(
     runner_python: Path,
     runner_oxq: Path,
     uv_cache_dir: Path,
+    extras: tuple[str, ...],
+    excluded_extras: tuple[str, ...],
 ) -> dict[str, Any]:
     return {
         "id": bundle_id,
         "root": str(bundle_root.resolve()),
         "profile": SDK_PROFILE,
-        "extras": list(SDK_EXTRAS),
-        "excluded_extras": list(EXCLUDED_EXTRAS),
+        "extras": list(extras),
+        "excluded_extras": list(excluded_extras),
         "wheel": {
             "path": str(wheel_path.resolve()),
             "sha256": wheel_sha,
