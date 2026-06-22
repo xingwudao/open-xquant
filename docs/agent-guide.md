@@ -197,50 +197,6 @@ OpenCode 集成通过 `agent/opencode/opencode.json` 的 `skills.paths`
 同目录 canonical `.md` 文件的 symlink 适配器，但不能复制出第二份
 skill 内容。
 
-### 3.1 TRAE 安装与使用
-
-TRAE 支持通过 `SKILL.md` 定义技能。open-xquant 的 TRAE 全局安装
-使用官方全局技能目录：
-
-- macOS/Linux: `~/.trae/skills/<skill_name>/SKILL.md`
-- Windows: `%userprofile%/.trae/skills/<skill_name>/SKILL.md`
-
-优先使用自动安装：
-
-```bash
-uv run oxq agent install --target trae --yes
-uv run oxq agent status
-```
-
-这会把 `agent/skills/*.md` 渲染为 TRAE 可读取的目录结构，并写入
-`~/.config/open-xquant/agent.yaml`。TRAE 中的 open-xquant skills 之后应读取
-该文件里的 `preferred_runner_argv` 或 `preferred_runner`，在任意研究目录中
-调用 cached runner。
-
-如果只希望当前项目使用 open-xquant skills，可以改用 TRAE 项目目录：
-
-```text
-<project>/.trae/skills/<skill_name>/SKILL.md
-```
-
-TRAE 也支持 Agent Skills 规范目录：
-
-```text
-<project>/.agents/skills/<skill_name>/SKILL.md
-```
-
-使用 `.agents/skills/` 时，必须在 TRAE 的
-`Settings > Skills & Commands` 中打开 `Enable .agents Skills Directory`。
-如果 `.trae/skills/` 和 `.agents/skills/` 中存在同名 skill，
-TRAE 会优先使用 `.trae/skills/`。
-
-在 TRAE 对话中使用时，可以直接点名对应 skill，例如：
-
-```text
-使用 strategy-builder skill，把这个策略想法转成 open-xquant spec，
-然后 validate、backtest、audit、robustness 和 report。
-```
-
 卸载长期能力：
 
 ```bash
