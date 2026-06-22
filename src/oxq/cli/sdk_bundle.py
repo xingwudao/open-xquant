@@ -68,7 +68,10 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
 
     config_root.mkdir(parents=True, exist_ok=True)
     if not buildable_source:
-        cached_bundle = _installed_sdk_bundle(config_root)
+        try:
+            cached_bundle = _installed_sdk_bundle(config_root)
+        except click.ClickException:
+            cached_bundle = None
         if cached_bundle is not None and _bundle_version(cached_bundle) == version and _bundle_extras(cached_bundle) == sdk_extras:
             return cached_bundle
 
@@ -623,6 +626,8 @@ def _stored_path(path: str | Path) -> Path:
 
 
 def _path_is_relative_to(path: Path, parent: Path) -> bool:
+    if path.is_relative_to(parent):
+        return True
     try:
         return path.resolve().is_relative_to(parent.resolve())
     except OSError:

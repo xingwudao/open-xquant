@@ -205,6 +205,53 @@ def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(mon
     ]
 
 
+def test_build_sdk_bundle_treats_invalid_cached_installed_bundle_as_cache_miss(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "site-packages/open_xquant"
+    config_root = tmp_path / "config/open-xquant"
+    (source / "agent/skills").mkdir(parents=True)
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/bundle-test")
+    Path(bundle["dependencies"]["lock_file"]).unlink()
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    site = tmp_path / "fake-site"
+    dist_info = site / "open_xquant-0.1.0.dist-info"
+    (site / "oxq").mkdir(parents=True)
+    dist_info.mkdir(parents=True)
+    (site / "oxq/__init__.py").write_text("", encoding="utf-8")
+    (dist_info / "METADATA").write_text("Name: open-xquant\nVersion: 0.1.0\nProvides-Extra: chart\n", encoding="utf-8")
+    (dist_info / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n", encoding="utf-8")
+    (dist_info / "RECORD").write_text("", encoding="utf-8")
+    commands: list[list[str]] = []
+
+    class FakeMetadata(dict):
+        def get_all(self, key: str, default: list[str] | None = None) -> list[str]:
+            if key == "Provides-Extra":
+                return ["chart"]
+            return default or []
+
+    class FakeDistribution:
+        version = "0.1.0"
+        metadata = FakeMetadata({"Name": "open-xquant"})
+        files = [
+            Path("oxq/__init__.py"),
+            Path("open_xquant-0.1.0.dist-info/METADATA"),
+            Path("open_xquant-0.1.0.dist-info/WHEEL"),
+            Path("open_xquant-0.1.0.dist-info/RECORD"),
+        ]
+
+        def locate_file(self, path: Path) -> Path:
+            return site / path
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle.metadata.distribution", lambda _name: FakeDistribution())
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+
+    payload = build_sdk_bundle(source, config_root)
+
+    assert payload["id"] != bundle["id"]
+    assert payload["extras"] == ["chart"]
+    assert any(cmd[0] == "uv" and "compile" in cmd for cmd in commands)
+
+
 def test_build_sdk_bundle_requires_project_or_installed_distribution(monkeypatch, tmp_path) -> None:
     source = tmp_path / "site-packages/open_xquant"
     (source / "agent/skills").mkdir(parents=True)
@@ -302,6 +349,29 @@ def test_remove_sdk_bundle_refuses_active_cached_runner(monkeypatch, tmp_path) -
     monkeypatch.setattr(
         "oxq.cli.sdk_bundle.shutil.rmtree",
         lambda _path: pytest.fail("active cached runner must not be deleted"),
+    )
+
+    assert remove_sdk_bundle(bundle, config_root) is False
+
+
+def test_remove_sdk_bundle_refuses_active_symlinked_cached_runner(monkeypatch, tmp_path) -> None:
+    config_root = tmp_path / "config/open-xquant"
+    root = config_root / "sdk-bundles/bundle-test"
+    bundle = _write_valid_bundle(root)
+    base_python = tmp_path / "base-python"
+    runner_python = root / "runner/.venv/bin/python"
+    base_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    base_python.chmod(0o755)
+    runner_python.unlink()
+    try:
+        runner_python.symlink_to(base_python)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    monkeypatch.setattr("oxq.cli.sdk_bundle.sys.executable", str(runner_python))
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", lambda cmd: subprocess.CompletedProcess(cmd, 0))
+    monkeypatch.setattr(
+        "oxq.cli.sdk_bundle.shutil.rmtree",
+        lambda _path: pytest.fail("active symlinked cached runner must not be deleted"),
     )
 
     assert remove_sdk_bundle(bundle, config_root) is False
