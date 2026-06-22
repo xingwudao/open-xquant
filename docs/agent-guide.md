@@ -55,6 +55,13 @@ execution comparisons.
    - 下载样例数据并跑通流程，只说明环境可用。
    - 真实策略结论必须基于用户确认的数据、时间段、成本和假设。
 
+6. Skill 路由是强制规则。
+   - 只要用户任务对应 `agent/skills/*.md` 中的 skill，必须先加载、
+     阅读并遵循该 skill，再执行 CLI、SDK、脚本或写入产物。
+   - 已经掌握 artifacts、metrics 或上下文，不是跳过 skill 的理由。
+   - 如果你发现自己在想“应该使用某个 skill，但我可以直接做”，必须停止，
+     先加载该 skill，并从该 skill 的 workflow 重新开始。
+
 ---
 
 ## 1. 当前稳定可用范围
@@ -464,8 +471,13 @@ uv run oxq experiment add "$RUN_DIR" \
 
 ## 8. 用户任务路由
 
-当用户提出请求时，先选择对应 skill，再执行 CLI 或 SDK。
-Skill 文件位于 `agent/skills/`。
+当用户提出请求时，先选择对应 skill，并在执行任何 CLI、SDK、脚本、
+文件写入或报告撰写前加载并遵循该 skill。Skill 文件位于
+`agent/skills/`。
+
+Skill 是任务入口，不是可选建议。工具、CLI 和 SDK 只能作为对应 skill
+workflow 的执行手段。禁止因为“我已经有所有数据”、“这个任务很简单”、
+“直接写更快”而绕过适用 skill。
 
 策略想法或新策略：
 
@@ -539,6 +551,12 @@ Skill 文件位于 `agent/skills/`。
 - 如果同一个脚本一次重绘多张已登记图片，写
   `report_assets/assets.json` 后使用 `oxq report asset add-batch`，
   避免逐个登记时遇到旧 hash 冲突。
+
+最终报告写作：
+
+- 加载 `agent/skills/research-report-writer.md`。
+- 写入或修改 `research_report.md` / `research_report.html` 时必须使用该
+  skill，不得在已经识别到该 skill 适用后直接手写报告。
 - 最终报告必须披露 effective last trading day 和 configured end date。
   中文报告写作时对应“有效数据最后交易日”和“配置结束日”。
 - 生成 `research_report.md` 和 `research_report.html` 后运行

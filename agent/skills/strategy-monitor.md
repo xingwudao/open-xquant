@@ -82,6 +82,9 @@ artifacts, then render `research_report.html` from that final Markdown. The
 executive decision is research guidance, not permission to trade. Explain any
 audit warnings beside the decision.
 
+Do not write the report directly from the artifacts inside this skill. The
+report narrative must be written through `research-report-writer`.
+
 ## SDK Monitoring
 
 Use SDK monitoring only when you have a `RunResult` object:
