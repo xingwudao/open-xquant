@@ -163,6 +163,24 @@ def test_agent_install_writes_cached_runner(monkeypatch, tmp_path, fake_sdk_bund
     assert "preferred_runner_argv" in instructions
 
 
+def test_agent_install_generic_does_not_advertise_cached_runner(monkeypatch, tmp_path, fake_sdk_bundle) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(main, ["agent", "install", "--target", "generic", "--yes"])
+
+    assert result.exit_code == 0, result.output
+    assert fake_sdk_bundle == []
+    assert "agent/skills/*.md" in result.output
+    assert "sdk-bundles" not in result.output
+    assert "agent-install.json" not in result.output
+    assert "preferred_runner_argv" not in result.output
+    config = read_yaml_file(home / ".config/open-xquant/agent.yaml")
+    assert config["preferred_runner"] == "uv run oxq"
+    assert "preferred_runner_argv" not in config
+    assert not (home / ".config/open-xquant/agent-install.json").exists()
+
+
 def test_agent_install_quotes_shell_runner_but_keeps_raw_argv(monkeypatch, tmp_path) -> None:
     source = tmp_path / "source"
     home = tmp_path / "home with spaces"

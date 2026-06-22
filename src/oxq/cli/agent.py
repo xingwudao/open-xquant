@@ -124,6 +124,34 @@ Stable spec fields include explicit execution assumptions
 and metrics profiles (`open_xquant_default`, `xquant_production`)."""
 
 
+GENERIC_AGENT_BLOCK = """## open-xquant
+
+When the user asks about quant strategy, backtest, factor evaluation,
+parameter tuning, audit, robustness, report, broker connectivity, or live
+trading, use the installed open-xquant skills.
+
+If the current directory has no `.open-xquant/workspace.yaml`, run
+`<preferred runner> research init` before creating strategy artifacts.
+
+Before running open-xquant commands in a new directory:
+- Read `~/.config/open-xquant/agent.yaml`.
+- Use `preferred_runner` in place of `oxq` or `uv run oxq`.
+- For generic installs, this runner is only valid where the open-xquant
+  command is already available. To get a portable cached runner, rerun
+  `oxq agent install` with a concrete target such as `codex`, `opencode`,
+  `claude-code`, `cursor`, `openclaw`, or `trae`.
+- Keep the shell in the user's research directory. Do not search unrelated
+  home directories for another open-xquant checkout.
+
+Default workflow:
+`strategy_spec.yaml` -> validate -> backtest -> audit -> robustness -> report.
+
+Stable spec fields include explicit execution assumptions
+(`order_timing`, `price_bar`, `price_type`, `cash_annual_return`,
+`lot_size_config`), supported calendars (`XNYS`, `ARCX`, `XSHG`, `XSHE`),
+and metrics profiles (`open_xquant_default`, `xquant_production`)."""
+
+
 @click.group()
 def agent() -> None:
     """Manage long-lived Agent integration for open-xquant."""
@@ -794,4 +822,4 @@ def _print_generic() -> None:
     click.echo("Install these skills into your Agent's SKILL.md directory:")
     click.echo("agent/skills/*.md")
     click.echo("")
-    click.echo(GLOBAL_AGENT_BLOCK)
+    click.echo(GENERIC_AGENT_BLOCK)
