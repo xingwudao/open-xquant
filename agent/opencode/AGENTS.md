@@ -18,9 +18,11 @@ cp -r agent /path/to/opencode/workspace/
 ```
 
 The canonical skill text lives in `agent/skills/*.md`. OpenCode discovers
-skills through `agent/skills/<name>/SKILL.md` symlink adapters that point back
-to those canonical files. Keep those adapters inside `agent/skills/`; never
-create a second skill copy under `agent/opencode/skills/`.
+skills through `agent/skills/<name>/SKILL.md` wrapper adapters. Those adapters
+contain only discovery frontmatter plus instructions to read the canonical
+`../<name>.md` file; they must not copy full skill bodies. Keep those adapters
+inside `agent/skills/`; never create a second skill copy under
+`agent/opencode/skills/`.
 
 ## Agent Roles
 

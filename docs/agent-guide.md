@@ -133,9 +133,9 @@ worktree 中复现/开发，优先使用 current worktree runner，例如
 OpenCode 集成通过 `agent/opencode/opencode.json` 的 `skills.paths`
 从 workspace root 加载 `agent/skills/`。运行 OpenCode 时，当前工作目录
 应是包含 `agent/` 的工作区根目录。为了符合 OpenCode 的
-`<name>/SKILL.md` 发现规则，`agent/skills/<name>/SKILL.md` 可以是指向
-同目录 canonical `.md` 文件的 symlink 适配器，但不能复制出第二份
-skill 内容。
+`<name>/SKILL.md` 发现规则，`agent/skills/<name>/SKILL.md` 是真实
+wrapper 适配器，包含发现用 frontmatter 和读取 canonical
+`../<name>.md` 的指令，但不能复制出第二份完整 skill 内容。
 
 ---
 

@@ -22,8 +22,11 @@ workspace context needed for that handoff.
   CLI, SDK, scripts, or file writes.
 - Existing artifacts, metrics, loaded context, or a simple-looking task are not
   reasons to skip the matching leaf skill.
-- Do not run `oxq`, import `oxq`, edit specs, create charts, or write report
-  files directly from this router.
+- The only CLI commands this router may run before leaf-skill handoff are the
+  minimal runner/workspace commands explicitly listed in this skill, such as
+  `doctor`, `research init`, `research init --sdk`, and `agent status`.
+- Do not run other `oxq` commands, import `oxq`, edit specs, create charts, or
+  write report files directly from this router.
 - Do not write report files directly. Route final report writing to
   `research-report-writer`.
 
@@ -46,9 +49,10 @@ Resolve the runner before the leaf skill runs commands:
 5. Keep the shell in the user's research directory. Do not search unrelated
    home directories for another open-xquant checkout.
 
-If a research directory lacks `.open-xquant/workspace.yaml`, initialize it with
-the resolved runner before creating strategy artifacts. Use
-`research init --sdk` when the user will write SDK-based custom research code.
+If a research directory lacks `.open-xquant/workspace.yaml`, this router may
+initialize it with the resolved runner before loading the leaf skill that will
+create strategy artifacts. Use `research init --sdk` when the user will write
+SDK-based custom research code.
 
 ## Task Routing
 

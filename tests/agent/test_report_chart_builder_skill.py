@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import yaml
+
 
 def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     skill = Path("agent/skills/report-chart-builder.md")
@@ -53,8 +55,15 @@ def test_opencode_bundle_references_single_source_skills() -> None:
         skill_name = canonical.stem
         adapter = canonical.with_suffix("") / "SKILL.md"
         assert canonical.exists()
-        assert adapter.is_symlink()
-        assert adapter.resolve() == canonical.resolve()
+        assert adapter.exists()
+        assert not adapter.is_symlink()
+        canonical_meta = yaml.safe_load(canonical.read_text(encoding="utf-8").split("---", 2)[1])
+        adapter_text = adapter.read_text(encoding="utf-8")
+        adapter_meta = yaml.safe_load(adapter_text.split("---", 2)[1])
+        assert adapter_meta["name"] == canonical_meta["name"]
+        assert " ".join(adapter_meta["description"].split()) == " ".join(canonical_meta["description"].split())
+        assert f"`../{skill_name}.md`" in adapter_text
+        assert "must not copy full skill bodies" not in adapter_text
     assert not Path("agent/opencode/skills").exists()
 
 
@@ -90,8 +99,10 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "Use when" in text
     assert "quantitative research" in text
     assert "Router Contract" in text
-    assert "Do not run `oxq`" in text
+    assert "Do not run other `oxq` commands" in text
     assert "Do not write report files directly" in text
+    assert "minimal runner/workspace commands" in text
+    assert "`research init --sdk`" in text
     assert "Install And Upgrade Questions" in text
     assert "installed Agents must not depend on that file" in text
     assert "<runner> agent status" in text
