@@ -26,6 +26,7 @@ SDK_PROFILE = "full-research"
 SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
 EXCLUDED_EXTRAS = ("dev", "docs", "talib")
 WHEEL_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
+RESERVED_WORKSPACE_PATHS = (".open-xquant", "strategy_specs", "experiments.jsonl")
 
 
 def default_config_dir() -> Path:
@@ -92,18 +93,18 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         if existing_manifest.exists():
             existing_payload = _read_bundle_manifest(existing_manifest)
             if existing_payload is None:
-                shutil.rmtree(bundle_root)
+                _remove_bundle_root_for_rebuild(bundle_root)
             else:
                 try:
                     _verify_bundle(existing_payload)
                 except click.ClickException:
-                    shutil.rmtree(bundle_root)
+                    _remove_bundle_root_for_rebuild(bundle_root)
                 else:
                     if _bundle_extras(existing_payload) == sdk_extras:
                         return existing_payload
-                    shutil.rmtree(bundle_root)
+                    _remove_bundle_root_for_rebuild(bundle_root)
         if bundle_root.exists():
-            shutil.rmtree(bundle_root)
+            _remove_bundle_root_for_rebuild(bundle_root)
         bundle_root.mkdir(parents=True)
 
         dist_dir = bundle_root / "dist"
@@ -221,6 +222,7 @@ def install_workspace_sdk(cwd: Path, venv: Path, *, force: bool = False) -> dict
     bundle = manifest.get("sdk_bundle")
     if not isinstance(bundle, dict):
         raise click.ClickException("agent-install.json has no sdk_bundle. Re-run `oxq agent install`.")
+    _verify_managed_bundle_root(bundle, default_config_dir())
     _verify_bundle(bundle)
     runner = _require_dict(bundle, "runner")
     bundle_python = _stored_path(_require_str(runner, "python"))
@@ -297,6 +299,15 @@ def remove_sdk_bundle(bundle: dict[str, Any], config_root: Path) -> bool:
     return True
 
 
+def _remove_bundle_root_for_rebuild(bundle_root: Path) -> None:
+    if _path_is_relative_to(_stored_path(sys.executable), bundle_root):
+        raise click.ClickException(
+            "Refusing to replace the active cached SDK bundle. "
+            "Re-run this command from a non-cached open-xquant checkout or installed Python environment."
+        )
+    shutil.rmtree(bundle_root)
+
+
 def sdk_bundle_contains_active_runner(bundle: dict[str, Any], config_root: Path) -> bool:
     """Return whether the current Python executable is inside a managed SDK bundle."""
 
@@ -320,9 +331,10 @@ def _verify_bundle(bundle: dict[str, Any]) -> None:
     runner = _stored_path(_require_str(runner_meta, "oxq"))
     if not root.exists():
         raise click.ClickException(f"SDK bundle directory is missing: {root}")
+    for path in (wheel, lock, packages, runner):
+        _verify_bundle_path(root, path)
+    _verify_bundle_path(root, runner_python, allow_symlink_target=True)
     for path in (wheel, lock, packages, runner_python, runner):
-        if not path.is_relative_to(root):
-            raise click.ClickException(f"SDK bundle path escapes bundle root: {path}")
         if not path.exists():
             raise click.ClickException(f"SDK bundle file is missing: {path}")
     expected_wheel_sha = _require_str(_require_dict(bundle, "wheel"), "sha256")
@@ -470,10 +482,25 @@ def _write_wheel_entry(wheel: zipfile.ZipFile, archive_name: str, data: bytes) -
 
 
 def _is_safe_wheel_archive_name(value: str) -> bool:
-    if not value or re.match(r"^[A-Za-z]:/", value):
+    if not value or re.match(r"^[A-Za-z]:", value):
         return False
     path = PurePosixPath(value)
     return not path.is_absolute() and ".." not in path.parts
+
+
+def _verify_managed_bundle_root(bundle: dict[str, Any], config_root: Path) -> None:
+    root_value = _require_str(bundle, "root")
+    root = _stored_path(root_value).resolve()
+    bundles_root = (config_root / "sdk-bundles").resolve()
+    if not root.is_relative_to(bundles_root):
+        raise click.ClickException(f"SDK bundle root escapes managed cache: {root}")
+
+
+def _verify_bundle_path(root: Path, path: Path, *, allow_symlink_target: bool = False) -> None:
+    if not path.is_relative_to(root):
+        raise click.ClickException(f"SDK bundle path escapes bundle root: {path}")
+    if not allow_symlink_target and not _resolved_path_is_relative_to(path, root):
+        raise click.ClickException(f"SDK bundle path escapes bundle root: {path}")
 
 
 def _verify_python_version_matches(expected_python: Path, actual_python: Path) -> None:
@@ -564,6 +591,10 @@ def _validate_workspace_venv(cwd: Path, venv: Path) -> None:
         raise click.ClickException(
             f"Refusing to use the research directory or a parent as the SDK virtualenv: {venv}"
         )
+    for reserved in RESERVED_WORKSPACE_PATHS:
+        reserved_path = (cwd / reserved).resolve()
+        if venv == reserved_path or venv.is_relative_to(reserved_path):
+            raise click.ClickException(f"Refusing to use reserved workspace path for --sdk-venv: {venv}")
     if not venv.exists():
         return
     if not venv.is_dir():
@@ -712,6 +743,13 @@ def _path_is_relative_to(path: Path, parent: Path) -> bool:
         return path.is_relative_to(parent)
 
 
+def _resolved_path_is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        return path.resolve().is_relative_to(parent.resolve())
+    except OSError:
+        return path.is_relative_to(parent)
+
+
 def _uv_cmd(args: list[str], *, directory: Path) -> list[str]:
     return ["uv", "--directory", str(directory), "--no-config", *args]
 
@@ -721,6 +759,8 @@ def _run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         return subprocess.run(cmd, check=True, text=True, capture_output=True)
     except FileNotFoundError as exc:
         raise click.ClickException(f"Required command not found: {cmd[0]}") from exc
+    except OSError as exc:
+        raise click.ClickException(f"Command failed: {' '.join(cmd)}\n{exc}") from exc
     except subprocess.CalledProcessError as exc:
         detail = exc.stderr.strip() or exc.stdout.strip() or str(exc)
         raise click.ClickException(f"Command failed: {' '.join(cmd)}\n{detail}") from exc

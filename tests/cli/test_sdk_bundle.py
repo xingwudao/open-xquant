@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 import zipfile
@@ -13,6 +14,7 @@ import pytest
 
 from oxq.cli.sdk_bundle import (
     _build_installed_distribution_wheel,
+    _is_safe_wheel_archive_name,
     _uv_cmd,
     _verify_bundle,
     build_sdk_bundle,
@@ -155,6 +157,34 @@ def test_build_sdk_bundle_rebuilds_malformed_existing_manifest(monkeypatch, tmp_
     assert any(cmd[0] == "uv" and "compile" in cmd for cmd in commands)
 
 
+def test_build_sdk_bundle_refuses_to_replace_active_existing_bundle(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'open-xquant'\nversion = '0.1.0'\n", encoding="utf-8")
+    wheel_sha = hashlib.sha256(b"wheel").hexdigest()
+    bundle_root = config_root / "sdk-bundles" / f"0.1.0-no-git-{wheel_sha[:12]}"
+    runner_python = bundle_root / "runner/.venv/bin/python"
+    runner_python.parent.mkdir(parents=True)
+    runner_python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    runner_python.chmod(0o755)
+    (bundle_root / "manifest.json").write_text("{broken", encoding="utf-8")
+    commands: list[list[str]] = []
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+    monkeypatch.setattr("oxq.cli.sdk_bundle.sys.executable", str(runner_python))
+    real_rmtree = shutil.rmtree
+
+    def rmtree(path: Path) -> None:
+        if path == bundle_root:
+            pytest.fail("active cached bundle must not be deleted during rebuild")
+        real_rmtree(path)
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle.shutil.rmtree", rmtree)
+
+    with pytest.raises(Exception, match="active cached SDK bundle"):
+        build_sdk_bundle(source, config_root)
+
+
 def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(monkeypatch, tmp_path) -> None:
     source = tmp_path / "site-packages/open_xquant"
     config_root = tmp_path / "config/open-xquant"
@@ -252,6 +282,11 @@ def test_build_installed_distribution_wheel_uses_deterministic_archive_metadata(
         names = [info.filename for info in infos]
         assert names == sorted(names)
         assert all(info.date_time == (1980, 1, 1, 0, 0, 0) for info in infos)
+
+
+def test_wheel_archive_name_rejects_drive_relative_paths() -> None:
+    assert _is_safe_wheel_archive_name("C:pkg/file.py") is False
+    assert _is_safe_wheel_archive_name("C:/pkg/file.py") is False
 
 
 def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(monkeypatch, tmp_path) -> None:
@@ -471,6 +506,12 @@ def test_install_workspace_sdk_rejects_existing_venv_missing_python(monkeypatch,
     assert (venv / "sentinel.txt").read_text(encoding="utf-8") == "keep\n"
 
 
+@pytest.mark.parametrize("sdk_venv", [".open-xquant", "strategy_specs", "experiments.jsonl"])
+def test_install_workspace_sdk_rejects_reserved_workspace_paths(tmp_path, sdk_venv) -> None:
+    with pytest.raises(Exception, match="reserved workspace path"):
+        install_workspace_sdk(tmp_path / "workspace", tmp_path / "workspace" / sdk_venv)
+
+
 def test_install_workspace_sdk_rejects_existing_venv_python_version_mismatch(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     config_root = home / ".config/open-xquant"
@@ -501,6 +542,23 @@ def test_install_workspace_sdk_rejects_existing_venv_python_version_mismatch(mon
 
     with pytest.raises(Exception, match="Python version"):
         install_workspace_sdk(workspace, venv)
+
+
+def test_install_workspace_sdk_rejects_unmanaged_bundle_root(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    config_root = home / ".config/open-xquant"
+    workspace = tmp_path / "workspace"
+    bundle = _write_valid_bundle(tmp_path / "outside-bundle")
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(
+        "oxq.cli.sdk_bundle._run",
+        lambda _cmd: pytest.fail("unmanaged bundle roots must be rejected before executing bundle commands"),
+    )
+
+    with pytest.raises(Exception, match="SDK bundle root escapes"):
+        install_workspace_sdk(workspace, workspace / ".venv")
 
 
 def test_remove_sdk_bundle_refuses_active_cached_runner(monkeypatch, tmp_path) -> None:
@@ -534,6 +592,25 @@ def test_remove_sdk_bundle_converts_verification_oserror_to_safe_failure(monkeyp
 
     assert remove_sdk_bundle(bundle, config_root) is False
     assert root.exists()
+
+
+def test_verify_bundle_rejects_symlinked_non_runner_paths(tmp_path) -> None:
+    root = tmp_path / "sdk-bundles/bundle"
+    outside = tmp_path / "outside"
+    bundle = _write_valid_bundle(root)
+    outside.mkdir()
+    outside_lock = outside / "requirements.lock.txt"
+    outside_lock.write_text("outside-lock\n", encoding="utf-8")
+    link = root / "escape"
+    try:
+        link.symlink_to(outside, target_is_directory=True)
+    except OSError as exc:
+        pytest.skip(f"symlink unavailable: {exc}")
+    bundle["dependencies"]["lock_file"] = str(link / "requirements.lock.txt")
+    bundle["dependencies"]["lock_sha256"] = hashlib.sha256(b"outside-lock\n").hexdigest()
+
+    with pytest.raises(Exception, match="escapes bundle root"):
+        _verify_bundle(bundle)
 
 
 def test_remove_sdk_bundle_refuses_active_symlinked_cached_runner(monkeypatch, tmp_path) -> None:
@@ -632,6 +709,15 @@ def test_verify_bundle_requires_runner_python(tmp_path) -> None:
     }
 
     with pytest.raises(Exception, match="SDK bundle file is missing"):
+        _verify_bundle(bundle)
+
+
+def test_verify_bundle_wraps_runner_oserror(tmp_path) -> None:
+    root = tmp_path / "sdk-bundles/bundle"
+    bundle = _write_valid_bundle(root)
+    Path(bundle["runner"]["python"]).chmod(0o644)
+
+    with pytest.raises(Exception, match="Command failed"):
         _verify_bundle(bundle)
 
 
