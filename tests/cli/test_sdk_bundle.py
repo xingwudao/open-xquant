@@ -160,6 +160,9 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
     (site / "oxq").mkdir(parents=True)
     (site / "agent/skills").mkdir(parents=True)
     dist_info.mkdir(parents=True)
+    escaped_script = tmp_path / "bin/oxq"
+    escaped_script.parent.mkdir(parents=True)
+    escaped_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (site / "oxq/__init__.py").write_text("", encoding="utf-8")
     (site / "agent/skills/strategy-builder.md").write_text("# Strategy Builder\n", encoding="utf-8")
     (dist_info / "METADATA").write_text("Name: open-xquant\nVersion: 0.2.0\n", encoding="utf-8")
@@ -179,12 +182,15 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
         files = [
             Path("oxq/__init__.py"),
             Path("agent/skills/strategy-builder.md"),
+            Path("../../../bin/oxq"),
             Path("open_xquant-0.2.0.dist-info/METADATA"),
             Path("open_xquant-0.2.0.dist-info/WHEEL"),
             Path("open_xquant-0.2.0.dist-info/RECORD"),
         ]
 
         def locate_file(self, path: Path) -> Path:
+            if str(path).replace("\\", "/") == "../../../bin/oxq":
+                return escaped_script
             return site / path
 
     monkeypatch.setattr("oxq.cli.sdk_bundle.metadata.distribution", lambda _name: FakeDistribution())
@@ -198,7 +204,9 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
     req = (Path(payload["root"]) / "requirements.in").read_text(encoding="utf-8")
     assert req.startswith("open-xquant[chart,researchx] @ ")
     with zipfile.ZipFile(payload["wheel"]["path"]) as wheel:
-        assert "agent/skills/strategy-builder.md" in wheel.namelist()
+        names = wheel.namelist()
+        assert "agent/skills/strategy-builder.md" in names
+        assert "../../../bin/oxq" not in names
 
 
 def test_build_sdk_bundle_reuses_matching_cached_bundle_for_installed_source(monkeypatch, tmp_path) -> None:

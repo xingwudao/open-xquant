@@ -439,7 +439,7 @@ def _build_installed_distribution_wheel(source_root: Path, dist_tmp: Path) -> Pa
     with zipfile.ZipFile(wheel_path, "w", compression=zipfile.ZIP_DEFLATED) as wheel:
         for file in files:
             archive_name = str(file).replace("\\", "/")
-            if not archive_name or archive_name.endswith("/RECORD"):
+            if not _is_safe_wheel_archive_name(archive_name) or archive_name.endswith("/RECORD"):
                 continue
             parts = PurePosixPath(archive_name).parts
             for index, part in enumerate(parts):
@@ -457,6 +457,13 @@ def _build_installed_distribution_wheel(source_root: Path, dist_tmp: Path) -> Pa
         record_name = f"{dist_info_dir}/RECORD"
         wheel.writestr(record_name, "\n".join([*records, _csv_line([record_name, "", ""])]) + "\n")
     return wheel_path
+
+
+def _is_safe_wheel_archive_name(value: str) -> bool:
+    if not value or re.match(r"^[A-Za-z]:/", value):
+        return False
+    path = PurePosixPath(value)
+    return not path.is_absolute() and ".." not in path.parts
 
 
 def _installed_distribution_version(source_root: Path) -> str:
