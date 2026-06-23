@@ -81,6 +81,13 @@ Use `research-report-writer` to write `research_report.md` from run artifacts,
 audits, robustness output, metrics, and registered chart assets. Render
 `research_report.html` from that final Markdown.
 
+Before final report writing, ask the user whether chart assets are needed. If
+the answer is yes, use `report-chart-builder` to discuss requirements, generate
+figures, and register them before handing off to `research-report-writer`.
+If the user wants charts, do not start the final narrative until that handoff is
+complete. If the user declines charts, continue with the report and disclose
+that no chart assets were requested.
+
 This is a mandatory handoff. Do not write the final report directly after
 recognizing that `research-report-writer` applies, even if all artifacts are
 already in context.

@@ -36,8 +36,12 @@ def render_markdown_html_report(markdown: str, lang: str = "zh") -> str:
             "</style>",
             "</head>",
             "<body>",
-            '<main class="report">',
+            '<main class="report-shell">',
+            '<article class="report">',
+            '<div class="report-content">',
             body,
+            "</div>",
+            "</article>",
             "</main>",
             "</body>",
             "</html>",
@@ -49,6 +53,7 @@ def _markdown_to_html(markdown: str) -> str:
     html_lines: list[str] = []
     lines = markdown.splitlines()
     i = 0
+    seen_h1 = False
     while i < len(lines):
         line = lines[i]
         image = _IMAGE_RE.match(line)
@@ -65,7 +70,7 @@ def _markdown_to_html(markdown: str) -> str:
                     html_lines.append(f"<p>{escape(alt)}</p>")
                 i = skip_until
                 continue
-            html_lines.append("<figure>")
+            html_lines.append('<figure class="figure-card">')
             html_lines.append(f'<img src="{escape(src, quote=True)}" alt="{escape(alt, quote=True)}">')
             if caption:
                 html_lines.append(f"<figcaption>{escape(caption)}</figcaption>")
@@ -77,7 +82,15 @@ def _markdown_to_html(markdown: str) -> str:
             i += 1
             continue
         if line.startswith("# "):
-            html_lines.append(f"<h1>{_inline_markdown(line[2:])}</h1>")
+            heading = _inline_markdown(line[2:])
+            if not seen_h1:
+                html_lines.append('<header class="report-hero">')
+                html_lines.append('<p class="report-kicker">open-xquant research report</p>')
+                html_lines.append(f"<h1>{heading}</h1>")
+                html_lines.append("</header>")
+                seen_h1 = True
+            else:
+                html_lines.append(f"<h1>{heading}</h1>")
         elif line.startswith("## "):
             html_lines.append(f"<h2>{_inline_markdown(line[3:])}</h2>")
         elif line.startswith("### "):
@@ -134,15 +147,28 @@ def _markdown_table_to_html(lines: list[str]) -> str:
         return ""
     header = rows[0]
     body_rows = rows[1:]
-    html = ["<table>", "<thead>", "<tr>"]
+    wrap_class = _table_wrap_class(header)
+    html = [f'<div class="{wrap_class}">', "<table>", "<thead>", "<tr>"]
     html.extend(f"<th>{_inline_markdown(cell)}</th>" for cell in header)
     html.extend(["</tr>", "</thead>", "<tbody>"])
     for row in body_rows:
         html.append("<tr>")
         html.extend(f"<td>{_inline_markdown(cell)}</td>" for cell in row)
         html.append("</tr>")
-    html.extend(["</tbody>", "</table>"])
+    html.extend(["</tbody>", "</table>", "</div>"])
     return "\n".join(html)
+
+
+def _table_wrap_class(header: list[str]) -> str:
+    normalized = " ".join(cell.strip().lower() for cell in header)
+    metric_terms = ("metric", "指标", "measure")
+    value_terms = ("value", "数值", "结果", "result")
+    status_terms = ("status", "状态", "audit", "审计", "robustness", "稳健")
+    if any(term in normalized for term in metric_terms) and any(term in normalized for term in value_terms):
+        return "table-wrap metric-table-wrap"
+    if any(term in normalized for term in status_terms):
+        return "table-wrap status-table-wrap"
+    return "table-wrap"
 
 
 def _split_table_row(line: str) -> list[str]:
@@ -189,24 +215,60 @@ def _stylesheet() -> str:
     return """
 :root {
   color-scheme: light;
-  --bg: #f8fafc;
-  --text: #1f2937;
-  --muted: #667085;
-  --border: #d9e1ec;
+  --bg: #f3f6f8;
+  --text: #172033;
+  --muted: #627084;
+  --border: #d5dee8;
   --panel: #ffffff;
+  --panel-soft: #f8fbfb;
   --accent: #0f766e;
+  --accent-strong: #115e59;
+  --warning: #b45309;
+  --danger: #b42318;
+  --shadow: 0 18px 45px rgba(23, 32, 51, 0.08);
+}
+* {
+  box-sizing: border-box;
 }
 body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans CJK SC", "PingFang SC", "Microsoft YaHei", sans-serif;
   line-height: 1.65;
+}
+.report-shell {
+  min-height: 100vh;
+  padding: 28px 16px 64px;
 }
 .report {
   max-width: 980px;
   margin: 0 auto;
-  padding: 32px 20px 56px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+.report-content {
+  padding: 0 34px 52px;
+}
+.report-hero {
+  margin: 0 -34px 26px;
+  padding: 34px 34px 30px;
+  background:
+    linear-gradient(135deg, rgba(15, 118, 110, 0.12), rgba(180, 83, 9, 0.08)),
+    var(--panel-soft);
+  border-bottom: 1px solid var(--border);
+}
+.report-kicker {
+  margin: 0 0 8px;
+  color: var(--accent-strong);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: uppercase;
 }
 h1, h2, h3 {
   line-height: 1.25;
@@ -214,61 +276,107 @@ h1, h2, h3 {
 }
 h1 {
   margin-top: 0;
-  font-size: 32px;
+  margin-bottom: 0;
+  max-width: 760px;
+  font-size: 34px;
+  letter-spacing: 0;
 }
 h2 {
   border-top: 1px solid var(--border);
   padding-top: 18px;
   font-size: 24px;
+  letter-spacing: 0;
 }
 h3 {
   font-size: 18px;
+  letter-spacing: 0;
 }
 p {
   margin: 0 0 10px;
 }
 .bullet {
-  padding-left: 16px;
+  position: relative;
+  padding-left: 18px;
 }
-figure {
-  margin: 22px 0;
-  padding: 14px;
+.bullet::before {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 0.82em;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.figure-card {
+  margin: 24px 0 28px;
+  padding: 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
+  box-shadow: 0 10px 28px rgba(23, 32, 51, 0.06);
 }
 img {
   display: block;
   max-width: 100%;
   height: auto;
+  margin: 0 auto;
+  border-radius: 6px;
 }
 figcaption {
-  margin-top: 10px;
+  margin-top: 12px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
   color: var(--muted);
   font-size: 14px;
+}
+.table-wrap {
+  margin: 16px 0 24px;
+  overflow-x: auto;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
 }
 table {
   width: 100%;
   border-collapse: collapse;
-  margin: 14px 0 20px;
-  border: 1px solid var(--border);
+  margin: 0;
   background: var(--panel);
 }
 th, td {
-  padding: 9px 11px;
+  padding: 10px 12px;
   border-bottom: 1px solid var(--border);
   text-align: left;
   vertical-align: top;
 }
+tbody tr:last-child td {
+  border-bottom: 0;
+}
 th {
-  background: #eef6f4;
+  background: #edf7f5;
   color: #143c37;
   font-weight: 650;
 }
+.metric-table-wrap table {
+  min-width: 520px;
+}
+.metric-table-wrap tbody td:first-child {
+  color: var(--muted);
+  font-weight: 600;
+}
+.metric-table-wrap tbody td:last-child {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+}
+.status-table-wrap th {
+  background: #fff7ed;
+  color: #7c2d12;
+}
 .decision-badge {
   display: inline-block;
-  margin: 4px 0 12px;
-  padding: 8px 12px;
+  margin: 2px 0 16px;
+  padding: 8px 13px;
   border-radius: 8px;
   font-size: 18px;
   letter-spacing: 0;
@@ -302,5 +410,55 @@ pre {
 }
 a {
   color: var(--accent);
+}
+@media (max-width: 720px) {
+  .report-shell {
+    padding: 0;
+  }
+  .report {
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .report-content {
+    padding: 0 18px 40px;
+  }
+  .report-hero {
+    margin: 0 -18px 22px;
+    padding: 28px 18px 24px;
+  }
+  h1 {
+    font-size: 28px;
+  }
+  h2 {
+    font-size: 21px;
+  }
+}
+@media print {
+  body {
+    background: #ffffff;
+  }
+  .report-shell {
+    padding: 0;
+  }
+  .report {
+    max-width: none;
+    border: 0;
+    box-shadow: none;
+  }
+  .report-content {
+    padding: 0;
+  }
+  .report-hero {
+    margin: 0 0 18px;
+    padding: 0 0 16px;
+    background: #ffffff;
+  }
+  h2, .figure-card, .table-wrap {
+    break-inside: avoid;
+  }
+  a {
+    color: var(--text);
+  }
 }
 """.strip()
