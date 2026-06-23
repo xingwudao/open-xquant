@@ -124,7 +124,7 @@ class ReportQAResult:
 
 @dataclass(frozen=True)
 class _FontConfigLocation:
-    execution_lineno: int
+    execution_order: int
     source_lineno: int
     function_name: str | None
 
@@ -559,16 +559,15 @@ def _has_verified_cjk_font(script_text: str) -> bool:
         return False
 
     parent_map = _ast_parent_map(tree)
-    function_call_lines = _top_level_function_call_lines(tree, parent_map)
-    cjk_text_calls: list[ast.Call] = []
+    runtime_orders = _runtime_order_map(tree)
     global_font_configs: list[_FontConfigLocation] = []
-    cjk_legend_labels: list[tuple[str | None, int]] = []
-    fonted_legends: list[tuple[str | None, int, bool]] = []
     for node in ast.walk(tree):
-        before_lineno = _execution_before_lineno(node, parent_map, function_call_lines)
-        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_lineno)
+        before_order = runtime_orders.get(node)
+        if before_order is None:
+            continue
+        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_order, runtime_orders)
         if isinstance(node, ast.Assign):
-            context = _registered_cjk_font_context(tree, cjk_font_paths, before_lineno)
+            context = _registered_cjk_font_context(tree, cjk_font_paths, before_order, runtime_orders)
             if any(_is_rcparams_font_target(target) for target in node.targets) and (
                 _ast_contains_cjk_font_name(node.value)
                 or _ast_uses_registered_cjk_font_property(
@@ -579,9 +578,9 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     context[3],
                 )
             ):
-                global_font_configs.append(_font_config_location(node, parent_map, before_lineno))
+                global_font_configs.append(_font_config_location(node, parent_map, before_order))
         elif isinstance(node, ast.AnnAssign):
-            context = _registered_cjk_font_context(tree, cjk_font_paths, before_lineno)
+            context = _registered_cjk_font_context(tree, cjk_font_paths, before_order, runtime_orders)
             if _is_rcparams_font_target(node.target) and (
                 _ast_contains_cjk_font_name(node.value)
                 or _ast_uses_registered_cjk_font_property(
@@ -592,9 +591,9 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     context[3],
                 )
             ):
-                global_font_configs.append(_font_config_location(node, parent_map, before_lineno))
+                global_font_configs.append(_font_config_location(node, parent_map, before_order))
         elif isinstance(node, ast.Call):
-            context = _registered_cjk_font_context(tree, cjk_font_paths, before_lineno)
+            context = _registered_cjk_font_context(tree, cjk_font_paths, before_order, runtime_orders)
             if (
                 _is_rcparams_update_font_call(
                     node,
@@ -611,47 +610,69 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     context[3],
                 )
             ):
-                global_font_configs.append(_font_config_location(node, parent_map, before_lineno))
-            if _call_applies_to_cjk_text(node):
-                cjk_text_calls.append(node)
-                execution_lineno = before_lineno or _node_lineno(node) or 0
-                if not (
-                    _has_prior_global_font_config(global_font_configs, node, parent_map, execution_lineno)
-                    or _call_applies_cjk_font_property(
-                        node,
-                        _assigned_cjk_font_property_names(tree, cjk_font_paths, before_lineno),
-                        cjk_font_paths,
-                    )
-                ):
-                    return False
-            elif _call_has_cjk_legend_label(node):
-                cjk_legend_labels.append((_call_receiver_key(node), before_lineno or _node_lineno(node) or 0))
-            if _is_legend_call(node) and _call_applies_cjk_font_property(
-                node,
-                _assigned_cjk_font_property_names(tree, cjk_font_paths, before_lineno),
-                cjk_font_paths,
-                require_cjk_text=False,
-            ):
-                fonted_legends.append(
-                    (
-                        _call_receiver_key(node),
-                        before_lineno or _node_lineno(node) or 0,
-                        _call_has_cjk_legend_label(node),
-                    )
+                global_font_configs.append(_font_config_location(node, parent_map, before_order))
+
+    cjk_text_calls: list[ast.Call] = []
+    cjk_legend_labels: list[tuple[str | None, int]] = []
+    legend_calls: list[tuple[str | None, int, bool, bool]] = []
+    for node in ast.walk(tree):
+        before_order = runtime_orders.get(node)
+        if before_order is None or not isinstance(node, ast.Call):
+            continue
+        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_order, runtime_orders)
+        assigned_cjk_font_properties = _assigned_cjk_font_property_names(
+            tree,
+            cjk_font_paths,
+            before_order,
+            runtime_orders,
+        )
+        has_fonted_call = _call_applies_cjk_font_property(
+            node,
+            assigned_cjk_font_properties,
+            cjk_font_paths,
+            require_cjk_text=False,
+        )
+        if _call_applies_to_cjk_text(node):
+            cjk_text_calls.append(node)
+            if not (
+                _has_prior_global_font_config(global_font_configs, before_order)
+                or _call_applies_cjk_font_property(
+                    node,
+                    assigned_cjk_font_properties,
+                    cjk_font_paths,
                 )
+            ):
+                return False
+        elif _call_has_cjk_legend_label(node):
+            cjk_legend_labels.append((_call_receiver_key(node), before_order))
+        if _is_legend_call(node):
+            legend_calls.append(
+                (
+                    _call_receiver_key(node),
+                    before_order,
+                    _call_has_cjk_legend_label(node),
+                    has_fonted_call,
+                )
+            )
     if cjk_text_calls:
         return True
-    if _has_verified_cjk_legend_font(cjk_legend_labels, fonted_legends):
+    if _has_verified_cjk_legend_font(cjk_legend_labels, legend_calls, global_font_configs):
         return True
+    if cjk_legend_labels:
+        return False
     if global_font_configs:
         return True
     return False
 
 
-def _assigned_cjk_font_path_names(tree: ast.AST, before_lineno: int | None = None) -> set[str]:
+def _assigned_cjk_font_path_names(
+    tree: ast.AST,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
+) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not _node_is_before(node, before_lineno):
+        if not _node_is_before_order(node, before_order, runtime_orders):
             continue
         value, targets = _assignment_value_and_targets(node)
         if value is None:
@@ -667,16 +688,17 @@ def _assigned_cjk_font_path_names(tree: ast.AST, before_lineno: int | None = Non
 def _assigned_cjk_font_property_names(
     tree: ast.AST,
     cjk_font_paths: set[str],
-    before_lineno: int | None = None,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
 ) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not _node_is_before(node, before_lineno):
+        if not _node_is_before_order(node, before_order, runtime_orders):
             continue
         value, targets = _assignment_value_and_targets(node)
         if value is None:
             continue
-        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, _node_lineno(node))
+        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, runtime_orders.get(node), runtime_orders)
         if not _is_cjk_font_property_call(value, node_cjk_font_paths):
             continue
         for target in targets:
@@ -688,12 +710,14 @@ def _assigned_cjk_font_property_names(
 def _registered_cjk_font_context(
     tree: ast.AST,
     cjk_font_paths: set[str],
-    before_lineno: int | None,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
 ) -> tuple[set[str], set[str], bool, set[str]]:
     registered_cjk_font_paths, registered_cjk_font_path_literals = _registered_cjk_font_path_refs(
         tree,
         cjk_font_paths,
-        before_lineno,
+        before_order,
+        runtime_orders,
     )
     has_registered_cjk_font = bool(registered_cjk_font_paths or registered_cjk_font_path_literals)
     registered_cjk_font_properties = _assigned_registered_cjk_font_property_names(
@@ -701,7 +725,8 @@ def _registered_cjk_font_context(
         registered_cjk_font_paths,
         has_registered_cjk_font,
         registered_cjk_font_path_literals,
-        before_lineno,
+        before_order,
+        runtime_orders,
     )
     return registered_cjk_font_paths, registered_cjk_font_properties, has_registered_cjk_font, registered_cjk_font_path_literals
 
@@ -709,14 +734,15 @@ def _registered_cjk_font_context(
 def _registered_cjk_font_path_refs(
     tree: ast.AST,
     cjk_font_paths: set[str],
-    before_lineno: int | None,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
 ) -> tuple[set[str], set[str]]:
     names: set[str] = set()
     literals: set[str] = set()
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _call_name(node.func) != "addfont":
             continue
-        if not _node_is_before(node, before_lineno):
+        if not _node_is_before_order(node, before_order, runtime_orders):
             continue
         payloads = [*node.args, *(keyword.value for keyword in node.keywords)]
         for payload in payloads:
@@ -730,20 +756,23 @@ def _assigned_registered_cjk_font_property_names(
     registered_cjk_font_paths: set[str],
     has_registered_cjk_font: bool,
     registered_cjk_font_path_literals: set[str],
-    before_lineno: int | None,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
 ) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not _node_is_before(node, before_lineno):
+        if not _node_is_before_order(node, before_order, runtime_orders):
             continue
         value, targets = _assignment_value_and_targets(node)
         if value is None:
             continue
-        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, _node_lineno(node))
+        node_order = runtime_orders.get(node)
+        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, node_order, runtime_orders)
         node_registered_paths, node_registered_literals = _registered_cjk_font_path_refs(
             tree,
             node_cjk_font_paths,
-            _node_lineno(node),
+            node_order,
+            runtime_orders,
         )
         node_has_registered_font = bool(node_registered_paths or node_registered_literals)
         if _is_registered_cjk_font_property_call(
@@ -780,24 +809,51 @@ def _ast_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
     return parents
 
 
-def _node_is_inside_function(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> bool:
-    parent = parent_map.get(node)
-    while parent is not None:
-        if isinstance(parent, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
-            return True
-        parent = parent_map.get(parent)
-    return False
+def _runtime_order_map(tree: ast.AST) -> dict[ast.AST, int]:
+    if not isinstance(tree, ast.Module):
+        return {}
+    functions = {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    orders: dict[ast.AST, int] = {}
+    active_functions: list[str] = []
+    counter = 0
 
+    def next_order() -> int:
+        nonlocal counter
+        counter += 1
+        return counter
 
-def _execution_before_lineno(
-    node: ast.AST,
-    parent_map: dict[ast.AST, ast.AST],
-    function_call_lines: dict[str, int],
-) -> int | None:
-    function_name = _enclosing_function_name(node, parent_map)
-    if function_name is not None:
-        return function_call_lines.get(function_name)
-    return _node_lineno(node)
+    def mark_subtree(node: ast.AST, order: int) -> None:
+        for child in ast.walk(node):
+            orders.setdefault(child, order)
+
+    def visit_function(name: str) -> None:
+        if name in active_functions:
+            return
+        function = functions.get(name)
+        if function is None:
+            return
+        active_functions.append(name)
+        visit_statements(function.body)
+        active_functions.pop()
+
+    def visit_statements(statements: list[ast.stmt]) -> None:
+        for statement in statements:
+            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            order = next_order()
+            mark_subtree(statement, order)
+            for child in ast.walk(statement):
+                if isinstance(child, ast.Call):
+                    name = _call_name(child.func)
+                    if name is not None:
+                        visit_function(name)
+
+    visit_statements(tree.body)
+    return orders
 
 
 def _enclosing_function_name(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> str | None:
@@ -811,26 +867,17 @@ def _enclosing_function_name(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) 
     return None
 
 
-def _top_level_function_call_lines(tree: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> dict[str, int]:
-    lines: dict[str, int] = {}
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or _node_is_inside_function(node, parent_map):
-            continue
-        name = _call_name(node.func)
-        lineno = _node_lineno(node)
-        if name is None or lineno is None:
-            continue
-        lines[name] = min(lines.get(name, lineno), lineno)
-    return lines
-
-
 def _node_lineno(node: ast.AST) -> int | None:
     return getattr(node, "lineno", None)
 
 
-def _node_is_before(node: ast.AST, before_lineno: int | None) -> bool:
-    lineno = _node_lineno(node)
-    return before_lineno is None or lineno is None or lineno < before_lineno
+def _node_is_before_order(
+    node: ast.AST,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
+) -> bool:
+    order = runtime_orders.get(node)
+    return before_order is not None and order is not None and order < before_order
 
 
 def _is_cjk_font_property_call(node: ast.AST | None, cjk_font_paths: set[str]) -> bool:
@@ -1054,12 +1101,16 @@ def _call_receiver_key(node: ast.Call) -> str | None:
 
 def _has_verified_cjk_legend_font(
     cjk_legend_labels: list[tuple[str | None, int]],
-    fonted_legends: list[tuple[str | None, int, bool]],
+    legend_calls: list[tuple[str | None, int, bool, bool]],
+    global_font_configs: list[_FontConfigLocation],
 ) -> bool:
-    for receiver, legend_lineno, legend_has_cjk_label in fonted_legends:
+    for receiver, legend_order, legend_has_cjk_label, legend_has_font in legend_calls:
+        has_font = legend_has_font or _has_prior_global_font_config(global_font_configs, legend_order)
+        if not has_font:
+            continue
         if legend_has_cjk_label:
             return True
-        if any(label_receiver == receiver and label_lineno < legend_lineno for label_receiver, label_lineno in cjk_legend_labels):
+        if any(label_receiver == receiver and label_order < legend_order for label_receiver, label_order in cjk_legend_labels):
             return True
     return False
 
@@ -1067,11 +1118,11 @@ def _has_verified_cjk_legend_font(
 def _font_config_location(
     node: ast.AST,
     parent_map: dict[ast.AST, ast.AST],
-    execution_lineno: int | None,
+    execution_order: int,
 ) -> _FontConfigLocation:
     source_lineno = _node_lineno(node) or 0
     return _FontConfigLocation(
-        execution_lineno=execution_lineno or source_lineno,
+        execution_order=execution_order,
         source_lineno=source_lineno,
         function_name=_enclosing_function_name(node, parent_map),
     )
@@ -1079,20 +1130,9 @@ def _font_config_location(
 
 def _has_prior_global_font_config(
     global_font_configs: list[_FontConfigLocation],
-    node: ast.AST,
-    parent_map: dict[ast.AST, ast.AST],
-    execution_lineno: int,
+    execution_order: int,
 ) -> bool:
-    source_lineno = _node_lineno(node) or execution_lineno
-    function_name = _enclosing_function_name(node, parent_map)
-    for config in global_font_configs:
-        if config.function_name == function_name:
-            if config.source_lineno < source_lineno:
-                return True
-            continue
-        if config.execution_lineno < execution_lineno:
-            return True
-    return False
+    return any(config.execution_order < execution_order for config in global_font_configs)
 
 
 def _fontdict_uses_cjk_font_property(
