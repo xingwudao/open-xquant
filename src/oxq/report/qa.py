@@ -564,6 +564,9 @@ def _has_verified_cjk_font(script_text: str) -> bool:
         return False
 
     parent_map = _ast_parent_map(tree)
+    if _has_cjk_text_in_unverified_scope(tree, parent_map):
+        return False
+
     runtime_orders = _runtime_order_map(tree)
     global_font_configs: list[_FontConfigLocation] = []
     for node in ast.walk(tree):
@@ -834,7 +837,7 @@ def _registered_cjk_font_path_refs(
     names: set[str] = set()
     literals: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or _call_name(node.func) != "addfont":
+        if not isinstance(node, ast.Call) or not _is_matplotlib_fontmanager_addfont_call(node):
             continue
         if not _node_is_before_order(node, before_order, runtime_orders):
             continue
@@ -1004,13 +1007,7 @@ def _ast_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
 def _runtime_order_map(tree: ast.AST) -> dict[ast.AST, int]:
     if not isinstance(tree, ast.Module):
         return {}
-    functions = {
-        node.name: node
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    }
     orders: dict[ast.AST, int] = {}
-    active_functions: list[str] = []
     counter = 0
 
     def next_order() -> int:
@@ -1022,28 +1019,46 @@ def _runtime_order_map(tree: ast.AST) -> dict[ast.AST, int]:
         for child in ast.walk(node):
             orders.setdefault(child, order)
 
-    def visit_function(name: str) -> None:
-        if name in active_functions:
-            return
-        function = functions.get(name)
-        if function is None:
-            return
-        active_functions.append(name)
-        visit_statements(function.body)
-        active_functions.pop()
-
-    def visit_statements(statements: list[ast.stmt]) -> None:
-        for statement in statements:
-            if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            order = next_order()
-            mark_subtree(statement, order)
-            for child in ast.walk(statement):
-                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-                    visit_function(child.func.id)
-
-    visit_statements(tree.body)
+    for statement in tree.body:
+        if _is_unverified_runtime_statement(statement):
+            continue
+        mark_subtree(statement, next_order())
     return orders
+
+
+def _is_unverified_runtime_statement(node: ast.AST) -> bool:
+    return isinstance(
+        node,
+        ast.FunctionDef
+        | ast.AsyncFunctionDef
+        | ast.ClassDef
+        | ast.If
+        | ast.For
+        | ast.AsyncFor
+        | ast.While
+        | ast.Try
+        | ast.With
+        | ast.AsyncWith
+        | ast.Match,
+    )
+
+
+def _has_cjk_text_in_unverified_scope(tree: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> bool:
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.Constant) and isinstance(node.value, str) and _CJK_RE.search(node.value)):
+            continue
+        if _is_under_unverified_scope(node, parent_map):
+            return True
+    return False
+
+
+def _is_under_unverified_scope(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> bool:
+    parent = parent_map.get(node)
+    while parent is not None:
+        if isinstance(parent, ast.Lambda) or _is_unverified_runtime_statement(parent):
+            return True
+        parent = parent_map.get(parent)
+    return False
 
 
 def _enclosing_function_name(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> str | None:
@@ -1398,6 +1413,27 @@ def _call_name(node: ast.expr) -> str | None:
     if isinstance(node, ast.Attribute):
         return node.attr
     return None
+
+
+def _is_matplotlib_fontmanager_addfont_call(node: ast.Call) -> bool:
+    if not isinstance(node.func, ast.Attribute) or node.func.attr != "addfont":
+        return False
+    receiver_path = _attribute_path(node.func.value)
+    return receiver_path in {
+        ("fm", "fontManager"),
+        ("font_manager", "fontManager"),
+        ("matplotlib", "font_manager", "fontManager"),
+    }
+
+
+def _attribute_path(node: ast.AST) -> tuple[str, ...]:
+    if isinstance(node, ast.Name):
+        return (node.id,)
+    if isinstance(node, ast.Attribute):
+        parent_path = _attribute_path(node.value)
+        if parent_path:
+            return (*parent_path, node.attr)
+    return ()
 
 
 def _dict_sets_font_key(node: ast.expr) -> bool:
