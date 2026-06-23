@@ -36,6 +36,8 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "Pair Plot" in text
     assert "scan the run directory" in text
     assert "recommended chart set" in text
+    assert "Numeric claim review is semantic/advisory" in text
+    assert "treating the CLI command as proof" in text
 
 
 def test_report_chart_builder_skill_requires_professional_chart_pack() -> None:
@@ -181,7 +183,9 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
     assert "confirmed" in text
     assert "default" in text
     assert "unconfirmed" in text
-    assert "last successful `oxq spec validate`" in text
+    assert "start of the current experiment" in text
+    assert "just-finished" in text
+    assert "only a checkpoint" in text
     assert "blocks backtest" in text
     assert "group related fields" in text
 
@@ -203,6 +207,10 @@ def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
     assert "drawdown_overlay" in text
     assert "metrics_bar" in text
     assert "metrics.json" in text
+    assert "execution_assumptions.json" in text
+    assert "research_bias_audit.json" in text
+    assert "reproducibility_audit.json" in text
+    assert "audited comparison requires" in text
 
 
 def test_open_xquant_router_resumes_writer_after_chart_builder_before_rendering() -> None:
@@ -232,6 +240,7 @@ def test_research_report_reviewer_skill_covers_semantic_report_qa() -> None:
     assert "audit" in text
     assert "robustness" in text
     assert "numeric_claim_unverified" in text
+    assert "optional/advisory numeric QA output" in text
     assert "facts registry" in text
     assert "local-language labels" in text
     assert "chart" in text
@@ -270,6 +279,7 @@ def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
     assert "effective last trading day" in text
     assert ".open-xquant/workspace.yaml" in text
     assert "paths.final_dir" in text
+    assert "paths.experiment_registry" in text
 
 
 def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
@@ -295,6 +305,7 @@ def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs
     assert "Skip robustness sub-runs" in quant_research
     assert "runs/final" in quant_research
     assert "mark it as final" in quant_research
+    assert "paths.experiment_registry" in quant_research
     assert "_cost_x2" in strategy_monitor
     assert "created sub-run directory" in strategy_monitor
 

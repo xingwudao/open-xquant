@@ -17,10 +17,15 @@ from entering a formal experiment.
 
 ## Source Boundary
 
-Use the last successful `oxq spec validate` as the experiment boundary. When a
-prior run contains `spec_hash.txt` and `environment.json`, use that run's
-recorded timestamp as the boundary. If no prior validated run exists, trace
-from the start of the current conversation.
+Use the start of the current experiment as the source boundary. A just-finished
+`oxq spec validate` is only a checkpoint proving the current YAML is
+well-formed; it is not the boundary for tracing user confirmations made while
+building that spec.
+
+When resuming after a prior run, use the latest relevant prior run containing
+`spec_hash.txt` and `environment.json` to identify the previous experiment's
+timestamp, then trace user confirmations made after that point. If no prior
+validated run exists, trace from the start of the current conversation.
 
 ## Field Classification
 

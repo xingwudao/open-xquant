@@ -105,7 +105,10 @@ After registration, verify every generated figure:
 - The caption names the source artifact and the interpretation limit.
 
 Use `oxq report qa runs/<run_id>/` after final Markdown and HTML exist to
-re-check image references, dates, numeric claims, and manifest state.
+re-check deterministic report artifacts: image references, dates, and manifest
+state. Numeric claim review is semantic/advisory; route it through
+`research-report-reviewer` or an explicitly advisory QA pass rather than
+treating the CLI command as proof that all numeric claims are sourced.
 
 5. Hand off final writing to `research-report-writer`.
 

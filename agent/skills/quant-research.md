@@ -26,8 +26,9 @@ directories as child artifacts of the parent run, not resumable experiments.
 
 If any run has `metrics.json` but no `research_report.md`, ask whether to
 continue that unfinished experiment or abandon it and start a new one. Do not
-delete abandoned runs; record abandonment in `experiments.jsonl` when the
-registry exists.
+delete abandoned runs; read `.open-xquant/workspace.yaml` and resolve
+`paths.experiment_registry`, falling back to `experiments.jsonl`, before
+recording abandonment when the registry exists.
 
 ### Step 1: Create Spec
 
@@ -110,17 +111,18 @@ If the reviewer requires Markdown report edits, render `research_report.html`
 again from the updated Markdown before rerunning `oxq report qa`.
 
 When the user accepts the completed experiment, ask whether to mark it as final.
-If yes, read `.open-xquant/workspace.yaml` and resolve `paths.final_dir`; fall
-back to `runs/final` when the config value is absent. Write the lightweight
+If yes, read `.open-xquant/workspace.yaml` and resolve both
+`paths.final_dir` and `paths.experiment_registry`; fall back to `runs/final`
+and `experiments.jsonl` when config values are absent. Write the lightweight
 final pointer there:
 
 - `<final_dir>/strategy_spec.yaml`
 - `<final_dir>/selected.json`
 - `<final_dir>/README.md`
 
-Mark the accepted run as final in `experiments.jsonl` when present. The final
-pointer is a copy of the selected spec plus metadata, not a copy of the full
-run directory.
+Mark the accepted run as final in the resolved experiment registry when
+present. The final pointer is a copy of the selected spec plus metadata, not a
+copy of the full run directory.
 
 ## Quality Gates
 

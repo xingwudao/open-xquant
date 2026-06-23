@@ -30,8 +30,9 @@ Read:
 - `report_assets/manifest.json`, captions, source scripts, and figure files
 - `equity_curve.csv`, `benchmark_curve.csv`, `trades.csv`, `positions.csv`,
   and `target_weights.csv` when needed to verify a claim
-- the `oxq report qa` output, especially any `numeric_claim_unverified`
-  warnings from optional or legacy checks
+- the deterministic `oxq report qa` output
+- optional/advisory numeric QA output when available, especially any
+  `numeric_claim_unverified` warnings
 
 Do not rewrite metrics, audits, robustness output, or backtest artifacts. Do not
 rewrite the report to hide adverse evidence. If a report edit is needed, change
