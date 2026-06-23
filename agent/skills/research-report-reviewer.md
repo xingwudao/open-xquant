@@ -80,7 +80,7 @@ Markdown, and rerun deterministic QA.
    - Check that charts are not blank, nearly blank, unreadable, mislabeled, or
      purely decorative.
    - Prefer English chart labels unless the final rendered figure already
-     proves CJK labels are readable.
+     proves local-language labels are readable.
    - Captions must identify source artifacts and avoid unsupported conclusions.
 
 6. Markdown/HTML semantic consistency.
@@ -105,5 +105,5 @@ Return a concise review with:
 - Do not approve positive risk language that omits fatal or material warnings.
 - Do not let many low-value numeric warnings hide a decision-critical mismatch.
 - Do not use chart aesthetics as evidence of strategy quality.
-- Do not claim CJK rendering is correct solely because a script configured a
-  font.
+- Do not claim chart text is readable solely because plotting code configured
+  styling; inspect the final rendered figure when readability matters.

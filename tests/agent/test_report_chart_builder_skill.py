@@ -233,7 +233,7 @@ def test_research_report_reviewer_skill_covers_semantic_report_qa() -> None:
     assert "robustness" in text
     assert "numeric_claim_unverified" in text
     assert "facts registry" in text
-    assert "CJK" in text
+    assert "local-language labels" in text
     assert "chart" in text
     assert "do not rewrite" in text.lower()
 

@@ -15,10 +15,7 @@ def test_report_qa_passes_complete_registered_report(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     script = run_dir / "report_assets/scripts/plot.py"
     script.parent.mkdir(parents=True)
-    script.write_text(
-        'import matplotlib.pyplot as plt\nplt.rcParams["font.sans-serif"] = ["Noto Sans CJK SC"]\n',
-        encoding="utf-8",
-    )
+    script.write_text('import matplotlib.pyplot as plt\nplt.plot([1, 2, 3])\n', encoding="utf-8")
     figure = tmp_path / "equity.png"
     _write_png(figure)
     add_report_asset(
@@ -81,7 +78,7 @@ def test_report_qa_flags_report_image_manifest_hash_and_number_problems(tmp_path
     assert "numeric_claim_unverified" in finding_ids
 
 
-def test_report_qa_allows_cjk_chart_text_without_font_check(tmp_path) -> None:
+def test_report_qa_does_not_validate_chart_text_rendering(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     script = run_dir / "report_assets/scripts/plot.py"
     script.parent.mkdir(parents=True)
