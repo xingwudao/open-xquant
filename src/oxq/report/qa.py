@@ -551,48 +551,45 @@ def _has_verified_cjk_font(script_text: str) -> bool:
 
     cjk_font_paths = _assigned_cjk_font_path_names(tree)
     cjk_font_properties = _assigned_cjk_font_property_names(tree, cjk_font_paths)
-    registered_cjk_font_paths, has_registered_cjk_font = _registered_cjk_font_path_refs(tree, cjk_font_paths)
-    registered_cjk_font_properties = _assigned_registered_cjk_font_property_names(
-        tree,
-        registered_cjk_font_paths,
-        has_registered_cjk_font,
-    )
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
+            context = _registered_cjk_font_context(tree, cjk_font_paths, _node_lineno(node))
             if any(_is_rcparams_font_target(target) for target in node.targets) and (
                 _ast_contains_cjk_font_name(node.value)
                 or _ast_uses_registered_cjk_font_property(
                     node.value,
-                    registered_cjk_font_properties,
-                    registered_cjk_font_paths,
-                    has_registered_cjk_font,
+                    context[1],
+                    context[0],
+                    context[2],
                 )
             ):
                 return True
         elif isinstance(node, ast.AnnAssign):
+            context = _registered_cjk_font_context(tree, cjk_font_paths, _node_lineno(node))
             if _is_rcparams_font_target(node.target) and (
                 _ast_contains_cjk_font_name(node.value)
                 or _ast_uses_registered_cjk_font_property(
                     node.value,
-                    registered_cjk_font_properties,
-                    registered_cjk_font_paths,
-                    has_registered_cjk_font,
+                    context[1],
+                    context[0],
+                    context[2],
                 )
             ):
                 return True
         elif isinstance(node, ast.Call):
+            context = _registered_cjk_font_context(tree, cjk_font_paths, _node_lineno(node))
             if (
                 _is_rcparams_update_font_call(
                     node,
-                    registered_cjk_font_properties,
-                    registered_cjk_font_paths,
-                    has_registered_cjk_font,
+                    context[1],
+                    context[0],
+                    context[2],
                 )
                 or _is_matplotlib_rc_font_call(
                     node,
-                    registered_cjk_font_properties,
-                    registered_cjk_font_paths,
-                    has_registered_cjk_font,
+                    context[1],
+                    context[0],
+                    context[2],
                 )
                 or _call_applies_cjk_font_property(node, cjk_font_properties, cjk_font_paths)
             ):
@@ -603,11 +600,12 @@ def _has_verified_cjk_font(script_text: str) -> bool:
 def _assigned_cjk_font_path_names(tree: ast.AST) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
+        value, targets = _assignment_value_and_targets(node)
+        if value is None:
             continue
-        if not _ast_contains_cjk_font_path(node.value):
+        if not _ast_contains_cjk_font_path(value):
             continue
-        for target in node.targets:
+        for target in targets:
             if isinstance(target, ast.Name):
                 names.add(target.id)
     return names
@@ -616,21 +614,47 @@ def _assigned_cjk_font_path_names(tree: ast.AST) -> set[str]:
 def _assigned_cjk_font_property_names(tree: ast.AST, cjk_font_paths: set[str]) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
+        value, targets = _assignment_value_and_targets(node)
+        if value is None:
             continue
-        if not _is_cjk_font_property_call(node.value, cjk_font_paths):
+        if not _is_cjk_font_property_call(value, cjk_font_paths):
             continue
-        for target in node.targets:
+        for target in targets:
             if isinstance(target, ast.Name):
                 names.add(target.id)
     return names
 
 
-def _registered_cjk_font_path_refs(tree: ast.AST, cjk_font_paths: set[str]) -> tuple[set[str], bool]:
+def _registered_cjk_font_context(
+    tree: ast.AST,
+    cjk_font_paths: set[str],
+    before_lineno: int | None,
+) -> tuple[set[str], set[str], bool]:
+    registered_cjk_font_paths, has_registered_cjk_font = _registered_cjk_font_path_refs(
+        tree,
+        cjk_font_paths,
+        before_lineno,
+    )
+    registered_cjk_font_properties = _assigned_registered_cjk_font_property_names(
+        tree,
+        registered_cjk_font_paths,
+        has_registered_cjk_font,
+        before_lineno,
+    )
+    return registered_cjk_font_paths, registered_cjk_font_properties, has_registered_cjk_font
+
+
+def _registered_cjk_font_path_refs(
+    tree: ast.AST,
+    cjk_font_paths: set[str],
+    before_lineno: int | None,
+) -> tuple[set[str], bool]:
     names: set[str] = set()
     has_registered_cjk_font = False
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call) or _call_name(node.func) != "addfont":
+            continue
+        if not _node_is_before(node, before_lineno):
             continue
         payloads = [*node.args, *(keyword.value for keyword in node.keywords)]
         for payload in payloads:
@@ -646,17 +670,38 @@ def _assigned_registered_cjk_font_property_names(
     tree: ast.AST,
     registered_cjk_font_paths: set[str],
     has_registered_cjk_font: bool,
+    before_lineno: int | None,
 ) -> set[str]:
     names: set[str] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign):
+        if not _node_is_before(node, before_lineno):
             continue
-        if not _is_registered_cjk_font_property_call(node.value, registered_cjk_font_paths, has_registered_cjk_font):
+        value, targets = _assignment_value_and_targets(node)
+        if value is None:
             continue
-        for target in node.targets:
+        if not _is_registered_cjk_font_property_call(value, registered_cjk_font_paths, has_registered_cjk_font):
+            continue
+        for target in targets:
             if isinstance(target, ast.Name):
                 names.add(target.id)
     return names
+
+
+def _assignment_value_and_targets(node: ast.AST) -> tuple[ast.AST | None, list[ast.expr]]:
+    if isinstance(node, ast.Assign):
+        return node.value, list(node.targets)
+    if isinstance(node, ast.AnnAssign):
+        return node.value, [node.target]
+    return None, []
+
+
+def _node_lineno(node: ast.AST) -> int | None:
+    return getattr(node, "lineno", None)
+
+
+def _node_is_before(node: ast.AST, before_lineno: int | None) -> bool:
+    lineno = _node_lineno(node)
+    return before_lineno is None or lineno is None or lineno < before_lineno
 
 
 def _is_cjk_font_property_call(node: ast.AST | None, cjk_font_paths: set[str]) -> bool:

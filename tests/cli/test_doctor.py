@@ -142,6 +142,34 @@ def test_doctor_accepts_legacy_workspace_layout(monkeypatch, tmp_path) -> None:
     assert result["missing"] == []
 
 
+def test_doctor_warns_when_configured_comparison_registry_is_missing(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  runs_dir: runs",
+                "  final_dir: runs/final",
+                "  comparisons_dir: comparisons",
+                "  experiment_registry: experiments.jsonl",
+                "  comparison_registry: comparisons/comparisons.jsonl",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (work / "runs/final").mkdir(parents=True)
+    (work / "comparisons").mkdir()
+    (work / "experiments.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert str(work / "comparisons" / "comparisons.jsonl") in result["missing"]
+
+
 def test_doctor_json_reports_malformed_workspace_config(monkeypatch, tmp_path) -> None:
     work = tmp_path / "work"
     (work / ".open-xquant").mkdir(parents=True)

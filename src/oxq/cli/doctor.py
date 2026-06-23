@@ -128,6 +128,7 @@ def _workspace_required_paths(config: dict[str, Any]) -> list[Path]:
         "final_dir",
         "comparisons_dir",
         "experiment_registry",
+        "comparison_registry",
     )
     configured = [
         Path.cwd() / value
