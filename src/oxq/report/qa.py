@@ -551,9 +551,12 @@ def _has_verified_cjk_font(script_text: str) -> bool:
     except SyntaxError:
         return False
 
+    parent_map = _ast_parent_map(tree)
     cjk_text_calls: list[ast.Call] = []
+    has_cjk_legend_label = False
+    has_fonted_legend = False
     for node in ast.walk(tree):
-        before_lineno = _node_lineno(node)
+        before_lineno = None if _node_is_inside_function(node, parent_map) else _node_lineno(node)
         cjk_font_paths = _assigned_cjk_font_path_names(tree, before_lineno)
         if isinstance(node, ast.Assign):
             context = _registered_cjk_font_context(tree, cjk_font_paths, before_lineno)
@@ -608,7 +611,18 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     cjk_font_paths,
                 ):
                     return False
+            elif _call_has_cjk_legend_label(node):
+                has_cjk_legend_label = True
+            if _is_legend_call(node) and _call_applies_cjk_font_property(
+                node,
+                _assigned_cjk_font_property_names(tree, cjk_font_paths, before_lineno),
+                cjk_font_paths,
+                require_cjk_text=False,
+            ):
+                has_fonted_legend = True
     if cjk_text_calls:
+        return True
+    if has_cjk_legend_label and has_fonted_legend:
         return True
     return False
 
@@ -731,6 +745,23 @@ def _assignment_value_and_targets(node: ast.AST) -> tuple[ast.AST | None, list[a
     if isinstance(node, ast.AnnAssign):
         return node.value, [node.target]
     return None, []
+
+
+def _ast_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
+    parents: dict[ast.AST, ast.AST] = {}
+    for parent in ast.walk(tree):
+        for child in ast.iter_child_nodes(parent):
+            parents[child] = parent
+    return parents
+
+
+def _node_is_inside_function(node: ast.AST, parent_map: dict[ast.AST, ast.AST]) -> bool:
+    parent = parent_map.get(node)
+    while parent is not None:
+        if isinstance(parent, ast.FunctionDef | ast.AsyncFunctionDef | ast.Lambda):
+            return True
+        parent = parent_map.get(parent)
+    return False
 
 
 def _node_lineno(node: ast.AST) -> int | None:
@@ -876,18 +907,75 @@ def _is_matplotlib_rc_font_call(
     )
 
 
-def _call_applies_cjk_font_property(node: ast.Call, cjk_font_properties: set[str], cjk_font_paths: set[str]) -> bool:
-    if not _call_applies_to_cjk_text(node):
+def _call_applies_cjk_font_property(
+    node: ast.Call,
+    cjk_font_properties: set[str],
+    cjk_font_paths: set[str],
+    *,
+    require_cjk_text: bool = True,
+) -> bool:
+    if require_cjk_text and not _call_applies_to_cjk_text(node):
         return False
-    return any(
-        keyword.arg in {"fontproperties", "font_properties", "prop"}
-        and _ast_uses_cjk_font_property(keyword.value, cjk_font_properties, cjk_font_paths)
-        for keyword in node.keywords
-    )
+    for keyword in node.keywords:
+        if keyword.arg in {"fontproperties", "font_properties", "prop"} and _ast_uses_cjk_font_property(
+            keyword.value,
+            cjk_font_properties,
+            cjk_font_paths,
+        ):
+            return True
+        if keyword.arg == "fontdict" and _fontdict_uses_cjk_font_property(
+            keyword.value,
+            cjk_font_properties,
+            cjk_font_paths,
+        ):
+            return True
+    return False
 
 
 def _call_applies_to_cjk_text(node: ast.Call) -> bool:
+    name = _call_name(node.func)
+    if name not in {
+        "annotate",
+        "figtext",
+        "set_title",
+        "set_xlabel",
+        "set_ylabel",
+        "set_zlabel",
+        "suptitle",
+        "text",
+        "title",
+        "xlabel",
+        "ylabel",
+        "zlabel",
+    }:
+        return False
     return any(_ast_contains_cjk_text(payload) for payload in [*node.args, *(keyword.value for keyword in node.keywords)])
+
+
+def _call_has_cjk_legend_label(node: ast.Call) -> bool:
+    return any(keyword.arg == "label" and _ast_contains_cjk_text(keyword.value) for keyword in node.keywords)
+
+
+def _is_legend_call(node: ast.Call) -> bool:
+    return _call_name(node.func) == "legend"
+
+
+def _fontdict_uses_cjk_font_property(
+    node: ast.AST,
+    cjk_font_properties: set[str],
+    cjk_font_paths: set[str],
+) -> bool:
+    if not isinstance(node, ast.Dict):
+        return False
+    for raw_key, value in zip(node.keys, node.values, strict=True):
+        key = _literal_string(raw_key) if raw_key is not None else None
+        if key in {"fontproperties", "font_properties", "prop"} and _ast_uses_cjk_font_property(
+            value,
+            cjk_font_properties,
+            cjk_font_paths,
+        ):
+            return True
+    return False
 
 
 def _ast_contains_cjk_text(node: ast.AST | None) -> bool:
