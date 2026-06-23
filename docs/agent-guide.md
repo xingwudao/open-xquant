@@ -11,12 +11,13 @@
 边界原则：
 
 - `oxq` CLI / SDK / Tools 只做确定性 primitives，例如 validate、
-  compile、backtest、audit、robustness、report QA、asset manifest、
-  workspace init、agent install/status。
+  compile、backtest、audit、robustness、报告文件与资产完整性 QA、
+  asset manifest、workspace init、agent install/status。
 - 需要上下文综合判断的任务必须留在 skill / Agent 层，例如 spec 字段
   来源追溯、是否继续未完成实验、图表选择、报告写作、实验差异解释、
-  是否标记某个 run 为 final。
+  报告数值叙事是否成立、是否标记某个 run 为 final。
 - 不要把报告写作、实验结论、图表叙事或来源判断下沉成 CLI 模板。
+  `oxq report qa` 不是语义审稿器，不负责证明所有数值结论都合理。
 
 ---
 

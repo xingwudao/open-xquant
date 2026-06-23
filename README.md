@@ -91,8 +91,9 @@ Agent loads open-xquant skill
 ```
 
 这里的 `oxq` CLI 步骤是确定性 primitives：验证、编译、回测、审计、
-稳健性、artifact QA 和实验登记。需要理解上下文和做取舍的步骤由 skill
-完成。
+稳健性、报告文件与资产完整性 QA，以及实验登记。报告数值叙事是否合理、
+图表是否足以支撑结论、是否接受某个 run 为最终版本，都需要由 skill
+结合上下文判断。
 
 ## 谁适合使用 open-xquant？
 
@@ -277,8 +278,10 @@ Agent loads the open-xquant skill
 ```
 
 The `oxq` CLI steps are deterministic primitives: validation, compilation,
-backtesting, audits, robustness, artifact QA, and experiment registration.
-Steps that require contextual judgment stay in skills.
+backtesting, audits, robustness, report file and asset-integrity QA, and
+experiment registration. Skills handle contextual judgment, including whether
+numeric narratives are justified, whether charts support the conclusion, and
+whether a run should be accepted as final.
 
 ## Who Is This For?
 
