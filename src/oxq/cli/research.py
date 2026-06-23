@@ -55,6 +55,7 @@ def initialize_workspace(
     workspace_file = config_dir / "workspace.yaml"
     sdk_state = None
     workspace_config: dict[str, object] | None = None
+    created_workspace_config = False
     if sdk:
         sdk_state = install_workspace_sdk(cwd, _resolve_sdk_venv(cwd, sdk_venv))
     if workspace_file.exists() and not force:
@@ -68,6 +69,7 @@ def initialize_workspace(
         config_dir.mkdir(parents=True, exist_ok=True)
         workspace_config = _workspace_payload(cwd, name, data_dir, sdk_state=sdk_state)
         write_yaml_file(workspace_file, workspace_config)
+        created_workspace_config = True
         click.echo(f"Workspace config written to {workspace_file}")
 
     workspace_config = workspace_config or {}
@@ -76,8 +78,10 @@ def initialize_workspace(
     experiments = _configured_path(cwd, workspace_config, "experiment_registry") or (cwd / "experiments.jsonl")
     if not experiments.exists():
         write_text_file(experiments, "")
-    comparison_registry = _configured_path(cwd, workspace_config, "comparison_registry") or (cwd / "comparisons" / "comparisons.jsonl")
-    if not minimal and not comparison_registry.exists():
+    comparison_registry = _configured_path(cwd, workspace_config, "comparison_registry")
+    if comparison_registry is None and created_workspace_config:
+        comparison_registry = cwd / "comparisons" / "comparisons.jsonl"
+    if not minimal and comparison_registry is not None and not comparison_registry.exists():
         write_text_file(comparison_registry, "")
     upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
 

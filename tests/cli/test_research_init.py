@@ -85,6 +85,7 @@ def test_research_init_repairs_paths_from_existing_workspace_config(tmp_path) ->
         assert (cwd_path / "reports").is_dir()
         assert (cwd_path / "experiments.jsonl").exists()
         assert not (cwd_path / "runs/final").exists()
+        assert not (cwd_path / "comparisons" / "comparisons.jsonl").exists()
         workspace = yaml.safe_load((cwd_path / ".open-xquant" / "workspace.yaml").read_text(encoding="utf-8"))
         assert workspace["paths"]["specs_dir"] == "strategy_specs"
 
