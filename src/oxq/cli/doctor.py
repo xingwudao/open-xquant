@@ -99,7 +99,15 @@ def _check_workspace() -> dict[str, Any]:
     workspace = Path.cwd() / ".open-xquant" / "workspace.yaml"
     if not workspace.exists():
         return {"status": "missing", "fixes": ["oxq research init"]}
-    config = read_yaml_file(workspace)
+    try:
+        config = read_yaml_file(workspace)
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "path": str(workspace),
+            "error": str(exc),
+            "fixes": ["oxq research init --force"],
+        }
     configured_paths = _workspace_required_paths(config)
     missing = [
         str(path)

@@ -142,6 +142,21 @@ def test_doctor_accepts_legacy_workspace_layout(monkeypatch, tmp_path) -> None:
     assert result["missing"] == []
 
 
+def test_doctor_json_reports_malformed_workspace_config(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text("paths: [broken", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["doctor", "--json"])
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["checks"]["workspace"]["status"] == "fail"
+    assert "workspace.yaml" in payload["checks"]["workspace"]["path"]
+    assert "oxq research init --force" in payload["fixes"]
+
+
 def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
     missing = {"pyarrow", "pandas", "numpy", "yaml", "scipy", "matplotlib", "yfinance"}
 

@@ -58,6 +58,37 @@ def test_research_init_workspace_paths_match_run_centric_layout(tmp_path) -> Non
         }
 
 
+def test_research_init_repairs_paths_from_existing_workspace_config(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            "\n".join(
+                [
+                    "schema_version: 1",
+                    "paths:",
+                    "  specs_dir: strategy_specs",
+                    "  runs_dir: runs",
+                    "  reports_dir: reports",
+                    "  experiment_registry: experiments.jsonl",
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 0, result.output
+        assert (cwd_path / "strategy_specs").is_dir()
+        assert (cwd_path / "runs").is_dir()
+        assert (cwd_path / "reports").is_dir()
+        assert (cwd_path / "experiments.jsonl").exists()
+        assert not (cwd_path / "runs/final").exists()
+        workspace = yaml.safe_load((cwd_path / ".open-xquant" / "workspace.yaml").read_text(encoding="utf-8"))
+        assert workspace["paths"]["specs_dir"] == "strategy_specs"
+
+
 def test_research_init_defaults_to_market_data_directory(tmp_path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
