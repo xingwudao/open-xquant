@@ -122,6 +122,13 @@ class ReportQAResult:
         }
 
 
+@dataclass(frozen=True)
+class _FontConfigLocation:
+    execution_lineno: int
+    source_lineno: int
+    function_name: str | None
+
+
 def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) -> ReportQAResult:
     """Run report QA checks for a backtest run directory.
 
@@ -554,7 +561,7 @@ def _has_verified_cjk_font(script_text: str) -> bool:
     parent_map = _ast_parent_map(tree)
     function_call_lines = _top_level_function_call_lines(tree, parent_map)
     cjk_text_calls: list[ast.Call] = []
-    global_font_config_lines: list[int] = []
+    global_font_configs: list[_FontConfigLocation] = []
     cjk_legend_labels: list[tuple[str | None, int]] = []
     fonted_legends: list[tuple[str | None, int, bool]] = []
     for node in ast.walk(tree):
@@ -572,7 +579,7 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     context[3],
                 )
             ):
-                global_font_config_lines.append(before_lineno or _node_lineno(node) or 0)
+                global_font_configs.append(_font_config_location(node, parent_map, before_lineno))
         elif isinstance(node, ast.AnnAssign):
             context = _registered_cjk_font_context(tree, cjk_font_paths, before_lineno)
             if _is_rcparams_font_target(node.target) and (
@@ -585,7 +592,7 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     context[3],
                 )
             ):
-                global_font_config_lines.append(before_lineno or _node_lineno(node) or 0)
+                global_font_configs.append(_font_config_location(node, parent_map, before_lineno))
         elif isinstance(node, ast.Call):
             context = _registered_cjk_font_context(tree, cjk_font_paths, before_lineno)
             if (
@@ -604,12 +611,12 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     context[3],
                 )
             ):
-                global_font_config_lines.append(before_lineno or _node_lineno(node) or 0)
+                global_font_configs.append(_font_config_location(node, parent_map, before_lineno))
             if _call_applies_to_cjk_text(node):
                 cjk_text_calls.append(node)
                 execution_lineno = before_lineno or _node_lineno(node) or 0
                 if not (
-                    _has_prior_global_font_config(global_font_config_lines, execution_lineno)
+                    _has_prior_global_font_config(global_font_configs, node, parent_map, execution_lineno)
                     or _call_applies_cjk_font_property(
                         node,
                         _assigned_cjk_font_property_names(tree, cjk_font_paths, before_lineno),
@@ -636,7 +643,7 @@ def _has_verified_cjk_font(script_text: str) -> bool:
         return True
     if _has_verified_cjk_legend_font(cjk_legend_labels, fonted_legends):
         return True
-    if global_font_config_lines:
+    if global_font_configs:
         return True
     return False
 
@@ -1057,8 +1064,35 @@ def _has_verified_cjk_legend_font(
     return False
 
 
-def _has_prior_global_font_config(global_font_config_lines: list[int], lineno: int) -> bool:
-    return any(config_lineno < lineno for config_lineno in global_font_config_lines)
+def _font_config_location(
+    node: ast.AST,
+    parent_map: dict[ast.AST, ast.AST],
+    execution_lineno: int | None,
+) -> _FontConfigLocation:
+    source_lineno = _node_lineno(node) or 0
+    return _FontConfigLocation(
+        execution_lineno=execution_lineno or source_lineno,
+        source_lineno=source_lineno,
+        function_name=_enclosing_function_name(node, parent_map),
+    )
+
+
+def _has_prior_global_font_config(
+    global_font_configs: list[_FontConfigLocation],
+    node: ast.AST,
+    parent_map: dict[ast.AST, ast.AST],
+    execution_lineno: int,
+) -> bool:
+    source_lineno = _node_lineno(node) or execution_lineno
+    function_name = _enclosing_function_name(node, parent_map)
+    for config in global_font_configs:
+        if config.function_name == function_name:
+            if config.source_lineno < source_lineno:
+                return True
+            continue
+        if config.execution_lineno < execution_lineno:
+            return True
+    return False
 
 
 def _fontdict_uses_cjk_font_property(
