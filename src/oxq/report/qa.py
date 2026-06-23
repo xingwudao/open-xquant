@@ -47,6 +47,11 @@ _CJK_FONT_NAMES = (
 _CJK_FONT_PATH_MARKERS = (
     "STHeiti",
     "PingFang",
+    "Songti",
+    "STSong",
+    "KaiTi",
+    "Kaiti",
+    "FangSong",
     "NotoSansCJK",
     "Noto Sans CJK",
     "NotoSerifCJK",
@@ -565,9 +570,17 @@ def _has_verified_cjk_font(script_text: str) -> bool:
         before_order = runtime_orders.get(node)
         if before_order is None:
             continue
-        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_order, runtime_orders)
+        scope_name = _enclosing_function_name(node, parent_map)
+        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_order, runtime_orders, parent_map, scope_name)
         if isinstance(node, ast.Assign):
-            context = _registered_cjk_font_context(tree, cjk_font_paths, before_order, runtime_orders)
+            context = _registered_cjk_font_context(
+                tree,
+                cjk_font_paths,
+                before_order,
+                runtime_orders,
+                parent_map,
+                scope_name,
+            )
             if any(_is_rcparams_font_target(target) for target in node.targets) and (
                 _ast_contains_cjk_font_name(node.value)
                 or _ast_uses_registered_cjk_font_name(
@@ -581,7 +594,14 @@ def _has_verified_cjk_font(script_text: str) -> bool:
             ):
                 global_font_configs.append(_font_config_location(node, parent_map, before_order))
         elif isinstance(node, ast.AnnAssign):
-            context = _registered_cjk_font_context(tree, cjk_font_paths, before_order, runtime_orders)
+            context = _registered_cjk_font_context(
+                tree,
+                cjk_font_paths,
+                before_order,
+                runtime_orders,
+                parent_map,
+                scope_name,
+            )
             if _is_rcparams_font_target(node.target) and (
                 _ast_contains_cjk_font_name(node.value)
                 or _ast_uses_registered_cjk_font_name(
@@ -595,7 +615,14 @@ def _has_verified_cjk_font(script_text: str) -> bool:
             ):
                 global_font_configs.append(_font_config_location(node, parent_map, before_order))
         elif isinstance(node, ast.Call):
-            context = _registered_cjk_font_context(tree, cjk_font_paths, before_order, runtime_orders)
+            context = _registered_cjk_font_context(
+                tree,
+                cjk_font_paths,
+                before_order,
+                runtime_orders,
+                parent_map,
+                scope_name,
+            )
             if (
                 _is_rcparams_update_font_call(
                     node,
@@ -623,20 +650,24 @@ def _has_verified_cjk_font(script_text: str) -> bool:
         before_order = runtime_orders.get(node)
         if before_order is None or not isinstance(node, ast.Call):
             continue
-        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_order, runtime_orders)
+        scope_name = _enclosing_function_name(node, parent_map)
+        cjk_font_paths = _assigned_cjk_font_path_names(tree, before_order, runtime_orders, parent_map, scope_name)
         assigned_cjk_font_properties = _assigned_cjk_font_property_names(
             tree,
             cjk_font_paths,
             before_order,
             runtime_orders,
+            parent_map,
+            scope_name,
         )
+        assigned_cjk_text_names = _assigned_cjk_text_names(tree, before_order, runtime_orders, parent_map, scope_name)
         has_fonted_call = _call_applies_cjk_font_property(
             node,
             assigned_cjk_font_properties,
             cjk_font_paths,
             require_cjk_text=False,
         )
-        if _call_applies_to_cjk_text(node):
+        if _call_applies_to_cjk_text(node, assigned_cjk_text_names):
             cjk_text_calls.append(node)
             if not (
                 _has_prior_global_font_config(global_font_configs, before_order)
@@ -644,23 +675,25 @@ def _has_verified_cjk_font(script_text: str) -> bool:
                     node,
                     assigned_cjk_font_properties,
                     cjk_font_paths,
+                    cjk_text_names=assigned_cjk_text_names,
                 )
             ):
                 return False
-        elif _call_has_cjk_legend_label(node):
+        elif _call_has_cjk_legend_label(node, assigned_cjk_text_names):
             cjk_legend_labels.append((_call_receiver_key(node), before_order))
         if _is_legend_call(node):
             legend_calls.append(
                 (
                     _call_receiver_key(node),
                     before_order,
-                    _call_has_cjk_legend_label(node),
+                    _call_has_cjk_legend_label(node, assigned_cjk_text_names),
                     has_fonted_call,
                 )
             )
-    if cjk_text_calls:
+    legends_verified = _has_verified_cjk_legend_font(cjk_legend_labels, legend_calls, global_font_configs)
+    if cjk_text_calls and (not cjk_legend_labels or legends_verified):
         return True
-    if _has_verified_cjk_legend_font(cjk_legend_labels, legend_calls, global_font_configs):
+    if legends_verified:
         return True
     if cjk_legend_labels:
         return False
@@ -673,25 +706,42 @@ def _assigned_cjk_font_path_names(
     tree: ast.AST,
     before_order: int | None,
     runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
+    scope_name: str | None = None,
 ) -> set[str]:
-    names: set[str] = set()
+    return set(_assigned_cjk_font_path_literals(tree, before_order, runtime_orders, parent_map, scope_name))
+
+
+def _assigned_cjk_font_path_literals(
+    tree: ast.AST,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
+    scope_name: str | None = None,
+) -> dict[str, set[str]]:
+    names: dict[str, set[str]] = {}
     assignments: list[tuple[int, ast.AST]] = []
     for node in ast.walk(tree):
         order = runtime_orders.get(node)
         if not _node_is_before_order(node, before_order, runtime_orders) or order is None:
+            continue
+        if not _assignment_is_visible_in_scope(node, parent_map, scope_name):
             continue
         assignments.append((order, node))
     for _, node in sorted(assignments, key=lambda item: item[0]):
         value, targets = _assignment_value_and_targets(node)
         if value is None:
             continue
-        is_cjk_path = _ast_contains_cjk_font_path(value) or bool(_cjk_font_path_ref_names(value, names))
+        value_literals = _cjk_font_path_literals(value)
+        for ref_name in _cjk_font_path_ref_names(value, set(names)):
+            value_literals.update(names.get(ref_name, set()))
+        is_cjk_path = bool(value_literals)
         for target in targets:
             if isinstance(target, ast.Name):
                 if is_cjk_path:
-                    names.add(target.id)
+                    names[target.id] = set(value_literals)
                 else:
-                    names.discard(target.id)
+                    names.pop(target.id, None)
     return names
 
 
@@ -700,6 +750,8 @@ def _assigned_cjk_font_property_names(
     cjk_font_paths: set[str],
     before_order: int | None,
     runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
+    scope_name: str | None = None,
 ) -> set[str]:
     names: set[str] = set()
     assignments: list[tuple[int, ast.AST]] = []
@@ -707,12 +759,15 @@ def _assigned_cjk_font_property_names(
         order = runtime_orders.get(node)
         if not _node_is_before_order(node, before_order, runtime_orders) or order is None:
             continue
+        if not _assignment_is_visible_in_scope(node, parent_map, scope_name):
+            continue
         assignments.append((order, node))
     for order, node in sorted(assignments, key=lambda item: item[0]):
         value, targets = _assignment_value_and_targets(node)
         if value is None:
             continue
-        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, order, runtime_orders)
+        node_scope = _enclosing_function_name(node, parent_map or {})
+        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, order, runtime_orders, parent_map, node_scope)
         is_cjk_property = _is_cjk_font_property_call(value, node_cjk_font_paths)
         for target in targets:
             if isinstance(target, ast.Name):
@@ -728,12 +783,15 @@ def _registered_cjk_font_context(
     cjk_font_paths: set[str],
     before_order: int | None,
     runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
+    scope_name: str | None = None,
 ) -> tuple[set[str], set[str], set[str], bool, set[str]]:
     registered_cjk_font_paths, registered_cjk_font_path_literals = _registered_cjk_font_path_refs(
         tree,
         cjk_font_paths,
         before_order,
         runtime_orders,
+        parent_map,
     )
     has_registered_cjk_font = bool(registered_cjk_font_paths or registered_cjk_font_path_literals)
     registered_cjk_font_properties = _assigned_registered_cjk_font_property_names(
@@ -743,6 +801,8 @@ def _registered_cjk_font_context(
         registered_cjk_font_path_literals,
         before_order,
         runtime_orders,
+        parent_map,
+        scope_name,
     )
     registered_cjk_font_names = _assigned_registered_cjk_font_name_names(
         tree,
@@ -752,6 +812,8 @@ def _registered_cjk_font_context(
         registered_cjk_font_path_literals,
         before_order,
         runtime_orders,
+        parent_map,
+        scope_name,
     )
     return (
         registered_cjk_font_paths,
@@ -767,6 +829,7 @@ def _registered_cjk_font_path_refs(
     cjk_font_paths: set[str],
     before_order: int | None,
     runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
 ) -> tuple[set[str], set[str]]:
     names: set[str] = set()
     literals: set[str] = set()
@@ -776,9 +839,20 @@ def _registered_cjk_font_path_refs(
         if not _node_is_before_order(node, before_order, runtime_orders):
             continue
         payloads = [*node.args, *(keyword.value for keyword in node.keywords)]
+        node_scope = _enclosing_function_name(node, parent_map or {})
+        path_literals_by_name = _assigned_cjk_font_path_literals(
+            tree,
+            runtime_orders.get(node),
+            runtime_orders,
+            parent_map,
+            node_scope,
+        )
         for payload in payloads:
             literals.update(_cjk_font_path_literals(payload))
-            names.update(_cjk_font_path_ref_names(payload, cjk_font_paths))
+            ref_names = _cjk_font_path_ref_names(payload, cjk_font_paths)
+            names.update(ref_names)
+            for ref_name in ref_names:
+                literals.update(path_literals_by_name.get(ref_name, set()))
     return names, literals
 
 
@@ -789,6 +863,8 @@ def _assigned_registered_cjk_font_property_names(
     registered_cjk_font_path_literals: set[str],
     before_order: int | None,
     runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
+    scope_name: str | None = None,
 ) -> set[str]:
     names: set[str] = set()
     assignments: list[tuple[int, ast.AST]] = []
@@ -796,17 +872,21 @@ def _assigned_registered_cjk_font_property_names(
         order = runtime_orders.get(node)
         if not _node_is_before_order(node, before_order, runtime_orders) or order is None:
             continue
+        if not _assignment_is_visible_in_scope(node, parent_map, scope_name):
+            continue
         assignments.append((order, node))
     for order, node in sorted(assignments, key=lambda item: item[0]):
         value, targets = _assignment_value_and_targets(node)
         if value is None:
             continue
-        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, order, runtime_orders)
+        node_scope = _enclosing_function_name(node, parent_map or {})
+        node_cjk_font_paths = _assigned_cjk_font_path_names(tree, order, runtime_orders, parent_map, node_scope)
         node_registered_paths, node_registered_literals = _registered_cjk_font_path_refs(
             tree,
             node_cjk_font_paths,
             order,
             runtime_orders,
+            parent_map,
         )
         node_has_registered_font = bool(node_registered_paths or node_registered_literals)
         is_registered_property = _is_registered_cjk_font_property_call(
@@ -832,12 +912,16 @@ def _assigned_registered_cjk_font_name_names(
     registered_cjk_font_path_literals: set[str],
     before_order: int | None,
     runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST] | None = None,
+    scope_name: str | None = None,
 ) -> set[str]:
     names: set[str] = set()
     assignments: list[tuple[int, ast.AST]] = []
     for node in ast.walk(tree):
         order = runtime_orders.get(node)
         if not _node_is_before_order(node, before_order, runtime_orders) or order is None:
+            continue
+        if not _assignment_is_visible_in_scope(node, parent_map, scope_name):
             continue
         assignments.append((order, node))
     for _, node in sorted(assignments, key=lambda item: item[0]):
@@ -866,6 +950,47 @@ def _assignment_value_and_targets(node: ast.AST) -> tuple[ast.AST | None, list[a
     if isinstance(node, ast.AnnAssign):
         return node.value, [node.target]
     return None, []
+
+
+def _assignment_is_visible_in_scope(
+    node: ast.AST,
+    parent_map: dict[ast.AST, ast.AST] | None,
+    scope_name: str | None,
+) -> bool:
+    if parent_map is None:
+        return True
+    assignment_scope = _enclosing_function_name(node, parent_map)
+    return assignment_scope is None or assignment_scope == scope_name
+
+
+def _assigned_cjk_text_names(
+    tree: ast.AST,
+    before_order: int | None,
+    runtime_orders: dict[ast.AST, int],
+    parent_map: dict[ast.AST, ast.AST],
+    scope_name: str | None,
+) -> set[str]:
+    names: set[str] = set()
+    assignments: list[tuple[int, ast.AST]] = []
+    for node in ast.walk(tree):
+        order = runtime_orders.get(node)
+        if not _node_is_before_order(node, before_order, runtime_orders) or order is None:
+            continue
+        if not _assignment_is_visible_in_scope(node, parent_map, scope_name):
+            continue
+        assignments.append((order, node))
+    for _, node in sorted(assignments, key=lambda item: item[0]):
+        value, targets = _assignment_value_and_targets(node)
+        if value is None:
+            continue
+        is_cjk_text = _ast_contains_cjk_text(value, names)
+        for target in targets:
+            if isinstance(target, ast.Name):
+                if is_cjk_text:
+                    names.add(target.id)
+                else:
+                    names.discard(target.id)
+    return names
 
 
 def _ast_parent_map(tree: ast.AST) -> dict[ast.AST, ast.AST]:
@@ -1135,8 +1260,9 @@ def _call_applies_cjk_font_property(
     cjk_font_paths: set[str],
     *,
     require_cjk_text: bool = True,
+    cjk_text_names: set[str] | None = None,
 ) -> bool:
-    if require_cjk_text and not _call_applies_to_cjk_text(node):
+    if require_cjk_text and not _call_applies_to_cjk_text(node, cjk_text_names):
         return False
     for keyword in node.keywords:
         if keyword.arg in {"fontproperties", "font_properties", "prop"} and _ast_uses_cjk_font_property(
@@ -1154,7 +1280,7 @@ def _call_applies_cjk_font_property(
     return False
 
 
-def _call_applies_to_cjk_text(node: ast.Call) -> bool:
+def _call_applies_to_cjk_text(node: ast.Call, cjk_text_names: set[str] | None = None) -> bool:
     name = _call_name(node.func)
     if name not in {
         "annotate",
@@ -1171,15 +1297,22 @@ def _call_applies_to_cjk_text(node: ast.Call) -> bool:
         "zlabel",
     }:
         return False
-    return any(_ast_contains_cjk_text(payload) for payload in [*node.args, *(keyword.value for keyword in node.keywords)])
+    return any(
+        _ast_contains_cjk_text(payload, cjk_text_names)
+        for payload in [*node.args, *(keyword.value for keyword in node.keywords)]
+    )
 
 
-def _call_has_cjk_legend_label(node: ast.Call) -> bool:
+def _call_has_cjk_legend_label(node: ast.Call, cjk_text_names: set[str] | None = None) -> bool:
     if _is_legend_call(node):
-        return any(_ast_contains_cjk_text(arg) for arg in node.args) or any(
-            keyword.arg == "labels" and _ast_contains_cjk_text(keyword.value) for keyword in node.keywords
+        return any(_ast_contains_cjk_text(arg, cjk_text_names) for arg in node.args) or any(
+            keyword.arg == "labels" and _ast_contains_cjk_text(keyword.value, cjk_text_names)
+            for keyword in node.keywords
         )
-    return any(keyword.arg == "label" and _ast_contains_cjk_text(keyword.value) for keyword in node.keywords)
+    return any(
+        keyword.arg == "label" and _ast_contains_cjk_text(keyword.value, cjk_text_names)
+        for keyword in node.keywords
+    )
 
 
 def _is_legend_call(node: ast.Call) -> bool:
@@ -1197,15 +1330,17 @@ def _has_verified_cjk_legend_font(
     legend_calls: list[tuple[str | None, int, bool, bool]],
     global_font_configs: list[_FontConfigLocation],
 ) -> bool:
-    for receiver, legend_order, legend_has_cjk_label, legend_has_font in legend_calls:
-        has_font = legend_has_font or _has_prior_global_font_config(global_font_configs, legend_order)
-        if not has_font:
-            continue
-        if legend_has_cjk_label:
-            return True
-        if any(label_receiver == receiver and label_order < legend_order for label_receiver, label_order in cjk_legend_labels):
-            return True
-    return False
+    if not cjk_legend_labels:
+        return False
+    for label_receiver, label_order in cjk_legend_labels:
+        if not any(
+            label_receiver == receiver
+            and label_order <= legend_order
+            and (legend_has_font or _has_prior_global_font_config(global_font_configs, legend_order))
+            for receiver, legend_order, _, legend_has_font in legend_calls
+        ):
+            return False
+    return True
 
 
 def _font_config_location(
@@ -1246,10 +1381,12 @@ def _fontdict_uses_cjk_font_property(
     return False
 
 
-def _ast_contains_cjk_text(node: ast.AST | None) -> bool:
+def _ast_contains_cjk_text(node: ast.AST | None, cjk_text_names: set[str] | None = None) -> bool:
     if node is None:
         return False
     for child in ast.walk(node):
+        if isinstance(child, ast.Name) and cjk_text_names is not None and child.id in cjk_text_names:
+            return True
         if isinstance(child, ast.Constant) and isinstance(child.value, str) and _CJK_RE.search(child.value):
             return True
     return False
