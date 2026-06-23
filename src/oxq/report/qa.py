@@ -726,16 +726,21 @@ def _assigned_registered_cjk_font_property_names(
             _node_lineno(node),
         )
         node_has_registered_font = bool(node_registered_paths or node_registered_literals)
-        if not _is_registered_cjk_font_property_call(
+        if _is_registered_cjk_font_property_call(
             value,
             node_registered_paths,
             node_has_registered_font,
             node_registered_literals,
+        ) or _ast_get_name_uses_registered_cjk_font_property(
+            value,
+            names,
+            node_registered_paths,
+            node_has_registered_font,
+            node_registered_literals,
         ):
-            continue
-        for target in targets:
-            if isinstance(target, ast.Name):
-                names.add(target.id)
+            for target in targets:
+                if isinstance(target, ast.Name):
+                    names.add(target.id)
     return names
 
 
@@ -834,6 +839,28 @@ def _ast_uses_registered_cjk_font_property(
         ):
             return True
     return False
+
+
+def _ast_get_name_uses_registered_cjk_font_property(
+    node: ast.AST | None,
+    registered_cjk_font_properties: set[str],
+    registered_cjk_font_paths: set[str],
+    has_registered_cjk_font: bool,
+    registered_cjk_font_path_literals: set[str],
+) -> bool:
+    if not isinstance(node, ast.Call):
+        return False
+    if not isinstance(node.func, ast.Attribute) or node.func.attr != "get_name":
+        return False
+    receiver = node.func.value
+    if isinstance(receiver, ast.Name) and receiver.id in registered_cjk_font_properties:
+        return True
+    return _is_registered_cjk_font_property_call(
+        receiver,
+        registered_cjk_font_paths,
+        has_registered_cjk_font,
+        registered_cjk_font_path_literals,
+    )
 
 
 def _is_rcparams_font_target(target: ast.expr) -> bool:
@@ -953,6 +980,10 @@ def _call_applies_to_cjk_text(node: ast.Call) -> bool:
 
 
 def _call_has_cjk_legend_label(node: ast.Call) -> bool:
+    if _is_legend_call(node):
+        return any(_ast_contains_cjk_text(arg) for arg in node.args) or any(
+            keyword.arg == "labels" and _ast_contains_cjk_text(keyword.value) for keyword in node.keywords
+        )
     return any(keyword.arg == "label" and _ast_contains_cjk_text(keyword.value) for keyword in node.keywords)
 
 
