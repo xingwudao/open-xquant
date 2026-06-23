@@ -84,7 +84,7 @@ def test_report_qa_command_leaves_semantic_advisory_checks_to_skill(tmp_path) ->
     payload = json.loads(result.output)
     finding_ids = {finding["id"] for finding in payload["findings"]}
     assert "numeric_claim_unverified" not in finding_ids
-    assert "cjk_font_unverified" not in finding_ids
+    assert payload["warning_count"] == 0
 
 
 def test_report_qa_command_keeps_source_script_path_validation_deterministic(tmp_path) -> None:

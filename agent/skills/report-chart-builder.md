@@ -41,12 +41,9 @@ handing the final narrative to `research-report-writer`.
    - Write figure outputs under `report_assets/figures`.
    - Keep plotting deterministic and local; do not download new data unless the
      user explicitly asks.
-   - For Chinese chart labels, explicitly configure an available CJK font using
-     `matplotlib.font_manager.FontProperties(fname=...)` and
-     `fontManager.addfont(...)` with a real font file such as
-     `/System/Library/Fonts/STHeiti Light.ttc`, PingFang, or Noto Sans CJK.
-     If a CJK font cannot be verified, default to English labels instead of
-     risking missing glyphs.
+   - Prefer English chart labels. Use Chinese labels only when the local
+     rendering environment is already known to support them; otherwise keep
+     labels in English rather than spending research QA effort on font setup.
 
 4. Register generated assets.
 
@@ -103,12 +100,13 @@ After registration, verify every generated figure:
 - The path is under `report_assets/figures`.
 - The figure is present in `report_assets/manifest.json`.
 - The manifest hash matches the current file.
-- Chinese charts either use a verified CJK font or default to English labels.
+- Charts default to English labels unless CJK rendering is already known to
+  work in the local environment.
 - The chart is not blank or visually empty.
 - The caption names the source artifact and the interpretation limit.
 
 Use `oxq report qa runs/<run_id>/` after final Markdown and HTML exist to
-re-check image references, fonts, and manifest state.
+re-check image references, dates, numeric claims, and manifest state.
 
 5. Hand off final writing to `research-report-writer`.
 

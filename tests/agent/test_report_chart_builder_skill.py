@@ -26,7 +26,7 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "report_evidence.md" not in text
     assert "Do not modify metrics" in text
     assert "Do not modify audit" in text
-    assert "CJK font" in text
+    assert "Prefer English chart labels" in text
     assert "default to English labels" in text
     assert "non-empty" in text
     assert "dimensions" in text

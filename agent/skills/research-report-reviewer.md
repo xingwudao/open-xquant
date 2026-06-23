@@ -75,12 +75,12 @@ Markdown, and rerun deterministic QA.
    - Claims like "OOS 优于 IS 表明没有过拟合", "方向正确", "风险可控", or
      "适合 paper trading" require explicit artifact-backed reasoning.
 
-5. Chart and CJK review.
+5. Chart review.
    - Inspect registered figures when they support key conclusions.
    - Check that charts are not blank, nearly blank, unreadable, mislabeled, or
      purely decorative.
-   - Review CJK font risk from the final PNG/HTML appearance when possible;
-     script configuration alone does not prove glyphs rendered correctly.
+   - Prefer English chart labels unless the final rendered figure already
+     proves CJK labels are readable.
    - Captions must identify source artifacts and avoid unsupported conclusions.
 
 6. Markdown/HTML semantic consistency.
