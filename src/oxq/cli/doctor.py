@@ -102,9 +102,9 @@ def _check_workspace() -> dict[str, Any]:
     missing = [
         str(path)
         for path in (
-            Path.cwd() / "strategy_specs",
             Path.cwd() / "runs",
-            Path.cwd() / "reports",
+            Path.cwd() / "runs" / "final",
+            Path.cwd() / "comparisons",
             Path.cwd() / "experiments.jsonl",
         )
         if not path.exists()
@@ -125,6 +125,7 @@ def _check_deps() -> dict[str, Any]:
         "scipy": "uv sync --extra scipy",
         "matplotlib": "uv sync --extra chart",
         "mplfinance": "uv sync --extra chart",
+        "seaborn": "uv sync --extra chart",
         "httpx": "uv sync --extra live",
         "socksio": "uv sync --extra live",
         "websockets": "uv sync --extra live",

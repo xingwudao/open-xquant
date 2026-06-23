@@ -60,6 +60,11 @@ uv run oxq robustness run runs/<run_id>/
 `WARN` can mean robustness is incomplete, not that the command failed. Preserve
 warnings such as missing parameter perturbation or regime analysis.
 
+After the command finishes, inspect `runs/` and explicitly tell the user when a
+created sub-run directory such as `<run_id>_cost_x2` appears. That `_cost_x2`
+directory is a parallel cost-stress backtest and should be referenced as a
+robustness artifact, not mistaken for an unrelated experiment.
+
 When `robustness.json` exists, inspect and report:
 
 - cost stress results

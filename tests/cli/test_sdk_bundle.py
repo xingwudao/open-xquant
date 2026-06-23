@@ -508,11 +508,24 @@ def test_install_workspace_sdk_rejects_existing_venv_missing_python(monkeypatch,
 
 @pytest.mark.parametrize(
     "sdk_venv",
-    [".open-xquant", "strategy_specs", "runs", "reports", "experiments.jsonl", "AGENTS.md"],
+    [
+        ".open-xquant",
+        "runs",
+        "comparisons",
+        "experiments.jsonl",
+        "strategy_spec.yaml",
+        "AGENTS.md",
+    ],
 )
 def test_install_workspace_sdk_rejects_reserved_workspace_paths(tmp_path, sdk_venv) -> None:
     with pytest.raises(Exception, match="reserved workspace path"):
         install_workspace_sdk(tmp_path / "workspace", tmp_path / "workspace" / sdk_venv)
+
+
+def test_chart_extra_includes_seaborn_for_statistical_report_charts() -> None:
+    data = Path("pyproject.toml").read_text(encoding="utf-8")
+
+    assert "seaborn>=0.13" in data
 
 
 def test_install_workspace_sdk_rejects_existing_venv_python_version_mismatch(monkeypatch, tmp_path) -> None:

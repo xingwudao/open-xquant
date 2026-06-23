@@ -26,7 +26,14 @@ SDK_PROFILE = "full-research"
 SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
 EXCLUDED_EXTRAS = ("dev", "docs", "talib")
 WHEEL_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
-RESERVED_WORKSPACE_PATHS = (".open-xquant", "strategy_specs", "runs", "reports", "experiments.jsonl", "AGENTS.md")
+RESERVED_WORKSPACE_PATHS = (
+    ".open-xquant",
+    "runs",
+    "comparisons",
+    "experiments.jsonl",
+    "strategy_spec.yaml",
+    "AGENTS.md",
+)
 
 
 def default_config_dir() -> Path:

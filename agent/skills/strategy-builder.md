@@ -76,6 +76,27 @@ Do not promise these are directly supported by the audited CLI compiler:
 
 ## Phase 0: Confirm Constraints
 
+### Experiment Lifecycle Check
+
+Before creating or editing a spec, inspect `runs/` when it exists:
+
+```bash
+ls runs/
+```
+
+For each run directory, classify completion by checking:
+
+- `metrics.json`
+- `research_report.md`
+- `research_bias_audit.json`
+- `robustness.json`
+
+If a run has `metrics.json` but lacks `research_report.md`, ask whether to
+resume that unfinished experiment or abandon it and start a new run. Abandoning
+does not delete the run; record the status in `experiments.jsonl` when an
+experiment registry exists. If all prior experiments are complete, summarize
+the recent runs and continue.
+
 Ask for or confirm:
 
 - tradable symbols
@@ -196,6 +217,11 @@ Fatal issues to fix before continuing:
 
 Warnings are not fatal, but must be reported later.
 
+After validation passes, use `spec-auditor` before any backtest. The auditor
+must classify material fields as confirmed, default, or unconfirmed. Any
+unconfirmed field blocks `oxq backtest run` until the user confirms or changes
+the value, then validation and the auditor gate run again.
+
 ## Phase 3: Prepare Data
 
 `oxq backtest run` reads local parquet files. If data is missing, prepare it
@@ -255,6 +281,15 @@ exists, summarize cost stress, IS/OOS metric diff, parameter perturbation, and
 regime analysis instead of only quoting baseline Sharpe.
 Use `research-report-writer` to write `research_report.md` and render
 `research_report.html` from that final Markdown.
+
+When the user accepts a completed run as the selected version, ask whether to
+mark it as final. If yes, update `runs/final` as a lightweight pointer:
+
+- copy the selected run's `strategy_spec.yaml` to `runs/final/strategy_spec.yaml`
+- write `runs/final/selected.json` with `run_id`, `selected_at`, reason,
+  `metrics_snapshot`, and `previous_run_id` when replacing an older selection
+- write `runs/final/README.md` with the selected reason and next steps
+- mark the run status as `final` in `experiments.jsonl` when present
 
 ## Red Lines
 

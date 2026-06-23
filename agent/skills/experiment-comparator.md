@@ -1,0 +1,59 @@
+---
+name: experiment-comparator
+description: Compare two completed open-xquant experiment runs.
+---
+
+# Experiment Comparator
+
+Use this skill when the user asks to compare two completed runs. The comparison
+is cross-experiment metadata, so write outputs under `comparisons/`, not inside
+either run directory.
+
+## Preconditions
+
+Both runs must contain:
+
+- `strategy_spec.yaml`
+- `metrics.json`
+- `equity_curve.csv`
+
+If a run lacks `metrics.json`, say that the experiment has not completed a
+backtest and cannot be compared yet.
+
+## Workflow
+
+1. Read both `strategy_spec.yaml` files and generate `spec_diff.yaml`.
+   - Compare fields recursively.
+   - Include path, run A value, run B value, and likely impact.
+2. Read both `metrics.json` files and generate `metrics_comparison.json`.
+   - Include key metrics for each run.
+   - Include deltas and winners by return, Sharpe, and drawdown where present.
+3. Generate figures under `comparisons/<comparison_id>/figures/`.
+   - `equity_overlay.png`
+   - `drawdown_overlay.png`
+   - `metrics_bar.png`
+4. Write `comparison_report.md`.
+   - Explain which spec differences plausibly drove the metric differences.
+   - Do not claim causality when the evidence only supports association.
+5. Append a summary row to `comparisons/comparisons.jsonl`.
+
+## Output Layout
+
+```text
+comparisons/
+├── comparisons.jsonl
+└── <comparison_id>/
+    ├── spec_diff.yaml
+    ├── metrics_comparison.json
+    ├── comparison_report.md
+    └── figures/
+        ├── equity_overlay.png
+        ├── drawdown_overlay.png
+        └── metrics_bar.png
+```
+
+## Red Lines
+
+- Do not modify either run's artifacts.
+- Do not compare unaudited assumptions as if they were equivalent.
+- Do not hide metric trade-offs by naming a single winner without context.

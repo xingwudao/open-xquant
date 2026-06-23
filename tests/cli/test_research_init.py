@@ -22,10 +22,12 @@ def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> No
 
         assert created.exit_code == 0, created.output
         assert (cwd_path / ".open-xquant/workspace.yaml").exists()
-        assert (cwd_path / "strategy_specs").is_dir()
         assert (cwd_path / "runs").is_dir()
-        assert (cwd_path / "reports").is_dir()
+        assert (cwd_path / "runs/final").is_dir()
+        assert (cwd_path / "comparisons").is_dir()
         assert (cwd_path / "experiments.jsonl").exists()
+        assert not (cwd_path / "strategy_specs").exists()
+        assert not (cwd_path / "reports").exists()
         agents_text = (cwd_path / "AGENTS.md").read_text(encoding="utf-8")
         assert "user note" in agents_text
         assert "open-xquant-workspace:begin" in agents_text
@@ -35,6 +37,25 @@ def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> No
         again = runner.invoke(main, ["research", "init"])
         assert again.exit_code == 0, again.output
         assert (cwd_path / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant-workspace:begin") == 1
+
+
+def test_research_init_workspace_paths_match_run_centric_layout(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 0, result.output
+        workspace = yaml.safe_load((cwd_path / ".open-xquant/workspace.yaml").read_text(encoding="utf-8"))
+        assert workspace["paths"] == {
+            "current_spec": "strategy_spec.yaml",
+            "runs_dir": "runs",
+            "final_dir": "runs/final",
+            "comparisons_dir": "comparisons",
+            "experiment_registry": "experiments.jsonl",
+            "comparison_registry": "comparisons/comparisons.jsonl",
+        }
 
 
 def test_research_init_defaults_to_market_data_directory(tmp_path) -> None:

@@ -69,11 +69,14 @@ def initialize_workspace(
         click.echo(f"Workspace config written to {workspace_file}")
 
     if not minimal:
-        for dirname in ("strategy_specs", "runs", "reports"):
-            (cwd / dirname).mkdir(exist_ok=True)
+        (cwd / "runs" / "final").mkdir(parents=True, exist_ok=True)
+        (cwd / "comparisons").mkdir(exist_ok=True)
     experiments = cwd / "experiments.jsonl"
     if not experiments.exists():
         write_text_file(experiments, "")
+    comparison_registry = cwd / "comparisons" / "comparisons.jsonl"
+    if not minimal and not comparison_registry.exists():
+        write_text_file(comparison_registry, "")
     upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
 
 
@@ -82,10 +85,12 @@ def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state:
         "schema_version": 1,
         "name": name or cwd.name,
         "paths": {
-            "specs_dir": "strategy_specs",
+            "current_spec": "strategy_spec.yaml",
             "runs_dir": "runs",
-            "reports_dir": "reports",
+            "final_dir": "runs/final",
+            "comparisons_dir": "comparisons",
             "experiment_registry": "experiments.jsonl",
+            "comparison_registry": "comparisons/comparisons.jsonl",
         },
         "data": {
             "market_data_dir": data_dir,

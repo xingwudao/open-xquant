@@ -31,6 +31,11 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "non-empty" in text
     assert "dimensions" in text
     assert "manifest" in text
+    assert "Chart Applicability Matrix" in text
+    assert "Violin Plot" in text
+    assert "Pair Plot" in text
+    assert "scan the run directory" in text
+    assert "recommended chart set" in text
 
 
 def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
@@ -109,8 +114,10 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     for leaf_skill in [
         "strategy-builder",
         "quant-research",
+        "spec-auditor",
         "strategy-monitor",
         "report-chart-builder",
+        "experiment-comparator",
         "research-report-writer",
         "research-report-reviewer",
         "performance-reviewer",
@@ -121,6 +128,36 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
         "live-trader",
     ]:
         assert leaf_skill in text
+
+
+def test_spec_auditor_skill_documents_source_trace_gate() -> None:
+    skill = Path("agent/skills/spec-auditor.md")
+
+    text = skill.read_text(encoding="utf-8")
+
+    assert "name: spec-auditor" in text
+    assert "confirmed" in text
+    assert "default" in text
+    assert "unconfirmed" in text
+    assert "last successful `oxq spec validate`" in text
+    assert "blocks backtest" in text
+    assert "group related fields" in text
+
+
+def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
+    skill = Path("agent/skills/experiment-comparator.md")
+
+    text = skill.read_text(encoding="utf-8")
+
+    assert "name: experiment-comparator" in text
+    assert "comparisons/" in text
+    assert "spec_diff.yaml" in text
+    assert "metrics_comparison.json" in text
+    assert "comparison_report.md" in text
+    assert "equity_overlay" in text
+    assert "drawdown_overlay" in text
+    assert "metrics_bar" in text
+    assert "metrics.json" in text
 
 
 def test_research_report_reviewer_skill_covers_semantic_report_qa() -> None:
@@ -169,6 +206,28 @@ def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
     assert "Markdown/HTML image counts" in text
     assert "configured end date" in text
     assert "effective last trading day" in text
+
+
+def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
+    text = Path("agent/skills/strategy-builder.md").read_text(encoding="utf-8")
+
+    assert "Experiment Lifecycle Check" in text
+    assert "research_report.md" in text
+    assert "research_bias_audit.json" in text
+    assert "robustness.json" in text
+    assert "spec-auditor" in text
+    assert "runs/final" in text
+
+
+def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs() -> None:
+    quant_research = Path("agent/skills/quant-research.md").read_text(encoding="utf-8")
+    strategy_monitor = Path("agent/skills/strategy-monitor.md").read_text(encoding="utf-8")
+
+    assert "Experiment Lifecycle Check" in quant_research
+    assert "runs/final" in quant_research
+    assert "mark it as final" in quant_research
+    assert "_cost_x2" in strategy_monitor
+    assert "created sub-run directory" in strategy_monitor
 
 
 def test_agent_guide_is_install_only_and_points_to_router_skill() -> None:

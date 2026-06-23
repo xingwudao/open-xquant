@@ -47,6 +47,7 @@ akshare = [
 chart = [
     "mplfinance>=0.12",
     "matplotlib>=3.7",
+    "seaborn>=0.13",
 ]
 scipy = [
     "scipy>=1.11",

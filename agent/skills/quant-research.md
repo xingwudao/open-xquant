@@ -10,6 +10,21 @@ audit -> report.
 
 ## Workflow
 
+### Step 0: Experiment Lifecycle Check
+
+Before starting a new run, inspect `runs/` and classify existing experiments by
+the presence of:
+
+- `metrics.json`
+- `research_report.md`
+- `research_bias_audit.json`
+- `robustness.json`
+
+If any run has `metrics.json` but no `research_report.md`, ask whether to
+continue that unfinished experiment or abandon it and start a new one. Do not
+delete abandoned runs; record abandonment in `experiments.jsonl` when the
+registry exists.
+
 ### Step 1: Create Spec
 
 ```bash
@@ -23,6 +38,10 @@ oxq spec validate strategy_spec.yaml
 ```
 
 Fix any errors. Spec MUST pass validation before proceeding.
+
+After validation passes, use `spec-auditor` to trace material field sources.
+Any unconfirmed field blocks the backtest until the user confirms or changes
+the grouped assumptions and the spec passes validation again.
 
 ### Step 2: Backtest
 
@@ -77,6 +96,17 @@ audit/robustness fidelity, numeric warning triage, chart narrative quality,
 CJK/font risk, and whether the report structure supports the stated decision.
 If the reviewer requires Markdown report edits, render `research_report.html`
 again from the updated Markdown before rerunning `oxq report qa`.
+
+When the user accepts the completed experiment, ask whether to mark it as final.
+If yes, write the lightweight `runs/final` pointer:
+
+- `runs/final/strategy_spec.yaml`
+- `runs/final/selected.json`
+- `runs/final/README.md`
+
+Mark the accepted run as final in `experiments.jsonl` when present. The final
+pointer is a copy of the selected spec plus metadata, not a copy of the full
+run directory.
 
 ## Quality Gates
 

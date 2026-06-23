@@ -136,7 +136,7 @@ def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
 
 
 def test_doctor_deps_warns_when_only_optional_missing(monkeypatch) -> None:
-    missing = {"scipy", "mplfinance"}
+    missing = {"scipy", "mplfinance", "seaborn"}
 
     def fake_find_spec(module: str):
         return None if module in missing else object()
@@ -147,6 +147,6 @@ def test_doctor_deps_warns_when_only_optional_missing(monkeypatch) -> None:
 
     assert result["status"] == "warn"
     assert result["missing_core"] == []
-    assert result["missing_optional"] == ["mplfinance", "scipy"]
+    assert result["missing_optional"] == ["mplfinance", "scipy", "seaborn"]
     assert "uv sync --extra scipy" in result["fixes"]
     assert "uv sync --extra chart" in result["fixes"]
