@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from oxq.cli.doctor import _check_data, _check_deps
+from oxq.cli.doctor import _check_data, _check_deps, _check_workspace
 from oxq.cli.main import main
 
 
@@ -112,6 +112,34 @@ def test_doctor_data_check_uses_market_data_directory(monkeypatch, tmp_path) -> 
 
     assert result["status"] == "warn"
     assert result["path"].endswith(".oxq/data/market")
+
+
+def test_doctor_accepts_legacy_workspace_layout(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  specs_dir: strategy_specs",
+                "  runs_dir: runs",
+                "  reports_dir: reports",
+                "  experiment_registry: experiments.jsonl",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (work / "strategy_specs").mkdir()
+    (work / "runs").mkdir()
+    (work / "reports").mkdir()
+    (work / "experiments.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "ok"
+    assert result["missing"] == []
 
 
 def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:

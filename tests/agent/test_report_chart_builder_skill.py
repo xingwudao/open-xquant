@@ -215,6 +215,8 @@ def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
     assert "research_report.md" in text
     assert "research_bias_audit.json" in text
     assert "robustness.json" in text
+    assert "Skip robustness sub-runs" in text
+    assert "_cost_x2" in text
     assert "spec-auditor" in text
     assert "runs/final" in text
 
@@ -224,6 +226,7 @@ def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs
     strategy_monitor = Path("agent/skills/strategy-monitor.md").read_text(encoding="utf-8")
 
     assert "Experiment Lifecycle Check" in quant_research
+    assert "Skip robustness sub-runs" in quant_research
     assert "runs/final" in quant_research
     assert "mark it as final" in quant_research
     assert "_cost_x2" in strategy_monitor

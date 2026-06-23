@@ -549,18 +549,27 @@ def _has_verified_cjk_font(script_text: str) -> bool:
     except SyntaxError:
         return False
 
-    cjk_font_path_names = _assigned_cjk_font_path_names(tree)
+    cjk_font_paths = _assigned_cjk_font_path_names(tree)
+    cjk_font_properties = _assigned_cjk_font_property_names(tree, cjk_font_paths)
     for node in ast.walk(tree):
         if isinstance(node, ast.Assign):
-            if any(_is_rcparams_font_target(target) for target in node.targets) and _ast_contains_cjk_font_name(node.value):
+            if any(_is_rcparams_font_target(target) for target in node.targets) and (
+                _ast_contains_cjk_font_name(node.value)
+                or _ast_uses_cjk_font_property(node.value, cjk_font_properties, cjk_font_paths)
+            ):
                 return True
         elif isinstance(node, ast.AnnAssign):
-            if _is_rcparams_font_target(node.target) and _ast_contains_cjk_font_name(node.value):
+            if _is_rcparams_font_target(node.target) and (
+                _ast_contains_cjk_font_name(node.value)
+                or _ast_uses_cjk_font_property(node.value, cjk_font_properties, cjk_font_paths)
+            ):
                 return True
         elif isinstance(node, ast.Call):
-            if _is_rcparams_update_font_call(node) or _is_matplotlib_rc_font_call(node):
-                return True
-            if _is_cjk_font_file_call(node, cjk_font_path_names):
+            if (
+                _is_rcparams_update_font_call(node, cjk_font_properties, cjk_font_paths)
+                or _is_matplotlib_rc_font_call(node, cjk_font_properties, cjk_font_paths)
+                or _call_applies_cjk_font_property(node, cjk_font_properties, cjk_font_paths)
+            ):
                 return True
     return False
 
@@ -578,23 +587,40 @@ def _assigned_cjk_font_path_names(tree: ast.AST) -> set[str]:
     return names
 
 
-def _is_cjk_font_file_call(node: ast.Call, cjk_font_path_names: set[str]) -> bool:
-    name = _call_name(node.func)
-    if name == "FontProperties":
-        payloads = [*node.args, *(keyword.value for keyword in node.keywords if keyword.arg == "fname")]
-        return any(_ast_references_cjk_font_path(payload, cjk_font_path_names) for payload in payloads)
-    if name == "addfont":
-        payloads = [*node.args, *(keyword.value for keyword in node.keywords)]
-        return any(_ast_references_cjk_font_path(payload, cjk_font_path_names) for payload in payloads)
-    return False
+def _assigned_cjk_font_property_names(tree: ast.AST, cjk_font_paths: set[str]) -> set[str]:
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not _is_cjk_font_property_call(node.value, cjk_font_paths):
+            continue
+        for target in node.targets:
+            if isinstance(target, ast.Name):
+                names.add(target.id)
+    return names
 
 
-def _ast_references_cjk_font_path(node: ast.AST | None, cjk_font_path_names: set[str]) -> bool:
+def _is_cjk_font_property_call(node: ast.AST | None, cjk_font_paths: set[str]) -> bool:
     if node is None:
         return False
-    if _ast_contains_cjk_font_path(node):
-        return True
-    return isinstance(node, ast.Name) and node.id in cjk_font_path_names
+    if not isinstance(node, ast.Call) or _call_name(node.func) != "FontProperties":
+        return False
+    payloads = [*node.args, *(keyword.value for keyword in node.keywords if keyword.arg == "fname")]
+    return any(
+        _ast_contains_cjk_font_path(payload) or (isinstance(payload, ast.Name) and payload.id in cjk_font_paths)
+        for payload in payloads
+    )
+
+
+def _ast_uses_cjk_font_property(node: ast.AST | None, cjk_font_properties: set[str], cjk_font_paths: set[str]) -> bool:
+    if node is None:
+        return False
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id in cjk_font_properties:
+            return True
+        if _is_cjk_font_property_call(child, cjk_font_paths):
+            return True
+    return False
 
 
 def _is_rcparams_font_target(target: ast.expr) -> bool:
@@ -612,7 +638,7 @@ def _is_rcparams_object(node: ast.expr) -> bool:
     return isinstance(node, ast.Attribute) and node.attr == "rcParams"
 
 
-def _is_rcparams_update_font_call(node: ast.Call) -> bool:
+def _is_rcparams_update_font_call(node: ast.Call, cjk_font_properties: set[str], cjk_font_paths: set[str]) -> bool:
     if not (
         isinstance(node.func, ast.Attribute)
         and node.func.attr == "update"
@@ -620,17 +646,36 @@ def _is_rcparams_update_font_call(node: ast.Call) -> bool:
     ):
         return False
     payloads = [*node.args, *(keyword.value for keyword in node.keywords)]
-    return any(_dict_sets_font_key(payload) and _ast_contains_cjk_font_name(payload) for payload in payloads)
+    return any(
+        _dict_sets_font_key(payload)
+        and (
+            _ast_contains_cjk_font_name(payload)
+            or _ast_uses_cjk_font_property(payload, cjk_font_properties, cjk_font_paths)
+        )
+        for payload in payloads
+    )
 
 
-def _is_matplotlib_rc_font_call(node: ast.Call) -> bool:
+def _is_matplotlib_rc_font_call(node: ast.Call, cjk_font_properties: set[str], cjk_font_paths: set[str]) -> bool:
     name = _call_name(node.func)
     if name != "rc":
         return False
     if not node.args or _literal_string(node.args[0]) != "font":
         return False
     payloads = [*node.args[1:], *(keyword.value for keyword in node.keywords)]
-    return any(_ast_contains_cjk_font_name(payload) for payload in payloads)
+    return any(
+        _ast_contains_cjk_font_name(payload)
+        or _ast_uses_cjk_font_property(payload, cjk_font_properties, cjk_font_paths)
+        for payload in payloads
+    )
+
+
+def _call_applies_cjk_font_property(node: ast.Call, cjk_font_properties: set[str], cjk_font_paths: set[str]) -> bool:
+    return any(
+        keyword.arg in {"fontproperties", "font_properties", "prop"}
+        and _ast_uses_cjk_font_property(keyword.value, cjk_font_properties, cjk_font_paths)
+        for keyword in node.keywords
+    )
 
 
 def _call_name(node: ast.expr) -> str | None:

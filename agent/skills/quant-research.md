@@ -20,6 +20,10 @@ the presence of:
 - `research_bias_audit.json`
 - `robustness.json`
 
+Skip robustness sub-runs such as `<run_id>_cost_x2` and parameter-perturbation
+siblings when deciding whether a user experiment is unfinished. Treat those
+directories as child artifacts of the parent run, not resumable experiments.
+
 If any run has `metrics.json` but no `research_report.md`, ask whether to
 continue that unfinished experiment or abandon it and start a new one. Do not
 delete abandoned runs; record abandonment in `experiments.jsonl` when the

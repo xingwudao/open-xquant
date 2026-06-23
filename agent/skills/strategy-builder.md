@@ -91,6 +91,10 @@ For each run directory, classify completion by checking:
 - `research_bias_audit.json`
 - `robustness.json`
 
+Skip robustness sub-runs such as `<run_id>_cost_x2` and parameter-perturbation
+siblings when deciding whether a user experiment is unfinished. Treat those
+directories as child artifacts of the parent run, not resumable experiments.
+
 If a run has `metrics.json` but lacks `research_report.md`, ask whether to
 resume that unfinished experiment or abandon it and start a new run. Abandoning
 does not delete the run; record the status in `experiments.jsonl` when an

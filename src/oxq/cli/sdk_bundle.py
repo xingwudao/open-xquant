@@ -28,7 +28,9 @@ EXCLUDED_EXTRAS = ("dev", "docs", "talib")
 WHEEL_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 RESERVED_WORKSPACE_PATHS = (
     ".open-xquant",
+    "strategy_specs",
     "runs",
+    "reports",
     "comparisons",
     "experiments.jsonl",
     "strategy_spec.yaml",
