@@ -1001,6 +1001,34 @@ def test_report_qa_accepts_registered_noto_serif_cjk_font_file(tmp_path) -> None
     assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
 
 
+def test_report_qa_requires_selected_cjk_font_file_to_be_registered(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    script = run_dir / "report_assets/scripts/plot.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(
+        (
+            "import matplotlib.font_manager as fm\n"
+            "import matplotlib.pyplot as plt\n"
+            "fm.fontManager.addfont('/System/Library/Fonts/STHeiti Light.ttc')\n"
+            "fp = fm.FontProperties(fname='/System/Library/Fonts/PingFang.ttc')\n"
+            "plt.rcParams['font.family'] = fp.get_name()\n"
+            "plt.title('策略净值')\n"
+        ),
+        encoding="utf-8",
+    )
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值", source_script=script)
+    markdown = "# 研究报告\n\n有效数据最后交易日：2024-03-29\n\n配置结束日：2024-03-31\n\n![策略净值](report_assets/figures/equity.png)\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
+
+    result = run_report_qa(run_dir)
+
+    assert result.status == "warn"
+    assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
 def test_report_qa_checks_numeric_claims_in_html_text(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     markdown = (

@@ -287,12 +287,14 @@ Use `research-report-writer` to write `research_report.md` and render
 `research_report.html` from that final Markdown.
 
 When the user accepts a completed run as the selected version, ask whether to
-mark it as final. If yes, update `runs/final` as a lightweight pointer:
+mark it as final. If yes, read `.open-xquant/workspace.yaml` and resolve
+`paths.final_dir`; fall back to `runs/final` when the config value is absent.
+Update that final directory as a lightweight pointer:
 
-- copy the selected run's `strategy_spec.yaml` to `runs/final/strategy_spec.yaml`
-- write `runs/final/selected.json` with `run_id`, `selected_at`, reason,
+- copy the selected run's `strategy_spec.yaml` to `<final_dir>/strategy_spec.yaml`
+- write `<final_dir>/selected.json` with `run_id`, `selected_at`, reason,
   `metrics_snapshot`, and `previous_run_id` when replacing an older selection
-- write `runs/final/README.md` with the selected reason and next steps
+- write `<final_dir>/README.md` with the selected reason and next steps
 - mark the run status as `final` in `experiments.jsonl` when present
 
 ## Red Lines

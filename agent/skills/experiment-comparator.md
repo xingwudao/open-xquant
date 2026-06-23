@@ -6,8 +6,12 @@ description: Compare two completed open-xquant experiment runs.
 # Experiment Comparator
 
 Use this skill when the user asks to compare two completed runs. The comparison
-is cross-experiment metadata, so write outputs under `comparisons/`, not inside
-either run directory.
+is cross-experiment metadata, so do not write outputs inside either run
+directory. Resolve the comparison output root from `.open-xquant/workspace.yaml`
+when it exists: use `paths.comparisons_dir` for the comparison directory root
+and `paths.comparison_registry` for the summary registry. Fall back to
+`comparisons/` and `comparisons/comparisons.jsonl` only when no workspace config
+value is present.
 
 ## Preconditions
 
@@ -28,16 +32,18 @@ backtest and cannot be compared yet.
 2. Read both `metrics.json` files and generate `metrics_comparison.json`.
    - Include key metrics for each run.
    - Include deltas and winners by return, Sharpe, and drawdown where present.
-3. Generate figures under `comparisons/<comparison_id>/figures/`.
+3. Generate figures under `<comparisons_dir>/<comparison_id>/figures/`.
    - `equity_overlay.png`
    - `drawdown_overlay.png`
    - `metrics_bar.png`
 4. Write `comparison_report.md`.
    - Explain which spec differences plausibly drove the metric differences.
    - Do not claim causality when the evidence only supports association.
-5. Append a summary row to `comparisons/comparisons.jsonl`.
+5. Append a summary row to `<comparison_registry>`.
 
 ## Output Layout
+
+With the default fallback paths:
 
 ```text
 comparisons/

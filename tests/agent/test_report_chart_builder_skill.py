@@ -151,6 +151,9 @@ def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
 
     assert "name: experiment-comparator" in text
     assert "comparisons/" in text
+    assert ".open-xquant/workspace.yaml" in text
+    assert "paths.comparisons_dir" in text
+    assert "paths.comparison_registry" in text
     assert "spec_diff.yaml" in text
     assert "metrics_comparison.json" in text
     assert "comparison_report.md" in text
@@ -219,6 +222,8 @@ def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
     assert "_cost_x2" in text
     assert "spec-auditor" in text
     assert "runs/final" in text
+    assert ".open-xquant/workspace.yaml" in text
+    assert "paths.final_dir" in text
 
 
 def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs() -> None:
