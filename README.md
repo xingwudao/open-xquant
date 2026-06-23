@@ -11,6 +11,8 @@ spec → validate → compile → backtest → audit → robustness → report
 ```
 
 open-xquant 不是一个 Coding Agent，而是 Coding Agent 应该调用的确定性量化研究内核。
+CLI / SDK 只负责可复现的底层执行；报告撰写、图表选择、实验对比和
+spec 来源追溯这类需要综合判断的任务，交给已安装的 Agent skills 驱动。
 
 它的目标不是更快生成更多策略，而是更快识别和拒绝假的回测结果。
 
@@ -73,16 +75,24 @@ equity curve、artifact hashes、audit、report——可版本化、可 diff、�
 ## 核心流程
 
 ```
-oxq spec init "策略想法"
-  → oxq spec validate strategy_spec.yaml
+Agent loads open-xquant skill
+  → strategy-builder writes and validates strategy_spec.yaml
+  → spec-auditor checks assumption provenance
   → oxq strategy compile strategy_spec.yaml
   → oxq backtest run strategy_spec.yaml --json
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
-  → /quant-report runs/<run_id>/
+  → report-chart-builder registers chart assets when needed
+  → research-report-writer writes research_report.md/html
+  → oxq report qa runs/<run_id>/
+  → research-report-reviewer reviews the final report
   → oxq experiment add runs/<run_id>/
 ```
+
+这里的 `oxq` CLI 步骤是确定性 primitives：验证、编译、回测、审计、
+稳健性、artifact QA 和实验登记。需要理解上下文和做取舍的步骤由 skill
+完成。
 
 ## 谁适合使用 open-xquant？
 
@@ -106,7 +116,7 @@ oxq spec init "策略想法"
 | `02_data_and_universe.py` | 数据下载、读取、Universe 构建 |
 | `03_backtest_and_artifacts.py` | Spec 编译、回测执行、artifact 读取 |
 | `04_audit_and_robustness.py` | 可复现审计、偏差审计、稳健性测试 |
-| `05_report_and_experiment.py` | 研究报告生成、实验登记 |
+| `05_report_and_experiment.py` | 报告 artifact、QA 与实验登记 |
 | `06_signals_and_rules.py` | Signal、Rule、ROCTiming 与 BUY/SELL/HOLD 语义 |
 
 ```bash
@@ -135,7 +145,8 @@ uv run python examples/strategies/spec_validation_demo.py
 ## 项目边界
 
 open-xquant 是完整可用的开源研究内核，聚焦确定性计算、
-声明式 spec、审计、报告和 Agent 可调用的 CLI / SDK / Tools。
+声明式 spec、审计、artifact QA 和 Agent 可调用的 CLI / SDK / Tools。
+需要语义判断的报告、图表和实验对比由 Agent skills 编排。
 
 不属于 open-xquant 核心边界的能力：
 
@@ -162,7 +173,9 @@ open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Rese
 - Runtime execution assumptions (calendar, fill price, lot size, cash return)
 - Metrics profiles (`open_xquant_default`, `xquant_production`)
 - Robustness Runner (cost stress, IS/OOS diff, parameter perturbation, regimes)
-- Research Report Generator
+- Report asset manifest and deterministic report QA
+- Agent skills for report writing, chart building, spec auditing, and
+  experiment comparison
 - OpenCode 集成
 
 ## License
@@ -186,6 +199,9 @@ spec → validate → compile → backtest → audit → robustness → report
 ```
 
 open-xquant is not a coding agent. It is the deterministic quant research runtime that coding agents should use.
+The CLI / SDK provide reproducible execution primitives; tasks that require
+contextual judgment, such as report writing, chart selection, experiment
+comparison, and spec provenance review, are driven by installed Agent skills.
 
 Its goal is not to generate more strategies faster, but to make false backtests easier to detect and reject.
 
@@ -245,16 +261,24 @@ diffable, and persistent.
 ## Core Workflow
 
 ```
-oxq spec init "strategy idea"
-  → oxq spec validate strategy_spec.yaml
+Agent loads the open-xquant skill
+  → strategy-builder writes and validates strategy_spec.yaml
+  → spec-auditor checks assumption provenance
   → oxq strategy compile strategy_spec.yaml
   → oxq backtest run strategy_spec.yaml --json
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
-  → /quant-report runs/<run_id>/
+  → report-chart-builder registers chart assets when needed
+  → research-report-writer writes research_report.md/html
+  → oxq report qa runs/<run_id>/
+  → research-report-reviewer reviews the final report
   → oxq experiment add runs/<run_id>/
 ```
+
+The `oxq` CLI steps are deterministic primitives: validation, compilation,
+backtesting, audits, robustness, artifact QA, and experiment registration.
+Steps that require contextual judgment stay in skills.
 
 ## Who Is This For?
 
@@ -274,7 +298,7 @@ Runnable Python scripts demonstrating each core module with SDK and equivalent C
 | `02_data_and_universe.py` | Data download, inspect, universe construction |
 | `03_backtest_and_artifacts.py` | Spec compile, backtest run, artifact inspection |
 | `04_audit_and_robustness.py` | Reproducibility audit, bias audit, robustness tests |
-| `05_report_and_experiment.py` | Research report generation, experiment registry |
+| `05_report_and_experiment.py` | Report artifacts, QA, and experiment registry |
 | `06_signals_and_rules.py` | Signals, rules, ROCTiming, and BUY/SELL/HOLD semantics |
 
 ```bash
@@ -303,8 +327,9 @@ Complete E2E pipeline examples (spec → backtest → audit → report):
 ## Project Boundaries
 
 open-xquant is a complete open-source research kernel focused on deterministic
-computation, declarative specs, audits, reports, and Agent-callable
-CLI / SDK / Tools.
+computation, declarative specs, audits, artifact QA, and Agent-callable
+CLI / SDK / Tools. Semantic report writing, chart selection, and experiment
+comparison are orchestrated by Agent skills.
 
 Capabilities outside the core open-xquant boundary:
 
@@ -332,7 +357,9 @@ Completed:
 - Runtime execution assumptions (calendar, fill price, lot size, cash return)
 - Metrics profiles (`open_xquant_default`, `xquant_production`)
 - Robustness Runner (cost stress, IS/OOS diff, parameter perturbation, regimes)
-- Research Report Generator
+- Report asset manifest and deterministic report QA
+- Agent skills for report writing, chart building, spec auditing, and
+  experiment comparison
 - OpenCode integration
 
 ## License

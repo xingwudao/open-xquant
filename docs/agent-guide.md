@@ -8,6 +8,16 @@
 图表资产、SDK 开发或实盘连接任务时，应先加载 `open-xquant` skill，
 再由它路由到更具体的 skill。不要把本文档当成研究 workflow。
 
+边界原则：
+
+- `oxq` CLI / SDK / Tools 只做确定性 primitives，例如 validate、
+  compile、backtest、audit、robustness、report QA、asset manifest、
+  workspace init、agent install/status。
+- 需要上下文综合判断的任务必须留在 skill / Agent 层，例如 spec 字段
+  来源追溯、是否继续未完成实验、图表选择、报告写作、实验差异解释、
+  是否标记某个 run 为 final。
+- 不要把报告写作、实验结论、图表叙事或来源判断下沉成 CLI 模板。
+
 ---
 
 ## 1. 前置检查
@@ -119,7 +129,7 @@ worktree 中复现/开发，优先使用 current worktree runner，例如
 如果 `agent.yaml` 缺失或 runner 失败，读取
 `~/.config/open-xquant/agent-install.json`，使用其中的
 `sdk_bundle.runner.argv` 或 `sdk_bundle.runner.oxq`。
-不要默认回到 `source.path`；用户可能已经删除最初的源码目录。
+不要默认回到最初安装时的源码路径；用户可能已经删除那个目录。
 
 ---
 

@@ -15,6 +15,13 @@
 Agent 完成长期能力安装；之后在新目录里通常只需要直接说策略想法，
 已安装的 `open-xquant` skill 会负责路由到具体能力。
 
+你可以把边界理解成：
+
+- `oxq` CLI 负责可复现的确定性步骤，例如校验 spec、回测、审计、
+  稳健性检查、报告 QA 和 artifact 登记。
+- Agent skills 负责需要理解上下文的步骤，例如确认假设来源、选择图表、
+  撰写报告、解释实验差异，以及判断是否把某个 run 标记为最终版本。
+
 ---
 
 ## 1. 第一次使用
@@ -75,9 +82,11 @@ cd my-research
 - 在当前目录初始化研究 workspace。
 - 生成并验证 `strategy_spec.yaml`。
 - 准备或请求行情数据。
-- 运行回测、审计、稳健性检查和报告。
+- 运行回测、审计、稳健性检查，并通过 report skills 撰写报告。
 - 把结论写到 `runs/<run_id>/research_report.md` 和
   `runs/<run_id>/research_report.html`。
+- 在你确认后生成图表资产、对比多个实验，或把认可的实验标记到
+  `runs/final/`。
 
 你不需要再次粘贴 `docs/agent-guide.md`。
 
@@ -149,6 +158,20 @@ benchmark 用 SPY。
 report_assets 保存并登记，然后重新生成 Markdown 和 HTML 报告。
 ```
 
+如果你想比较两个实验，可以说：
+
+```text
+请用 experiment-comparator 对比 runs/<run_a> 和 runs/<run_b>。
+生成 spec diff、metrics 对比、对比图和 comparison_report.md。
+```
+
+如果你认可某个实验，可以说：
+
+```text
+我认可 runs/<run_id> 作为当前最终版本。
+请把它标记到 runs/final/，记录选择理由和关键指标快照。
+```
+
 Agent 的最终回答应该明确区分：
 
 - 环境验证是否成功。
@@ -213,8 +236,9 @@ Agent 的最终回答应该明确区分：
 ~/.config/open-xquant/agent-install.json
 ```
 
-然后使用 `preferred_runner` 或 `source.path`，不要在你的 home 目录里随机搜索
-其他 open-xquant 副本。
+然后使用 `preferred_runner`、`preferred_runner_argv`，或
+`agent-install.json` 里的 `sdk_bundle.runner`。不要在你的 home 目录里随机
+搜索其他 open-xquant 副本，也不要默认回到最初源码目录。
 
 ### 我需要自己准备数据吗？
 
