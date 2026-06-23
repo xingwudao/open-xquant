@@ -747,6 +747,66 @@ def test_report_qa_requires_actual_cjk_font_configuration(tmp_path) -> None:
     assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
 
 
+def test_report_qa_requires_global_font_before_axes_set_cjk_title(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "import matplotlib.pyplot as plt\n"
+            "fig, ax = plt.subplots()\n"
+            "ax.set(title='策略净值')\n"
+            "plt.rcParams['font.family'] = ['SimHei']\n"
+        ),
+    )
+
+    assert result.status == "warn"
+    assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
+def test_report_qa_accepts_global_font_before_axes_set_cjk_title(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "import matplotlib.pyplot as plt\n"
+            "plt.rcParams['font.family'] = ['SimHei']\n"
+            "fig, ax = plt.subplots()\n"
+            "ax.set(title='策略净值')\n"
+        ),
+    )
+
+    assert result.status == "pass"
+    assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
+def test_report_qa_rejects_bare_font_family_as_fontproperties_fname(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "import matplotlib.font_manager as fm\n"
+            "import matplotlib.pyplot as plt\n"
+            "fp = fm.FontProperties(fname='SimHei')\n"
+            "plt.title('策略净值', fontproperties=fp)\n"
+        ),
+    )
+
+    assert result.status == "warn"
+    assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
+def test_report_qa_rejects_positional_fontproperties_path(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "import matplotlib.font_manager as fm\n"
+            "import matplotlib.pyplot as plt\n"
+            "fp = fm.FontProperties('/System/Library/Fonts/STHeiti Light.ttc')\n"
+            "plt.title('策略净值', fontproperties=fp)\n"
+        ),
+    )
+
+    assert result.status == "warn"
+    assert any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
 def test_report_qa_requires_registered_cjk_font_to_be_selected(tmp_path) -> None:
     run_dir = _write_qa_run(tmp_path)
     script = run_dir / "report_assets/scripts/plot.py"
@@ -798,6 +858,43 @@ def test_report_qa_accepts_explicit_cjk_font_file_registration(tmp_path) -> None
     (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
 
     result = run_report_qa(run_dir)
+
+    assert result.status == "pass"
+    assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
+def test_report_qa_accepts_imported_fontmanager_addfont(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "from pathlib import Path\n"
+            "from matplotlib.font_manager import FontProperties, fontManager\n"
+            "import matplotlib.pyplot as plt\n"
+            "font_path = Path('/System/Library/Fonts/STHeiti Light.ttc')\n"
+            "fontManager.addfont(font_path)\n"
+            "fp = FontProperties(fname=font_path)\n"
+            "plt.rcParams['font.family'] = fp.get_name()\n"
+            "plt.title('策略净值')\n"
+        ),
+    )
+
+    assert result.status == "pass"
+    assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
+def test_report_qa_matches_registered_font_literal_to_later_path_variable(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "import matplotlib.font_manager as fm\n"
+            "import matplotlib.pyplot as plt\n"
+            "fm.fontManager.addfont('/System/Library/Fonts/STHeiti Light.ttc')\n"
+            "font_path = '/System/Library/Fonts/STHeiti Light.ttc'\n"
+            "fp = fm.FontProperties(fname=font_path)\n"
+            "plt.rcParams['font.family'] = fp.get_name()\n"
+            "plt.title('策略净值')\n"
+        ),
+    )
 
     assert result.status == "pass"
     assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
@@ -1391,6 +1488,22 @@ def test_report_qa_accepts_cjk_text_fontdict_font_property(tmp_path) -> None:
 
     result = run_report_qa(run_dir)
 
+    assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
+
+
+def test_report_qa_accepts_cjk_text_fontdict_variable(tmp_path) -> None:
+    result = _run_cjk_script_qa(
+        tmp_path,
+        (
+            "import matplotlib.font_manager as fm\n"
+            "import matplotlib.pyplot as plt\n"
+            "fp = fm.FontProperties(fname='/System/Library/Fonts/STHeiti Light.ttc')\n"
+            "fontdict = {'fontproperties': fp}\n"
+            "plt.title('策略净值', fontdict=fontdict)\n"
+        ),
+    )
+
+    assert result.status == "pass"
     assert not any(finding.id == "cjk_font_unverified" for finding in result.findings)
 
 
@@ -2419,6 +2532,20 @@ def _write_qa_run(tmp_path):
         encoding="utf-8",
     )
     return run_dir
+
+
+def _run_cjk_script_qa(tmp_path, script_text: str):
+    run_dir = _write_qa_run(tmp_path)
+    script = run_dir / "report_assets/scripts/plot.py"
+    script.parent.mkdir(parents=True)
+    script.write_text(script_text, encoding="utf-8")
+    figure = tmp_path / "equity.png"
+    _write_png(figure)
+    add_report_asset(run_dir, figure, asset_id="equity", title="策略净值", source_script=script)
+    markdown = "# 研究报告\n\n有效数据最后交易日：2024-03-29\n\n配置结束日：2024-03-31\n\n![策略净值](report_assets/figures/equity.png)\n"
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
+    return run_report_qa(run_dir)
 
 
 def _write_png(path) -> None:
