@@ -109,11 +109,13 @@ If the reviewer requires Markdown report edits, render `research_report.html`
 again from the updated Markdown before rerunning `oxq report qa`.
 
 When the user accepts the completed experiment, ask whether to mark it as final.
-If yes, write the lightweight `runs/final` pointer:
+If yes, read `.open-xquant/workspace.yaml` and resolve `paths.final_dir`; fall
+back to `runs/final` when the config value is absent. Write the lightweight
+final pointer there:
 
-- `runs/final/strategy_spec.yaml`
-- `runs/final/selected.json`
-- `runs/final/README.md`
+- `<final_dir>/strategy_spec.yaml`
+- `<final_dir>/selected.json`
+- `<final_dir>/README.md`
 
 Mark the accepted run as final in `experiments.jsonl` when present. The final
 pointer is a copy of the selected spec plus metadata, not a copy of the full

@@ -268,6 +268,8 @@ def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
     assert "Markdown/HTML image counts" in text
     assert "configured end date" in text
     assert "effective last trading day" in text
+    assert ".open-xquant/workspace.yaml" in text
+    assert "paths.final_dir" in text
 
 
 def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
