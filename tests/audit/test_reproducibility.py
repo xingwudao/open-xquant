@@ -9,7 +9,7 @@ from oxq.audit.reproducibility import _hash_json_file, audit_reproducibility
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
-from oxq.spec.compiler import _hash_file, _write_artifacts
+from oxq.spec.compiler import _build_strategy_py_artifact, _hash_file, _write_artifacts
 from oxq.spec.schema import StrategySpec
 
 
@@ -170,6 +170,33 @@ def test_reproducibility_audit_validates_compiled_plan_hash(tmp_path) -> None:
 
     assert audit["status"] == "fail"
     assert any(check["id"] == "compiled_plan_hash" for check in audit["checks"])
+
+
+def test_reproducibility_audit_rejects_compiled_plan_spec_hash_conflict(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    plan_path = run_dir / "compiled_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["spec_hash"] = "sha256:0000000000000000"
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    plan_hash = _hash_json_file(plan_path)
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    strategy_py_path = run_dir / "strategy.py"
+    strategy_py_path.write_text(
+        _build_strategy_py_artifact(spec, plan, spec_hash, plan_hash),
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["compiled_plan.json"] = plan_hash
+    hashes["strategy.py"] = _hash_file(strategy_py_path)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    consistency = next(check for check in audit["checks"] if check["id"] == "strategy_py_consistency")
+    assert "compiled_plan.json spec_hash mismatch" in consistency["message"]
 
 
 def test_reproducibility_audit_rejects_strategy_py_spec_conflict(tmp_path) -> None:

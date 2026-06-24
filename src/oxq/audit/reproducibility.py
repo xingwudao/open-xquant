@@ -303,6 +303,14 @@ def _check_strategy_py_consistency(run_path: Path, spec_hash_actual: str) -> dic
             "strategy.py COMPILED_PLAN_HASH mismatch: "
             f"stored={assignments['COMPILED_PLAN_HASH']}, actual={compiled_plan_hash}",
         )
+    if expected_plan.get("spec_hash") != spec_hash_actual:
+        return _check(
+            "strategy_py_consistency",
+            False,
+            "fatal",
+            "compiled_plan.json spec_hash mismatch: "
+            f"stored={expected_plan.get('spec_hash')}, actual={spec_hash_actual}",
+        )
     if assignments["STRATEGY_SPEC"] != expected_spec:
         return _check("strategy_py_consistency", False, "fatal", "strategy.py STRATEGY_SPEC conflicts with strategy_spec.yaml")
     if assignments["COMPILED_PLAN"] != expected_plan:

@@ -31,7 +31,7 @@ from oxq.data.loaders import resolve_data_dir
 from oxq.data.market import LocalMarketDataProvider
 from oxq.market_calendar import normalize_exchange_calendar
 from oxq.portfolio.analytics import RunResult
-from oxq.portfolio.metrics_profile import compute_equity_curve_metrics, compute_profile_metrics
+from oxq.portfolio.metrics_profile import compute_equity_curve_metrics, compute_profile_metrics, metric_assumptions
 from oxq.rules.constraint import RebalanceFrequencyRule
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
@@ -396,8 +396,8 @@ def _write_artifacts(
     (run_dir / "execution_assumptions.json").write_text(json.dumps(execution_assumptions, indent=2) + "\n", encoding="utf-8")
 
     # compiled_plan.json
-    compiled_strategy = strategy or compile_strategy(spec)
-    compiled_plan = _build_compiled_plan(spec, compiled_strategy)
+    compiled_strategy = strategy or compile_strategy(serialized_spec)
+    compiled_plan = _build_compiled_plan(serialized_spec, compiled_strategy, effective_data_dir=effective_data_dir)
     (run_dir / "compiled_plan.json").write_text(
         json.dumps(compiled_plan, indent=2, sort_keys=True, default=str) + "\n",
         encoding="utf-8",
@@ -406,7 +406,7 @@ def _write_artifacts(
 
     # strategy.py
     (run_dir / "strategy.py").write_text(
-        _build_strategy_py_artifact(spec, compiled_plan, serialized_spec_hash, compiled_plan_hash),
+        _build_strategy_py_artifact(serialized_spec, compiled_plan, serialized_spec_hash, compiled_plan_hash),
         encoding="utf-8",
     )
 
@@ -547,10 +547,16 @@ def _build_execution_assumptions(spec: StrategySpec) -> dict[str, Any]:
     }
 
 
-def _build_compiled_plan(spec: StrategySpec, strategy: Strategy | None = None) -> dict[str, Any]:
+def _build_compiled_plan(
+    spec: StrategySpec,
+    strategy: Strategy | None = None,
+    *,
+    effective_data_dir: str | None = None,
+) -> dict[str, Any]:
     """Build a deterministic trace of how the spec maps to runtime objects."""
     strategy = strategy or compile_strategy(spec)
     semantics = derive_execution_semantics(spec.execution)
+    assumptions = metric_assumptions(spec.metrics)
     signal_types = {name: rule.type for name, rule in sorted(spec.signal.rules.items())}
     terminal_signals: list[str] = []
     portfolio_runtime_type = spec.portfolio.type
@@ -585,7 +591,9 @@ def _build_compiled_plan(spec: StrategySpec, strategy: Strategy | None = None) -
         },
         "data": {
             "provider": spec.data.provider,
-            "data_dir": spec.data.data_dir,
+            "data_dir": effective_data_dir or spec.data.data_dir,
+            "spec_data_dir": spec.data.data_dir,
+            "effective_data_dir": effective_data_dir or spec.data.data_dir,
             "price_adjustment": spec.data.price_adjustment,
             "required_columns": list(spec.data.required_columns),
             "min_start_date": spec.data.min_start_date,
@@ -657,11 +665,11 @@ def _build_compiled_plan(spec: StrategySpec, strategy: Strategy | None = None) -
         },
         "metrics": {
             "profile": spec.metrics.profile,
-            "risk_free_rate": spec.metrics.risk_free_rate,
-            "return_type": spec.metrics.return_type,
-            "annualization_days": spec.metrics.annualization_days,
-            "calmar_denominator": spec.metrics.calmar_denominator,
-            "evaluation_window": spec.metrics.evaluation_window,
+            "risk_free_rate": assumptions["risk_free_rate"],
+            "return_type": assumptions["return_type"],
+            "annualization_days": assumptions["annualization_days"],
+            "calmar_denominator": assumptions["calmar_denominator"],
+            "evaluation_window": assumptions["evaluation_window"],
         },
     }
 
@@ -740,7 +748,8 @@ def _build_strategy_py_artifact(
 
 
 def _format_python_literal(value: Any) -> str:
-    return pprint.pformat(value, sort_dicts=False, width=100)
+    payload = json.loads(json.dumps(_sanitize_json(value), default=str, allow_nan=False))
+    return pprint.pformat(payload, sort_dicts=False, width=100)
 
 
 def _build_compiled_runtime_rules(spec: StrategySpec) -> list[dict[str, Any]]:

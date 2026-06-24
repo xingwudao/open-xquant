@@ -309,7 +309,7 @@ def _parse_research(raw: dict) -> ResearchSection:
         hypothesis=raw.get("hypothesis", ""),
         rationale=raw.get("rationale", ""),
         author=raw.get("author", ""),
-        created_at=raw.get("created_at", ""),
+        created_at=_parse_date_string(raw.get("created_at", ""), "research.created_at"),
     )
 
 
@@ -519,6 +519,16 @@ def _parse_date_list(value: object, field_name: str) -> list[str]:
         else:
             raise ValueError(f"{field_name} must be a list of date strings")
     return parsed
+
+
+def _parse_date_string(value: object, field_name: str) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    if isinstance(value, str):
+        return value
+    raise ValueError(f"{field_name} must be a date string")
 
 
 def _parse_params(value: object, field_name: str) -> dict[str, Any]:

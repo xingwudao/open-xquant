@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import date
 from decimal import Decimal
 
 import numpy as np
@@ -444,6 +445,9 @@ def test_write_artifacts_persists_target_weights(tmp_path) -> None:
 def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compiled_plan", hypothesis="compiled plans should be auditable")
     spec.universe.symbols = ["SPY"]
+    spec.execution.order_timing = "next_session_open"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "open"
     spec.signal.indicators = {
         "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
     }
@@ -491,13 +495,87 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert plan["signals"]["terminal_signals"] == ["positive"]
     assert plan["portfolio"]["runtime_type"] == "SignalFilteredEqualWeight"
     assert plan["execution"]["fill_price_mode"] == "next_open"
+    assert plan["data"]["data_dir"] == str(data_dir)
+    assert plan["data"]["effective_data_dir"] == str(data_dir)
+    assert plan["data"]["spec_data_dir"] == ""
     assert "STRATEGY_SPEC =" in strategy_py
+    assert "'fill_price_mode': ''" in strategy_py
     assert "COMPILED_PLAN =" in strategy_py
     assert "def build_strategy():" in strategy_py
     assert hashes["schema_version"] == 5
     assert "compiled_plan.json" in hashes
     assert "strategy.py" in hashes
     assert audit_reproducibility(run_dir)["status"] == "pass"
+
+
+def test_strategy_py_serializes_date_values_as_literals(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="compiled_plan_dates", hypothesis="date values should be literal-safe")
+    spec.research.created_at = date(2024, 1, 2)  # type: ignore[assignment]
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    result.mktdata["SPY"].to_parquet(data_dir / "SPY.parquet")
+
+    _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
+
+    strategy_py = (run_dir / "strategy.py").read_text(encoding="utf-8")
+    assert "datetime.date" not in strategy_py
+    assert "'created_at': '2024-01-02'" in strategy_py
+    assert audit_reproducibility(run_dir)["status"] == "pass"
+
+
+def test_compiled_plan_records_normalized_metric_assumptions(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="compiled_plan_metrics", hypothesis="compiled plans match metric runtime")
+    spec.metrics.profile = "xquant_production"
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    _write_artifacts(spec, result, run_dir, Engine())
+
+    plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    assert plan["metrics"]["profile"] == "xquant_production"
+    assert plan["metrics"]["return_type"] == "log"
+    assert plan["metrics"]["risk_free_rate"] == 0.02
+    assert plan["metrics"]["return_type"] == metrics["metric_assumptions"]["return_type"]
+    assert plan["metrics"]["risk_free_rate"] == metrics["metric_assumptions"]["risk_free_rate"]
 
 
 def test_compiled_plan_hash_is_stable_across_run_dirs(tmp_path) -> None:
