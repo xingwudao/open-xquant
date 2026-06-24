@@ -42,6 +42,29 @@ handing the final narrative to `research-report-writer`.
    - Write figure outputs under `report_assets/figures`.
    - Keep plotting deterministic and local; do not download new data unless the
      user explicitly asks.
+   - Prefer `seaborn` for professional chart styling, statistical plots,
+     palettes, and grid treatment when it is installed. If `seaborn` is not
+     installed, fall back to direct `matplotlib` plotting without failing the
+     chart task.
+   - Use a small deterministic plotting import block in generated scripts:
+
+```python
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
+try:
+    import seaborn as sns
+except ImportError:
+    sns = None
+
+if sns is not None:
+    sns.set_theme(style="whitegrid", context="talk")
+else:
+    plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
+```
+
    - Prefer English chart labels. Use local-language labels only when the final
      rendered image is already known to be readable in the current environment.
 

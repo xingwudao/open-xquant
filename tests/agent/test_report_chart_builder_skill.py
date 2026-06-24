@@ -38,6 +38,11 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "scan the run directory" in text
     assert "recommended chart set" in text
     assert "trade curve as the first/default recommendation" in text
+    assert "Prefer `seaborn`" in text
+    assert "fall back to direct `matplotlib`" in text
+    assert "import seaborn as sns" in text
+    assert "except ImportError" in text
+    assert 'matplotlib.use("Agg")' in text
     assert "Numeric claim review is semantic/advisory" in text
     assert "treating the CLI command as proof" in text
 
