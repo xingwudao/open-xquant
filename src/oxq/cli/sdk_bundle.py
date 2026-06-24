@@ -464,6 +464,13 @@ def _try_reuse_runner_venv(
         return False
     if _lock_without_project_requirement(previous_lock) != _lock_without_project_requirement(lock_path):
         return False
+    previous_runner_python = _runner_python_path(cached_bundle)
+    if previous_runner_python is None or not previous_runner_python.exists():
+        return False
+    if _python_major_minor(previous_runner_python) != _python_major_minor(Path(sys.executable)):
+        return False
+    if not _runner_packages_match_manifest(cached_bundle, previous_runner_python, uv_cache_dir, bundle_root):
+        return False
     previous_runner_venv = _runner_venv_path(cached_bundle)
     if previous_runner_venv is None or not previous_runner_venv.exists():
         return False
@@ -491,14 +498,64 @@ def _try_reuse_runner_venv(
 
 
 def _runner_venv_path(bundle: dict[str, Any]) -> Path | None:
+    python = _runner_python_path(bundle)
+    return python.parent.parent if python is not None else None
+
+
+def _runner_python_path(bundle: dict[str, Any]) -> Path | None:
     runner = _require_dict(bundle, "runner")
-    venv = runner.get("venv")
-    if isinstance(venv, str) and venv:
-        return _stored_path(venv)
     python = runner.get("python")
     if isinstance(python, str) and python:
-        return _stored_path(python).parent.parent
+        return _stored_path(python)
     return None
+
+
+def _runner_packages_match_manifest(
+    bundle: dict[str, Any],
+    runner_python: Path,
+    uv_cache_dir: Path,
+    bundle_root: Path,
+) -> bool:
+    packages_path = _stored_path(_require_str(_require_dict(bundle, "dependencies"), "packages_file"))
+    if not packages_path.exists():
+        return False
+    try:
+        recorded = read_json_file(packages_path)
+    except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return False
+    recorded_packages = recorded.get("packages") if isinstance(recorded, dict) else recorded
+    if not isinstance(recorded_packages, list):
+        return False
+    current_packages = _run_json(
+        _uv_cmd(
+            [
+                "pip",
+                "list",
+                "--format",
+                "json",
+                "--python",
+                str(runner_python),
+                "--cache-dir",
+                str(uv_cache_dir),
+            ],
+            directory=bundle_root,
+        )
+    )
+    if not isinstance(current_packages, list):
+        return False
+    return _package_identity_set(recorded_packages) == _package_identity_set(current_packages)
+
+
+def _package_identity_set(packages: list[Any]) -> set[tuple[str, str]]:
+    identities: set[tuple[str, str]] = set()
+    for package in packages:
+        if not isinstance(package, dict):
+            continue
+        name = package.get("name")
+        version = package.get("version")
+        if isinstance(name, str) and isinstance(version, str):
+            identities.add((name.lower(), version))
+    return identities
 
 
 def _lock_without_project_requirement(lock_path: Path) -> str:

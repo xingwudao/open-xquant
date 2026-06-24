@@ -255,6 +255,9 @@ def uninstall(target: str | None, all_targets: bool, dry_run: bool, purge_config
                     "Refusing to purge config because SDK bundle removal was not verified: "
                     + ", ".join(failed)
                 )
+            sdk_cache = config_dir() / "sdk-cache"
+            if sdk_cache.exists():
+                shutil.rmtree(sdk_cache)
             if agent_config_path().exists():
                 agent_config_path().unlink()
             if manifest_path().exists():

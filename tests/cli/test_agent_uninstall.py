@@ -110,6 +110,9 @@ def test_agent_uninstall_purge_config_removes_managed_sdk_bundle(monkeypatch, tm
     assert install.exit_code == 0, install.output
     bundle = home / ".config/open-xquant/sdk-bundles/bundle-test"
     assert bundle.exists()
+    sdk_cache = home / ".config/open-xquant/sdk-cache/uv"
+    sdk_cache.mkdir(parents=True)
+    (sdk_cache / "cached-wheel").write_text("cache\n", encoding="utf-8")
     manifest = home / ".config/open-xquant/agent-install.json"
     assert json.loads(manifest.read_text(encoding="utf-8"))["sdk_bundle"]["root"] == str(bundle)
 
@@ -120,6 +123,7 @@ def test_agent_uninstall_purge_config_removes_managed_sdk_bundle(monkeypatch, tm
 
     assert result.exit_code == 0, result.output
     assert not bundle.exists()
+    assert not sdk_cache.exists()
     assert not manifest.exists()
     assert not (home / ".config/open-xquant/agent.yaml").exists()
 

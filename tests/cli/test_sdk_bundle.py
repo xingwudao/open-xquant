@@ -183,12 +183,20 @@ def test_build_sdk_bundle_reuses_runner_venv_when_dependency_lock_is_unchanged(m
     lock_path = Path(bundle["dependencies"]["lock_file"])
     lock_path.write_text(old_lock, encoding="utf-8")
     bundle["dependencies"]["lock_sha256"] = hashlib.sha256(old_lock.encode("utf-8")).hexdigest()
+    outside_venv = tmp_path / "outside-venv"
+    (outside_venv / "bin").mkdir(parents=True)
+    (outside_venv / "marker.txt").write_text("do not copy\n", encoding="utf-8")
+    (outside_venv / "bin/python").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (outside_venv / "bin/oxq").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    bundle["runner"]["venv"] = str(outside_venv)
     config_root.mkdir(parents=True, exist_ok=True)
     (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
     commands: list[list[str]] = []
 
     def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
         commands.append(cmd)
+        if len(cmd) >= 3 and cmd[1] == "-c" and "version_info" in cmd[2]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="3.13\n", stderr="")
         if cmd[0] == "uv" and "build" in cmd:
             out_dir = Path(cmd[cmd.index("--out-dir") + 1])
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -210,6 +218,80 @@ def test_build_sdk_bundle_reuses_runner_venv_when_dependency_lock_is_unchanged(m
     assert "--no-deps" in install_cmd
     assert payload["id"] != bundle["id"]
     assert Path(payload["runner"]["python"]).exists()
+    assert not (Path(payload["runner"]["venv"]) / "marker.txt").exists()
+
+
+def test_build_sdk_bundle_rebuilds_runner_venv_when_python_version_changes(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'open-xquant'\nversion = '0.1.0'\n", encoding="utf-8")
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/old-bundle")
+    old_lock = "open-xquant @ file:///old/open_xquant-0.1.0-py3-none-any.whl \\\n    --hash=sha256:oldwheel\n"
+    new_lock = old_lock.replace("file:///old/open_xquant-0.1.0-py3-none-any.whl", "file:///new/open_xquant-0.1.0-py3-none-any.whl")
+    lock_path = Path(bundle["dependencies"]["lock_file"])
+    lock_path.write_text(old_lock, encoding="utf-8")
+    bundle["dependencies"]["lock_sha256"] = hashlib.sha256(old_lock.encode("utf-8")).hexdigest()
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        if len(cmd) >= 3 and cmd[1] == "-c" and "version_info" in cmd[2]:
+            version = "3.12\n" if cmd[0] == bundle["runner"]["python"] else "3.13\n"
+            return subprocess.CompletedProcess(cmd, 0, stdout=version, stderr="")
+        if cmd[0] == "uv" and "build" in cmd:
+            out_dir = Path(cmd[cmd.index("--out-dir") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "open_xquant-0.1.0-py3-none-any.whl").write_text("wheel", encoding="utf-8")
+        if cmd[0] == "uv" and "compile" in cmd:
+            output = Path(cmd[cmd.index("--output-file") + 1])
+            output.write_text(new_lock, encoding="utf-8")
+        stdout = "[]" if cmd[0] == "uv" and "list" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
+
+    build_sdk_bundle(source, config_root)
+
+    assert any(cmd[0] == "uv" and "sync" in cmd for cmd in commands)
+
+
+def test_build_sdk_bundle_rebuilds_runner_venv_when_cached_packages_are_polluted(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'open-xquant'\nversion = '0.1.0'\n", encoding="utf-8")
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/old-bundle")
+    old_lock = "open-xquant @ file:///old/open_xquant-0.1.0-py3-none-any.whl \\\n    --hash=sha256:oldwheel\n"
+    new_lock = old_lock.replace("file:///old/open_xquant-0.1.0-py3-none-any.whl", "file:///new/open_xquant-0.1.0-py3-none-any.whl")
+    lock_path = Path(bundle["dependencies"]["lock_file"])
+    lock_path.write_text(old_lock, encoding="utf-8")
+    bundle["dependencies"]["lock_sha256"] = hashlib.sha256(old_lock.encode("utf-8")).hexdigest()
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        if len(cmd) >= 3 and cmd[1] == "-c" and "version_info" in cmd[2]:
+            return subprocess.CompletedProcess(cmd, 0, stdout="3.13\n", stderr="")
+        if cmd[0] == "uv" and "build" in cmd:
+            out_dir = Path(cmd[cmd.index("--out-dir") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "open_xquant-0.1.0-py3-none-any.whl").write_text("wheel", encoding="utf-8")
+        if cmd[0] == "uv" and "compile" in cmd:
+            output = Path(cmd[cmd.index("--output-file") + 1])
+            output.write_text(new_lock, encoding="utf-8")
+        stdout = '[{"name": "unexpected", "version": "1.0"}]' if cmd[0] == "uv" and "list" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
+
+    build_sdk_bundle(source, config_root)
+
+    assert any(cmd[0] == "uv" and "sync" in cmd for cmd in commands)
 
 
 def test_build_sdk_bundle_rebuilds_malformed_existing_manifest(monkeypatch, tmp_path) -> None:
