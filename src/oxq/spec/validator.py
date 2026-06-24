@@ -450,6 +450,7 @@ def _validate_required_execution_columns(required_columns: set[str], fill_price_
         "mid": {"open"},
         "next_mid": {"open"},
         "next_avg": {"open", "high", "low"},
+        "next_hl2": {"high", "low"},
     }
     errors: list[dict] = []
     for column in sorted(required_by_mode.get(fill_price_mode, set()) - required_columns):
@@ -719,7 +720,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
 
     # Derive execution semantics early so data requirements use effective explicit fields.
     has_any_explicit_execution_field = _has_any_explicit_execution_field(spec)
-    valid_legacy_fill_modes = frozenset({"close", "mid", "next_avg", "next_close", "next_mid", "next_open"})
+    valid_legacy_fill_modes = frozenset({"close", "mid", "next_avg", "next_close", "next_hl2", "next_mid", "next_open"})
     raw_legacy_fill_mode_invalid = (
         bool(spec.execution.fill_price_mode)
         and not has_any_explicit_execution_field
@@ -825,6 +826,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         "mid": "close_t",
         "next_avg": "next_open",
         "next_close": "next_open",
+        "next_hl2": "next_open",
         "next_mid": "next_open",
         "next_open": "next_open",
     }.get(effective_fill_price_mode)
@@ -851,7 +853,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
             )
         elif (
             effective_execution.price_bar == "next_session"
-            and effective_execution.price_type in {"close", "mid", "avg"}
+            and effective_execution.price_type in {"close", "mid", "avg", "hl2"}
         ):
             warnings.append(
                 _err(

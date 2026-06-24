@@ -136,7 +136,7 @@ def audit_research(run_dir: str | Path) -> dict:
         signal_time == "close_t"
         and effective_execution is not None
         and effective_execution.price_bar == "next_session"
-        and effective_execution.price_type in {"close", "mid", "avg"}
+        and effective_execution.price_type in {"close", "mid", "avg", "hl2"}
     ):
         checks.append(_finding(
             "execution_conservatism", "fail", "warning",

@@ -187,6 +187,7 @@ def test_engine_run_passes_market_calendar_to_provider_and_broker(monkeypatch, s
         ("next_close", FillPriceMode.NEXT_CLOSE),
         ("next_mid", FillPriceMode.NEXT_MID),
         ("next_avg", FillPriceMode.NEXT_AVG),
+        ("next_hl2", FillPriceMode.NEXT_HL2),
     ],
 )
 def test_engine_run_accepts_next_session_close_modes(monkeypatch, sample_data_dir, fill_price_mode, expected) -> None:

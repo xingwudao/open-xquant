@@ -715,7 +715,7 @@ def test_validate_rejects_next_high_and_next_low_fill_modes() -> None:
     assert "execution_semantics_invalid" not in checks
 
 
-@pytest.mark.parametrize("fill_price_mode", ["next_close", "next_mid", "next_avg"])
+@pytest.mark.parametrize("fill_price_mode", ["next_close", "next_mid", "next_avg", "next_hl2"])
 def test_validate_accepts_executable_next_session_legacy_fill_modes(fill_price_mode: str) -> None:
     spec = StrategySpec.template(strategy_id=f"legacy_{fill_price_mode}", hypothesis="legacy executable fill modes work")
     spec.execution.trade_time = "next_open"
@@ -798,6 +798,23 @@ def test_validate_explicit_next_session_avg_maps_to_next_avg() -> None:
 
     assert result.status == "pass"
     assert effective.fill_price_mode == "next_avg"
+
+
+def test_validate_explicit_next_session_hl2_maps_to_next_hl2() -> None:
+    from oxq.spec.execution import derive_execution_semantics
+
+    spec = StrategySpec.template(strategy_id="next_hl2_map", hypothesis="hl2 maps to executable next hl2")
+    spec.execution.fill_price_mode = ""
+    spec.execution.trade_time = "next_open"
+    spec.execution.order_timing = "next_session_hl2"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "hl2"
+
+    result = validate(spec)
+    effective = derive_execution_semantics(spec.execution)
+
+    assert result.status == "pass"
+    assert effective.fill_price_mode == "next_hl2"
 
 
 def test_validate_does_not_warn_for_next_session_open_explicit_execution() -> None:

@@ -604,6 +604,7 @@ class TestFillPriceMode:
             (FillPriceMode.NEXT_CLOSE, Decimal("101")),
             (FillPriceMode.NEXT_MID, Decimal("101.5")),
             (FillPriceMode.NEXT_AVG, Decimal("101.5")),
+            (FillPriceMode.NEXT_HL2, Decimal("101.5")),
         ],
     )
     def test_next_session_modes_fill_on_next_session_not_same_bar(self, mode, expected_price):
@@ -629,6 +630,7 @@ class TestFillPriceMode:
             (FillPriceMode.NEXT_CLOSE, Decimal("101")),
             (FillPriceMode.NEXT_MID, Decimal("101.5")),
             (FillPriceMode.NEXT_AVG, Decimal("101.5")),
+            (FillPriceMode.NEXT_HL2, Decimal("101.5")),
         ],
     )
     def test_next_session_close_modes_do_not_fill_via_due_open_hook(self, mode, expected_price):
@@ -662,11 +664,35 @@ class TestFillPriceMode:
 
     @pytest.mark.parametrize(
         "mode",
-        [FillPriceMode.NEXT_CLOSE, FillPriceMode.NEXT_MID, FillPriceMode.NEXT_AVG],
+        [FillPriceMode.NEXT_CLOSE, FillPriceMode.NEXT_MID, FillPriceMode.NEXT_AVG, FillPriceMode.NEXT_HL2],
     )
     def test_all_next_session_modes_require_market_calendar(self, mode):
         with pytest.raises(ValueError, match="market_calendar"):
             SimBroker(fill_price_mode=mode)
+
+    def test_next_hl2_uses_next_high_low_midpoint_not_open_close_midpoint(self):
+        dates = pd.bdate_range("2024-01-01", periods=2)
+        mktdata = {
+            "AAPL": pd.DataFrame(
+                {
+                    "open": [100.0, 102.0],
+                    "high": [103.0, 110.0],
+                    "low": [99.0, 90.0],
+                    "close": [101.0, 101.0],
+                },
+                index=dates,
+            )
+        }
+        broker = SimBroker(fill_price_mode=FillPriceMode.NEXT_HL2, market_calendar="XNYS")
+        broker.set_current_date(dates[0])
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+
+        broker.on_bar_close(mktdata, dates[0])
+        broker.on_bar_close(mktdata, dates[1])
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].filled_price == Decimal("100")
 
     def test_next_mode_without_submission_timestamp_does_not_peek(self):
         """NEXT_OPEN without created_at should not read next-bar prices."""

@@ -271,6 +271,22 @@ def test_helper_derives_explicit_execution_semantics_without_legacy_fill_mode() 
     assert effective.compatibility_source == "explicit_fields"
 
 
+def test_helper_derives_explicit_next_session_hl2_execution_semantics() -> None:
+    spec = StrategySpec.template(strategy_id="explicit_hl2", hypothesis="explicit hl2 mapping")
+    spec.execution.order_timing = "next_session_hl2"
+    spec.execution.price_bar = "next_session"
+    spec.execution.price_type = "hl2"
+    spec.execution.fill_price_mode = ""
+
+    effective = derive_execution_semantics(spec.execution)
+
+    assert effective.order_timing == "next_session_hl2"
+    assert effective.price_bar == "next_session"
+    assert effective.price_type == "hl2"
+    assert effective.fill_price_mode == "next_hl2"
+    assert effective.compatibility_source == "explicit_fields"
+
+
 def test_programmatic_explicit_execution_treats_default_fill_mode_as_absent() -> None:
     spec = StrategySpec.template(strategy_id="programmatic_explicit", hypothesis="explicit mapping")
     spec.execution.order_timing = "next_session_close"

@@ -23,6 +23,7 @@ class FillPriceMode(Enum):
     NEXT_CLOSE = "next_close"
     NEXT_MID = "next_mid"
     NEXT_AVG = "next_avg"
+    NEXT_HL2 = "next_hl2"
     NEXT_HIGH = "next_high"
     NEXT_LOW = "next_low"
 
@@ -32,6 +33,7 @@ _NEXT_SESSION_FILL_MODES = {
     FillPriceMode.NEXT_CLOSE,
     FillPriceMode.NEXT_MID,
     FillPriceMode.NEXT_AVG,
+    FillPriceMode.NEXT_HL2,
 }
 
 
@@ -408,6 +410,12 @@ class SimBroker:
                 if not all(price.is_finite() for price in prices):
                     return None
                 return sum(prices, Decimal("0")) / 4
+            if self._fill_price_mode == FillPriceMode.NEXT_HL2:
+                high_price = Decimal(str(float(df.loc[date, "high"])))
+                low_price = Decimal(str(float(df.loc[date, "low"])))
+                if not high_price.is_finite() or not low_price.is_finite():
+                    return None
+                return (high_price + low_price) / 2
 
         return None
 

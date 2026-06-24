@@ -47,6 +47,7 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
     "mid": FillPriceMode.MID,
     "next_mid": FillPriceMode.NEXT_MID,
     "next_avg": FillPriceMode.NEXT_AVG,
+    "next_hl2": FillPriceMode.NEXT_HL2,
 }
 
 # Signals that fire on a single bar and should latch once triggered.

@@ -1264,6 +1264,7 @@ def test_compile_run_rejects_invalid_specs_before_execution(tmp_path) -> None:
         ("next_session_close", "close", compiler.FillPriceMode.NEXT_CLOSE),
         ("next_session_mid", "mid", compiler.FillPriceMode.NEXT_MID),
         ("next_session_avg", "avg", compiler.FillPriceMode.NEXT_AVG),
+        ("next_session_hl2", "hl2", compiler.FillPriceMode.NEXT_HL2),
     ],
 )
 def test_compile_run_explicit_next_session_modes_instantiate_matching_broker(
