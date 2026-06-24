@@ -82,6 +82,8 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
         "environment_json",
         "data_manifest_json",
         "execution_assumptions_json",
+        "compiled_plan_json",
+        "strategy_py",
         "equity_curve_csv",
         "trades_csv",
         "positions_csv",
@@ -93,6 +95,8 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
         "run_log_jsonl",
     }
     assert payload["artifacts"]["target_weights_csv"].endswith("target_weights.csv")
+    assert payload["artifacts"]["compiled_plan_json"].endswith("compiled_plan.json")
+    assert payload["artifacts"]["strategy_py"].endswith("strategy.py")
     assert payload["artifacts"]["benchmark_curve_csv"].endswith("benchmark_curve.csv")
     assert payload["artifacts"]["artifact_hashes_json"].endswith("artifact_hashes.json")
 

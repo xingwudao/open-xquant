@@ -1,8 +1,8 @@
 """Spec Compiler — compiles StrategySpec to executable Strategy + Engine.
 
-Two modes:
-  1. Direct Runtime Mode (MVP): construct Strategy object from spec and run.
-  2. Generated Code Mode (future): generate strategy.py file.
+The current implementation uses Direct Runtime Mode: construct Strategy objects
+from the spec, run them in memory, and persist a deterministic compiled plan
+artifact for audit.
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import json
 import math
 import os
 import platform
+import pprint
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -309,12 +310,19 @@ def compile_run(
         run_dir = out_path / f"{timestamp}_{spec.strategy_id}"
 
     run_dir.mkdir(parents=True, exist_ok=True)
-    _write_artifacts(spec, result, run_dir, engine, effective_data_dir=str(data_path))
+    _write_artifacts(spec, result, run_dir, engine, effective_data_dir=str(data_path), strategy=strategy)
 
     return result, run_dir
 
 
-def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engine: Engine, effective_data_dir: str | None = None) -> None:
+def _write_artifacts(
+    spec: StrategySpec,
+    result: RunResult,
+    run_dir: Path,
+    engine: Engine,
+    effective_data_dir: str | None = None,
+    strategy: Strategy | None = None,
+) -> None:
     """Write all standardized backtest artifacts to run_dir."""
     run_id = run_dir.name
 
@@ -387,6 +395,21 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     execution_assumptions = _build_execution_assumptions(spec)
     (run_dir / "execution_assumptions.json").write_text(json.dumps(execution_assumptions, indent=2) + "\n", encoding="utf-8")
 
+    # compiled_plan.json
+    compiled_strategy = strategy or compile_strategy(spec)
+    compiled_plan = _build_compiled_plan(spec, compiled_strategy)
+    (run_dir / "compiled_plan.json").write_text(
+        json.dumps(compiled_plan, indent=2, sort_keys=True, default=str) + "\n",
+        encoding="utf-8",
+    )
+    compiled_plan_hash = _hash_json_file(run_dir / "compiled_plan.json")
+
+    # strategy.py
+    (run_dir / "strategy.py").write_text(
+        _build_strategy_py_artifact(spec, compiled_plan, serialized_spec_hash, compiled_plan_hash),
+        encoding="utf-8",
+    )
+
     # metrics.json
     metrics = _sanitize_json(_build_metrics(spec, result, run_id))
     (run_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, allow_nan=False) + "\n")
@@ -451,11 +474,13 @@ def _write_artifacts(spec: StrategySpec, result: RunResult, run_dir: Path, engin
     pd.DataFrame(target_weight_rows, columns=target_weight_columns).to_csv(run_dir / "target_weights.csv", index=False)
 
     artifact_hashes = {
-        "schema_version": 3,
+        "schema_version": 5,
         "strategy_spec.yaml": _hash_file(run_dir / "strategy_spec.yaml"),
         "environment.json": _hash_json_file(run_dir / "environment.json", exclude_keys={"run_timestamp"}),
         "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
         "execution_assumptions.json": _hash_json_file(run_dir / "execution_assumptions.json"),
+        "compiled_plan.json": compiled_plan_hash,
+        "strategy.py": _hash_file(run_dir / "strategy.py"),
         "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
         "trades.csv": _hash_file(run_dir / "trades.csv"),
         "positions.csv": _hash_file(run_dir / "positions.csv"),
@@ -520,6 +545,234 @@ def _build_execution_assumptions(spec: StrategySpec) -> dict[str, Any]:
             "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
         },
     }
+
+
+def _build_compiled_plan(spec: StrategySpec, strategy: Strategy | None = None) -> dict[str, Any]:
+    """Build a deterministic trace of how the spec maps to runtime objects."""
+    strategy = strategy or compile_strategy(spec)
+    semantics = derive_execution_semantics(spec.execution)
+    signal_types = {name: rule.type for name, rule in sorted(spec.signal.rules.items())}
+    terminal_signals: list[str] = []
+    portfolio_runtime_type = spec.portfolio.type
+    if spec.portfolio.type == "EqualWeight" and spec.signal.rules:
+        terminal_signals = _terminal_signal_names(spec)
+        signal_types = {name: _effective_signal_type(spec, name) for name in sorted(spec.signal.rules)}
+        portfolio_runtime_type = "SignalFilteredEqualWeight"
+
+    return {
+        "schema_version": 1,
+        "compilation_mode": "direct_runtime",
+        "spec_hash": spec.compute_hash(),
+        "strategy": {
+            "strategy_id": spec.strategy_id,
+            "runtime_name": strategy.name,
+            "display_name": spec.name,
+            "hypothesis": strategy.hypothesis,
+        },
+        "market": {
+            "asset_class": spec.market.asset_class,
+            "region": spec.market.region,
+            "currency": spec.market.currency,
+            "calendar": spec.market.calendar,
+            "runtime_calendar": normalize_exchange_calendar(spec.market.calendar),
+        },
+        "universe": {
+            "type": spec.universe.type,
+            "runtime_class": _class_ref(type(strategy.universe)),
+            "symbols": list(getattr(strategy.universe, "symbols", spec.universe.symbols)),
+            "point_in_time": spec.universe.point_in_time,
+            "survivorship_bias_policy": spec.universe.survivorship_bias_policy,
+        },
+        "data": {
+            "provider": spec.data.provider,
+            "data_dir": spec.data.data_dir,
+            "price_adjustment": spec.data.price_adjustment,
+            "required_columns": list(spec.data.required_columns),
+            "min_start_date": spec.data.min_start_date,
+        },
+        "signals": {
+            "signal_time": spec.signal.signal_time,
+            "indicators": {
+                name: {
+                    "type": definition.type,
+                    "class": _class_ref(_resolve_indicator(definition.type)),
+                    "params": dict(definition.params),
+                }
+                for name, definition in sorted(spec.signal.indicators.items())
+            },
+            "rules": {
+                name: {
+                    "type": definition.type,
+                    "effective_type": signal_types.get(name, definition.type),
+                    "class": _class_ref(type(strategy.signals[name][0])),
+                    "params": dict(definition.params),
+                    "output_domain": list(definition.output_domain),
+                }
+                for name, definition in sorted(spec.signal.rules.items())
+            },
+            "terminal_signals": terminal_signals,
+            "event_signal_types": sorted(_EVENT_SIGNAL_TYPES),
+        },
+        "portfolio": {
+            "type": spec.portfolio.type,
+            "runtime_type": portfolio_runtime_type,
+            "class": _class_ref(type(strategy.portfolio)),
+            "params": dict(spec.portfolio.params),
+        },
+        "execution": {
+            "trade_time": spec.execution.trade_time,
+            "order_timing": semantics.order_timing,
+            "price_bar": semantics.price_bar,
+            "price_type": semantics.price_type,
+            "fill_price_mode": semantics.fill_price_mode,
+            "compatibility_source": semantics.compatibility_source,
+            "initial_cash": spec.execution.initial_cash,
+            "cash_annual_return": spec.execution.cash_annual_return,
+            "lot_size": spec.execution.lot_size,
+            "effective_lot_size": _effective_lot_size(spec),
+            "lot_size_config": {
+                "default": spec.execution.lot_size_config.default,
+                "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
+            },
+            "rebalance": {
+                "frequency": spec.execution.rebalance.frequency,
+                "interval_days": spec.execution.rebalance.interval_days,
+            },
+        },
+        "cost": {
+            "fee_model": "PercentageFee",
+            "fee_rate": spec.cost.fee_rate,
+            "fee_min": spec.cost.fee_min,
+            "slippage_model": "PercentageSlippage",
+            "slippage_rate": spec.cost.slippage_rate,
+        },
+        "runtime_rules": _build_compiled_runtime_rules(spec),
+        "benchmark": {
+            "symbols": list(strategy.benchmarks),
+        },
+        "validation": {
+            "train_period": list(spec.validation.train_period),
+            "test_period": list(spec.validation.test_period),
+            "required_oos": spec.validation.required_oos,
+        },
+        "metrics": {
+            "profile": spec.metrics.profile,
+            "risk_free_rate": spec.metrics.risk_free_rate,
+            "return_type": spec.metrics.return_type,
+            "annualization_days": spec.metrics.annualization_days,
+            "calmar_denominator": spec.metrics.calmar_denominator,
+            "evaluation_window": spec.metrics.evaluation_window,
+        },
+    }
+
+
+def _build_strategy_py_artifact(
+    spec: StrategySpec,
+    compiled_plan: dict[str, Any],
+    spec_hash: str,
+    compiled_plan_hash: str,
+) -> str:
+    spec_dict = spec.to_dict()
+    sections = {
+        "RESEARCH": spec_dict.get("research", {}),
+        "MARKET": spec_dict.get("market", {}),
+        "UNIVERSE": spec_dict.get("universe", {}),
+        "DATA": spec_dict.get("data", {}),
+        "SIGNAL": spec_dict.get("signal", {}),
+        "PORTFOLIO": spec_dict.get("portfolio", {}),
+        "EXECUTION": spec_dict.get("execution", {}),
+        "COST": spec_dict.get("cost", {}),
+        "BENCHMARK": spec_dict.get("benchmark", {}),
+        "VALIDATION": spec_dict.get("validation", {}),
+        "METRICS": spec_dict.get("metrics", {}),
+        "ROBUSTNESS": spec_dict.get("robustness", {}),
+        "DECISION_POLICY": spec_dict.get("decision_policy", {}),
+    }
+    lines = [
+        '"""',
+        "Generated open-xquant strategy artifact.",
+        "",
+        "Canonical source: strategy_spec.yaml",
+        "Machine audit trace: compiled_plan.json",
+        "",
+        "This file is generated from the compiled in-memory Strategy object",
+        "and the canonical StrategySpec. Review it as a Python view of the",
+        "strategy, but edit strategy_spec.yaml instead of editing this file.",
+        '"""',
+        "",
+        "from __future__ import annotations",
+        "",
+        "from copy import deepcopy",
+        "from pathlib import Path",
+        "",
+        f"STRATEGY_SPEC_HASH = {spec_hash!r}",
+        f"COMPILED_PLAN_HASH = {compiled_plan_hash!r}",
+        "",
+        f"STRATEGY_SPEC = {_format_python_literal(spec_dict)}",
+        "",
+        f"COMPILED_PLAN = {_format_python_literal(compiled_plan)}",
+        "",
+    ]
+    for name, value in sections.items():
+        lines.extend([f"{name} = {_format_python_literal(value)}", ""])
+    lines.extend(
+        [
+            "",
+            "def describe() -> dict:",
+            "    return {",
+            '        "strategy_spec_hash": STRATEGY_SPEC_HASH,',
+            '        "compiled_plan_hash": COMPILED_PLAN_HASH,',
+            '        "strategy_spec": deepcopy(STRATEGY_SPEC),',
+            '        "compiled_plan": deepcopy(COMPILED_PLAN),',
+            "    }",
+            "",
+            "",
+            "def build_strategy():",
+            "    from oxq.spec.compiler import compile_strategy",
+            "    from oxq.spec.schema import StrategySpec",
+            "",
+            '    spec_path = Path(__file__).with_name("strategy_spec.yaml")',
+            "    return compile_strategy(StrategySpec.from_yaml(spec_path))",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _format_python_literal(value: Any) -> str:
+    return pprint.pformat(value, sort_dicts=False, width=100)
+
+
+def _build_compiled_runtime_rules(spec: StrategySpec) -> list[dict[str, Any]]:
+    rules: list[dict[str, Any]] = []
+    if spec.execution.rebalance.interval_days > 1:
+        rules.append(
+            {
+                "type": "RebalanceFrequencyRule",
+                "class": f"{RebalanceFrequencyRule.__module__}.{RebalanceFrequencyRule.__qualname__}",
+                "params": {"interval_days": spec.execution.rebalance.interval_days},
+                "source": "execution.rebalance.interval_days",
+            }
+        )
+    for signal_name, signal_def in sorted(spec.signal.rules.items()):
+        if signal_def.type != "Crossover":
+            continue
+        fast = signal_def.params.get("fast", "")
+        slow = signal_def.params.get("slow", "")
+        if fast and slow:
+            rules.append(
+                {
+                    "type": "ExitRule",
+                    "class": "oxq.rules.exit.ExitRule",
+                    "params": {"fast": fast, "slow": slow},
+                    "source": f"signal.rules.{signal_name}",
+                }
+            )
+    return rules
+
+
+def _class_ref(cls: type) -> str:
+    return f"{cls.__module__}.{cls.__qualname__}"
 
 
 def _to_timestamp(ts_val: str | object, tz: object | None = None) -> pd.Timestamp:

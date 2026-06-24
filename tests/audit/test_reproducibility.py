@@ -9,7 +9,7 @@ from oxq.audit.reproducibility import _hash_json_file, audit_reproducibility
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
-from oxq.spec.compiler import _write_artifacts
+from oxq.spec.compiler import _hash_file, _write_artifacts
 from oxq.spec.schema import StrategySpec
 
 
@@ -157,7 +157,69 @@ def test_reproducibility_audit_validates_target_weight_hash(tmp_path) -> None:
     assert any(check["id"] == "target_weights_hash" for check in audit["checks"])
 
     hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
-    assert hashes["schema_version"] == 3
+    assert hashes["schema_version"] == 5
+
+
+def test_reproducibility_audit_validates_compiled_plan_hash(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    plan["compilation_mode"] = "tampered"
+    (run_dir / "compiled_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "compiled_plan_hash" for check in audit["checks"])
+
+
+def test_reproducibility_audit_rejects_strategy_py_spec_conflict(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    strategy_py_path = run_dir / "strategy.py"
+    strategy_py = strategy_py_path.read_text(encoding="utf-8")
+    strategy_py_path.write_text(
+        strategy_py.replace("'strategy_id': 'audit_execution_assumptions'", "'strategy_id': 'tampered'"),
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["strategy.py"] = _hash_file(strategy_py_path)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    consistency = next(check for check in audit["checks"] if check["id"] == "strategy_py_consistency")
+    assert "STRATEGY_SPEC conflicts" in consistency["message"]
+
+
+def test_reproducibility_audit_allows_schema_4_without_strategy_py(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    (run_dir / "strategy.py").unlink()
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["schema_version"] = 4
+    hashes.pop("strategy.py")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
+
+
+def test_reproducibility_audit_allows_schema_3_without_compiled_plan(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    (run_dir / "strategy.py").unlink()
+    (run_dir / "compiled_plan.json").unlink()
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["schema_version"] = 3
+    hashes.pop("strategy.py")
+    hashes.pop("compiled_plan.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
 
 
 def test_reproducibility_audit_checks_target_weights_when_schema_2_manifest(tmp_path) -> None:

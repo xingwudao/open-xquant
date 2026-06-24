@@ -133,6 +133,8 @@ benchmark 用 SPY。
 - `strategy_spec.yaml`
 - `runs/<run_id>/metrics.json`
 - `runs/<run_id>/execution_assumptions.json`
+- `runs/<run_id>/compiled_plan.json`，记录 spec 被解析成运行时对象的确定性计划。
+- `runs/<run_id>/strategy.py`，面向用户阅读的 Python 策略投影；不要直接编辑。
 - `runs/<run_id>/equity_curve.csv`
 - `runs/<run_id>/benchmark_curve.csv`，如果配置了 benchmark。
 - `runs/<run_id>/trades.csv`

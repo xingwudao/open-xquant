@@ -437,8 +437,101 @@ def test_write_artifacts_persists_target_weights(tmp_path) -> None:
     ]
 
     hashes = json.loads((tmp_path / "artifact_hashes.json").read_text(encoding="utf-8"))
-    assert hashes["schema_version"] == 3
+    assert hashes["schema_version"] == 5
     assert "target_weights.csv" in hashes
+
+
+def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="compiled_plan", hypothesis="compiled plans should be auditable")
+    spec.universe.symbols = ["SPY"]
+    spec.signal.indicators = {
+        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
+    }
+    spec.signal.rules = {
+        "positive": SignalRuleDef(
+            type="Threshold",
+            params={"column": "roc_1", "threshold": 0, "relationship": "gt"},
+        )
+    }
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-04"]
+    dates = pd.bdate_range("2024-01-02", periods=3, tz="UTC")
+    source_df = pd.DataFrame(
+        {
+            "open": [1.0, 2.0, 3.0],
+            "high": [1.0, 2.0, 3.0],
+            "low": [1.0, 2.0, 3.0],
+            "close": [1.0, 2.0, 3.0],
+            "volume": [100, 100, 100],
+        },
+        index=dates,
+    )
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={"SPY": source_df},
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source_df.to_parquet(data_dir / "SPY.parquet")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+
+    _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
+
+    plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    strategy_py = (run_dir / "strategy.py").read_text(encoding="utf-8")
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert plan["schema_version"] == 1
+    assert plan["compilation_mode"] == "direct_runtime"
+    assert plan["spec_hash"] == spec.compute_hash()
+    assert plan["signals"]["indicators"]["roc_1"]["type"] == "ROC"
+    assert plan["signals"]["rules"]["positive"]["effective_type"] == "Threshold"
+    assert plan["signals"]["terminal_signals"] == ["positive"]
+    assert plan["portfolio"]["runtime_type"] == "SignalFilteredEqualWeight"
+    assert plan["execution"]["fill_price_mode"] == "next_open"
+    assert "STRATEGY_SPEC =" in strategy_py
+    assert "COMPILED_PLAN =" in strategy_py
+    assert "def build_strategy():" in strategy_py
+    assert hashes["schema_version"] == 5
+    assert "compiled_plan.json" in hashes
+    assert "strategy.py" in hashes
+    assert audit_reproducibility(run_dir)["status"] == "pass"
+
+
+def test_compiled_plan_hash_is_stable_across_run_dirs(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="compiled_plan_hash", hypothesis="compiled plan hashes exclude run metadata")
+    dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0, 1.0],
+                    "high": [1.0, 1.0, 1.0],
+                    "low": [1.0, 1.0, 1.0],
+                    "close": [1.0, 1.0, 1.0],
+                    "volume": [1, 1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+
+    first = tmp_path / "run_1"
+    second = tmp_path / "run_2"
+    first.mkdir()
+    second.mkdir()
+    _write_artifacts(spec, result, first, Engine())
+    _write_artifacts(spec, result, second, Engine())
+
+    first_hashes = json.loads((first / "artifact_hashes.json").read_text(encoding="utf-8"))
+    second_hashes = json.loads((second / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert first_hashes["compiled_plan.json"] == second_hashes["compiled_plan.json"]
+    assert first_hashes["strategy.py"] == second_hashes["strategy.py"]
 
 
 def test_write_artifacts_preserves_target_weight_rule_reasons(tmp_path) -> None:

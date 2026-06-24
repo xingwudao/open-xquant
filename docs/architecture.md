@@ -400,7 +400,14 @@ P0 校验规则：
 
 两种模式：
 1. **Direct Runtime Mode**：直接从 spec 构造 Strategy 对象并运行（MVP 优先）
-2. **Generated Code Mode**：生成 `strategy.py`，便于人类 review 和 Git diff
+2. **Compiled Plan Artifact**：写出 `compiled_plan.json`，记录 spec 到运行时对象、
+   执行语义和自动规则的确定性映射，并纳入 `artifact_hashes.json`
+3. **Human Strategy Projection**：写出 `strategy.py`，以 Python 语法展示完整
+   spec、compiled plan 和可构造策略入口，供用户 review
+
+`strategy_spec.yaml` 仍是策略本体。`strategy.py` 是生成产物，不作为回测执行入口；
+复现性审计会静态解析其中的 `STRATEGY_SPEC` 和 `COMPILED_PLAN`，确认它们与
+`strategy_spec.yaml`、`compiled_plan.json` 一致。
 
 ---
 
@@ -415,7 +422,8 @@ Research Bias Audit   — 判断回测研究是否可信
 
 ### 6.2 Reproducibility Audit
 
-检查 spec hash、data manifest hash、trades hash、equity curve hash、metrics hash、environment hash。
+检查 spec hash、compiled plan hash、strategy.py 一致性、data manifest hash、
+trades hash、equity curve hash、metrics hash、environment hash。
 
 命令：`oxq audit reproducibility runs/<run_id>/`
 
@@ -700,7 +708,8 @@ agent/opencode/
 
 ### Phase 2: Spec Compiler 与 Backtest Artifacts ✅ 已完成
 - `src/oxq/spec/compiler.py`
-- 标准化 run directory 结构，包括 `target_weights.csv` 和
+- 标准化 run directory 结构，包括 `compiled_plan.json`、`strategy.py`、
+  `target_weights.csv` 和
   `artifact_hashes.json` hash 覆盖
 - CLI: `oxq strategy compile`, `oxq backtest run`
 

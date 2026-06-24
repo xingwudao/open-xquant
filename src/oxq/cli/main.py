@@ -106,6 +106,8 @@ def _backtest_artifact_paths(run_dir: Path) -> dict[str, str]:
         "environment_json": str(run_dir / "environment.json"),
         "data_manifest_json": str(run_dir / "data_manifest.json"),
         "execution_assumptions_json": str(run_dir / "execution_assumptions.json"),
+        "compiled_plan_json": str(run_dir / "compiled_plan.json"),
+        "strategy_py": str(run_dir / "strategy.py"),
         "equity_curve_csv": str(run_dir / "equity_curve.csv"),
         "trades_csv": str(run_dir / "trades.csv"),
         "positions_csv": str(run_dir / "positions.csv"),
