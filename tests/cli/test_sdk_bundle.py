@@ -139,6 +139,79 @@ def test_build_sdk_bundle_selects_all_research_extras_except_excluded(monkeypatc
     assert payload["excluded_extras"] == ["dev", "docs", "talib"]
 
 
+def test_build_sdk_bundle_uses_shared_uv_cache_across_bundle_roots(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'open-xquant'\nversion = '0.1.0'\n", encoding="utf-8")
+    commands: list[list[str]] = []
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+
+    payload = build_sdk_bundle(source, config_root)
+
+    shared_cache = config_root / "sdk-cache" / "uv"
+    bundle_root = Path(payload["root"])
+    assert Path(payload["uv_cache_dir"]) == shared_cache
+    assert not Path(payload["uv_cache_dir"]).is_relative_to(bundle_root)
+    cache_args = [
+        Path(cmd[cmd.index("--cache-dir") + 1])
+        for cmd in commands
+        if cmd[0] == "uv" and "--cache-dir" in cmd
+    ]
+    assert cache_args
+    assert set(cache_args) == {shared_cache}
+
+
+def test_build_sdk_bundle_reuses_runner_venv_when_dependency_lock_is_unchanged(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text("[project]\nname = 'open-xquant'\nversion = '0.1.0'\n", encoding="utf-8")
+    bundle = _write_valid_bundle(config_root / "sdk-bundles/old-bundle")
+    old_lock = "\n".join(
+        [
+            "dep==1.0 \\",
+            "    --hash=sha256:old",
+            "open-xquant @ file:///old/open_xquant-0.1.0-py3-none-any.whl \\",
+            "    --hash=sha256:oldwheel",
+            "zdep==2.0 \\",
+            "    --hash=sha256:z",
+            "",
+        ]
+    )
+    new_lock = old_lock.replace("file:///old/open_xquant-0.1.0-py3-none-any.whl", "file:///new/open_xquant-0.1.0-py3-none-any.whl")
+    lock_path = Path(bundle["dependencies"]["lock_file"])
+    lock_path.write_text(old_lock, encoding="utf-8")
+    bundle["dependencies"]["lock_sha256"] = hashlib.sha256(old_lock.encode("utf-8")).hexdigest()
+    config_root.mkdir(parents=True, exist_ok=True)
+    (config_root / "agent-install.json").write_text(json.dumps({"sdk_bundle": bundle}), encoding="utf-8")
+    commands: list[list[str]] = []
+
+    def run(cmd: list[str]) -> subprocess.CompletedProcess[str]:
+        commands.append(cmd)
+        if cmd[0] == "uv" and "build" in cmd:
+            out_dir = Path(cmd[cmd.index("--out-dir") + 1])
+            out_dir.mkdir(parents=True, exist_ok=True)
+            (out_dir / "open_xquant-0.1.0-py3-none-any.whl").write_text("wheel", encoding="utf-8")
+        if cmd[0] == "uv" and "compile" in cmd:
+            output = Path(cmd[cmd.index("--output-file") + 1])
+            output.write_text(new_lock, encoding="utf-8")
+        if cmd[0] == "uv" and "sync" in cmd:
+            pytest.fail(f"unchanged dependency lock should reuse the previous runner venv: {cmd}")
+        stdout = "[]" if cmd[0] == "uv" and "list" in cmd else ""
+        return subprocess.CompletedProcess(cmd, 0, stdout=stdout, stderr="")
+
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", run)
+
+    payload = build_sdk_bundle(source, config_root)
+
+    install_cmd = next(cmd for cmd in commands if cmd[0] == "uv" and "install" in cmd)
+    assert "--reinstall" in install_cmd
+    assert "--no-deps" in install_cmd
+    assert payload["id"] != bundle["id"]
+    assert Path(payload["runner"]["python"]).exists()
+
+
 def test_build_sdk_bundle_rebuilds_malformed_existing_manifest(monkeypatch, tmp_path) -> None:
     source = tmp_path / "source"
     config_root = tmp_path / "config/open-xquant"

@@ -51,6 +51,7 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
 
     source_root = source_root.resolve()
     config_root = config_root.resolve()
+    uv_cache_dir = _shared_uv_cache_dir(config_root)
     buildable_source = _is_buildable_source(source_root)
     version = _package_version(source_root) if buildable_source else _installed_distribution_version(source_root)
     sdk_extras = _selected_sdk_extras(source_root, buildable_source=buildable_source)
@@ -72,7 +73,7 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
             runner_venv=bundle_root / "runner" / ".venv",
             runner_python=_venv_executable(bundle_root / "runner" / ".venv", "python"),
             runner_oxq=oxq,
-            uv_cache_dir=bundle_root / "uv-cache",
+            uv_cache_dir=uv_cache_dir,
             extras=sdk_extras,
             excluded_extras=EXCLUDED_EXTRAS,
         )
@@ -87,8 +88,8 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         dist_tmp = tmp_root / "dist"
         wheel_tmp = _build_source_wheel(source_root, dist_tmp, buildable_source=buildable_source)
         wheel_sha = sha256_file(wheel_tmp)
+        cached_bundle = _installed_sdk_bundle(config_root, invalid_as_miss=True)
         if not buildable_source:
-            cached_bundle = _installed_sdk_bundle(config_root, invalid_as_miss=True)
             if (
                 cached_bundle is not None
                 and _bundle_version(cached_bundle) == version
@@ -121,7 +122,6 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         wheel_path = dist_dir / wheel_tmp.name
         shutil.copy2(wheel_tmp, wheel_path)
 
-        uv_cache_dir = bundle_root / "uv-cache"
         lock_path = bundle_root / "requirements.lock.txt"
         req_in = bundle_root / "requirements.in"
         requirement_name = "open-xquant"
@@ -151,27 +151,29 @@ def build_sdk_bundle(source_root: Path, config_root: Path, *, dry_run: bool = Fa
         lock_sha = sha256_file(lock_path)
 
         runner_venv = bundle_root / "runner" / ".venv"
-        _run(_uv_cmd(["venv", "--python", sys.executable, str(runner_venv)], directory=bundle_root))
         runner_python = _venv_executable(runner_venv, "python")
-        _run(
-            _uv_cmd(
-                [
-                    "pip",
-                    "sync",
-                    "--python",
-                    str(runner_python),
-                    "--require-hashes",
-                    "--strict",
-                    "--cache-dir",
-                    str(uv_cache_dir),
-                    str(lock_path),
-                ],
-                directory=bundle_root,
+        runner_oxq = _venv_executable(runner_venv, "oxq")
+        if not _try_reuse_runner_venv(cached_bundle, runner_venv, lock_path, wheel_path, uv_cache_dir, bundle_root):
+            _run(_uv_cmd(["venv", "--python", sys.executable, str(runner_venv)], directory=bundle_root))
+            runner_python = _venv_executable(runner_venv, "python")
+            _run(
+                _uv_cmd(
+                    [
+                        "pip",
+                        "sync",
+                        "--python",
+                        str(runner_python),
+                        "--require-hashes",
+                        "--strict",
+                        "--cache-dir",
+                        str(uv_cache_dir),
+                        str(lock_path),
+                    ],
+                    directory=bundle_root,
+                )
             )
-        )
         _run([str(runner_python), "-c", "import oxq"])
         _run(_uv_cmd(["pip", "check", "--python", str(runner_python), "--cache-dir", str(uv_cache_dir)], directory=bundle_root))
-        runner_oxq = _venv_executable(runner_venv, "oxq")
         _run([str(runner_oxq), "--help"])
 
         packages_path = bundle_root / "packages.json"
@@ -447,6 +449,73 @@ def _normalize_extra(value: str) -> str:
     return re.sub(r"[-_.]+", "-", value).lower()
 
 
+def _try_reuse_runner_venv(
+    cached_bundle: dict[str, Any] | None,
+    runner_venv: Path,
+    lock_path: Path,
+    wheel_path: Path,
+    uv_cache_dir: Path,
+    bundle_root: Path,
+) -> bool:
+    if cached_bundle is None:
+        return False
+    previous_lock = _stored_path(_require_str(_require_dict(cached_bundle, "dependencies"), "lock_file"))
+    if not previous_lock.exists():
+        return False
+    if _lock_without_project_requirement(previous_lock) != _lock_without_project_requirement(lock_path):
+        return False
+    previous_runner_venv = _runner_venv_path(cached_bundle)
+    if previous_runner_venv is None or not previous_runner_venv.exists():
+        return False
+    if runner_venv.exists():
+        shutil.rmtree(runner_venv)
+    shutil.copytree(previous_runner_venv, runner_venv, symlinks=True)
+    runner_python = _venv_executable(runner_venv, "python")
+    _run(
+        _uv_cmd(
+            [
+                "pip",
+                "install",
+                "--python",
+                str(runner_python),
+                "--reinstall",
+                "--no-deps",
+                "--cache-dir",
+                str(uv_cache_dir),
+                str(wheel_path),
+            ],
+            directory=bundle_root,
+        )
+    )
+    return True
+
+
+def _runner_venv_path(bundle: dict[str, Any]) -> Path | None:
+    runner = _require_dict(bundle, "runner")
+    venv = runner.get("venv")
+    if isinstance(venv, str) and venv:
+        return _stored_path(venv)
+    python = runner.get("python")
+    if isinstance(python, str) and python:
+        return _stored_path(python).parent.parent
+    return None
+
+
+def _lock_without_project_requirement(lock_path: Path) -> str:
+    kept: list[str] = []
+    skipping_project = False
+    for line in lock_path.read_text(encoding="utf-8").splitlines():
+        if line.startswith("open-xquant @ "):
+            skipping_project = True
+            continue
+        if skipping_project:
+            if line.startswith((" ", "\t")):
+                continue
+            skipping_project = False
+        kept.append(line)
+    return "\n".join(kept)
+
+
 def _build_source_wheel(source_root: Path, dist_tmp: Path, *, buildable_source: bool) -> Path:
     if buildable_source:
         _run(_uv_cmd(["build", "--wheel", "--out-dir", str(dist_tmp), "."], directory=source_root))
@@ -601,6 +670,10 @@ def _installed_sdk_bundle(config_root: Path, *, invalid_as_miss: bool = False) -
             return None
         raise click.ClickException(f"Cached SDK bundle is invalid: {exc}") from exc
     return bundle
+
+
+def _shared_uv_cache_dir(config_root: Path) -> Path:
+    return config_root / "sdk-cache" / "uv"
 
 
 def _read_bundle_manifest(path: Path) -> dict[str, Any] | None:
