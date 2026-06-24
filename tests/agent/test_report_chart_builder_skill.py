@@ -19,6 +19,7 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "oxq report asset add" in text
     assert "oxq report asset add-batch" in text
     assert "source_artifacts" in text
+    assert "trade_curve" in text
     assert "research_report.md" in text
     assert "research_report.html" in text
     assert "research-report-writer" in text
@@ -36,6 +37,7 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "Pair Plot" in text
     assert "scan the run directory" in text
     assert "recommended chart set" in text
+    assert "trade curve as the first/default recommendation" in text
     assert "Numeric claim review is semantic/advisory" in text
     assert "treating the CLI command as proof" in text
 
@@ -46,6 +48,7 @@ def test_report_chart_builder_skill_requires_professional_chart_pack() -> None:
     text = skill.read_text(encoding="utf-8")
 
     assert "Default Professional Chart Pack" in text
+    assert "trade curve" in text
     assert "equity curve vs benchmark" in text
     assert "drawdown" in text
     assert "monthly return heatmap" in text
@@ -58,6 +61,29 @@ def test_report_chart_builder_skill_requires_professional_chart_pack() -> None:
     assert "message title" in text
     assert "source artifact" in text
     assert "caption" in text
+    assert "buy/sell markers" in text
+    assert "orders.csv" in text
+    assert "target_weights.csv" in text
+
+    default_pack = text[
+        text.index("## Default Professional Chart Pack"): text.index("## Chart Applicability Matrix")
+    ]
+    assert default_pack.index("- trade curve") < default_pack.index("- equity curve vs benchmark")
+    assert "The trade curve is the default choice" in default_pack
+
+
+def test_report_chart_builder_skill_defines_trade_curve_requirements() -> None:
+    skill = Path("agent/skills/report-chart-builder.md")
+
+    text = skill.read_text(encoding="utf-8")
+    matrix = text[text.index("## Chart Applicability Matrix"): text.index("## Red Lines")]
+
+    assert "Trade Curve" in matrix
+    assert "`equity_curve.csv`, non-empty `trades.csv`" in matrix
+    assert "`orders.csv`" in matrix
+    assert "`target_weights.csv`" in matrix
+    assert "`benchmark_curve.csv`" in matrix
+    assert "Rotation-strategy value: core/default" in matrix
 
 
 def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:

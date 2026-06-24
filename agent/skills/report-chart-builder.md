@@ -16,7 +16,8 @@ handing the final narrative to `research-report-writer`.
 
 1. Confirm the run directory and required artifacts exist.
    - Read `metrics.json`, `equity_curve.csv`, `benchmark_curve.csv`,
-     `trades.csv`, `positions.csv`, and `target_weights.csv` only if present.
+     `trades.csv`, `orders.csv`, `positions.csv`, and `target_weights.csv`
+     only if present.
    - scan the run directory for available data assets before recommending
      charts.
    - Do not modify metrics.
@@ -29,8 +30,8 @@ handing the final narrative to `research-report-writer`.
    - List the recommended chart set sorted by rotation-strategy value and data
      availability.
    - If the user does not give a chart list, propose the Default Professional
-     Chart Pack and ask whether to build the full pack, a smaller subset, or a
-     custom set.
+     Chart Pack with trade curve as the first/default recommendation, then ask
+     whether to build the full pack, a smaller subset, or a custom set.
    - Ask the user to confirm the batch before generating charts.
    - Explain when a useful or requested chart cannot be produced from available
      data.
@@ -66,12 +67,22 @@ manifest write:
 ```json
 [
   {
+    "id": "trade_curve",
+    "file_path": "runs/<run_id>/report_assets/figures/trade_curve.png",
+    "title": "Trade curve",
+    "caption": "Generated from equity_curve.csv and trades.csv; markers show fills, not intraday paths.",
+    "section": "results",
+    "order": 10,
+    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_artifacts": ["equity_curve.csv", "trades.csv"]
+  },
+  {
     "id": "equity_curve",
     "file_path": "runs/<run_id>/report_assets/figures/equity_curve.png",
     "title": "Equity curve vs benchmark",
     "caption": "Generated from equity_curve.csv and benchmark_curve.csv.",
     "section": "results",
-    "order": 10,
+    "order": 20,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv", "benchmark_curve.csv"]
   },
@@ -81,7 +92,7 @@ manifest write:
     "title": "Drawdown curve",
     "caption": "Generated from equity_curve.csv.",
     "section": "risk",
-    "order": 20,
+    "order": 30,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv"]
   }
@@ -124,6 +135,7 @@ HTML from that final Markdown. The expected outputs are:
 
 ## Common Charts
 
+- Trade curve with buy/sell history.
 - Equity curve vs benchmark.
 - Drawdown curve.
 - Monthly or yearly returns.
@@ -135,8 +147,22 @@ HTML from that final Markdown. The expected outputs are:
 ## Default Professional Chart Pack
 
 Use this pack when the user wants a professional report but does not specify
-charts. Skip any chart whose source artifact is unavailable, and say why.
+charts. The trade curve is the default choice because it connects portfolio
+performance to the recorded buy/sell history. Skip any chart whose source
+artifact is unavailable, and say why.
 
+- trade curve: source artifacts `equity_curve.csv` and non-empty `trades.csv`;
+  optional source artifacts `orders.csv`, `target_weights.csv`, and
+  `benchmark_curve.csv`; show the portfolio equity curve with buy/sell markers
+  by symbol so the user can inspect when each holding was entered, reduced, or
+  exited. Use distinct marker shapes or colors for BUY and SELL, keep symbol
+  legends readable, and use an event rug, symbol lane, or small multiples when
+  dense multi-symbol trades would clutter a single curve. Label only major
+  events or the highest-turnover symbols unless the full label set remains
+  readable. The message title should state how trading activity aligns with
+  equity inflections. The caption must name the fill/order artifacts and state
+  that markers represent recorded fills, not intraday execution paths unless
+  such data is available.
 - equity curve vs benchmark: source artifact `equity_curve.csv` and
   `benchmark_curve.csv`; use a message title that states whether the strategy
   outperformed, tracked, or lagged the benchmark.
@@ -164,6 +190,10 @@ readable, but it does not replace artifact-backed evidence.
 
 ## Chart Applicability Matrix
 
+- Trade Curve
+  - Data: `equity_curve.csv`, non-empty `trades.csv`; optional `orders.csv`,
+    `target_weights.csv`, `benchmark_curve.csv`
+  - Rotation-strategy value: core/default
 - Equity Curve
   - Data: `equity_curve.csv`, optional `benchmark_curve.csv`
   - Rotation-strategy value: core
