@@ -87,6 +87,7 @@ def test_spec_hash_and_fields_are_deterministic(tmp_path) -> None:
     assert digest.startswith("sha256:")
     assert fields["spec_hash"] == digest
     assert {"path": "research.hypothesis", "value": "SMA crossover"} in fields["fields"]
+    assert {"path": "execution.initial_cash", "value": 100000.0} in fields["fields"]
     assert {"path": "execution.lot_size_config.default", "value": 1} in fields["fields"]
 
 
@@ -97,9 +98,24 @@ def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
-        "recipe_matches": [],
-        "field_audits": [{"field_path": "portfolio.type", "status": "confirmed", "evidence": []}],
-        "component_audits": [{"component_path": "portfolio.type", "component_type": "EqualWeight", "status": "catalog"}],
+        "recipe_matches": [
+            {
+                "recipe": "sma_golden_cross",
+                "status": "not_applicable",
+                "evidence": [],
+                "canonical": False,
+            }
+        ],
+        "field_audits": [{"field_path": "portfolio.type", "status": "confirmed", "evidence": [], "blocking": False}],
+        "component_audits": [
+            {
+                "component_path": "portfolio.type",
+                "component_type": "EqualWeight",
+                "status": "catalog",
+                "evidence": [],
+                "blocking": False,
+            }
+        ],
         "missing_user_requirements": [],
         "agent_added_fields": [],
         "contradictions": [],
@@ -124,3 +140,33 @@ def test_spec_audit_validate_rejects_missing_required_fields(tmp_path) -> None:
     payload = json.loads(result.output)
     assert payload["status"] == "fail"
     assert any(error["path"] == "spec_hash" for error in payload["errors"])
+    assert any(error["path"] == "schema_version" for error in payload["errors"])
+
+
+def test_spec_audit_validate_rejects_malformed_entries(tmp_path) -> None:
+    audit = {
+        "schema_version": 1,
+        "status": "blocked",
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        "recipe_matches": ["volatility_adjusted_momentum"],
+        "field_audits": [{"field_path": "portfolio.type", "status": "ok", "evidence": []}],
+        "component_audits": [{"component_path": "portfolio.type", "component_type": "EqualWeight", "status": "unknown"}],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert any(error["path"] == "status" for error in payload["errors"])
+    assert any(error["path"] == "recipe_matches[0]" for error in payload["errors"])
+    assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
+    assert any(error["path"] == "component_audits[0].status" for error in payload["errors"])

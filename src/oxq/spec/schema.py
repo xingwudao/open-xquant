@@ -250,6 +250,11 @@ class StrategySpec:
         self.execution.normalize_lot_size_config()
         return _dataclass_to_dict(self)
 
+    def to_effective_dict(self) -> dict[str, Any]:
+        """Serialize the complete effective spec, including parser defaults."""
+        self.execution.normalize_lot_size_config()
+        return _dataclass_to_canonical_dict(self)
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> StrategySpec:
         """Load a StrategySpec from a YAML file."""

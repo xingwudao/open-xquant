@@ -114,7 +114,7 @@ def spec_hash(spec_file: str, as_json: bool):
 def spec_fields(spec_file: str, as_json: bool):
     """Export deterministic flattened fields from a strategy spec."""
     parsed = StrategySpec.from_yaml(spec_file)
-    fields = [{"path": path, "value": value} for path, value in _flatten_fields(parsed.to_dict())]
+    fields = [{"path": path, "value": value} for path, value in _flatten_fields(parsed.to_effective_dict())]
     if as_json:
         click.echo(json.dumps({"spec_hash": parsed.compute_hash(), "fields": fields}, indent=2, ensure_ascii=False, default=str))
         return

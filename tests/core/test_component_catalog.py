@@ -23,6 +23,9 @@ def test_component_catalog_contains_registered_components_and_recipes() -> None:
     assert "dependencies" in indicators["NdayReturn"]
     assert "RollingVolatility" in indicators
     assert "Ratio" in indicators
+    assert indicators["Ratio"]["params"]["col_a"]["required"] is True
+    assert indicators["Ratio"]["params"]["col_a"]["semantic_required"] is True
+    assert indicators["Ratio"]["params"]["col_b"]["required"] is True
     assert "TopNRanking" in portfolios
     assert "roc_timing" in recipes
     assert "sma_golden_cross" in recipes

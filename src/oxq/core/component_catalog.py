@@ -320,9 +320,13 @@ def _params_for(kind: str, cls: type) -> dict[str, Any]:
     for name, param in signature.parameters.items():
         if name in skip or param.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
             continue
+        required = param.default is inspect.Parameter.empty or param.default == ""
         entry: dict[str, Any] = {
-            "required": param.default is inspect.Parameter.empty,
+            "required": required,
         }
+        if param.default == "":
+            entry["semantic_required"] = True
+            entry["required_reason"] = "empty string is a sentinel, not a usable default"
         if param.default is not inspect.Parameter.empty:
             entry["default"] = param.default
         if param.annotation is not inspect.Parameter.empty:

@@ -10,6 +10,7 @@ from typing import Any
 SPEC_AUDIT_SCHEMA_VERSION = 1
 
 REQUIRED_TOP_LEVEL_FIELDS = {
+    "schema_version",
     "status",
     "spec_hash",
     "conversation_hash",
@@ -23,7 +24,10 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "blocking_findings",
 }
 
-_ALLOWED_STATUS = {"pass", "block", "blocked", "fail"}
+_ALLOWED_STATUS = {"pass", "block", "fail"}
+_ALLOWED_RECIPE_STATUS = {"used", "available_but_not_used", "not_applicable"}
+_ALLOWED_FIELD_STATUS = {"confirmed", "default", "unconfirmed", "contradiction", "agent_added"}
+_ALLOWED_COMPONENT_STATUS = {"catalog", "recipe", "missing", "non_canonical"}
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{16,64}$")
 
 
@@ -53,7 +57,7 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
     if not isinstance(status, str) or status not in _ALLOWED_STATUS:
         errors.append({"path": "status", "message": f"must be one of {sorted(_ALLOWED_STATUS)}"})
 
-    schema_version = payload.get("schema_version", SPEC_AUDIT_SCHEMA_VERSION)
+    schema_version = payload.get("schema_version")
     if not isinstance(schema_version, int) or schema_version != SPEC_AUDIT_SCHEMA_VERSION:
         errors.append({"path": "schema_version", "message": f"must be {SPEC_AUDIT_SCHEMA_VERSION}"})
 
@@ -74,14 +78,27 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
         if field in payload and not isinstance(payload[field], list):
             errors.append({"path": field, "message": "must be a list"})
 
+    for index, item in enumerate(payload.get("recipe_matches", []) if isinstance(payload.get("recipe_matches"), list) else []):
+        if not isinstance(item, dict):
+            errors.append({"path": f"recipe_matches[{index}]", "message": "must be an object"})
+            continue
+        _require_str(item, f"recipe_matches[{index}]", "recipe", errors)
+        _require_enum(item, f"recipe_matches[{index}]", "status", _ALLOWED_RECIPE_STATUS, errors)
+        if "evidence" not in item or not isinstance(item["evidence"], list):
+            errors.append({"path": f"recipe_matches[{index}].evidence", "message": "must be a list"})
+        if "canonical" not in item or not isinstance(item["canonical"], bool):
+            errors.append({"path": f"recipe_matches[{index}].canonical", "message": "must be a boolean"})
+
     for index, item in enumerate(payload.get("field_audits", []) if isinstance(payload.get("field_audits"), list) else []):
         if not isinstance(item, dict):
             errors.append({"path": f"field_audits[{index}]", "message": "must be an object"})
             continue
         _require_str(item, f"field_audits[{index}]", "field_path", errors)
-        _require_str(item, f"field_audits[{index}]", "status", errors)
+        _require_enum(item, f"field_audits[{index}]", "status", _ALLOWED_FIELD_STATUS, errors)
         if "evidence" not in item or not isinstance(item["evidence"], list):
             errors.append({"path": f"field_audits[{index}].evidence", "message": "must be a list"})
+        if "blocking" in item and not isinstance(item["blocking"], bool):
+            errors.append({"path": f"field_audits[{index}].blocking", "message": "must be a boolean"})
 
     for index, item in enumerate(payload.get("component_audits", []) if isinstance(payload.get("component_audits"), list) else []):
         if not isinstance(item, dict):
@@ -89,7 +106,11 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
             continue
         _require_str(item, f"component_audits[{index}]", "component_path", errors)
         _require_str(item, f"component_audits[{index}]", "component_type", errors)
-        _require_str(item, f"component_audits[{index}]", "status", errors)
+        _require_enum(item, f"component_audits[{index}]", "status", _ALLOWED_COMPONENT_STATUS, errors)
+        if "evidence" in item and not isinstance(item["evidence"], list):
+            errors.append({"path": f"component_audits[{index}].evidence", "message": "must be a list"})
+        if "blocking" in item and not isinstance(item["blocking"], bool):
+            errors.append({"path": f"component_audits[{index}].blocking", "message": "must be a boolean"})
 
     for field in ("missing_user_requirements", "agent_added_fields", "contradictions", "blocking_findings"):
         for index, item in enumerate(payload.get(field, []) if isinstance(payload.get(field), list) else []):
@@ -104,6 +125,18 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
 def _require_str(item: dict[str, Any], prefix: str, field: str, errors: list[dict[str, str]]) -> None:
     if field not in item or not isinstance(item[field], str):
         errors.append({"path": f"{prefix}.{field}", "message": "must be a string"})
+
+
+def _require_enum(
+    item: dict[str, Any],
+    prefix: str,
+    field: str,
+    allowed: set[str],
+    errors: list[dict[str, str]],
+) -> None:
+    value = item.get(field)
+    if not isinstance(value, str) or value not in allowed:
+        errors.append({"path": f"{prefix}.{field}", "message": f"must be one of {sorted(allowed)}"})
 
 
 def _result(status: str, errors: list[dict[str, str]]) -> dict[str, Any]:
