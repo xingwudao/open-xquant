@@ -550,6 +550,11 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
                 "cash_annual_return": 0.025,
                 "lot_size": 1,
                 "lot_size_config": {"default": 100, "by_symbol": {"SPY": 10}},
+                "rebalance": {
+                    "frequency": "daily",
+                    "interval_days": 10,
+                    "source": "portfolio.rules.rebalance",
+                },
             }
         ),
         encoding="utf-8",
@@ -566,6 +571,9 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
     assert "- **default_lot_size**: 100" in report
     assert "- **calendar**: XSHE" in report
     assert "- **runtime_calendar**: XSHG" in report
+    assert "- **rebalance.frequency**: daily" in report
+    assert "- **rebalance.interval_days**: 10" in report
+    assert "- **rebalance.source**: portfolio.rules.rebalance" in report
 
 
 def test_chinese_report_localizes_professional_metric_sections(tmp_path) -> None:

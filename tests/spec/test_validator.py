@@ -491,6 +491,17 @@ def test_validate_rejects_constructor_supplied_rebalance_rule_conflict() -> None
     assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
 
 
+def test_validate_rejects_constructor_supplied_daily_rebalance_rule_conflict() -> None:
+    spec = StrategySpec.template(strategy_id="rebalance_constructor_daily_conflict", hypothesis="explicit daily is material")
+    spec.execution.rebalance = RebalanceDef(interval_days=1)
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(type="RebalanceFrequencyRule", params={"interval_days": 10})
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
+
+
 def test_validate_rejects_unsupported_rebalance_rule_params() -> None:
     spec = StrategySpec.template(strategy_id="rebalance_extra_params", hypothesis="unsupported params must fail fast")
     spec.portfolio.rules["rebalance"] = PortfolioRuleDef(

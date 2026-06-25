@@ -1020,6 +1020,11 @@ def _format_execution_assumption_lines(assumptions: dict) -> list[str]:
         lines.append(f"- **calendar**: {_format_assumption_value(assumptions.get('calendar'))}")
     if "runtime_calendar" in assumptions:
         lines.append(f"- **runtime_calendar**: {_format_assumption_value(assumptions.get('runtime_calendar'))}")
+    rebalance = assumptions.get("rebalance")
+    if isinstance(rebalance, dict):
+        lines.append(f"- **rebalance.frequency**: {_format_assumption_value(rebalance.get('frequency'))}")
+        lines.append(f"- **rebalance.interval_days**: {_format_assumption_value(rebalance.get('interval_days'))}")
+        lines.append(f"- **rebalance.source**: {_format_assumption_value(rebalance.get('source'))}")
     return lines
 
 

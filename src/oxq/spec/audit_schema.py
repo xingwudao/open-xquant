@@ -168,7 +168,7 @@ def _require_str(item: dict[str, Any], prefix: str, field: str, errors: list[dic
 
 def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
     has_negative = False
-    has_later_confirmation = False
+    unresolved_negative = False
     for entry in evidence:
         if not isinstance(entry, str):
             continue
@@ -178,15 +178,23 @@ def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
             before_negative = entry[: negative_match.start()]
             after_negative = entry[negative_match.end() :]
             if _POSITIVE_CONFIRMATION_RE.search(after_negative) and _LATER_CONFIRMATION_CONTEXT_RE.search(after_negative):
-                has_later_confirmation = True
+                unresolved_negative = False
             elif (
                 _POSITIVE_CONFIRMATION_RE.search(before_negative)
                 and _LATER_CONFIRMATION_CONTEXT_RE.search(before_negative)
                 and _HISTORICAL_NEGATIVE_PREFIX_RE.search(before_negative)
             ):
-                has_later_confirmation = True
+                unresolved_negative = False
+            else:
+                unresolved_negative = True
             continue
-    return has_negative and not has_later_confirmation
+        if (
+            unresolved_negative
+            and _POSITIVE_CONFIRMATION_RE.search(entry)
+            and _LATER_CONFIRMATION_CONTEXT_RE.search(entry)
+        ):
+            unresolved_negative = False
+    return has_negative and unresolved_negative
 
 
 def _require_enum(

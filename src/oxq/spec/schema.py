@@ -90,15 +90,29 @@ class PortfolioSection:
     rules: dict[str, PortfolioRuleDef] = field(default_factory=dict)
 
 
-@dataclass
+@dataclass(init=False)
 class RebalanceDef:
     frequency: str = "daily"
     interval_days: int = 1
     _interval_days_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
 
-    def __post_init__(self) -> None:
-        if self.interval_days != 1:
+    def __init__(
+        self,
+        frequency: str = "daily",
+        interval_days: Any = _UNSET,
+        _interval_days_explicit: bool | None = None,
+    ) -> None:
+        object.__setattr__(self, "frequency", frequency)
+        if interval_days is _UNSET:
+            object.__setattr__(self, "interval_days", 1)
+            object.__setattr__(self, "_interval_days_explicit", bool(_interval_days_explicit))
+            return
+
+        object.__setattr__(self, "interval_days", interval_days)
+        if _interval_days_explicit is None:
             object.__setattr__(self, "_interval_days_explicit", True)
+        else:
+            object.__setattr__(self, "_interval_days_explicit", bool(_interval_days_explicit))
 
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)

@@ -384,6 +384,40 @@ def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path)
     assert json.loads(result.output)["status"] == "pass"
 
 
+def test_spec_audit_validate_allows_later_confirmation_in_separate_evidence_entry(tmp_path) -> None:
+    audit = {
+        "schema_version": 2,
+        "status": "pass",
+        "spec_provenance_pass": True,
+        "runtime_semantics_pass": True,
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "validation.train_period",
+                "spec_value": ["2025-01-01", "2025-12-31"],
+                "status": "confirmed",
+                "evidence": ["initially not specified", "user confirmed it in turn 5"],
+                "blocking": False,
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["status"] == "pass"
+
+
 def test_spec_audit_validate_allows_confirmation_before_historical_negative_context(tmp_path) -> None:
     audit = {
         "schema_version": 2,
