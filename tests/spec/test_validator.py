@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import oxq.core.registry as registry
-from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, SignalRuleDef, StrategySpec, _dataclass_to_canonical_dict
+from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, RebalanceDef, SignalRuleDef, StrategySpec, _dataclass_to_canonical_dict
 from oxq.spec.validator import validate
 
 
@@ -477,6 +477,30 @@ def test_validate_rejects_rebalance_rule_conflict() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
+
+
+def test_validate_rejects_constructor_supplied_rebalance_rule_conflict() -> None:
+    spec = StrategySpec.template(strategy_id="rebalance_constructor_conflict", hypothesis="constructor intervals are explicit")
+    spec.execution.rebalance = RebalanceDef(interval_days=5)
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(type="RebalanceFrequencyRule", params={"interval_days": 10})
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
+
+
+def test_validate_rejects_unsupported_rebalance_rule_params() -> None:
+    spec = StrategySpec.template(strategy_id="rebalance_extra_params", hypothesis="unsupported params must fail fast")
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(
+        type="RebalanceFrequencyRule",
+        params={"interval_days": 10, "anchor": "month_end"},
+    )
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "portfolio_rebalance_params_unsupported" for error in result.errors)
 
 
 def test_validate_rejects_explicit_daily_rebalance_rule_conflict(tmp_path) -> None:

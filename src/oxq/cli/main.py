@@ -426,12 +426,18 @@ def strategy():
 
 @strategy.command()
 @click.argument("spec_file", type=click.Path(exists=True))
-def compile(spec_file: str):
+@click.option(
+    "--out",
+    type=click.Path(file_okay=False, dir_okay=True),
+    default=None,
+    help="Write deterministic compile preview artifacts to this directory.",
+)
+def compile(spec_file: str, out: str | None):
     """Compile a strategy spec into an executable strategy.
 
     SPEC_FILE is the path to a strategy_spec.yaml file.
     """
-    from oxq.spec.compiler import compile_strategy
+    from oxq.spec.compiler import compile_plan, compile_strategy
 
     spec = StrategySpec.from_yaml(spec_file)
     validation = validate_spec(spec)
@@ -447,6 +453,16 @@ def compile(spec_file: str):
     click.echo(f"  Signals:   {list(spec.signal.rules.keys())}")
     click.echo(f"  Portfolio: {spec.portfolio.type}")
     click.echo(f"  Hash:      {spec.compute_hash()}")
+    if out:
+        out_dir = Path(out)
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plan = compile_plan(spec)
+        (out_dir / "compiled_plan.json").write_text(
+            json.dumps(plan, indent=2, sort_keys=True, default=str) + "\n",
+            encoding="utf-8",
+        )
+        (out_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
+        click.echo(f"  Compile preview: {out_dir / 'compiled_plan.json'}")
 
 
 @main.group()

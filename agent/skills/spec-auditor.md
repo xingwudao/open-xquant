@@ -204,11 +204,19 @@ Schema validation only proves the artifact shape. It does not prove the
 semantic audit is correct; that responsibility stays in this skill.
 
 Before setting `runtime_semantics_pass` to true, compare material execution
-semantics against the compiler output when available:
+semantics against compiler output:
 
-- `compiled_plan.json` if a dry-run or previous run exists
-- otherwise state that runtime semantics are pending compiler verification and
-  do not claim runtime semantic approval
+- use the run `compiled_plan.json` if a previous run exists
+- otherwise create a deterministic compile preview before the backtest:
+
+```bash
+uv run oxq strategy compile strategy_spec.yaml --out compile_preview
+```
+
+Then compare `compile_preview/compiled_plan.json` against the audited SPEC
+fields. If no run artifact or compile preview is available, set
+`runtime_semantics_pass` to false and add a blocking finding; do not claim
+runtime semantic approval.
 
 For material fields such as rebalance frequency, execution timing, fees,
 slippage, validation periods, and rule components, the compiled plan must match

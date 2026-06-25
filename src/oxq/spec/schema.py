@@ -96,6 +96,10 @@ class RebalanceDef:
     interval_days: int = 1
     _interval_days_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
 
+    def __post_init__(self) -> None:
+        if self.interval_days != 1:
+            object.__setattr__(self, "_interval_days_explicit", True)
+
     def __setattr__(self, name: str, value: Any) -> None:
         object.__setattr__(self, name, value)
         if name == "interval_days" and hasattr(self, "_interval_days_explicit"):

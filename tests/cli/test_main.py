@@ -99,6 +99,25 @@ def test_spec_hash_and_fields_are_deterministic(tmp_path) -> None:
     assert {"path": "execution.lot_size_config.default", "value": 1} in fields["fields"]
 
 
+def test_strategy_compile_writes_compile_preview(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="compile_preview", hypothesis="compile preview should be auditable")
+    spec.portfolio.rules["rebalance"] = {
+        "type": "RebalanceFrequencyRule",
+        "params": {"interval_days": 10},
+    }
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "compile_preview"
+
+    result = CliRunner().invoke(main, ["strategy", "compile", str(spec_path), "--out", str(out_dir)])
+
+    assert result.exit_code == 0, result.output
+    compiled_plan = json.loads((out_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    assert compiled_plan["execution"]["rebalance"]["interval_days"] == 10
+    assert compiled_plan["execution"]["rebalance"]["source"] == "portfolio.rules.rebalance"
+    assert (out_dir / "spec_hash.txt").read_text(encoding="utf-8").strip() == compiled_plan["spec_hash"]
+
+
 def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
     audit = {
         "schema_version": 1,
@@ -230,6 +249,42 @@ def test_spec_audit_validate_rejects_confirmed_when_evidence_denies_user_confirm
     assert payload["status"] == "fail"
     assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
     assert any(error["path"] == "runtime_semantics_pass" for error in payload["errors"])
+
+
+def test_spec_audit_validate_rejects_confirmed_when_same_evidence_denies_field_confirmation(tmp_path) -> None:
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "spec_provenance_pass": True,
+        "runtime_semantics_pass": True,
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "validation.train_period",
+                "spec_value": ["2025-01-01", "2025-12-31"],
+                "status": "confirmed",
+                "evidence": ["用户确认了完整回测区间，但未指定训练/测试期划分"],
+                "blocking": False,
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
 
 
 def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path) -> None:

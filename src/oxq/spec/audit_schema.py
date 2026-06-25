@@ -41,6 +41,11 @@ _POSITIVE_CONFIRMATION_RE = re.compile(
     r"accepted by user|user accepted|approved by user)",
     re.IGNORECASE,
 )
+_LATER_CONFIRMATION_CONTEXT_RE = re.compile(
+    r"(后来|随后|之后|后续|第[^，。；;\s]*轮|第[^，。；;\s]*次|later|then|afterward|afterwards|"
+    r"subsequently|in turn\s*\d+|turn\s*\d+)",
+    re.IGNORECASE,
+)
 
 
 def validate_spec_audit_file(path: str | Path) -> dict[str, Any]:
@@ -158,13 +163,20 @@ def _require_str(item: dict[str, Any], prefix: str, field: str, errors: list[dic
 
 def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
     has_negative = False
-    has_positive = False
+    has_later_confirmation = False
     for entry in evidence:
         if not isinstance(entry, str):
             continue
-        has_negative = has_negative or bool(_NEGATIVE_CONFIRMATION_RE.search(entry))
-        has_positive = has_positive or bool(_POSITIVE_CONFIRMATION_RE.search(entry))
-    return has_negative and not has_positive
+        negative_match = _NEGATIVE_CONFIRMATION_RE.search(entry)
+        if negative_match:
+            has_negative = True
+            after_negative = entry[negative_match.end() :]
+            if _POSITIVE_CONFIRMATION_RE.search(after_negative) and _LATER_CONFIRMATION_CONTEXT_RE.search(after_negative):
+                has_later_confirmation = True
+            continue
+        if _POSITIVE_CONFIRMATION_RE.search(entry) and _LATER_CONFIRMATION_CONTEXT_RE.search(entry):
+            has_later_confirmation = True
+    return has_negative and not has_later_confirmation
 
 
 def _require_enum(

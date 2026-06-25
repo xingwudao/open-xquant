@@ -16,7 +16,7 @@ from oxq.core.engine import Engine
 from oxq.core.types import Fill, Order, Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.portfolio.orderbook import ManagedOrder
-from oxq.spec.compiler import _build_metrics, _build_optimizer, _write_artifacts, compile_run, compile_strategy
+from oxq.spec.compiler import _build_metrics, _build_optimizer, _write_artifacts, compile_plan, compile_run, compile_strategy
 from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, SignalRuleDef, StrategySpec
 
 
@@ -1468,6 +1468,20 @@ def test_compile_run_preserves_portfolio_rebalance_rule_in_runtime_artifacts(tmp
     assert compiled_plan["runtime_rules"][0]["params"]["interval_days"] == 3
     assert compiled_plan["runtime_rules"][0]["source"] == "portfolio.rules.rebalance"
     assert rows["reason"].str.contains("rebalance interval").any()
+
+
+def test_compile_plan_rejects_unsupported_rebalance_rule_params() -> None:
+    spec = StrategySpec.template(
+        strategy_id="rebalance_extra_params_compile",
+        hypothesis="compile plan must not drop unsupported rebalance params",
+    )
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(
+        type="RebalanceFrequencyRule",
+        params={"interval_days": 3, "calendar": "XNYS"},
+    )
+
+    with pytest.raises(ValueError, match="unsupported keys"):
+        compile_plan(spec)
 
 
 def test_compile_run_records_resolved_default_data_dir(tmp_path, monkeypatch) -> None:

@@ -521,6 +521,18 @@ def _validate_portfolio_rules(spec: StrategySpec) -> list[dict]:
                 )
             )
             continue
+        unsupported_params = sorted(set(rule_def.params) - {"interval_days"})
+        if unsupported_params:
+            errors.append(
+                _err(
+                    "fatal",
+                    "portfolio_rebalance_params_unsupported",
+                    "portfolio.rules.rebalance.params contains unsupported keys: "
+                    + ", ".join(unsupported_params),
+                    ["executable"],
+                )
+            )
+            continue
         interval_days = rule_def.params.get("interval_days")
         if not isinstance(interval_days, int) or isinstance(interval_days, bool) or interval_days <= 0:
             errors.append(

@@ -112,6 +112,12 @@ def _effective_rebalance(spec: StrategySpec) -> tuple[int, str]:
         return execution_interval, "execution.rebalance.interval_days"
     if rebalance_rule.type != "RebalanceFrequencyRule":
         raise ValueError("portfolio.rules.rebalance must use RebalanceFrequencyRule")
+    unsupported_params = sorted(set(rebalance_rule.params) - {"interval_days"})
+    if unsupported_params:
+        raise ValueError(
+            "portfolio.rules.rebalance.params contains unsupported keys: "
+            + ", ".join(unsupported_params)
+        )
     interval = rebalance_rule.params.get("interval_days")
     if not isinstance(interval, int) or isinstance(interval, bool) or interval <= 0:
         raise ValueError("portfolio.rules.rebalance.params.interval_days must be a positive integer")
@@ -707,6 +713,11 @@ def _build_compiled_plan(
             "evaluation_window": assumptions["evaluation_window"],
         },
     }
+
+
+def compile_plan(spec: StrategySpec, *, effective_data_dir: str | None = None) -> dict[str, Any]:
+    """Return the deterministic compiled runtime plan for a strategy spec."""
+    return _build_compiled_plan(spec, effective_data_dir=effective_data_dir)
 
 
 def _build_strategy_py_artifact(
