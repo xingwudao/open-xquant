@@ -94,6 +94,12 @@ class PortfolioSection:
 class RebalanceDef:
     frequency: str = "daily"
     interval_days: int = 1
+    _interval_days_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name == "interval_days" and hasattr(self, "_interval_days_explicit"):
+            object.__setattr__(self, "_interval_days_explicit", True)
 
 
 @dataclass
@@ -384,9 +390,15 @@ def _parse_portfolio(raw: dict) -> PortfolioSection:
     for name, defn in rules_raw.items():
         if not isinstance(defn, dict):
             raise ValueError(f"portfolio.rules.{name} must be a mapping")
+        params = dict(_parse_params(defn.get("params", {}), f"portfolio.rules.{name}.params"))
+        if str(name) == "rebalance" and "interval_days" in params:
+            params["interval_days"] = _parse_int(
+                params["interval_days"],
+                f"portfolio.rules.{name}.params.interval_days",
+            )
         rules[str(name)] = PortfolioRuleDef(
             type=_parse_str(defn.get("type", ""), f"portfolio.rules.{name}.type"),
-            params=_parse_params(defn.get("params", {}), f"portfolio.rules.{name}.params"),
+            params=params,
         )
     return PortfolioSection(
         type=raw.get("type", "EqualWeight"),
@@ -397,6 +409,10 @@ def _parse_portfolio(raw: dict) -> PortfolioSection:
 
 def _parse_execution(raw: dict) -> ExecutionSection:
     rebalance_raw = raw.get("rebalance", {})
+    if rebalance_raw is None:
+        rebalance_raw = {}
+    if not isinstance(rebalance_raw, dict):
+        raise ValueError("execution.rebalance must be a mapping")
     rebalance_frequency = rebalance_raw.get("frequency", "daily")
     lot_size = _parse_int(raw.get("lot_size", 1), "execution.lot_size")
     order_timing = _parse_str(raw.get("order_timing", ""), "execution.order_timing")
@@ -415,6 +431,7 @@ def _parse_execution(raw: dict) -> ExecutionSection:
                 rebalance_raw.get("interval_days", 1),
                 "execution.rebalance.interval_days",
             ),
+            _interval_days_explicit="interval_days" in rebalance_raw,
         ),
         lot_size=lot_size,
         order_timing=order_timing,
@@ -655,6 +672,8 @@ def _dataclass_to_canonical_dict(obj: Any) -> Any:
             if f.metadata.get("serialize") is False:
                 continue
             if isinstance(obj, SignalRuleDef) and f.name == "output_domain" and not obj.output_domain:
+                continue
+            if isinstance(obj, PortfolioSection) and f.name == "rules" and not obj.rules:
                 continue
             result[f.name] = _dataclass_to_canonical_dict(getattr(obj, f.name))
         return result

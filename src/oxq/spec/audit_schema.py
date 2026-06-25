@@ -12,6 +12,8 @@ SPEC_AUDIT_SCHEMA_VERSION = 1
 REQUIRED_TOP_LEVEL_FIELDS = {
     "schema_version",
     "status",
+    "spec_provenance_pass",
+    "runtime_semantics_pass",
     "spec_hash",
     "conversation_hash",
     "catalog_hash",
@@ -32,6 +34,11 @@ _HASH_RE = re.compile(r"^sha256:[0-9a-f]{16,64}$")
 _NEGATIVE_CONFIRMATION_RE = re.compile(
     r"(未指定|没有指定|未确认|没有确认|未明确|用户未|用户没有|not specified|not confirmed|unconfirmed|"
     r"agent\s+(?:chose|added|inferred|split)|agent将|agent自行)",
+    re.IGNORECASE,
+)
+_POSITIVE_CONFIRMATION_RE = re.compile(
+    r"(用户(?:已)?确认|用户接受|明确确认|确认了|user confirmed|explicitly confirmed|confirmed in turn|"
+    r"accepted by user|user accepted|approved by user)",
     re.IGNORECASE,
 )
 
@@ -69,6 +76,10 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
     for field in ("spec_provenance_pass", "runtime_semantics_pass"):
         if field in payload and not isinstance(payload[field], bool):
             errors.append({"path": field, "message": "must be a boolean"})
+    if status == "pass":
+        for field in ("spec_provenance_pass", "runtime_semantics_pass"):
+            if field in payload and payload.get(field) is not True:
+                errors.append({"path": field, "message": "must be true when status is pass"})
 
     for field in ("spec_hash", "conversation_hash", "catalog_hash"):
         value = payload.get(field)
@@ -146,10 +157,14 @@ def _require_str(item: dict[str, Any], prefix: str, field: str, errors: list[dic
 
 
 def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
+    has_negative = False
+    has_positive = False
     for entry in evidence:
-        if isinstance(entry, str) and _NEGATIVE_CONFIRMATION_RE.search(entry):
-            return True
-    return False
+        if not isinstance(entry, str):
+            continue
+        has_negative = has_negative or bool(_NEGATIVE_CONFIRMATION_RE.search(entry))
+        has_positive = has_positive or bool(_POSITIVE_CONFIRMATION_RE.search(entry))
+    return has_negative and not has_positive
 
 
 def _require_enum(

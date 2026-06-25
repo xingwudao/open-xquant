@@ -426,6 +426,38 @@ validation:
     assert spec.to_dict()["portfolio"]["rules"]["rebalance"]["params"]["interval_days"] == 10
 
 
+def test_from_yaml_coerces_quoted_portfolio_rebalance_interval(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: quoted_portfolio_rebalance
+research:
+  hypothesis: quoted portfolio rebalance interval should parse
+universe:
+  type: static
+  symbols: [SPY]
+portfolio:
+  type: EqualWeight
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: "10"
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.portfolio.rules["rebalance"].params["interval_days"] == 10
+    assert validate(spec).status == "pass"
+
+
 def test_validate_rejects_unsupported_portfolio_rule() -> None:
     spec = StrategySpec.template(strategy_id="bad_portfolio_rule", hypothesis="unsupported rules must fail fast")
     spec.portfolio.rules["rebalance"] = PortfolioRuleDef(type="WeeklyCalendarRule", params={"interval_days": 5})
@@ -442,6 +474,42 @@ def test_validate_rejects_rebalance_rule_conflict() -> None:
     spec.portfolio.rules["rebalance"] = PortfolioRuleDef(type="RebalanceFrequencyRule", params={"interval_days": 10})
 
     result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
+
+
+def test_validate_rejects_explicit_daily_rebalance_rule_conflict(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: explicit_daily_rebalance_conflict
+research:
+  hypothesis: explicit daily execution must not be overwritten by portfolio rules
+universe:
+  type: static
+  symbols: [SPY]
+portfolio:
+  type: EqualWeight
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: 10
+execution:
+  rebalance:
+    frequency: daily
+    interval_days: 1
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    result = validate(StrategySpec.from_yaml(spec_path))
 
     assert result.status == "fail"
     assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
@@ -1595,6 +1663,17 @@ def test_empty_signal_output_domain_is_not_part_of_canonical_hash_input() -> Non
     canonical = _dataclass_to_canonical_dict(spec)
 
     assert "output_domain" not in canonical["signal"]["rules"]["entry"]
+
+
+def test_empty_portfolio_rules_are_not_part_of_canonical_hash_input() -> None:
+    spec = StrategySpec.template(
+        strategy_id="empty_portfolio_rules_hash",
+        hypothesis="default empty portfolio rules should not change historical hashes",
+    )
+
+    canonical = _dataclass_to_canonical_dict(spec)
+
+    assert "rules" not in canonical["portfolio"]
 
 
 def test_roc_timing_fixed_thresholds_must_not_overlap() -> None:

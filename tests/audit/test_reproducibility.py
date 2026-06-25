@@ -180,6 +180,8 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
     spec_audit = {
         "schema_version": 1,
         "status": "pass",
+        "spec_provenance_pass": True,
+        "runtime_semantics_pass": True,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog_hash,
@@ -232,6 +234,8 @@ def test_reproducibility_audit_requires_complete_provenance_bundle(tmp_path) -> 
     spec_audit = {
         "schema_version": 1,
         "status": "pass",
+        "spec_provenance_pass": True,
+        "runtime_semantics_pass": True,
         "spec_hash": (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip(),
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "4" * 64,

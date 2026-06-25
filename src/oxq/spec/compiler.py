@@ -115,7 +115,7 @@ def _effective_rebalance(spec: StrategySpec) -> tuple[int, str]:
     interval = rebalance_rule.params.get("interval_days")
     if not isinstance(interval, int) or isinstance(interval, bool) or interval <= 0:
         raise ValueError("portfolio.rules.rebalance.params.interval_days must be a positive integer")
-    if execution_interval > 1 and execution_interval != interval:
+    if getattr(spec.execution.rebalance, "_interval_days_explicit", False) and execution_interval != interval:
         raise ValueError(
             "portfolio.rules.rebalance.params.interval_days conflicts with "
             "execution.rebalance.interval_days"

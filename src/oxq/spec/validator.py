@@ -533,12 +533,7 @@ def _validate_portfolio_rules(spec: StrategySpec) -> list[dict]:
             )
             continue
         execution_interval = spec.execution.rebalance.interval_days
-        if (
-            isinstance(execution_interval, int)
-            and not isinstance(execution_interval, bool)
-            and execution_interval > 1
-            and execution_interval != interval_days
-        ):
+        if getattr(spec.execution.rebalance, "_interval_days_explicit", False) and execution_interval != interval_days:
             errors.append(
                 _err(
                     "fatal",
