@@ -29,6 +29,11 @@ _ALLOWED_RECIPE_STATUS = {"used", "available_but_not_used", "not_applicable"}
 _ALLOWED_FIELD_STATUS = {"confirmed", "default", "unconfirmed", "contradiction", "agent_added"}
 _ALLOWED_COMPONENT_STATUS = {"catalog", "recipe", "missing", "non_canonical"}
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{16,64}$")
+_NEGATIVE_CONFIRMATION_RE = re.compile(
+    r"(未指定|没有指定|未确认|没有确认|未明确|用户未|用户没有|not specified|not confirmed|unconfirmed|"
+    r"agent\s+(?:chose|added|inferred|split)|agent将|agent自行)",
+    re.IGNORECASE,
+)
 
 
 def validate_spec_audit_file(path: str | Path) -> dict[str, Any]:
@@ -60,6 +65,10 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
     schema_version = payload.get("schema_version")
     if not isinstance(schema_version, int) or schema_version != SPEC_AUDIT_SCHEMA_VERSION:
         errors.append({"path": "schema_version", "message": f"must be {SPEC_AUDIT_SCHEMA_VERSION}"})
+
+    for field in ("spec_provenance_pass", "runtime_semantics_pass"):
+        if field in payload and not isinstance(payload[field], bool):
+            errors.append({"path": field, "message": "must be a boolean"})
 
     for field in ("spec_hash", "conversation_hash", "catalog_hash"):
         value = payload.get(field)
@@ -99,6 +108,13 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
             errors.append({"path": f"field_audits[{index}].spec_value", "message": "missing required field"})
         if "evidence" not in item or not isinstance(item["evidence"], list):
             errors.append({"path": f"field_audits[{index}].evidence", "message": "must be a list"})
+        elif item.get("status") == "confirmed" and _evidence_denies_confirmation(item["evidence"]):
+            errors.append(
+                {
+                    "path": f"field_audits[{index}].status",
+                    "message": "confirmed is inconsistent with evidence that says the user did not specify or confirm the field",
+                }
+            )
         if "blocking" in item and not isinstance(item["blocking"], bool):
             errors.append({"path": f"field_audits[{index}].blocking", "message": "must be a boolean"})
 
@@ -127,6 +143,13 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
 def _require_str(item: dict[str, Any], prefix: str, field: str, errors: list[dict[str, str]]) -> None:
     if field not in item or not isinstance(item[field], str):
         errors.append({"path": f"{prefix}.{field}", "message": "must be a string"})
+
+
+def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
+    for entry in evidence:
+        if isinstance(entry, str) and _NEGATIVE_CONFIRMATION_RE.search(entry):
+            return True
+    return False
 
 
 def _require_enum(

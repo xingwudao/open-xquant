@@ -127,6 +127,10 @@ Write `research_report.md` with:
    - Cite `spec_audit.json` for field provenance, unconfirmed defaults,
      selected canonical recipes, catalog hash status, and component provenance
      warnings.
+   - Cite `compiled_plan.json` or `execution_assumptions.json` for actual
+     runtime execution semantics. Do not describe rebalance frequency,
+     execution timing, fees, slippage, validation split, or runtime rules from
+     the raw YAML alone.
 
 4. Chart narrative.
    - Embed registered figures using their manifest paths.
@@ -156,6 +160,10 @@ Write `research_report.md` with:
 - When discussing why the SPEC was built a certain way, cite `spec_audit.json`
   and the selected recipe or catalog component. Do not infer provenance from
   the final YAML alone.
+- When discussing what actually ran, cite `compiled_plan.json` or
+  `execution_assumptions.json`. If those artifacts contradict
+  `strategy_spec.yaml` or `spec_audit.json`, stop and return the run to
+  `strategy-monitor` instead of writing a successful report.
 
 ## HTML Output
 
@@ -182,6 +190,8 @@ report narrative from templates.
 - Do not modify metrics, audit files, robustness output, or backtest artifacts.
 - Do not hide adverse evidence behind generic positive language.
 - Do not omit blocking or unresolved `spec_audit.json` findings.
+- Do not claim that a material execution rule ran unless `compiled_plan.json`
+  or a runtime artifact shows it was preserved.
 - Do not promote a run with fatal audit findings, failed reproducibility,
   fragile robustness, or no usable OOS evidence.
 - Do not call the strategy investable; describe research evidence and limits.

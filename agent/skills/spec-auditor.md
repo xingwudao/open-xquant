@@ -45,16 +45,31 @@ Classify material fields as:
 - `confirmed`: the user explicitly gave the value or an equivalent meaning.
 - `default`: the value matches a documented strategy-builder template default.
 - `unconfirmed`: the value is not a template default and no user source exists.
+- `agent_added`: the Agent introduced the value by inference, convention, or a
+  workflow preference that the user did not explicitly approve.
+
+Never mark a field `confirmed` when its evidence says the user did not specify,
+did not confirm, or that the Agent inferred the value. If the evidence says
+"用户未指定", "未确认", "Agent 将", "Agent inferred", or equivalent wording, the
+status must be `agent_added` or `unconfirmed`, and the field must block the
+backtest unless it is a documented template default accepted by the user.
 
 Material fields include:
 
 - train/test periods
+- `validation.required_oos`
 - symbols and benchmark
 - execution timing and fill price fields
 - initial cash and cash return
 - fee rate and slippage rate
 - risk-free rate and metrics profile
 - exit, risk, and rebalance constraints
+
+If the user supplied only one full backtest date range, do not treat an
+Agent-created IS/OOS split as confirmed. Classify `validation.train_period`,
+`validation.test_period`, and `validation.required_oos` as `agent_added` or
+`unconfirmed` until the user confirms the split or explicitly accepts the
+default validation plan.
 
 For each material field, record source evidence:
 
@@ -114,6 +129,9 @@ Examples:
 ## Gate
 
 Any `unconfirmed` field or blocking component provenance issue blocks backtest.
+Any `agent_added` material field blocks backtest unless it is documented as an
+accepted default with user approval. Train/test splits and required OOS settings
+are material and must not pass silently.
 Always group related fields instead of asking one question per YAML key:
 
 - execution assumptions
@@ -136,6 +154,8 @@ this skill, not from a deterministic CLI. Use this schema:
 {
   "schema_version": 1,
   "status": "pass | block | fail",
+  "spec_provenance_pass": true,
+  "runtime_semantics_pass": true,
   "spec_hash": "sha256:<hash>",
   "conversation_hash": "sha256:<hash>",
   "catalog_hash": "sha256:<hash>",
@@ -182,6 +202,21 @@ uv run oxq spec-audit validate spec_audit.json
 
 Schema validation only proves the artifact shape. It does not prove the
 semantic audit is correct; that responsibility stays in this skill.
+
+Before setting `runtime_semantics_pass` to true, compare material execution
+semantics against the compiler output when available:
+
+- `compiled_plan.json` if a dry-run or previous run exists
+- otherwise state that runtime semantics are pending compiler verification and
+  do not claim runtime semantic approval
+
+For material fields such as rebalance frequency, execution timing, fees,
+slippage, validation periods, and rule components, the compiled plan must match
+the audited SPEC value. If `strategy_spec.yaml` says
+`portfolio.rules.rebalance.params.interval_days: 10` but `compiled_plan.json`
+shows daily or `interval_days: 1`, set `runtime_semantics_pass` to false and add
+a blocking finding. The conversation audit remains semantic skill work; the
+SPEC-to-runtime comparison is deterministic artifact consistency.
 
 ## Output
 

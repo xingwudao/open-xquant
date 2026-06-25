@@ -78,9 +78,16 @@ class SignalSection:
 
 
 @dataclass
+class PortfolioRuleDef:
+    type: str
+    params: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class PortfolioSection:
     type: str = "EqualWeight"
     params: dict[str, Any] = field(default_factory=dict)
+    rules: dict[str, PortfolioRuleDef] = field(default_factory=dict)
 
 
 @dataclass
@@ -368,9 +375,23 @@ def _parse_signal(raw: dict) -> SignalSection:
 
 
 def _parse_portfolio(raw: dict) -> PortfolioSection:
+    rules = {}
+    rules_raw = raw.get("rules", {})
+    if rules_raw is None:
+        rules_raw = {}
+    if not isinstance(rules_raw, dict):
+        raise ValueError("portfolio.rules must be a mapping")
+    for name, defn in rules_raw.items():
+        if not isinstance(defn, dict):
+            raise ValueError(f"portfolio.rules.{name} must be a mapping")
+        rules[str(name)] = PortfolioRuleDef(
+            type=_parse_str(defn.get("type", ""), f"portfolio.rules.{name}.type"),
+            params=_parse_params(defn.get("params", {}), f"portfolio.rules.{name}.params"),
+        )
     return PortfolioSection(
         type=raw.get("type", "EqualWeight"),
         params=_parse_params(raw.get("params", {}), "portfolio.params"),
+        rules=rules,
     )
 
 

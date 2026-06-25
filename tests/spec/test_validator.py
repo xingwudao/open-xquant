@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 import oxq.core.registry as registry
-from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec, _dataclass_to_canonical_dict
+from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, SignalRuleDef, StrategySpec, _dataclass_to_canonical_dict
 from oxq.spec.validator import validate
 
 
@@ -391,6 +391,60 @@ validation:
     assert spec.execution.lot_size == 100
     assert spec.execution.initial_cash == 250000.0
     assert result.status == "pass"
+
+
+def test_from_yaml_preserves_portfolio_rebalance_rule(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: portfolio_rebalance_rule
+research:
+  hypothesis: portfolio rebalance rules should remain material
+universe:
+  type: static
+  symbols: [SPY]
+portfolio:
+  type: EqualWeight
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: 10
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+
+    assert spec.portfolio.rules["rebalance"].type == "RebalanceFrequencyRule"
+    assert spec.portfolio.rules["rebalance"].params["interval_days"] == 10
+    assert spec.to_dict()["portfolio"]["rules"]["rebalance"]["params"]["interval_days"] == 10
+
+
+def test_validate_rejects_unsupported_portfolio_rule() -> None:
+    spec = StrategySpec.template(strategy_id="bad_portfolio_rule", hypothesis="unsupported rules must fail fast")
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(type="WeeklyCalendarRule", params={"interval_days": 5})
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "portfolio_rebalance_rule_unsupported" for error in result.errors)
+
+
+def test_validate_rejects_rebalance_rule_conflict() -> None:
+    spec = StrategySpec.template(strategy_id="rebalance_conflict", hypothesis="conflicting rebalance settings fail")
+    spec.execution.rebalance.interval_days = 5
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(type="RebalanceFrequencyRule", params={"interval_days": 10})
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
 
 
 def test_from_yaml_rejects_non_finite_numeric_fields(tmp_path) -> None:

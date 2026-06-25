@@ -16,6 +16,7 @@ A valid CLI run should contain:
 
 - `strategy_spec.yaml`
 - `spec_hash.txt`
+- `compiled_plan.json`
 - `component_catalog_hash.txt`
 - `recipe_catalog_hash.txt`
 - `spec_audit.json`
@@ -48,6 +49,19 @@ This validation is deterministic schema validation only. Still read
 component provenance warnings, recipe selections, missing user requirements,
 agent-added fields, and contradictions in the monitoring summary.
 
+Also read `compiled_plan.json` before performance interpretation. Material
+runtime semantics must match the audited SPEC fields:
+
+- rebalance interval and runtime rules
+- execution timing and fill price mode
+- fee, minimum fee, and slippage
+- validation train/test periods and required OOS setting
+- rule components that affect orders or positions
+
+If `spec_audit.json` confirms a material field but `compiled_plan.json` omits
+or contradicts it, reject the run as a failed runtime semantics audit before
+report handoff.
+
 ## Audit
 
 ```bash
@@ -64,6 +78,8 @@ Interpretation:
   impact
 - spec audit `block` or `fail`: do not discuss performance as an approved
   experiment; resolve the semantic audit first
+- runtime semantics mismatch: reject the run even when provenance and
+  reproducibility checks pass
 
 Common warnings include survivorship risk, low OOS trade count, high missing
 data ratio, parameter count, benchmark gaps, and drawdown tail risk.

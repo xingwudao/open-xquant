@@ -189,6 +189,42 @@ def test_spec_audit_validate_rejects_malformed_entries(tmp_path) -> None:
     assert any(error["path"] == "component_audits[0].status" for error in payload["errors"])
 
 
+def test_spec_audit_validate_rejects_confirmed_when_evidence_denies_user_confirmation(tmp_path) -> None:
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "spec_provenance_pass": True,
+        "runtime_semantics_pass": False,
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "validation.train_period",
+                "spec_value": ["2025-01-01", "2025-12-31"],
+                "status": "confirmed",
+                "evidence": ["用户只给了回测时间，未指定训练/测试期划分"],
+                "blocking": False,
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
+
+
 def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()

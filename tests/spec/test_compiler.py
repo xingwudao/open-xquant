@@ -17,7 +17,7 @@ from oxq.core.types import Fill, Order, Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.portfolio.orderbook import ManagedOrder
 from oxq.spec.compiler import _build_metrics, _build_optimizer, _write_artifacts, compile_run, compile_strategy
-from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
+from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, SignalRuleDef, StrategySpec
 
 
 def test_artifact_spec_hash_matches_serialized_spec(tmp_path) -> None:
@@ -1381,6 +1381,11 @@ def test_compile_run_writes_execution_assumptions_artifact(tmp_path) -> None:
             "default": 100,
             "by_symbol": {},
         },
+        "rebalance": {
+            "frequency": "daily",
+            "interval_days": 1,
+            "source": "execution.rebalance.interval_days",
+        },
     }
     assert "execution_assumptions.json" in hashes
     assert audit_reproducibility(run_dir)["status"] == "pass"
@@ -1415,6 +1420,53 @@ def test_compile_run_writes_rebalance_rule_reasons_to_target_weights(tmp_path) -
     _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
 
     rows = pd.read_csv(run_dir / "target_weights.csv")
+    assert rows["reason"].str.contains("rebalance interval").any()
+
+
+def test_compile_run_preserves_portfolio_rebalance_rule_in_runtime_artifacts(tmp_path) -> None:
+    spec = StrategySpec.template(
+        strategy_id="portfolio_rebalance_runtime",
+        hypothesis="portfolio rebalance rule should compile into runtime semantics",
+    )
+    spec.universe.symbols = ["SPY"]
+    spec.universe.point_in_time = True
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2024-01-02", "2024-01-05"]
+    spec.validation.required_oos = False
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(
+        type="RebalanceFrequencyRule",
+        params={"interval_days": 3},
+    )
+
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    dates = pd.bdate_range("2024-01-02", periods=4, tz="UTC")
+    pd.DataFrame(
+        {
+            "open": [100.0, 101.0, 102.0, 103.0],
+            "high": [101.0, 102.0, 103.0, 104.0],
+            "low": [99.0, 100.0, 101.0, 102.0],
+            "close": [100.0, 101.0, 102.0, 103.0],
+            "volume": [1000, 1000, 1000, 1000],
+        },
+        index=dates,
+    ).to_parquet(data_dir / "SPY.parquet")
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    compiled_plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    run_spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    rows = pd.read_csv(run_dir / "target_weights.csv")
+
+    assert run_spec.portfolio.rules["rebalance"].params["interval_days"] == 3
+    assert compiled_plan["execution"]["rebalance"] == {
+        "frequency": "daily",
+        "interval_days": 3,
+        "source": "portfolio.rules.rebalance",
+    }
+    assert compiled_plan["runtime_rules"][0]["type"] == "RebalanceFrequencyRule"
+    assert compiled_plan["runtime_rules"][0]["params"]["interval_days"] == 3
+    assert compiled_plan["runtime_rules"][0]["source"] == "portfolio.rules.rebalance"
     assert rows["reason"].str.contains("rebalance interval").any()
 
 
