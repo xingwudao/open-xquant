@@ -227,6 +227,55 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
     assert any(check["id"] == "spec_audit_hash" for check in audit["checks"])
 
 
+def test_reproducibility_audit_requires_complete_provenance_bundle(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    spec_audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "spec_hash": (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip(),
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "4" * 64,
+        "recipe_matches": [],
+        "field_audits": [],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    (run_dir / "spec_audit.json").write_text(json.dumps(spec_audit), encoding="utf-8")
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["spec_audit.json"] = _hash_json_file(run_dir / "spec_audit.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    artifact_hash_check = next(check for check in audit["checks"] if check["id"] == "artifact_hashes")
+    assert "conversation_hash.txt" in artifact_hash_check["message"]
+    assert "component_catalog_hash.txt" in artifact_hash_check["message"]
+    assert "recipe_catalog_hash.txt" in artifact_hash_check["message"]
+
+
+def test_reproducibility_audit_rejects_unsafe_unknown_artifact_paths(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["../other_run/metrics.json"] = "sha256:" + "0" * 16
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    artifact_hash_check = next(
+        check
+        for check in audit["checks"]
+        if check["id"] == "artifact_hashes" and "unsafe artifact paths" in check["message"]
+    )
+    assert "../other_run/metrics.json" in artifact_hash_check["message"]
+
+
 def test_reproducibility_audit_rejects_compiled_plan_spec_hash_conflict(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
@@ -348,3 +397,11 @@ def _write_minimal_run(tmp_path):
     run_dir.mkdir()
     _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
     return run_dir
+
+
+def _write_current_run_digest(run_dir) -> None:
+    (run_dir.parent / "run_digests.jsonl").write_text(
+        json.dumps({"run_id": run_dir.name, "artifact_hashes": _hash_json_file(run_dir / "artifact_hashes.json")})
+        + "\n",
+        encoding="utf-8",
+    )

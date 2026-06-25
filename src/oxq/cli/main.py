@@ -290,6 +290,8 @@ def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
 def attach_provenance(run_dir: str, spec_audit: str, component_catalog: str, as_json: bool):
     """Attach pre-run provenance artifacts while preserving run digests."""
+    from oxq.audit import audit_reproducibility
+    from oxq.core.component_catalog import _catalog_hash, _stable_hash
     from oxq.spec.audit_schema import validate_spec_audit_file
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
 
@@ -297,6 +299,17 @@ def attach_provenance(run_dir: str, spec_audit: str, component_catalog: str, as_
     artifact_hashes_path = run_path / "artifact_hashes.json"
     if not artifact_hashes_path.exists():
         raise click.ClickException(f"missing artifact_hashes.json in run directory: {run_dir}")
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    if not isinstance(artifact_hashes, dict):
+        raise click.ClickException("artifact_hashes.json must be an object")
+    pre_attach_audit = audit_reproducibility(run_path)
+    if pre_attach_audit.get("status") == "fail":
+        failing = [
+            check.get("id", "unknown")
+            for check in pre_attach_audit.get("checks", [])
+            if check.get("severity") == "fatal" and check.get("status") == "fail"
+        ]
+        raise click.ClickException(f"run reproducibility must pass before attaching provenance: {failing}")
 
     audit_validation = validate_spec_audit_file(spec_audit)
     if audit_validation["status"] == "fail":
@@ -312,6 +325,7 @@ def attach_provenance(run_dir: str, spec_audit: str, component_catalog: str, as_
         raise click.ClickException("spec audit has blocking findings")
     if blocking_findings is not None and not isinstance(blocking_findings, list):
         raise click.ClickException("blocking_findings must be a list")
+    _reject_blocking_spec_audit_rows(audit_payload)
 
     run_spec_hash_path = run_path / "spec_hash.txt"
     if not run_spec_hash_path.exists():
@@ -323,19 +337,24 @@ def attach_provenance(run_dir: str, spec_audit: str, component_catalog: str, as_
 
     conversation_hash = _require_json_str(audit_payload, "conversation_hash")
     catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
+    computed_catalog_hash = _catalog_hash(catalog_payload)
+    if computed_catalog_hash != catalog_hash:
+        raise click.ClickException(f"component catalog hash mismatch: stored={catalog_hash}, actual={computed_catalog_hash}")
     audit_catalog_hash = _require_json_str(audit_payload, "catalog_hash")
     if audit_catalog_hash != catalog_hash:
         raise click.ClickException(f"catalog hash mismatch: audit={audit_catalog_hash}, catalog={catalog_hash}")
     recipe_catalog_hash = _require_json_str(catalog_payload, "recipe_catalog_hash")
+    computed_recipe_catalog_hash = _stable_hash(catalog_payload.get("recipes", []))
+    if computed_recipe_catalog_hash != recipe_catalog_hash:
+        raise click.ClickException(
+            f"recipe catalog hash mismatch: stored={recipe_catalog_hash}, actual={computed_recipe_catalog_hash}"
+        )
 
     (run_path / "spec_audit.json").write_text(Path(spec_audit).read_text(encoding="utf-8"), encoding="utf-8")
     (run_path / "conversation_hash.txt").write_text(conversation_hash + "\n", encoding="utf-8")
     (run_path / "component_catalog_hash.txt").write_text(catalog_hash + "\n", encoding="utf-8")
     (run_path / "recipe_catalog_hash.txt").write_text(recipe_catalog_hash + "\n", encoding="utf-8")
 
-    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
-    if not isinstance(artifact_hashes, dict):
-        raise click.ClickException("artifact_hashes.json must be an object")
     artifact_hashes.update(
         {
             "spec_audit.json": _hash_json_file(run_path / "spec_audit.json"),
@@ -371,6 +390,33 @@ def _require_json_str(payload: object, key: str) -> str:
     if not isinstance(payload, dict) or not isinstance(payload.get(key), str) or not payload[key]:
         raise click.ClickException(f"{key} must be present")
     return payload[key]
+
+
+def _reject_blocking_spec_audit_rows(audit_payload: object) -> None:
+    if not isinstance(audit_payload, dict):
+        raise click.ClickException("spec audit must be an object")
+    blocking_lists = {
+        "missing_user_requirements": "spec audit has missing user requirements",
+        "agent_added_fields": "spec audit has agent-added fields",
+        "contradictions": "spec audit has contradictions",
+    }
+    for key, message in blocking_lists.items():
+        value = audit_payload.get(key)
+        if isinstance(value, list) and value:
+            raise click.ClickException(message)
+
+    blocking_field_statuses = {"unconfirmed", "contradiction", "agent_added"}
+    blocking_component_statuses = {"missing", "non_canonical"}
+    for index, item in enumerate(audit_payload.get("field_audits", [])):
+        if not isinstance(item, dict):
+            continue
+        if item.get("blocking") is True or item.get("status") in blocking_field_statuses:
+            raise click.ClickException(f"spec audit has blocking field audit row: field_audits[{index}]")
+    for index, item in enumerate(audit_payload.get("component_audits", [])):
+        if not isinstance(item, dict):
+            continue
+        if item.get("blocking") is True or item.get("status") in blocking_component_statuses:
+            raise click.ClickException(f"spec audit has blocking component audit row: component_audits[{index}]")
 
 
 @main.group()
