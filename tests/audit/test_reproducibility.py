@@ -178,7 +178,7 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
     catalog_hash = "sha256:" + "4" * 64
     recipe_catalog_hash = "sha256:" + "5" * 64
     spec_audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "spec_provenance_pass": True,
         "runtime_semantics_pass": True,
@@ -232,7 +232,7 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
 def test_reproducibility_audit_requires_complete_provenance_bundle(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     spec_audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "spec_provenance_pass": True,
         "runtime_semantics_pass": True,

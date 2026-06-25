@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pandas as pd
 import pytest
+import yaml
 
 import oxq.core.registry as registry
 from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, RebalanceDef, SignalRuleDef, StrategySpec, _dataclass_to_canonical_dict
@@ -535,6 +536,49 @@ validation:
 
     result = validate(StrategySpec.from_yaml(spec_path))
 
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
+
+
+def test_to_dict_preserves_explicit_daily_rebalance_conflict(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    round_trip_path = tmp_path / "round_trip.yaml"
+    spec_path.write_text(
+        """
+strategy_id: explicit_daily_rebalance_round_trip
+research:
+  hypothesis: explicit daily rebalance remains material after serialization
+universe:
+  type: static
+  symbols: [SPY]
+portfolio:
+  type: EqualWeight
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: 10
+execution:
+  rebalance:
+    frequency: daily
+    interval_days: 1
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    serialized = spec.to_dict()
+    round_trip_path.write_text(yaml.dump(serialized, sort_keys=False), encoding="utf-8")
+    round_tripped = StrategySpec.from_yaml(round_trip_path)
+
+    assert serialized["execution"]["rebalance"]["interval_days"] == 1
+    assert validate(spec).status == "fail"
+    result = validate(round_tripped)
     assert result.status == "fail"
     assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
 

@@ -7,7 +7,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-SPEC_AUDIT_SCHEMA_VERSION = 1
+SPEC_AUDIT_SCHEMA_VERSION = 2
 
 REQUIRED_TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -167,6 +167,8 @@ def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
     for entry in evidence:
         if not isinstance(entry, str):
             continue
+        if _POSITIVE_CONFIRMATION_RE.search(entry) and _LATER_CONFIRMATION_CONTEXT_RE.search(entry):
+            has_later_confirmation = True
         negative_match = _NEGATIVE_CONFIRMATION_RE.search(entry)
         if negative_match:
             has_negative = True
@@ -174,8 +176,6 @@ def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
             if _POSITIVE_CONFIRMATION_RE.search(after_negative) and _LATER_CONFIRMATION_CONTEXT_RE.search(after_negative):
                 has_later_confirmation = True
             continue
-        if _POSITIVE_CONFIRMATION_RE.search(entry) and _LATER_CONFIRMATION_CONTEXT_RE.search(entry):
-            has_later_confirmation = True
     return has_negative and not has_later_confirmation
 
 

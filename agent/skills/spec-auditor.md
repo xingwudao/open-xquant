@@ -152,7 +152,7 @@ this skill, not from a deterministic CLI. Use this schema:
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "status": "pass | block | fail",
   "spec_provenance_pass": true,
   "runtime_semantics_pass": true,

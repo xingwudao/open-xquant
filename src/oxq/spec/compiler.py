@@ -717,6 +717,12 @@ def _build_compiled_plan(
 
 def compile_plan(spec: StrategySpec, *, effective_data_dir: str | None = None) -> dict[str, Any]:
     """Return the deterministic compiled runtime plan for a strategy spec."""
+    from oxq.spec.validator import validate
+
+    validation = validate(spec)
+    if validation.status == "fail":
+        messages = "; ".join(f"{error['check']}: {error['message']}" for error in validation.errors)
+        raise ValueError(f"spec cannot be compiled: {messages}")
     return _build_compiled_plan(spec, effective_data_dir=effective_data_dir)
 
 

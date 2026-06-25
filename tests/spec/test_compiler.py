@@ -1484,6 +1484,20 @@ def test_compile_plan_rejects_unsupported_rebalance_rule_params() -> None:
         compile_plan(spec)
 
 
+def test_compile_plan_rejects_unsupported_portfolio_rules() -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_plan_bad_rule",
+        hypothesis="compile previews must not drop unsupported portfolio rules",
+    )
+    spec.portfolio.rules["stop_loss"] = PortfolioRuleDef(
+        type="StopLossRule",
+        params={"threshold": 0.05},
+    )
+
+    with pytest.raises(ValueError, match="portfolio_rule_unsupported"):
+        compile_plan(spec)
+
+
 def test_compile_run_records_resolved_default_data_dir(tmp_path, monkeypatch) -> None:
     spec = StrategySpec.template(strategy_id="resolved_data_dir", hypothesis="default data dir is auditable")
     market_dir = tmp_path / "oxq_data" / "market"
