@@ -32,6 +32,14 @@ recording abandonment when the registry exists.
 
 ### Step 1: Create Spec
 
+Export the component catalog before creating or editing the spec. Use it when
+following `strategy-builder` and preserve the resulting catalog for audit
+provenance.
+
+```bash
+oxq registry export --out component_catalog.json
+```
+
 ```bash
 oxq spec init "<strategy idea>" --out strategy_spec.yaml
 ```
@@ -45,8 +53,18 @@ oxq spec validate strategy_spec.yaml
 Fix any errors. Spec MUST pass validation before proceeding.
 
 After validation passes, use `spec-auditor` to trace material field sources.
-Any unconfirmed field blocks the backtest until the user confirms or changes
-the grouped assumptions and the spec passes validation again.
+Provide the exact raw conversation history through the calling Agent's own
+conversation-history variable or loaded source; do not assume a fixed filename.
+The auditor must write `spec_audit.json`, then validate it:
+
+```bash
+oxq spec-audit validate spec_audit.json
+```
+
+Any unconfirmed field, contradiction, missing user requirement, or blocking
+component provenance finding blocks the backtest until the user confirms or
+changes the grouped assumptions and the spec passes validation again. A semantic
+`status` of `block` or `fail` is not acceptable for backtesting.
 
 ### Step 2: Backtest
 
@@ -57,6 +75,20 @@ oxq backtest run strategy_spec.yaml --out runs/auto --json > backtest.json
 Read `run_dir` and artifact paths from `backtest.json`. Use
 `target_weights.csv` for target allocation comparisons and `trades.csv` for
 execution comparisons.
+
+Before audit/report handoff, attach the validated pre-run provenance artifacts
+with the deterministic helper. Do not edit `artifact_hashes.json` by hand.
+
+```bash
+RUN_DIR=$(python - <<'PY'
+import json
+print(json.load(open("backtest.json"))["run_dir"])
+PY
+)
+oxq backtest attach-provenance "$RUN_DIR" \
+  --spec-audit spec_audit.json \
+  --component-catalog component_catalog.json
+```
 
 When a strategy produces `BUY`, `SELL`, or `HOLD` labels, model that as a
 categorical Signal and map it with `SignalToPosition`. Do not wire categorical

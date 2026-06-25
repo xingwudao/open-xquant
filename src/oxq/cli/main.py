@@ -304,8 +304,28 @@ def attach_provenance(run_dir: str, spec_audit: str, component_catalog: str, as_
 
     audit_payload = json.loads(Path(spec_audit).read_text(encoding="utf-8"))
     catalog_payload = json.loads(Path(component_catalog).read_text(encoding="utf-8"))
+    audit_status = _require_json_str(audit_payload, "status")
+    if audit_status != "pass":
+        raise click.ClickException(f"spec audit status must be pass before attaching provenance: {audit_status}")
+    blocking_findings = audit_payload.get("blocking_findings")
+    if isinstance(blocking_findings, list) and blocking_findings:
+        raise click.ClickException("spec audit has blocking findings")
+    if blocking_findings is not None and not isinstance(blocking_findings, list):
+        raise click.ClickException("blocking_findings must be a list")
+
+    run_spec_hash_path = run_path / "spec_hash.txt"
+    if not run_spec_hash_path.exists():
+        raise click.ClickException(f"missing spec_hash.txt in run directory: {run_dir}")
+    run_spec_hash = run_spec_hash_path.read_text(encoding="utf-8").strip()
+    audit_spec_hash = _require_json_str(audit_payload, "spec_hash")
+    if audit_spec_hash != run_spec_hash:
+        raise click.ClickException(f"spec audit hash mismatch: audit={audit_spec_hash}, run={run_spec_hash}")
+
     conversation_hash = _require_json_str(audit_payload, "conversation_hash")
     catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
+    audit_catalog_hash = _require_json_str(audit_payload, "catalog_hash")
+    if audit_catalog_hash != catalog_hash:
+        raise click.ClickException(f"catalog hash mismatch: audit={audit_catalog_hash}, catalog={catalog_hash}")
     recipe_catalog_hash = _require_json_str(catalog_payload, "recipe_catalog_hash")
 
     (run_path / "spec_audit.json").write_text(Path(spec_audit).read_text(encoding="utf-8"), encoding="utf-8")

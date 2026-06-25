@@ -132,6 +132,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         **schema_4_required_artifact_hashes,
         "strategy.py": "strategy_py_hash",
     }
+    provenance_artifact_hashes = {
+        "spec_audit.json": "spec_audit_hash",
+        "conversation_hash.txt": "conversation_hash_file_hash",
+        "component_catalog_hash.txt": "component_catalog_hash_file_hash",
+        "recipe_catalog_hash.txt": "recipe_catalog_hash_file_hash",
+    }
     artifact_schema_version = 0
     try:
         expected_hashes = json.loads((run_path / "artifact_hashes.json").read_text(encoding="utf-8"))
@@ -183,6 +189,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                             **required_hashes,
                             artifact_name: check_id,
                         }
+                for artifact_name, check_id in provenance_artifact_hashes.items():
+                    if artifact_name in expected_hashes or (run_path / artifact_name).exists():
+                        required_hashes = {
+                            **required_hashes,
+                            artifact_name: check_id,
+                        }
                 if artifact_schema_version < 4 and "compiled_plan.json" in expected_hashes:
                     required_hashes = {
                         **required_hashes,
@@ -193,6 +205,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                         **required_hashes,
                         "strategy.py": "strategy_py_hash",
                     }
+                for artifact_name in expected_hashes:
+                    if artifact_name != "schema_version" and artifact_name not in required_hashes:
+                        required_hashes = {
+                            **required_hashes,
+                            artifact_name: _unknown_artifact_check_id(artifact_name),
+                        }
                 missing_hash_keys = sorted(set(required_hashes).difference(expected_hashes))
             except (TypeError, ValueError):
                 checks.append(_check("artifact_hashes", False, "fatal", "artifact_hashes.json has invalid schema_version"))
@@ -220,15 +238,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
             checks.append(run_digest_check)
         for fname, check_id in required_hashes.items():
             try:
-                if fname == "metrics.json":
-                    actual = _hash_json_file(run_path / fname, exclude_keys={"run_id"})
-                elif fname == "environment.json":
-                    actual = _hash_json_file(run_path / fname, exclude_keys={"run_timestamp"})
-                elif fname in {"data_manifest.json", "execution_assumptions.json", "compiled_plan.json"}:
-                    actual = _hash_json_file(run_path / fname)
-                else:
-                    content = (run_path / fname).read_bytes()
-                    actual = f"sha256:{hashlib.sha256(content).hexdigest()[:16]}"
+                actual = _hash_artifact(run_path / fname)
                 expected = expected_hashes.get(fname)
                 checks.append(_check(check_id, actual == expected, "fatal", f"{fname} hash mismatch: stored={expected}, actual={actual}"))
             except (json.JSONDecodeError, OSError):
@@ -264,6 +274,22 @@ def _check(check_id: str, passed: bool, severity: str, message: str) -> dict:
         "severity": severity,
         "message": message if not passed else f"{check_id}: OK",
     }
+
+
+def _hash_artifact(path: Path) -> str:
+    if path.name == "metrics.json":
+        return _hash_json_file(path, exclude_keys={"run_id"})
+    if path.name == "environment.json":
+        return _hash_json_file(path, exclude_keys={"run_timestamp"})
+    if path.name in {"data_manifest.json", "execution_assumptions.json", "compiled_plan.json", "spec_audit.json"}:
+        return _hash_json_file(path)
+    content = path.read_bytes()
+    return f"sha256:{hashlib.sha256(content).hexdigest()[:16]}"
+
+
+def _unknown_artifact_check_id(artifact_name: str) -> str:
+    normalized = "".join(ch if ch.isalnum() else "_" for ch in artifact_name).strip("_")
+    return f"{normalized}_hash" if normalized else "unknown_artifact_hash"
 
 
 def _check_strategy_py_consistency(run_path: Path, spec_hash_actual: str) -> dict:

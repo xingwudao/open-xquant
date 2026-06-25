@@ -172,6 +172,61 @@ def test_reproducibility_audit_validates_compiled_plan_hash(tmp_path) -> None:
     assert any(check["id"] == "compiled_plan_hash" for check in audit["checks"])
 
 
+def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    catalog_hash = "sha256:" + "4" * 64
+    recipe_catalog_hash = "sha256:" + "5" * 64
+    spec_audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "spec_hash": spec_hash,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": catalog_hash,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "portfolio.type",
+                "spec_value": "EqualWeight",
+                "status": "confirmed",
+                "evidence": [],
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    (run_dir / "spec_audit.json").write_text(json.dumps(spec_audit, indent=2) + "\n", encoding="utf-8")
+    (run_dir / "conversation_hash.txt").write_text(spec_audit["conversation_hash"] + "\n", encoding="utf-8")
+    (run_dir / "component_catalog_hash.txt").write_text(catalog_hash + "\n", encoding="utf-8")
+    (run_dir / "recipe_catalog_hash.txt").write_text(recipe_catalog_hash + "\n", encoding="utf-8")
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes.update(
+        {
+            "spec_audit.json": _hash_json_file(run_dir / "spec_audit.json"),
+            "conversation_hash.txt": _hash_file(run_dir / "conversation_hash.txt"),
+            "component_catalog_hash.txt": _hash_file(run_dir / "component_catalog_hash.txt"),
+            "recipe_catalog_hash.txt": _hash_file(run_dir / "recipe_catalog_hash.txt"),
+        }
+    )
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").write_text(
+        json.dumps({"run_id": run_dir.name, "artifact_hashes": _hash_json_file(run_dir / "artifact_hashes.json")})
+        + "\n",
+        encoding="utf-8",
+    )
+
+    spec_audit["status"] = "block"
+    (run_dir / "spec_audit.json").write_text(json.dumps(spec_audit, indent=2) + "\n", encoding="utf-8")
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "spec_audit_hash" for check in audit["checks"])
+
+
 def test_reproducibility_audit_rejects_compiled_plan_spec_hash_conflict(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()

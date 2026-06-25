@@ -359,6 +359,10 @@ def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs
     assert "runs/final" in quant_research
     assert "mark it as final" in quant_research
     assert "paths.experiment_registry" in quant_research
+    assert "oxq registry export --out component_catalog.json" in quant_research
+    assert "oxq spec-audit validate spec_audit.json" in quant_research
+    assert "oxq backtest attach-provenance" in quant_research
+    assert "Do not edit `artifact_hashes.json` by hand" in quant_research
     assert "_cost_x2" in strategy_monitor
     assert "created sub-run directory" in strategy_monitor
     assert "spec_audit.json" in strategy_monitor

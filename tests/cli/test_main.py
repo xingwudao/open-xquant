@@ -185,12 +185,13 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
     run_dir = tmp_path / "runs" / "run_1"
     run_dir.mkdir(parents=True)
     (run_dir / "artifact_hashes.json").write_text(json.dumps({"schema_version": 5}), encoding="utf-8")
+    (run_dir / "spec_hash.txt").write_text("sha256:" + "1" * 16 + "\n", encoding="utf-8")
     audit = {
         "schema_version": 1,
         "status": "pass",
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
-        "catalog_hash": "sha256:" + "3" * 16,
+        "catalog_hash": "sha256:" + "4" * 64,
         "recipe_matches": [],
         "field_audits": [
             {
@@ -240,3 +241,127 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
     assert (run_dir / "conversation_hash.txt").read_text(encoding="utf-8").strip() == audit["conversation_hash"]
     assert last_digest["run_id"] == run_dir.name
     assert last_digest["artifact_hashes"] == payload["artifact_hashes_digest"]
+
+
+def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:
+    run_dir = tmp_path / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps({"schema_version": 5}), encoding="utf-8")
+    (run_dir / "spec_hash.txt").write_text("sha256:" + "1" * 16 + "\n", encoding="utf-8")
+    audit = {
+        "schema_version": 1,
+        "status": "block",
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "4" * 64,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "portfolio.type",
+                "spec_value": "EqualWeight",
+                "status": "unconfirmed",
+                "evidence": [],
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [{"message": "confirm allocation"}],
+    }
+    spec_audit = tmp_path / "spec_audit.json"
+    spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    component_catalog = tmp_path / "component_catalog.json"
+    component_catalog.write_text(
+        json.dumps({"catalog_hash": "sha256:" + "4" * 64, "recipe_catalog_hash": "sha256:" + "5" * 64}),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "spec audit status must be pass" in result.output
+
+
+def test_backtest_attach_provenance_rejects_hash_mismatch(tmp_path) -> None:
+    run_dir = tmp_path / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps({"schema_version": 5}), encoding="utf-8")
+    (run_dir / "spec_hash.txt").write_text("sha256:" + "0" * 16 + "\n", encoding="utf-8")
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "4" * 64,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "portfolio.type",
+                "spec_value": "EqualWeight",
+                "status": "confirmed",
+                "evidence": [],
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    spec_audit = tmp_path / "spec_audit.json"
+    spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    component_catalog = tmp_path / "component_catalog.json"
+    component_catalog.write_text(
+        json.dumps({"catalog_hash": "sha256:" + "4" * 64, "recipe_catalog_hash": "sha256:" + "5" * 64}),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "spec audit hash mismatch" in result.output
+
+    (run_dir / "spec_hash.txt").write_text(audit["spec_hash"] + "\n", encoding="utf-8")
+    component_catalog.write_text(
+        json.dumps({"catalog_hash": "sha256:" + "9" * 64, "recipe_catalog_hash": "sha256:" + "5" * 64}),
+        encoding="utf-8",
+    )
+
+    catalog_result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert catalog_result.exit_code == 1
+    assert "catalog hash mismatch" in catalog_result.output
