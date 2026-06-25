@@ -95,6 +95,50 @@ def validate(spec_file: str, as_json: bool):
         raise SystemExit(1)
 
 
+@spec.command(name="hash")
+@click.argument("spec_file", type=click.Path(exists=True))
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def spec_hash(spec_file: str, as_json: bool):
+    """Compute the canonical strategy spec hash."""
+    parsed = StrategySpec.from_yaml(spec_file)
+    digest = parsed.compute_hash()
+    if as_json:
+        click.echo(json.dumps({"spec_hash": digest}, indent=2))
+    else:
+        click.echo(digest)
+
+
+@spec.command(name="fields")
+@click.argument("spec_file", type=click.Path(exists=True))
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def spec_fields(spec_file: str, as_json: bool):
+    """Export deterministic flattened fields from a strategy spec."""
+    parsed = StrategySpec.from_yaml(spec_file)
+    fields = [{"path": path, "value": value} for path, value in _flatten_fields(parsed.to_dict())]
+    if as_json:
+        click.echo(json.dumps({"spec_hash": parsed.compute_hash(), "fields": fields}, indent=2, ensure_ascii=False, default=str))
+        return
+    for item in fields:
+        click.echo(f"{item['path']}={json.dumps(item['value'], ensure_ascii=False, sort_keys=True, default=str)}")
+
+
+def _flatten_fields(value: object, prefix: str = "") -> list[tuple[str, object]]:
+    if isinstance(value, dict):
+        rows: list[tuple[str, object]] = []
+        for key in sorted(value):
+            path = f"{prefix}.{key}" if prefix else str(key)
+            rows.extend(_flatten_fields(value[key], path))
+        return rows
+    if isinstance(value, list):
+        if all(not isinstance(item, (dict, list)) for item in value):
+            return [(prefix, value)]
+        rows = []
+        for index, item in enumerate(value):
+            rows.extend(_flatten_fields(item, f"{prefix}[{index}]"))
+        return rows
+    return [(prefix, value)]
+
+
 @main.group()
 def backtest():
     """Run backtests from strategy specs."""
@@ -262,6 +306,52 @@ def compile(spec_file: str):
     click.echo(f"  Signals:   {list(spec.signal.rules.keys())}")
     click.echo(f"  Portfolio: {spec.portfolio.type}")
     click.echo(f"  Hash:      {spec.compute_hash()}")
+
+
+@main.group()
+def registry():
+    """Inspect deterministic component registry artifacts."""
+
+
+@registry.command(name="export")
+@click.option("--out", "-o", required=True, type=click.Path(dir_okay=False), help="Output component catalog JSON path.")
+def registry_export(out: str):
+    """Export registered components and canonical recipes.
+
+    This command performs no semantic strategy matching. It writes the current
+    registry/catalog artifact for Agents and Studio gates to consume.
+    """
+    from oxq.core.component_catalog import build_component_catalog, component_catalog_json
+
+    output_path = Path(out)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    catalog = build_component_catalog()
+    output_path.write_text(component_catalog_json(catalog), encoding="utf-8")
+    click.echo(f"Component catalog written to {output_path}")
+    click.echo(f"Catalog hash: {catalog['catalog_hash']}")
+
+
+@main.group(name="spec-audit")
+def spec_audit():
+    """Validate Agent-authored spec audit artifacts."""
+
+
+@spec_audit.command(name="validate")
+@click.argument("audit_file", type=click.Path(exists=True, dir_okay=False))
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def spec_audit_validate(audit_file: str, as_json: bool):
+    """Validate spec_audit.json schema without semantic language judgment."""
+    from oxq.spec.audit_schema import validate_spec_audit_file
+
+    result = validate_spec_audit_file(audit_file)
+    if as_json:
+        click.echo(json.dumps(result, indent=2, ensure_ascii=False))
+    else:
+        click.echo(f"Status: {result['status'].upper()}")
+        for error in result["errors"]:
+            click.echo(f"  {error['path']}: {error['message']}")
+    if result["status"] == "fail":
+        raise SystemExit(1)
 
 
 @main.group()

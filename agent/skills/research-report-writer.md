@@ -42,6 +42,7 @@ exists, then ask the user whether report charts should be created or updated.
 Read:
 
 - `strategy_spec.yaml`
+- `spec_audit.json`
 - `metrics.json`
 - `execution_assumptions.json`
 - reproducibility audit output
@@ -123,6 +124,9 @@ Write `research_report.md` with:
    - Summarize strategy, universe, signal, execution assumptions, cost model,
      benchmark, and metrics profile.
    - Disclose configured end date and effective last trading day.
+   - Cite `spec_audit.json` for field provenance, unconfirmed defaults,
+     selected canonical recipes, catalog hash status, and component provenance
+     warnings.
 
 4. Chart narrative.
    - Embed registered figures using their manifest paths.
@@ -149,6 +153,9 @@ Write `research_report.md` with:
 - Do not hand-write or eyeball any of the above values from charts.
 - When using facts API values, keep the wording human-readable and cite the
   source artifact or fact group in nearby text.
+- When discussing why the SPEC was built a certain way, cite `spec_audit.json`
+  and the selected recipe or catalog component. Do not infer provenance from
+  the final YAML alone.
 
 ## HTML Output
 
@@ -174,6 +181,7 @@ report narrative from templates.
 - Do not invent evidence.
 - Do not modify metrics, audit files, robustness output, or backtest artifacts.
 - Do not hide adverse evidence behind generic positive language.
+- Do not omit blocking or unresolved `spec_audit.json` findings.
 - Do not promote a run with fatal audit findings, failed reproducibility,
   fragile robustness, or no usable OOS evidence.
 - Do not call the strategy investable; describe research evidence and limits.

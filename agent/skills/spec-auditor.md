@@ -12,7 +12,18 @@ from entering a formal experiment.
 ## Inputs
 
 - `strategy_spec.yaml`
-- the current conversation context
+- Agent-provided raw conversation history. Do not assume a filename or path.
+  The invoking Agent must supply the source text or Studio-provided object in a
+  task-local variable such as:
+
+  ```text
+  CONVERSATION_HISTORY_RAW:
+  <paste or load the exact user/agent conversation text for this experiment>
+  ```
+
+  If Studio provides a `conversation.json` object or path variable, use that
+  provided value. Do not hardcode `conversation.json` as a required path.
+- `component_catalog.json`, or a freshly exported catalog
 - `runs/` metadata when present
 
 ## Source Boundary
@@ -45,20 +56,132 @@ Material fields include:
 - risk-free rate and metrics profile
 - exit, risk, and rebalance constraints
 
+For each material field, record source evidence:
+
+- `field_path`
+- current spec value
+- classification: `confirmed`, `default`, `unconfirmed`, `contradiction`, or
+  `agent_added`
+- evidence snippets or message references from `CONVERSATION_HISTORY_RAW`
+- whether the item blocks backtest
+
+## Component Provenance
+
+Before approving a spec for backtest, audit component provenance against the
+same catalog used while building the spec:
+
+1. Load `component_catalog.json` from the research directory. If it is missing,
+   run:
+
+   ```bash
+   uv run oxq registry export --out component_catalog.json
+   ```
+
+2. Record the catalog's `catalog_hash` and compare it with any hash recorded in
+   the spec build notes, Studio task metadata, or prior audit artifact. A hash
+   mismatch blocks the backtest until the spec is rechecked against the current
+   catalog or the user explicitly accepts the catalog change.
+3. Verify every `signal.indicators.*.type`, `signal.rules.*.type`,
+   `portfolio.type`, and any documented rule component exists in the catalog.
+   Components absent from the catalog are blocking unless the workflow first
+   routes to `component-creator` and registers the custom component.
+4. Search catalog aliases and `recipes` for more standard canonical structures
+   than the spec currently uses. Block when the user request matches a recipe
+   but the spec decomposes it differently or uses an invented shortcut name.
+5. Block Agent-created names that look semantic but are not registered, such as
+   `RiskAdjustedMomentum`, when equivalent built-in components or recipes exist.
+6. Check semantic coverage: each user-requested indicator, signal, portfolio
+   optimizer, and rule must appear either as a selected catalog component or as
+   a selected recipe. Missing user-requested semantics block the backtest.
+
+Also check:
+
+- SPEC fields that exist but were never requested or confirmed by the user.
+- User-stated requirements that are missing from the SPEC.
+- SPEC values that contradict the conversation history.
+- Component choices that deviate from a matched recipe's `canonical_spec`.
+
+Examples:
+
+- If the user says "20日收益率 / 20日波动率" and the spec uses
+  `RiskAdjustedMomentum`, block it when the catalog has no such component.
+  Require the canonical `volatility_adjusted_momentum` recipe:
+  `NdayReturn + RollingVolatility + Ratio`.
+- If the user says "取 TopN，归一化权重" and the spec uses `EqualWeight`, block
+  it because `TopNRanking` is the catalog component matching that portfolio
+  semantic.
+
 ## Gate
 
-Any `unconfirmed` field blocks backtest. Always group related fields instead of
-asking one question per YAML key:
+Any `unconfirmed` field or blocking component provenance issue blocks backtest.
+Always group related fields instead of asking one question per YAML key:
 
 - execution assumptions
 - cost assumptions
 - train/test split
 - cash and risk-free assumptions
 - benchmark and success metric
+- component/catalog provenance
 
 Ask the user to either confirm the group or provide replacement values. After
 any change, re-run `oxq spec validate strategy_spec.yaml` and repeat this
 auditor gate.
+
+## `spec_audit.json`
+
+Write `spec_audit.json` before approving a backtest. It is semantic output from
+this skill, not from a deterministic CLI. Use this schema:
+
+```json
+{
+  "schema_version": 1,
+  "status": "pass | block | fail",
+  "spec_hash": "sha256:<hash>",
+  "conversation_hash": "sha256:<hash>",
+  "catalog_hash": "sha256:<hash>",
+  "recipe_matches": [
+    {
+      "recipe": "volatility_adjusted_momentum",
+      "status": "used | available_but_not_used | not_applicable",
+      "evidence": ["..."],
+      "canonical": true
+    }
+  ],
+  "field_audits": [
+    {
+      "field_path": "execution.initial_cash",
+      "spec_value": 100000,
+      "status": "confirmed | default | unconfirmed | contradiction | agent_added",
+      "evidence": ["..."],
+      "blocking": false
+    }
+  ],
+  "component_audits": [
+    {
+      "component_path": "signal.indicators.ret_n.type",
+      "component_type": "NdayReturn",
+      "status": "catalog | recipe | missing | non_canonical",
+      "recipe": "volatility_adjusted_momentum",
+      "evidence": ["..."],
+      "blocking": false
+    }
+  ],
+  "missing_user_requirements": [{"message": "...", "evidence": ["..."]}],
+  "agent_added_fields": [{"message": "...", "field_path": "..."}],
+  "contradictions": [{"message": "...", "field_path": "...", "evidence": ["..."]}],
+  "blocking_findings": [{"message": "...", "question": "..."}]
+}
+```
+
+Compute `conversation_hash` from the exact raw conversation input supplied to
+this skill. After writing `spec_audit.json`, run:
+
+```bash
+uv run oxq spec-audit validate spec_audit.json
+```
+
+Schema validation only proves the artifact shape. It does not prove the
+semantic audit is correct; that responsibility stays in this skill.
 
 ## Output
 
@@ -67,5 +190,11 @@ Report a compact summary:
 - confirmed fields
 - default fields that will be used
 - unconfirmed fields that block progress
+- selected catalog components and recipes
+- component provenance issues, including catalog hash mismatch, missing
+  components, non-canonical recipe decomposition, or missing user-requested
+  semantics
+- path to `spec_audit.json`
+- blocking confirmation questions
 
 Do not run or approve a backtest while blocking fields remain.

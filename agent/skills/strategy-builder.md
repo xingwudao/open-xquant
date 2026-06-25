@@ -121,6 +121,42 @@ investment conclusion.
 uv run oxq spec init "<strategy idea>" --out strategy_spec.yaml
 ```
 
+Before editing `strategy_spec.yaml`, run the component catalog gate. This gate is
+mandatory for every new spec and every material component edit:
+
+1. Load `component_catalog.json` from the research directory when it exists.
+   If it is missing or stale, create it with:
+
+   ```bash
+   uv run oxq registry export --out component_catalog.json
+   ```
+
+2. Search exact names and aliases in the catalog for every requested
+   indicator, signal, portfolio optimizer, and rule. Prefer `source: builtin`
+   components over custom components whenever they satisfy the user request.
+3. Search `recipes` before composing custom indicator chains or portfolio
+   structures. Match exact recipe names, aliases, and definitions against the
+   user's requested semantics.
+4. If a recipe matches, use its `canonical_spec` structure and fill only the
+   placeholders the user supplied or confirmed, such as `$period`, `$score_col`,
+   or `$n`.
+5. If no built-in component or recipe matches a requested semantic component,
+   route to `component-creator` before inventing a component name in the spec.
+6. Record selected components, selected recipes, `catalog_hash`, and concise
+   reasons in the spec build notes or working notes for the audit gate. If the
+   final spec cannot store notes, keep a nearby `spec_build_notes.md` artifact.
+
+Use examples:
+
+- User asks for "20日收益率 / 20日波动率": use the
+  `volatility_adjusted_momentum` recipe, not an invented
+  `RiskAdjustedMomentum` component.
+- User asks for "SMA 金叉": use the `sma_golden_cross` recipe.
+- User asks for "ROC timing": use the `roc_timing` recipe.
+- User asks for "TopN 正动量轮动": use the
+  `top_n_positive_momentum_rotation` recipe.
+- User asks to "取 TopN，归一化权重": use `TopNRanking`, not `EqualWeight`.
+
 Edit the generated spec. Keep the safe timing model:
 
 ```yaml
@@ -227,6 +263,19 @@ must classify material fields as confirmed, default, or unconfirmed. Any
 unconfirmed field blocks `oxq backtest run` until the user confirms or changes
 the value, then validation and the auditor gate run again.
 
+When invoking `spec-auditor`, provide the current experiment conversation as an
+input variable rather than assuming a file path:
+
+```text
+CONVERSATION_HISTORY_RAW:
+<exact user/agent conversation text for this experiment>
+```
+
+If Studio provides a conversation object or path variable, pass that provided
+value through to `spec-auditor`; do not hardcode a filename. The auditor must
+write `spec_audit.json`, and `uv run oxq spec-audit validate spec_audit.json`
+must pass before backtest.
+
 ## Phase 3: Prepare Data
 
 `oxq backtest run` reads local parquet files. If data is missing, prepare it
@@ -271,6 +320,17 @@ echo "$RUN_DIR"
 Use `artifacts.target_weights_csv` from `backtest_result.json` for baseline
 target-weight comparisons. Do not parse human stdout for `run_dir`.
 
+After the run finishes, preserve pre-run provenance artifacts beside the run
+artifacts when they exist:
+
+- copy `spec_audit.json` into `$RUN_DIR/spec_audit.json`
+- write `$RUN_DIR/conversation_hash.txt` from `spec_audit.json`
+- write `$RUN_DIR/component_catalog_hash.txt` from `component_catalog.json`
+- write `$RUN_DIR/recipe_catalog_hash.txt` from `component_catalog.json`
+
+Then update `artifact_hashes.json` for those copied files or state that the run
+is incomplete for Studio hard gates.
+
 ## Report Artifact Readiness
 
 If the run may become a professional report, verify that the spec and backtest
@@ -279,6 +339,12 @@ workflow can produce the evidence needed by `research-report-writer` and
 
 Required baseline artifacts:
 
+- `strategy_spec.yaml`
+- `spec_hash.txt`
+- `component_catalog_hash.txt`
+- `recipe_catalog_hash.txt`
+- `spec_audit.json`
+- `conversation_hash.txt`
 - `metrics.json`
 - `equity_curve.csv`
 - `trades.csv`

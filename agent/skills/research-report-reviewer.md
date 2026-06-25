@@ -24,6 +24,9 @@ Read:
 
 - `research_report.md` and `research_report.html`
 - `strategy_spec.yaml`, especially `decision_policy`
+- `spec_audit.json`, including field provenance, recipe matches,
+  component audits, missing requirements, agent-added fields, contradictions,
+  and blocking findings
 - `metrics.json` and `execution_assumptions.json`
 - `research_bias_audit.json` and `reproducibility_audit.json`
 - `robustness.json`, including perturbation and regime analysis sections
@@ -58,6 +61,9 @@ Markdown, and rerun deterministic QA.
      "风险可控" or "审计通过".
    - Check that perturbation and regime analysis findings are represented when
      they affect the decision.
+   - Confirm `spec_audit.json` conclusions are represented, including
+     unconfirmed defaults, component provenance warnings, selected recipes, and
+     any unresolved blocking questions.
 
 3. Numeric warning triage.
    - Do not treat every `numeric_claim_unverified` as a report error.
@@ -104,6 +110,8 @@ Return a concise review with:
 
 - Do not approve a report whose decision conflicts with `decision_policy`.
 - Do not approve positive risk language that omits fatal or material warnings.
+- Do not approve a report that omits unresolved `spec_audit.json` blockers or
+  presents non-canonical component choices as confirmed.
 - Do not let many low-value numeric warnings hide a decision-critical mismatch.
 - Do not use chart aesthetics as evidence of strategy quality.
 - Do not claim chart text is readable solely because plotting code configured

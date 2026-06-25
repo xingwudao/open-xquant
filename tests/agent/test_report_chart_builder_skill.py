@@ -219,6 +219,17 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
     assert "only a checkpoint" in text
     assert "blocks backtest" in text
     assert "group related fields" in text
+    assert "CONVERSATION_HISTORY_RAW" in text
+    assert "Do not hardcode `conversation.json` as a required path" in text
+    assert "field_path" in text
+    assert "agent_added" in text
+    assert "spec_audit.json" in text
+    assert "oxq spec-audit validate spec_audit.json" in text
+    assert "component_catalog.json" in text
+    assert "catalog_hash" in text
+    assert "RiskAdjustedMomentum" in text
+    assert "NdayReturn + RollingVolatility + Ratio" in text
+    assert "TopNRanking" in text
 
 
 def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
@@ -326,6 +337,15 @@ def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
     assert "runs/final" in text
     assert ".open-xquant/workspace.yaml" in text
     assert "paths.final_dir" in text
+    assert "component_catalog.json" in text
+    assert "oxq registry export --out component_catalog.json" in text
+    assert "Search `recipes` before composing custom indicator chains" in text
+    assert "sma_golden_cross" in text
+    assert "roc_timing" in text
+    assert "top_n_positive_momentum_rotation" in text
+    assert "CONVERSATION_HISTORY_RAW" in text
+    assert "spec_audit.json" in text
+    assert "component-creator" in text
 
 
 def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs() -> None:
@@ -339,6 +359,11 @@ def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs
     assert "paths.experiment_registry" in quant_research
     assert "_cost_x2" in strategy_monitor
     assert "created sub-run directory" in strategy_monitor
+    assert "spec_audit.json" in strategy_monitor
+    assert "component_catalog_hash.txt" in strategy_monitor
+    assert "recipe_catalog_hash.txt" in strategy_monitor
+    assert "conversation_hash.txt" in strategy_monitor
+    assert "oxq spec-audit validate runs/<run_id>/spec_audit.json" in strategy_monitor
 
 
 def test_agent_guide_is_install_only_and_points_to_router_skill() -> None:
@@ -395,3 +420,17 @@ def test_strategy_builder_skill_prepares_artifacts_for_professional_reports() ->
     assert "parameter_perturbation" in text
     assert "regime_analysis" in text
     assert "professional report" in text
+
+
+def test_report_writer_and_reviewer_require_spec_audit_disclosure() -> None:
+    writer = Path("agent/skills/research-report-writer.md").read_text(encoding="utf-8")
+    reviewer = Path("agent/skills/research-report-reviewer.md").read_text(encoding="utf-8")
+
+    assert "spec_audit.json" in writer
+    assert "selected canonical recipes" in writer
+    assert "component provenance" in writer
+    assert "Do not omit blocking or unresolved `spec_audit.json` findings" in writer
+    assert "spec_audit.json" in reviewer
+    assert "unconfirmed defaults" in reviewer
+    assert "selected recipes" in reviewer
+    assert "unresolved `spec_audit.json` blockers" in reviewer

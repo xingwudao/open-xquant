@@ -16,6 +16,10 @@ A valid CLI run should contain:
 
 - `strategy_spec.yaml`
 - `spec_hash.txt`
+- `component_catalog_hash.txt`
+- `recipe_catalog_hash.txt`
+- `spec_audit.json`
+- `conversation_hash.txt`
 - `environment.json`
 - `data_manifest.json`
 - `artifact_hashes.json`
@@ -33,6 +37,17 @@ A valid CLI run should contain:
 If these files are missing, state that the run is not a standard audited CLI
 artifact set.
 
+Before interpreting performance, validate the semantic audit artifact shape:
+
+```bash
+uv run oxq spec-audit validate runs/<run_id>/spec_audit.json
+```
+
+This validation is deterministic schema validation only. Still read
+`spec_audit.json` and preserve any blocking findings, unconfirmed defaults,
+component provenance warnings, recipe selections, missing user requirements,
+agent-added fields, and contradictions in the monitoring summary.
+
 ## Audit
 
 ```bash
@@ -47,6 +62,8 @@ Interpretation:
 - research audit fatal: reject the run
 - research audit warning: keep the warning in the report and explain its
   impact
+- spec audit `block` or `fail`: do not discuss performance as an approved
+  experiment; resolve the semantic audit first
 
 Common warnings include survivorship risk, low OOS trade count, high missing
 data ratio, parameter count, benchmark gaps, and drawdown tail risk.
@@ -85,7 +102,9 @@ uv run oxq experiment add runs/<run_id>/
 Use `research-report-writer` to write `research_report.md` from verified run
 artifacts, then render `research_report.html` from that final Markdown. The
 executive decision is research guidance, not permission to trade. Explain any
-audit warnings beside the decision.
+audit warnings beside the decision. Include `spec_audit.json` conclusions,
+including recipe choices and unconfirmed/default assumptions, in the report
+handoff.
 
 Do not write the report directly from the artifacts inside this skill. The
 report narrative must be written through `research-report-writer`.
