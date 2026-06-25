@@ -259,6 +259,8 @@ class StrategySpec:
             and not self.execution._fill_price_mode_explicit
         ):
             canonical_obj["execution"]["fill_price_mode"] = ""
+        if self.execution.rebalance.interval_days == 1 and self.execution.rebalance._interval_days_explicit:
+            canonical_obj.setdefault("execution", {}).setdefault("rebalance", {})["interval_days_explicit"] = True
         canonical = json.dumps(canonical_obj, sort_keys=True, default=str)
         return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 

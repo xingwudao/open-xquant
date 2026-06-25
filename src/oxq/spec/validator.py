@@ -558,6 +558,15 @@ def _validate_portfolio_rules(spec: StrategySpec) -> list[dict]:
     return errors
 
 
+def _effective_rebalance_interval_days(spec: StrategySpec) -> int:
+    rule_def = spec.portfolio.rules.get("rebalance")
+    if rule_def and rule_def.type == "RebalanceFrequencyRule":
+        interval_days = rule_def.params.get("interval_days")
+        if isinstance(interval_days, int) and not isinstance(interval_days, bool) and interval_days > 0:
+            return interval_days
+    return spec.execution.rebalance.interval_days
+
+
 def _validate_metrics(spec: StrategySpec) -> list[dict]:
     errors: list[dict] = []
     supported_profiles = frozenset({"open_xquant_default", "xquant_production"})
@@ -861,7 +870,8 @@ def validate(spec: StrategySpec) -> ValidationResult:
         or spec.execution.rebalance.interval_days <= 0
     ):
         errors.append(_err("fatal", "rebalance_interval_invalid", "execution.rebalance.interval_days must be a positive integer"))
-    if spec.execution.rebalance.frequency != "daily" and spec.execution.rebalance.interval_days <= 1:
+    effective_rebalance_interval_days = _effective_rebalance_interval_days(spec)
+    if spec.execution.rebalance.frequency != "daily" and effective_rebalance_interval_days <= 1:
         errors.append(
             _err(
                 "fatal",

@@ -583,6 +583,49 @@ validation:
     assert any(error["check"] == "rebalance_interval_conflict" for error in result.errors)
 
 
+def test_hash_distinguishes_explicit_daily_rebalance_from_implicit_default(tmp_path) -> None:
+    implicit_path = tmp_path / "implicit.yaml"
+    explicit_path = tmp_path / "explicit.yaml"
+    base_yaml = """
+strategy_id: explicit_daily_rebalance_hash
+research:
+  hypothesis: explicit daily rebalance is material provenance
+universe:
+  type: static
+  symbols: [SPY]
+portfolio:
+  type: EqualWeight
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: 10
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+"""
+    implicit_path.write_text(base_yaml, encoding="utf-8")
+    explicit_path.write_text(
+        base_yaml
+        + """
+execution:
+  rebalance:
+    frequency: daily
+    interval_days: 1
+""",
+        encoding="utf-8",
+    )
+
+    implicit_spec = StrategySpec.from_yaml(implicit_path)
+    explicit_spec = StrategySpec.from_yaml(explicit_path)
+
+    assert validate(implicit_spec).status == "pass"
+    assert validate(explicit_spec).status == "fail"
+    assert implicit_spec.compute_hash() != explicit_spec.compute_hash()
+
+
 def test_from_yaml_rejects_non_finite_numeric_fields(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(
@@ -695,6 +738,40 @@ def test_validate_accepts_non_daily_rebalance_with_explicit_interval() -> None:
     spec.execution.rebalance.interval_days = 5
 
     result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_accepts_non_daily_frequency_with_portfolio_rule_interval(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: weekly_portfolio_rule_rebalance
+research:
+  hypothesis: portfolio rebalance rule supplies the effective interval
+universe:
+  type: static
+  symbols: [SPY]
+portfolio:
+  type: EqualWeight
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: 5
+execution:
+  rebalance:
+    frequency: weekly
+cost:
+  fee_rate: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    result = validate(StrategySpec.from_yaml(spec_path))
 
     assert result.status == "pass"
 

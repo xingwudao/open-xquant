@@ -314,6 +314,42 @@ def test_spec_audit_validate_rejects_confirmed_when_same_evidence_denies_field_c
     assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
 
 
+def test_spec_audit_validate_rejects_confirmation_for_other_field_before_denial(tmp_path) -> None:
+    audit = {
+        "schema_version": 2,
+        "status": "pass",
+        "spec_provenance_pass": True,
+        "runtime_semantics_pass": True,
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "validation.train_period",
+                "spec_value": ["2025-01-01", "2025-12-31"],
+                "status": "confirmed",
+                "evidence": ["User confirmed the full backtest range in turn 5, but did not specify the train/test split."],
+                "blocking": False,
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
+
+
 def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path) -> None:
     audit = {
         "schema_version": 2,

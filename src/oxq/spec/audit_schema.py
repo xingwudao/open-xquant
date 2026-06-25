@@ -33,6 +33,7 @@ _ALLOWED_COMPONENT_STATUS = {"catalog", "recipe", "missing", "non_canonical"}
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{16,64}$")
 _NEGATIVE_CONFIRMATION_RE = re.compile(
     r"(未指定|没有指定|未确认|没有确认|未明确|用户未|用户没有|not specified|not confirmed|unconfirmed|"
+    r"did not specify|did not confirm|not explicitly specified|not explicitly confirmed|"
     r"agent\s+(?:chose|added|inferred|split)|agent将|agent自行)",
     re.IGNORECASE,
 )
@@ -44,6 +45,10 @@ _POSITIVE_CONFIRMATION_RE = re.compile(
 _LATER_CONFIRMATION_CONTEXT_RE = re.compile(
     r"(后来|随后|之后|后续|第[^，。；;\s]*轮|第[^，。；;\s]*次|later|then|afterward|afterwards|"
     r"subsequently|in turn\s*\d+|turn\s*\d+)",
+    re.IGNORECASE,
+)
+_HISTORICAL_NEGATIVE_PREFIX_RE = re.compile(
+    r"(起初|最初|原先|一开始|此前|之前|先前|曾经|initially|originally|previously|earlier|before)\W*$",
     re.IGNORECASE,
 )
 
@@ -167,13 +172,18 @@ def _evidence_denies_confirmation(evidence: list[Any]) -> bool:
     for entry in evidence:
         if not isinstance(entry, str):
             continue
-        if _POSITIVE_CONFIRMATION_RE.search(entry) and _LATER_CONFIRMATION_CONTEXT_RE.search(entry):
-            has_later_confirmation = True
         negative_match = _NEGATIVE_CONFIRMATION_RE.search(entry)
         if negative_match:
             has_negative = True
+            before_negative = entry[: negative_match.start()]
             after_negative = entry[negative_match.end() :]
             if _POSITIVE_CONFIRMATION_RE.search(after_negative) and _LATER_CONFIRMATION_CONTEXT_RE.search(after_negative):
+                has_later_confirmation = True
+            elif (
+                _POSITIVE_CONFIRMATION_RE.search(before_negative)
+                and _LATER_CONFIRMATION_CONTEXT_RE.search(before_negative)
+                and _HISTORICAL_NEGATIVE_PREFIX_RE.search(before_negative)
+            ):
                 has_later_confirmation = True
             continue
     return has_negative and not has_later_confirmation
