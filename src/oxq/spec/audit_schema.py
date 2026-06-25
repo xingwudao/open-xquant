@@ -95,6 +95,8 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
             continue
         _require_str(item, f"field_audits[{index}]", "field_path", errors)
         _require_enum(item, f"field_audits[{index}]", "status", _ALLOWED_FIELD_STATUS, errors)
+        if "spec_value" not in item:
+            errors.append({"path": f"field_audits[{index}].spec_value", "message": "missing required field"})
         if "evidence" not in item or not isinstance(item["evidence"], list):
             errors.append({"path": f"field_audits[{index}].evidence", "message": "must be a list"})
         if "blocking" in item and not isinstance(item["blocking"], bool):

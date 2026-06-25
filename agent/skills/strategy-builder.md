@@ -320,16 +320,20 @@ echo "$RUN_DIR"
 Use `artifacts.target_weights_csv` from `backtest_result.json` for baseline
 target-weight comparisons. Do not parse human stdout for `run_dir`.
 
-After the run finishes, preserve pre-run provenance artifacts beside the run
-artifacts when they exist:
+After the run finishes, attach pre-run provenance artifacts through the
+deterministic helper so `artifact_hashes.json` and `run_digests.jsonl` stay in
+sync:
 
-- copy `spec_audit.json` into `$RUN_DIR/spec_audit.json`
-- write `$RUN_DIR/conversation_hash.txt` from `spec_audit.json`
-- write `$RUN_DIR/component_catalog_hash.txt` from `component_catalog.json`
-- write `$RUN_DIR/recipe_catalog_hash.txt` from `component_catalog.json`
+```bash
+uv run oxq backtest attach-provenance "$RUN_DIR" \
+  --spec-audit spec_audit.json \
+  --component-catalog component_catalog.json
+```
 
-Then update `artifact_hashes.json` for those copied files or state that the run
-is incomplete for Studio hard gates.
+Do not edit `artifact_hashes.json` by hand after `oxq backtest run`; doing so
+invalidates the stored run digest and causes reproducibility audit failure. If
+the helper is unavailable, leave the run incomplete for Studio hard gates rather
+than mutating generated run artifacts manually.
 
 ## Report Artifact Readiness
 

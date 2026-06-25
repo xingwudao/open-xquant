@@ -316,23 +316,39 @@ def _params_for(kind: str, cls: type) -> dict[str, Any]:
     except (TypeError, ValueError, AttributeError):
         return {}
     params: dict[str, Any] = {}
-    skip = {"self", "mktdata", "signals", "indicators"}
+    skip = {"self", "mktdata"}
     for name, param in signature.parameters.items():
         if name in skip or param.kind in {inspect.Parameter.VAR_POSITIONAL, inspect.Parameter.VAR_KEYWORD}:
             continue
-        required = param.default is inspect.Parameter.empty or param.default == ""
+        sentinel_required = param.default == "" or (
+            kind == "signals" and getattr(cls, "name", cls.__name__) == "Composite" and name == "signals"
+        )
+        required = param.default is inspect.Parameter.empty or sentinel_required
         entry: dict[str, Any] = {
             "required": required,
         }
-        if param.default == "":
+        if sentinel_required:
             entry["semantic_required"] = True
-            entry["required_reason"] = "empty string is a sentinel, not a usable default"
+            entry["required_reason"] = "sentinel default is not a usable spec value"
         if param.default is not inspect.Parameter.empty:
-            entry["default"] = param.default
+            entry["default"] = _json_safe(param.default)
         if param.annotation is not inspect.Parameter.empty:
             entry["type"] = _annotation_name(param.annotation)
         params[name] = entry
     return params
+
+
+def _json_safe(value: object) -> object:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Mapping):
+        return {str(key): _json_safe(val) for key, val in sorted(value.items(), key=lambda item: str(item[0]))}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, set):
+        values = [_json_safe(item) for item in value]
+        return sorted(values, key=lambda item: json.dumps(item, sort_keys=True, default=str))
+    return str(value)
 
 
 def _annotation_name(annotation: object) -> str:

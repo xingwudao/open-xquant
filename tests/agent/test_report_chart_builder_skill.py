@@ -345,6 +345,8 @@ def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
     assert "top_n_positive_momentum_rotation" in text
     assert "CONVERSATION_HISTORY_RAW" in text
     assert "spec_audit.json" in text
+    assert "oxq backtest attach-provenance" in text
+    assert "Do not edit `artifact_hashes.json` by hand" in text
     assert "component-creator" in text
 
 

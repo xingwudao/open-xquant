@@ -278,6 +278,81 @@ def run(spec_file: str, out: str, data_dir: str | None, as_json: bool):
     click.echo(f"  Trade Count:  {len(result.trades)}")
 
 
+@backtest.command(name="attach-provenance")
+@click.argument("run_dir", type=click.Path(exists=True, file_okay=False))
+@click.option("--spec-audit", required=True, type=click.Path(exists=True, dir_okay=False), help="spec_audit.json path.")
+@click.option(
+    "--component-catalog",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False),
+    help="component_catalog.json path.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def attach_provenance(run_dir: str, spec_audit: str, component_catalog: str, as_json: bool):
+    """Attach pre-run provenance artifacts while preserving run digests."""
+    from oxq.spec.audit_schema import validate_spec_audit_file
+    from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
+
+    run_path = Path(run_dir)
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    if not artifact_hashes_path.exists():
+        raise click.ClickException(f"missing artifact_hashes.json in run directory: {run_dir}")
+
+    audit_validation = validate_spec_audit_file(spec_audit)
+    if audit_validation["status"] == "fail":
+        raise click.ClickException(f"invalid spec audit: {audit_validation['errors']}")
+
+    audit_payload = json.loads(Path(spec_audit).read_text(encoding="utf-8"))
+    catalog_payload = json.loads(Path(component_catalog).read_text(encoding="utf-8"))
+    conversation_hash = _require_json_str(audit_payload, "conversation_hash")
+    catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
+    recipe_catalog_hash = _require_json_str(catalog_payload, "recipe_catalog_hash")
+
+    (run_path / "spec_audit.json").write_text(Path(spec_audit).read_text(encoding="utf-8"), encoding="utf-8")
+    (run_path / "conversation_hash.txt").write_text(conversation_hash + "\n", encoding="utf-8")
+    (run_path / "component_catalog_hash.txt").write_text(catalog_hash + "\n", encoding="utf-8")
+    (run_path / "recipe_catalog_hash.txt").write_text(recipe_catalog_hash + "\n", encoding="utf-8")
+
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    if not isinstance(artifact_hashes, dict):
+        raise click.ClickException("artifact_hashes.json must be an object")
+    artifact_hashes.update(
+        {
+            "spec_audit.json": _hash_json_file(run_path / "spec_audit.json"),
+            "conversation_hash.txt": _hash_file(run_path / "conversation_hash.txt"),
+            "component_catalog_hash.txt": _hash_file(run_path / "component_catalog_hash.txt"),
+            "recipe_catalog_hash.txt": _hash_file(run_path / "recipe_catalog_hash.txt"),
+        }
+    )
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
+    artifact_hashes_digest = _hash_json_file(artifact_hashes_path)
+    _append_run_digest(run_path, artifact_hashes_digest)
+
+    result = {
+        "status": "pass",
+        "run_dir": str(run_path),
+        "artifact_hashes_digest": artifact_hashes_digest,
+        "attached": [
+            "spec_audit.json",
+            "conversation_hash.txt",
+            "component_catalog_hash.txt",
+            "recipe_catalog_hash.txt",
+        ],
+    }
+    if as_json:
+        click.echo(json.dumps(result, indent=2))
+    else:
+        click.echo("Status: PASS")
+        click.echo(f"Run dir: {run_path}")
+        click.echo(f"Artifact hashes digest: {artifact_hashes_digest}")
+
+
+def _require_json_str(payload: object, key: str) -> str:
+    if not isinstance(payload, dict) or not isinstance(payload.get(key), str) or not payload[key]:
+        raise click.ClickException(f"{key} must be present")
+    return payload[key]
+
+
 @main.group()
 def strategy():
     """Manage compiled strategies."""

@@ -106,7 +106,15 @@ def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
                 "canonical": False,
             }
         ],
-        "field_audits": [{"field_path": "portfolio.type", "status": "confirmed", "evidence": [], "blocking": False}],
+        "field_audits": [
+            {
+                "field_path": "portfolio.type",
+                "spec_value": "EqualWeight",
+                "status": "confirmed",
+                "evidence": [],
+                "blocking": False,
+            }
+        ],
         "component_audits": [
             {
                 "component_path": "portfolio.type",
@@ -169,4 +177,66 @@ def test_spec_audit_validate_rejects_malformed_entries(tmp_path) -> None:
     assert any(error["path"] == "status" for error in payload["errors"])
     assert any(error["path"] == "recipe_matches[0]" for error in payload["errors"])
     assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
+    assert any(error["path"] == "field_audits[0].spec_value" for error in payload["errors"])
     assert any(error["path"] == "component_audits[0].status" for error in payload["errors"])
+
+
+def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
+    run_dir = tmp_path / "runs" / "run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps({"schema_version": 5}), encoding="utf-8")
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "portfolio.type",
+                "spec_value": "EqualWeight",
+                "status": "confirmed",
+                "evidence": [],
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    spec_audit = tmp_path / "spec_audit.json"
+    spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    catalog = {
+        "catalog_hash": "sha256:" + "4" * 64,
+        "recipe_catalog_hash": "sha256:" + "5" * 64,
+    }
+    component_catalog = tmp_path / "component_catalog.json"
+    component_catalog.write_text(json.dumps(catalog), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    artifact_hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    run_digest_lines = (run_dir.parent / "run_digests.jsonl").read_text(encoding="utf-8").splitlines()
+    last_digest = json.loads(run_digest_lines[-1])
+    assert payload["status"] == "pass"
+    assert "spec_audit.json" in artifact_hashes
+    assert "conversation_hash.txt" in artifact_hashes
+    assert (run_dir / "conversation_hash.txt").read_text(encoding="utf-8").strip() == audit["conversation_hash"]
+    assert last_digest["run_id"] == run_dir.name
+    assert last_digest["artifact_hashes"] == payload["artifact_hashes_digest"]
