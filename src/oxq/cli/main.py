@@ -266,7 +266,14 @@ def _backtest_json_failure(check: str, message: str, warnings: list[dict] | None
 @backtest.command()
 @click.argument("spec_file", type=click.Path())
 @click.option("--out", "-o", default="runs/auto", help="Output directory for run artifacts")
-@click.option("--data-dir", default=None, help="Directory for market data files")
+@click.option(
+    "--data-dir",
+    default=None,
+    help=(
+        "Directory for market data files. The resolved effective data_dir is "
+        "recorded in compiled_plan.json and affects runtime audit hashes."
+    ),
+)
 @click.option(
     "--spec-audit",
     default=None,
@@ -854,13 +861,16 @@ def compile(spec_file: str, component_manifest: tuple[str, ...], out: str | None
     if out:
         out_dir = Path(out)
         out_dir.mkdir(parents=True, exist_ok=True)
-        plan = compile_plan(spec)
+        effective_data_dir = _resolve_effective_data_dir(spec, None)
+        plan = compile_plan(spec, effective_data_dir=effective_data_dir)
         (out_dir / "compiled_plan.json").write_text(
             json.dumps(plan, indent=2, sort_keys=True, default=str) + "\n",
             encoding="utf-8",
         )
         (out_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
         click.echo(f"  Compile preview: {out_dir / 'compiled_plan.json'}")
+        click.echo(f"  Effective data dir: {effective_data_dir}")
+        click.echo("  Note: effective data_dir is included in compiled_plan.json and its hash.")
 
 
 @main.group()

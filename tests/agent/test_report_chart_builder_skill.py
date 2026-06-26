@@ -189,6 +189,20 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "quant-research" not in text
 
 
+def test_coordinator_role_documents_subagent_workflow() -> None:
+    role = Path("agent/roles/oxq-coordinator.md")
+
+    text = role.read_text(encoding="utf-8")
+
+    assert "open-xquant SubAgent workflow" in text
+    assert "Prefer SubAgents by default" in text
+    assert "Builder writes `strategy_spec.yaml`" in text
+    assert "Spec auditor reads those artifacts" in text
+    assert "Runtime auditor reads the authorized spec/audit artifacts" in text
+    assert "Runner reads `backtest_authorization.json`" in text
+    assert "Main agent only coordinates" in text
+
+
 def test_component_author_skill_documents_workspace_extension_contract() -> None:
     skill = Path("agent/skills/author-component/SKILL.md")
     role = Path("agent/roles/oxq-component-author-worker.md")

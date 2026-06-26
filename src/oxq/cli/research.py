@@ -20,6 +20,26 @@ skill has selected the specific open-xquant skill for the task.
 Use `.open-xquant/workspace.yaml` for local paths."""
 
 
+SUBAGENT_POLICY_BLOCK = """## SubAgent policy
+
+- For open-xquant workflows, prefer SubAgents by default whenever SubAgent or
+  multi-agent tools are available.
+- The main agent acts as coordinator, reviewer, and final verifier.
+- Before running `oxq`, SDK code, or report scripts, first check whether
+  SubAgent tools are available.
+- If SubAgent tools are unavailable, explicitly say so before continuing in
+  the main thread.
+- Delegate independent phases to workers:
+  - strategy builder worker
+  - data inspection worker
+  - spec audit worker
+  - runtime audit worker
+  - backtest runner worker
+  - monitor/report worker
+- Do not force parallel execution when phases are strictly dependent. Use
+  sequential SubAgents with artifact handoff instead."""
+
+
 @click.group()
 def research() -> None:
     """Manage open-xquant research workspaces."""
@@ -84,6 +104,7 @@ def initialize_workspace(
     if not minimal and comparison_registry is not None and not comparison_registry.exists():
         write_text_file(comparison_registry, "")
     upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
+    upsert_marker_block(cwd / "AGENTS.md", "open-xquant-subagents", SUBAGENT_POLICY_BLOCK)
 
 
 def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state: dict[str, object] | None = None) -> dict[str, object]:

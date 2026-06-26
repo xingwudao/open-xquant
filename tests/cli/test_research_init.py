@@ -31,12 +31,16 @@ def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> No
         agents_text = (cwd_path / "AGENTS.md").read_text(encoding="utf-8")
         assert "user note" in agents_text
         assert "open-xquant-workspace:begin" in agents_text
+        assert "open-xquant-subagents:begin" in agents_text
         assert "use the installed `open-xquant` skill first" in agents_text
         assert "Do not run `oxq`" in agents_text
+        assert "For open-xquant workflows, prefer SubAgents by default" in agents_text
+        assert "If SubAgent tools are unavailable" in agents_text
 
         again = runner.invoke(main, ["research", "init"])
         assert again.exit_code == 0, again.output
         assert (cwd_path / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant-workspace:begin") == 1
+        assert (cwd_path / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant-subagents:begin") == 1
 
 
 def test_research_init_workspace_paths_match_run_centric_layout(tmp_path) -> None:

@@ -321,8 +321,9 @@ def _write_custom_indicator_extension(tmp_path):
     return manifest
 
 
-def test_strategy_compile_writes_compile_preview(tmp_path) -> None:
+def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compile_preview", hypothesis="compile preview should be auditable")
+    spec.data.data_dir = "data"
     spec.portfolio.rules["rebalance"] = {
         "type": "RebalanceFrequencyRule",
         "params": {"interval_days": 10},
@@ -330,14 +331,19 @@ def test_strategy_compile_writes_compile_preview(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     out_dir = tmp_path / "compile_preview"
+    monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["strategy", "compile", str(spec_path), "--out", str(out_dir)])
+    result = CliRunner().invoke(main, ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)])
 
     assert result.exit_code == 0, result.output
     compiled_plan = json.loads((out_dir / "compiled_plan.json").read_text(encoding="utf-8"))
     assert compiled_plan["execution"]["rebalance"]["interval_days"] == 10
     assert compiled_plan["execution"]["rebalance"]["source"] == "portfolio.rules.rebalance"
+    assert compiled_plan["data"]["spec_data_dir"] == "data"
+    assert compiled_plan["data"]["effective_data_dir"] == str((tmp_path / "data").resolve())
     assert (out_dir / "spec_hash.txt").read_text(encoding="utf-8").strip() == compiled_plan["spec_hash"]
+    assert "Effective data dir:" in result.output
+    assert "included in compiled_plan.json and its hash" in result.output
 
 
 def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:

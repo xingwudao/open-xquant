@@ -104,9 +104,15 @@ def test_agent_install_all_targets_writes_managed_skills(monkeypatch, tmp_path) 
     assert (home / ".openclaw/skills/build-strategy-spec/SKILL.md").exists()
     assert (home / ".trae/skills/build-strategy-spec/SKILL.md").exists()
     assert (codex_home / "skills/run-authorized-backtest/SKILL.md").exists()
-    assert (codex_home / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant:begin") == 1
-    assert "open-xquant:begin" in (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
-    assert "open-xquant:begin" in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+    codex_instructions = (codex_home / "AGENTS.md").read_text(encoding="utf-8")
+    opencode_instructions = (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
+    claude_instructions = (home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
+    assert codex_instructions.count("open-xquant:begin") == 1
+    assert "open-xquant:begin" in opencode_instructions
+    assert "open-xquant:begin" in claude_instructions
+    assert "For open-xquant workflows, prefer SubAgents by default" in codex_instructions
+    assert "For open-xquant workflows, prefer SubAgents by default" in opencode_instructions
+    assert "For open-xquant workflows, prefer SubAgents by default" in claude_instructions
 
     marker = codex_home / "skills/build-strategy-spec/.open-xquant-managed.json"
     assert json.loads(marker.read_text(encoding="utf-8"))["target"] == "codex"
@@ -428,6 +434,8 @@ def test_agent_install_real_source_writes_codex_agent_roles(monkeypatch, tmp_pat
     coordinator_payload = tomllib.loads(coordinator.read_text(encoding="utf-8"))
     assert coordinator_payload["name"] == "oxq-coordinator"
     assert "oxq-strategy-builder-worker" in coordinator_payload["developer_instructions"]
+    assert "open-xquant SubAgent workflow" in coordinator_payload["developer_instructions"]
+    assert "Main agent only coordinates" in coordinator_payload["developer_instructions"]
     runner_payload = tomllib.loads(runner.read_text(encoding="utf-8"))
     assert "run-authorized-backtest" in runner_payload["developer_instructions"]
 

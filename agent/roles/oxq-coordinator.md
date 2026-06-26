@@ -57,6 +57,28 @@ Use the `open-xquant` router skill.
 - Preserve the handoff artifacts produced by workers.
 - Decide the next worker or user confirmation; do not perform the worker's job.
 
+## open-xquant SubAgent workflow
+
+- Prefer SubAgents by default whenever SubAgent or multi-agent tools are
+  available.
+- If SubAgent tools are unavailable, explicitly say so before continuing in the
+  main thread.
+- Builder writes `strategy_spec.yaml`, `component_catalog.json`,
+  `spec_build_notes.md`, and `builder_phase_result.json`.
+- Spec auditor reads those artifacts plus raw conversation context and writes
+  `spec_audit.json` and `audit_notes.md`.
+- Runtime auditor reads the authorized spec/audit artifacts, compiles a preview,
+  and writes `compiled_plan.json` and `runtime_audit.json`.
+- Runner reads `backtest_authorization.json` and writes `runner_result.json`
+  plus `runs/<run_id>/`.
+- Report writer reads gated run artifacts and writes chart assets,
+  `research_report.md`, `research_report.html`, and `writer_result.json`.
+- Report reviewer reads the report package and writes `report_review.json`.
+- Main agent only coordinates, checks hashes, verifies failures, asks for
+  confirmations, and summarizes results.
+- Do not force parallel execution when phases are strictly dependent. Use
+  sequential SubAgents with artifact handoff instead.
+
 ## Inputs
 
 - User request or coordinator task.

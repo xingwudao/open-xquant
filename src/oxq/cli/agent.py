@@ -106,7 +106,27 @@ def default_agent_config() -> dict[str, Any]:
     }
 
 
-GLOBAL_AGENT_BLOCK = """## open-xquant
+SUBAGENT_POLICY_BLOCK = """## SubAgent policy
+
+- For open-xquant workflows, prefer SubAgents by default whenever SubAgent or
+  multi-agent tools are available.
+- The main agent acts as coordinator, reviewer, and final verifier.
+- Before running `oxq`, SDK code, or report scripts, first check whether
+  SubAgent tools are available.
+- If SubAgent tools are unavailable, explicitly say so before continuing in
+  the main thread.
+- Delegate independent phases to workers:
+  - strategy builder worker
+  - data inspection worker
+  - spec audit worker
+  - runtime audit worker
+  - backtest runner worker
+  - monitor/report worker
+- Do not force parallel execution when phases are strictly dependent. Use
+  sequential SubAgents with artifact handoff instead."""
+
+
+GLOBAL_AGENT_BLOCK = f"""## open-xquant
 
 When the user asks about quant strategy, backtest, factor evaluation,
 parameter tuning, audit, robustness, report, broker connectivity, or live
@@ -123,10 +143,12 @@ Before any routed skill runs open-xquant commands in a new directory:
   `~/.config/open-xquant/sdk-bundles/`, not the original source checkout.
 - If runner metadata is needed, read `~/.config/open-xquant/agent-install.json`.
 - Keep the shell in the user's research directory. Do not search unrelated
-  home directories for another open-xquant checkout."""
+  home directories for another open-xquant checkout.
+
+{SUBAGENT_POLICY_BLOCK}"""
 
 
-CLAUDE_AGENT_BLOCK = """## open-xquant
+CLAUDE_AGENT_BLOCK = f"""## open-xquant
 
 When the user asks about quant strategy, backtest, factor evaluation,
 parameter tuning, audit, robustness, report, broker connectivity, or live
@@ -146,10 +168,12 @@ Before any routed skill runs open-xquant commands in a new directory:
   home directories for another open-xquant checkout.
 
 If this project has an `AGENTS.md`, also read it when it is relevant to
-open-xquant work."""
+open-xquant work.
+
+{SUBAGENT_POLICY_BLOCK}"""
 
 
-GENERIC_AGENT_BLOCK = """## open-xquant
+GENERIC_AGENT_BLOCK = f"""## open-xquant
 
 When the user asks about quant strategy, backtest, factor evaluation,
 parameter tuning, audit, robustness, report, broker connectivity, or live
@@ -166,7 +190,9 @@ Before any routed skill runs open-xquant commands in a new directory:
   `oxq agent install` with a concrete target such as `codex`, `opencode`,
   `claude-code`, `cursor`, `openclaw`, or `trae`.
 - Keep the shell in the user's research directory. Do not search unrelated
-  home directories for another open-xquant checkout."""
+  home directories for another open-xquant checkout.
+
+{SUBAGENT_POLICY_BLOCK}"""
 
 
 @click.group()
