@@ -350,8 +350,19 @@ def _check_component_bundle_hashes(run_path: Path) -> list[dict]:
             checks.append(_check("component_bundle_hash", False, "fatal", f"component_manifests.json[{index}].bundle_hash is required"))
             continue
         try:
-            manifest_path = _resolve_component_manifest_for_audit(run_path, item)
+            manifest_path = _resolve_component_manifest_for_audit(run_path, item, recorded, len(summary))
             actual = compute_component_bundle_hash(manifest_path)
+            manifest_payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest_hash = manifest_payload.get("bundle_hash") if isinstance(manifest_payload, dict) else None
+            if manifest_hash != recorded:
+                checks.append(_check(
+                    "component_bundle_hash",
+                    False,
+                    "fatal",
+                    "component bundle "
+                    f"{index} manifest hash mismatch: stored={recorded}, manifest={manifest_hash}",
+                ))
+                continue
         except Exception as exc:
             checks.append(_check("component_bundle_hash", False, "fatal", f"component bundle {index} could not be verified: {exc}"))
             continue
@@ -364,17 +375,19 @@ def _check_component_bundle_hashes(run_path: Path) -> list[dict]:
     return checks
 
 
-def _resolve_component_manifest_for_audit(run_path: Path, item: dict) -> Path:
+def _resolve_component_manifest_for_audit(run_path: Path, item: dict, recorded_hash: str, summary_count: int) -> Path:
     archived_path = item.get("archived_manifest_path")
     if isinstance(archived_path, str) and archived_path:
         archived = _safe_artifact_path(run_path, archived_path)
         if archived.exists():
-            if archived.is_symlink():
-                raise OSError(f"archived component manifest must not be a symlink: {archived_path}")
-            resolved = archived.resolve()
-            if not resolved.is_relative_to(run_path.resolve()):
-                raise OSError(f"archived component manifest escapes run directory: {archived_path}")
+            _verify_run_local_component_manifest(run_path, archived, str(archived_path), recorded_hash)
             return archived
+
+    legacy = run_path / "component_manifest.json"
+    if summary_count == 1 and legacy.exists():
+        _verify_run_local_component_manifest(run_path, legacy, "component_manifest.json", recorded_hash)
+        return legacy
+
     manifest_path = item.get("manifest_path")
     if not isinstance(manifest_path, str) or not manifest_path:
         raise OSError("component manifest path is required")
@@ -383,14 +396,26 @@ def _resolve_component_manifest_for_audit(run_path: Path, item: dict) -> Path:
         candidate = run_path / candidate
     if candidate.exists():
         return candidate
-    legacy = run_path / "component_manifest.json"
-    if legacy.exists():
-        if legacy.is_symlink():
-            raise OSError("legacy archived component manifest must not be a symlink: component_manifest.json")
-        if not legacy.resolve().is_relative_to(run_path.resolve()):
-            raise OSError("legacy archived component manifest escapes run directory: component_manifest.json")
-        return legacy
     raise OSError(f"component manifest not found: {candidate}")
+
+
+def _verify_run_local_component_manifest(run_path: Path, path: Path, label: str, recorded_hash: str) -> None:
+    if path.is_symlink():
+        raise OSError(f"archived component manifest must not be a symlink: {label}")
+    resolved = path.resolve()
+    if not resolved.is_relative_to(run_path.resolve()):
+        raise OSError(f"archived component manifest escapes run directory: {label}")
+    from oxq.core.component_manifest import compute_component_bundle_hash
+
+    actual = compute_component_bundle_hash(path)
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    manifest_hash = payload.get("bundle_hash") if isinstance(payload, dict) else None
+    if manifest_hash == recorded_hash and actual == recorded_hash:
+        return
+    raise OSError(
+        "archived component manifest hash mismatch: "
+        f"stored={recorded_hash}, manifest={manifest_hash}, actual={actual}"
+    )
 
 
 def _unknown_artifact_check_id(artifact_name: str) -> str:

@@ -556,6 +556,7 @@ def test_agent_upgrade_removes_openclaw_config_for_deprecated_skills(monkeypatch
                     "entries": {
                         "strategy-builder": {"enabled": True},
                         "backtest-runner": {"enabled": True},
+                        "spec-auditor": {"enabled": True},
                     }
                 }
             },
@@ -597,6 +598,7 @@ def test_agent_upgrade_removes_openclaw_config_for_deprecated_skills(monkeypatch
     entries = config["skills"]["entries"]
     assert "strategy-builder" not in entries
     assert "backtest-runner" not in entries
+    assert "spec-auditor" not in entries
     assert entries["build-strategy-spec"]["enabled"] is True
     assert entries["run-authorized-backtest"]["enabled"] is True
 

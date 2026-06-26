@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from decimal import Decimal
+from pathlib import Path
 
 import pandas as pd
 
@@ -500,6 +501,73 @@ def test_reproducibility_audit_verifies_archived_component_source(tmp_path) -> N
     assert any(check["id"] == "component_bundle_hash" and check["status"] == "fail" for check in audit["checks"])
 
 
+def test_reproducibility_audit_prefers_legacy_run_manifest_over_mutable_manifest_path(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    run_manifest, run_bundle_hash = _write_component_manifest_bundle(run_dir, value="1.0")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_manifest, _workspace_bundle_hash = _write_component_manifest_bundle(workspace, value="2.0")
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": str(workspace_manifest),
+                    "bundle_hash": run_bundle_hash,
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["component_manifest.json"] = _hash_json_file(run_manifest)
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
+    assert any(check["id"] == "component_bundle_hash" and check["status"] == "pass" for check in audit["checks"])
+
+
+def test_reproducibility_audit_rejects_tampered_archived_manifest_bundle_hash(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    manifest, bundle_hash = _write_component_manifest_bundle(run_dir, value="1.0")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = "sha256:tampered"
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": "/deleted/component_manifest.json",
+                    "bundle_hash": bundle_hash,
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["component_manifest.json"] = _hash_json_file(manifest)
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(
+        check["id"] == "component_bundle_hash" and "manifest hash mismatch" in check["message"]
+        for check in audit["checks"]
+    )
+
+
 def test_reproducibility_audit_rejects_symlinked_archived_component_manifest(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     external_manifest = tmp_path / "external_component_manifest.json"
@@ -589,9 +657,69 @@ def test_reproducibility_audit_rejects_symlinked_legacy_component_manifest(tmp_p
 
     assert audit["status"] == "fail"
     assert any(
-        check["id"] == "component_bundle_hash" and "legacy archived component manifest must not be a symlink" in check["message"]
+        check["id"] == "component_bundle_hash" and "archived component manifest must not be a symlink" in check["message"]
         for check in audit["checks"]
     )
+
+
+def _write_component_manifest_bundle(base: Path, *, value: str) -> tuple[Path, str]:
+    root = base / "custom_components"
+    source_dir = root / "oxq_components" / "indicators"
+    tests_dir = root / "tests"
+    source_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+    (root / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
+    (source_dir / "__init__.py").write_text("", encoding="utf-8")
+    source = source_dir / "archived_indicator.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class ArchivedIndicator:",
+                "    name = 'ArchivedIndicator'",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                f"        return pd.Series({value}, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    test_file = tests_dir / "test_archived_indicator.py"
+    test_file.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
+    manifest = base / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "ArchivedIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "oxq_components.indicators.archived_indicator",
+                        "class": "ArchivedIndicator",
+                        "protocol": "Indicator",
+                        "tests": ["custom_components/tests/test_archived_indicator.py"],
+                        "source_path": "oxq_components/indicators/archived_indicator.py",
+                        "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                        "test_hash": "sha256:" + hashlib.sha256(test_file.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    bundle_hash = compute_component_bundle_hash(manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest, bundle_hash
 
 
 def _write_minimal_run(tmp_path):

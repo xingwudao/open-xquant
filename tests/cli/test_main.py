@@ -146,6 +146,56 @@ def test_component_manifest_hash_rejects_symlinked_bundle_file(tmp_path) -> None
     assert "must not be a symlink" in str(result.exception)
 
 
+def test_component_manifest_hash_rejects_symlink_to_manifest_in_bundle_root(tmp_path) -> None:
+    module = tmp_path / "workspace_indicator.py"
+    module.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class WorkspaceRootIndicator:",
+                "    name = 'WorkspaceRootIndicator'",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "workspace_root",
+                "extension_root": ".",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "WorkspaceRootIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_indicator",
+                        "class": "WorkspaceRootIndicator",
+                        "protocol": "Indicator",
+                        "source_hash": "sha256:" + hashlib.sha256(module.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    alias = tmp_path / "manifest_alias.json"
+    alias.symlink_to(manifest)
+
+    result = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
+
+    assert result.exit_code == 1
+    assert "must not be a symlink" in str(result.exception)
+
+
 def test_component_manifest_hash_skips_manifest_when_extension_root_is_workspace(tmp_path) -> None:
     module = tmp_path / "workspace_indicator.py"
     module.write_text(

@@ -835,6 +835,7 @@ def _remove_deprecated_managed_skill_dirs(target: AgentTarget, dry_run: bool) ->
     for name in sorted(DEPRECATED_SKILLS):
         path = target.skills_dir / name
         if not path.exists():
+            removed_names.append(name)
             continue
         marker = path / MANAGED_MARKER
         dest = path / "SKILL.md"

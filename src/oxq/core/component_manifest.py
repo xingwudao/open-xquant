@@ -229,10 +229,10 @@ def compute_component_bundle_hash(path: str | Path) -> str:
         _stable_payload_hash(manifest_without_hash),
     )
     for bundle_file in sorted(root.rglob("*")):
-        if bundle_file.resolve() == manifest_path:
-            continue
         if bundle_file.is_symlink():
             raise ValueError(f"component bundle file must not be a symlink: {_relative_path(bundle_file, manifest_path.parent)}")
+        if bundle_file.resolve() == manifest_path:
+            continue
         if _is_bundle_file(bundle_file):
             _add_hash_piece(pieces_by_path, _relative_path(bundle_file, manifest_path.parent), _sha256_file(bundle_file))
     for component in _components(payload):
