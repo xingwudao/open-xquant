@@ -232,12 +232,15 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
         encoding="utf-8",
     )
     if len(manifests) == 1:
-        manifest_copy = dict(manifests[0])
-        manifest_copy.pop("_manifest_path", None)
-        (run_dir / "component_manifest.json").write_text(
-            json.dumps(manifest_copy, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
-            encoding="utf-8",
-        )
+        if 0 in archived_paths:
+            _copy_legacy_single_component_root(run_dir, manifests[0], archived_paths[0][1])
+        if _single_component_manifest_is_run_local(run_dir, manifests[0], 0 in archived_paths):
+            manifest_copy = dict(manifests[0])
+            manifest_copy.pop("_manifest_path", None)
+            (run_dir / "component_manifest.json").write_text(
+                json.dumps(manifest_copy, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
         (run_dir / "component_bundle_hash.txt").write_text(
             str(manifests[0].get("bundle_hash", "")) + "\n",
             encoding="utf-8",
@@ -252,6 +255,39 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
         artifact_hashes["component_bundle_hash.txt"] = _hash_file(run_dir / "component_bundle_hash.txt")
     artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _append_run_digest(run_dir, _hash_json_file(artifact_hashes_path))
+
+
+def _single_component_manifest_is_run_local(run_dir: Path, manifest: dict, archived: bool) -> bool:
+    raw_root = manifest.get("extension_root") or manifest.get("extension_id")
+    if not isinstance(raw_root, str) or not raw_root:
+        return not archived
+    root = Path(raw_root)
+    if root.is_absolute() or ".." in root.parts:
+        return False
+    if raw_root == ".":
+        return not archived
+    return (run_dir / root).is_dir()
+
+
+def _copy_legacy_single_component_root(run_dir: Path, manifest: dict, archived_extension_root: str) -> None:
+    raw_root = manifest.get("extension_root") or manifest.get("extension_id")
+    if not isinstance(raw_root, str) or not raw_root:
+        return
+    root = Path(raw_root)
+    if root.is_absolute() or ".." in root.parts or raw_root == ".":
+        return
+    source_root = (run_dir / archived_extension_root).resolve()
+    target_root = (run_dir / root).resolve()
+    if not source_root.is_dir() or not source_root.is_relative_to(run_dir.resolve()):
+        return
+    if not target_root.is_relative_to(run_dir.resolve()):
+        return
+    shutil.copytree(
+        source_root,
+        target_root,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
+    )
 
 
 def _preflight_component_extension_archives(run_dir: Path, manifests: list[dict]) -> None:

@@ -108,7 +108,7 @@ def test_run_robustness_restores_workspace_component_registry(monkeypatch, tmp_p
 
 
 def test_copy_component_provenance_includes_legacy_component_root(tmp_path) -> None:
-    from oxq.core.component_manifest import load_component_manifests_from_run
+    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
 
     source_run = tmp_path / "source"
     child_run = tmp_path / "child"
@@ -134,7 +134,8 @@ def test_copy_component_provenance_includes_legacy_component_root(tmp_path) -> N
     _copy_component_provenance(source_run, child_run)
     shutil.rmtree(source_run / "custom_components")
     manifest.unlink()
-    loaded = load_component_manifests_from_run(child_run)
+    with scoped_component_registries():
+        loaded = load_component_manifests_from_run(child_run)
     child_hashes = json.loads((child_run / "artifact_hashes.json").read_text(encoding="utf-8"))
 
     assert loaded[0]["bundle_hash"] == bundle_hash

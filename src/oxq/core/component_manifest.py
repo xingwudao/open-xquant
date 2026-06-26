@@ -29,6 +29,12 @@ _KIND_TO_REGISTER = {
     "Rule": register_rule,
     "PortfolioOptimizer": register_portfolio_optimizer,
 }
+_KIND_TO_REGISTRY = {
+    "Indicator": _INDICATOR_REGISTRY,
+    "Signal": _SIGNAL_REGISTRY,
+    "Rule": _RULE_REGISTRY,
+    "PortfolioOptimizer": _PORTFOLIO_OPTIMIZER_REGISTRY,
+}
 _COMPONENT_REGISTRIES = (
     _INDICATOR_REGISTRY,
     _SIGNAL_REGISTRY,
@@ -286,7 +292,10 @@ def _register_manifest_component(component: dict[str, Any], index: int, root: Pa
     register = _KIND_TO_REGISTER.get(kind)
     if register is None:
         raise ValueError(f"components[{index}].kind is unsupported: {kind}")
+    registry = _KIND_TO_REGISTRY[kind]
     declared_name = _require_str(component, "name", index)
+    if declared_name in registry:
+        raise ValueError(f"components[{index}].name already exists in the {kind} registry: {declared_name}")
     module_name = _require_str(component, "module", index)
     class_name = _require_str(component, "class", index)
     module = importlib.import_module(module_name)

@@ -173,7 +173,8 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
 
 
 def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
-    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
+    from oxq.core.component_manifest import load_component_manifest, load_component_manifests_from_run, scoped_component_registries
+    from oxq.core.registry import list_indicators
 
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
@@ -223,20 +224,24 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     assert "component_bundle_hash.txt" in hashes
     manifest.unlink()
     shutil.rmtree(tmp_path / "custom_components")
-    loaded = load_component_manifests_from_run(run_dir)
+    with scoped_component_registries():
+        legacy = load_component_manifest(run_dir / "component_manifest.json")
+    assert legacy["bundle_hash"] == digest
+    with scoped_component_registries():
+        loaded = load_component_manifests_from_run(run_dir)
     assert loaded[0]["bundle_hash"] == digest
     module_spec = importlib.util.spec_from_file_location("generated_strategy_artifact", run_dir / "strategy.py")
     assert module_spec is not None
     assert module_spec.loader is not None
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
-    with scoped_component_registries():
-        strategy = module.build_strategy()
+    strategy = module.build_strategy()
     assert strategy.name == "json_backtest"
+    assert "WorkspaceBacktestIndicator" not in list_indicators()
 
 
 def test_run_component_manifest_loader_prefers_archived_legacy_manifest(tmp_path) -> None:
-    from oxq.core.component_manifest import load_component_manifests_from_run
+    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
 
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
@@ -264,7 +269,7 @@ def test_run_component_manifest_loader_prefers_archived_legacy_manifest(tmp_path
     assert result.exit_code == 0, result.output
     run_dir = Path(json.loads(result.output)["run_dir"])
     summary = json.loads((run_dir / "component_manifests.json").read_text(encoding="utf-8"))
-    shutil.copytree(run_dir / summary[0]["archived_extension_root"], run_dir / "custom_components")
+    assert (run_dir / "custom_components").is_dir()
     summary[0].pop("archived_manifest_path", None)
     summary[0].pop("archived_extension_root", None)
     (run_dir / "component_manifests.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
@@ -272,13 +277,14 @@ def test_run_component_manifest_loader_prefers_archived_legacy_manifest(tmp_path
     mutable_payload["bundle_hash"] = "sha256:mutable-workspace"
     manifest.write_text(json.dumps(mutable_payload, indent=2, sort_keys=True), encoding="utf-8")
 
-    loaded = load_component_manifests_from_run(run_dir)
+    with scoped_component_registries():
+        loaded = load_component_manifests_from_run(run_dir)
 
     assert loaded[0]["bundle_hash"] == digest
 
 
 def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
-    from oxq.core.component_manifest import load_component_manifests_from_run
+    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
 
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
@@ -319,7 +325,8 @@ def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
     manifest.unlink()
     shutil.rmtree(tmp_path / "custom_components")
     shutil.rmtree(external_tests)
-    loaded = load_component_manifests_from_run(run_dir)
+    with scoped_component_registries():
+        loaded = load_component_manifests_from_run(run_dir)
     assert loaded[0]["bundle_hash"] == digest
 
 
@@ -364,7 +371,7 @@ def test_component_extension_external_tests_reject_symlinked_parent(tmp_path) ->
 
 
 def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
-    from oxq.core.component_manifest import load_component_manifests_from_run
+    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
 
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest_a = _write_component_manifest(tmp_path)
@@ -416,7 +423,8 @@ def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
     shutil.rmtree(tmp_path / "custom_components")
     shutil.rmtree(tmp_path / "more_components")
 
-    loaded = load_component_manifests_from_run(run_dir)
+    with scoped_component_registries():
+        loaded = load_component_manifests_from_run(run_dir)
     assert [item["bundle_hash"] for item in loaded] == digests
 
 

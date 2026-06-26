@@ -295,6 +295,59 @@ def test_component_manifest_rejects_declared_name_mismatch(tmp_path) -> None:
     assert "must match registered class name" in result.output
 
 
+def test_component_manifest_rejects_duplicate_registered_name(tmp_path) -> None:
+    root = tmp_path / "custom_components"
+    root.mkdir()
+    source = root / "workspace_roc.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class ROC:",
+                "    name = 'ROC'",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "ROC",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_roc",
+                        "class": "ROC",
+                        "protocol": "Indicator",
+                        "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = compute_component_bundle_hash(manifest)
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["component-manifest", "validate", str(manifest), "--json"])
+
+    assert result.exit_code == 1
+    assert "already exists in the Indicator registry" in result.output
+
+
 def test_component_manifest_rejects_module_outside_extension_root(tmp_path) -> None:
     import sys
 
@@ -374,7 +427,7 @@ def test_component_manifest_clears_single_module_cache(tmp_path) -> None:
 def test_component_manifest_clears_helper_modules_from_previous_extension(tmp_path) -> None:
     import sys
 
-    from oxq.core.component_manifest import load_component_manifest
+    from oxq.core.component_manifest import load_component_manifest, scoped_component_registries
 
     def write_extension(root_name: str, class_name: str) -> Path:
         root = tmp_path / root_name
@@ -427,17 +480,18 @@ def test_component_manifest_clears_helper_modules_from_previous_extension(tmp_pa
     first = write_extension("first_components", "FirstIndicator")
     second = write_extension("second_components", "SecondIndicator")
 
-    load_component_manifest(first)
-    assert sys.modules["helpers"].__file__.startswith(str(tmp_path / "first_components"))
-    load_component_manifest(second)
+    with scoped_component_registries():
+        load_component_manifest(first)
+        assert sys.modules["helpers"].__file__.startswith(str(tmp_path / "first_components"))
+        load_component_manifest(second)
 
-    assert sys.modules["helpers"].__file__.startswith(str(tmp_path / "second_components"))
+        assert sys.modules["helpers"].__file__.startswith(str(tmp_path / "second_components"))
 
 
 def test_component_manifest_clears_helper_modules_when_reloading_same_extension(tmp_path) -> None:
     import sys
 
-    from oxq.core.component_manifest import load_component_manifest
+    from oxq.core.component_manifest import load_component_manifest, scoped_component_registries
 
     root = tmp_path / "custom_components"
     root.mkdir()
@@ -489,14 +543,15 @@ def test_component_manifest_clears_helper_modules_when_reloading_same_extension(
         payload["bundle_hash"] = compute_component_bundle_hash(manifest)
         manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
-    write_manifest("FirstIndicator")
-    load_component_manifest(manifest)
-    assert sys.modules["helpers"].CLASS_NAME == "FirstIndicator"
+    with scoped_component_registries():
+        write_manifest("FirstIndicator")
+        load_component_manifest(manifest)
+        assert sys.modules["helpers"].CLASS_NAME == "FirstIndicator"
 
-    write_manifest("SecondReloadedIndicator")
-    load_component_manifest(manifest)
+        write_manifest("SecondReloadedIndicator")
+        load_component_manifest(manifest)
 
-    assert sys.modules["helpers"].CLASS_NAME == "SecondReloadedIndicator"
+        assert sys.modules["helpers"].CLASS_NAME == "SecondReloadedIndicator"
 
 
 def test_spec_validate_loads_workspace_component_manifest(tmp_path) -> None:
