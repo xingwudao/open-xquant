@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from decimal import Decimal
 
 import pandas as pd
 
 from oxq.audit.reproducibility import _hash_json_file, audit_reproducibility
+from oxq.core.component_manifest import compute_component_bundle_hash
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
@@ -391,17 +393,7 @@ def test_reproducibility_audit_hashes_provenance_json_canonically(tmp_path) -> N
         encoding="utf-8",
     )
     (run_dir / "component_manifests.json").write_text(
-        json.dumps(
-            [
-                {
-                    "manifest_path": "component_manifest.json",
-                    "extension_id": "custom_components",
-                    "bundle_hash": "sha256:" + "2" * 16,
-                    "components": [],
-                }
-            ],
-            indent=2,
-        ),
+        json.dumps([], indent=2),
         encoding="utf-8",
     )
     hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
@@ -419,6 +411,93 @@ def test_reproducibility_audit_hashes_provenance_json_canonically(tmp_path) -> N
     assert audit["status"] == "pass"
     assert any(check["id"] == "runtime_audit_hash" and check["status"] == "pass" for check in audit["checks"])
     assert any(check["id"] == "component_manifests_hash" and check["status"] == "pass" for check in audit["checks"])
+
+
+def test_reproducibility_audit_verifies_archived_component_source(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    archive_base = run_dir / "component_extensions" / "00_custom_components"
+    source_dir = archive_base / "custom_components" / "oxq_components" / "indicators"
+    tests_dir = archive_base / "custom_components" / "tests"
+    source_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+    (archive_base / "custom_components" / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
+    (source_dir / "__init__.py").write_text("", encoding="utf-8")
+    source = source_dir / "archived_indicator.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class ArchivedIndicator:",
+                "    name = 'ArchivedIndicator'",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    test_file = tests_dir / "test_archived_indicator.py"
+    test_file.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
+    manifest = archive_base / "workspace_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "ArchivedIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "oxq_components.indicators.archived_indicator",
+                        "class": "ArchivedIndicator",
+                        "protocol": "Indicator",
+                        "tests": ["custom_components/tests/test_archived_indicator.py"],
+                        "source_path": "oxq_components/indicators/archived_indicator.py",
+                        "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                        "test_hash": "sha256:" + hashlib.sha256(test_file.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    bundle_hash = compute_component_bundle_hash(manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": "/deleted/workspace_manifest.json",
+                    "archived_manifest_path": "component_extensions/00_custom_components/workspace_manifest.json",
+                    "archived_extension_root": "component_extensions/00_custom_components/custom_components",
+                    "bundle_hash": bundle_hash,
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    source.write_text(source.read_text(encoding="utf-8").replace("1.0", "2.0"), encoding="utf-8")
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(check["id"] == "component_bundle_hash" and check["status"] == "fail" for check in audit["checks"])
 
 
 def _write_minimal_run(tmp_path):

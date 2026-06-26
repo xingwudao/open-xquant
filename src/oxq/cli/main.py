@@ -171,12 +171,23 @@ def _load_component_manifests(manifest_paths: tuple[str, ...]) -> list[dict]:
 def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]) -> None:
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
 
-    for manifest in manifests:
-        _archive_component_extension(run_dir, manifest)
+    archived_paths: dict[int, tuple[str, str]] = {}
+    for index, manifest in enumerate(manifests):
+        archived = _archive_component_extension(run_dir, manifest, index)
+        if archived is not None:
+            archived_paths[index] = archived
 
     summary = [
         {
             "manifest_path": manifest.get("_manifest_path", ""),
+            **(
+                {
+                    "archived_manifest_path": archived_paths[index][0],
+                    "archived_extension_root": archived_paths[index][1],
+                }
+                if index in archived_paths
+                else {}
+            ),
             "extension_id": manifest.get("extension_id", ""),
             "bundle_hash": manifest.get("bundle_hash", ""),
             "components": [
@@ -190,7 +201,7 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
                 if isinstance(component, dict)
             ],
         }
-        for manifest in manifests
+        for index, manifest in enumerate(manifests)
     ]
     (run_dir / "component_manifests.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -219,26 +230,50 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
     _append_run_digest(run_dir, _hash_json_file(artifact_hashes_path))
 
 
-def _archive_component_extension(run_dir: Path, manifest: dict) -> None:
+def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> tuple[str, str] | None:
     manifest_path_raw = manifest.get("_manifest_path")
     if not isinstance(manifest_path_raw, str) or not manifest_path_raw:
-        return
+        return None
     raw_root = manifest.get("extension_root") or manifest.get("extension_id")
     if not isinstance(raw_root, str) or not raw_root:
-        return
+        return None
     manifest_path = Path(manifest_path_raw).resolve()
     source_root = (manifest_path.parent / raw_root).resolve()
     if not source_root.is_dir() or not source_root.is_relative_to(manifest_path.parent):
-        return
-    archived_root = (run_dir / raw_root).resolve()
-    if not archived_root.is_relative_to(run_dir.resolve()) or archived_root == source_root:
-        return
+        return None
+    archive_name = f"{index:02d}_{_component_archive_slug(manifest, manifest_path)}"
+    archive_base = (run_dir / "component_extensions" / archive_name).resolve()
+    archived_root = (archive_base / raw_root).resolve()
+    if not archive_base.is_relative_to(run_dir.resolve()) or not archived_root.is_relative_to(run_dir.resolve()):
+        return None
+    if archived_root.is_relative_to(source_root) or source_root.is_relative_to(archived_root):
+        raise click.ClickException(
+            "component extension archive would be nested inside the source extension; "
+            "choose an --out directory outside the component extension root"
+        )
     shutil.copytree(
         source_root,
         archived_root,
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
     )
+    manifest_copy = dict(manifest)
+    manifest_copy.pop("_manifest_path", None)
+    archived_manifest = archive_base / manifest_path.name
+    archived_manifest.write_text(
+        json.dumps(manifest_copy, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return (
+        archived_manifest.relative_to(run_dir.resolve()).as_posix(),
+        archived_root.relative_to(run_dir.resolve()).as_posix(),
+    )
+
+
+def _component_archive_slug(manifest: dict, manifest_path: Path) -> str:
+    raw = str(manifest.get("extension_id") or manifest_path.stem)
+    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in raw).strip("_")
+    return slug or "component_extension"
 
 
 @main.group()

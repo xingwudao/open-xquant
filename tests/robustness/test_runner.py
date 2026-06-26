@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from decimal import Decimal
 from pathlib import Path
 
@@ -62,8 +63,18 @@ def test_run_robustness_restores_workspace_component_registry(monkeypatch, tmp_p
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     payload["bundle_hash"] = bundle_hash
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    archive_base = tmp_path / "component_extensions" / "00_custom_components"
+    shutil.copytree(tmp_path / "custom_components", archive_base / "custom_components")
+    shutil.copy2(manifest, archive_base / "component_manifest.json")
     (tmp_path / "component_manifests.json").write_text(
-        json.dumps([{"manifest_path": str(manifest), "bundle_hash": bundle_hash}]),
+        json.dumps([
+            {
+                "manifest_path": str(manifest),
+                "archived_manifest_path": "component_extensions/00_custom_components/component_manifest.json",
+                "archived_extension_root": "component_extensions/00_custom_components/custom_components",
+                "bundle_hash": bundle_hash,
+            }
+        ]),
         encoding="utf-8",
     )
     (tmp_path / "component_bundle_hash.txt").write_text(bundle_hash + "\n", encoding="utf-8")
@@ -90,6 +101,7 @@ def test_run_robustness_restores_workspace_component_registry(monkeypatch, tmp_p
     assert "RobustnessWorkspaceIndicator" not in list_indicators()
     assert (child_run / "component_manifests.json").exists()
     assert (child_run / "component_bundle_hash.txt").exists()
+    assert (child_run / "component_extensions" / "00_custom_components" / "custom_components").exists()
     assert "component_manifests.json" in child_hashes
     assert "component_bundle_hash.txt" in child_hashes
 

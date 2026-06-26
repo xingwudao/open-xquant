@@ -204,7 +204,11 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     assert result_payload["artifacts"]["component_manifests_json"].endswith("component_manifests.json")
     assert result_payload["artifacts"]["component_bundle_hash_txt"].endswith("component_bundle_hash.txt")
     assert (run_dir / "component_bundle_hash.txt").read_text(encoding="utf-8").strip() == digest
-    assert (run_dir / "custom_components" / "oxq_components" / "indicators" / "workspace_backtest_indicator.py").exists()
+    assert any(
+        run_dir.glob(
+            "component_extensions/*/custom_components/oxq_components/indicators/workspace_backtest_indicator.py"
+        )
+    )
     hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
     assert "component_manifest.json" in hashes
     assert "component_manifests.json" in hashes
@@ -213,6 +217,93 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     shutil.rmtree(tmp_path / "custom_components")
     loaded = load_component_manifests_from_run(run_dir)
     assert loaded[0]["bundle_hash"] == digest
+
+
+def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest_a = _write_component_manifest(tmp_path)
+    manifest_b = _write_named_component_manifest(
+        tmp_path,
+        root_name="more_components",
+        manifest_name="workspace_manifest.json",
+        class_name="SecondWorkspaceBacktestIndicator",
+    )
+    digests = []
+    for manifest in (manifest_a, manifest_b):
+        digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+            "component_bundle_hash"
+        ]
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["bundle_hash"] = digest
+        manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        digests.append(digest)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest_a),
+            "--component-manifest",
+            str(manifest_b),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(json.loads(result.output)["run_dir"])
+    summary = json.loads((run_dir / "component_manifests.json").read_text(encoding="utf-8"))
+    assert len(summary) == 2
+    archived_paths = [item["archived_manifest_path"] for item in summary]
+    assert any(path.endswith("/component_manifest.json") for path in archived_paths)
+    assert any(path.endswith("/workspace_manifest.json") for path in archived_paths)
+    assert all((run_dir / path).exists() for path in archived_paths)
+
+    manifest_a.unlink()
+    manifest_b.unlink()
+    shutil.rmtree(tmp_path / "custom_components")
+    shutil.rmtree(tmp_path / "more_components")
+
+    loaded = load_component_manifests_from_run(run_dir)
+    assert [item["bundle_hash"] for item in loaded] == digests
+
+
+def test_backtest_run_rejects_archiving_extension_into_itself(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "custom_components" / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "archive would be nested inside the source extension" in result.output
 
 
 def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_path) -> None:
@@ -347,21 +438,31 @@ def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:
 
 
 def _write_component_manifest(tmp_path: Path) -> Path:
-    root = tmp_path / "custom_components"
+    return _write_named_component_manifest(
+        tmp_path,
+        root_name="custom_components",
+        manifest_name="component_manifest.json",
+        class_name="WorkspaceBacktestIndicator",
+    )
+
+
+def _write_named_component_manifest(tmp_path: Path, *, root_name: str, manifest_name: str, class_name: str) -> Path:
+    root = tmp_path / root_name
     source_dir = root / "oxq_components" / "indicators"
     tests_dir = root / "tests"
     source_dir.mkdir(parents=True)
     tests_dir.mkdir(parents=True)
     (root / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
     (source_dir / "__init__.py").write_text("", encoding="utf-8")
-    source = source_dir / "workspace_backtest_indicator.py"
+    module_file = "".join(["_" + ch.lower() if ch.isupper() else ch for ch in class_name]).lstrip("_")
+    source = source_dir / f"{module_file}.py"
     source.write_text(
         "\n".join(
             [
                 "from __future__ import annotations",
                 "import pandas as pd",
-                "class WorkspaceBacktestIndicator:",
-                "    name = 'WorkspaceBacktestIndicator'",
+                f"class {class_name}:",
+                f"    name = '{class_name}'",
                 "    def compute(self, mktdata: pd.DataFrame, value: float = 1.0) -> pd.Series:",
                 "        return pd.Series(float(value), index=mktdata.index, name=self.name)",
                 "",
@@ -369,26 +470,26 @@ def _write_component_manifest(tmp_path: Path) -> Path:
         ),
         encoding="utf-8",
     )
-    test_file = tests_dir / "test_workspace_backtest_indicator.py"
+    test_file = tests_dir / f"test_{module_file}.py"
     test_file.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
-    manifest = tmp_path / "component_manifest.json"
+    manifest = tmp_path / manifest_name
     manifest.write_text(
         json.dumps(
             {
                 "schema_version": 1,
-                "extension_id": "custom_components",
-                "extension_root": "custom_components",
+                "extension_id": root_name,
+                "extension_root": root_name,
                 "bundle_hash": "",
                 "components": [
                     {
-                        "name": "WorkspaceBacktestIndicator",
+                        "name": class_name,
                         "kind": "Indicator",
                         "source": "workspace_extension",
-                        "module": "oxq_components.indicators.workspace_backtest_indicator",
-                        "class": "WorkspaceBacktestIndicator",
+                        "module": f"oxq_components.indicators.{module_file}",
+                        "class": class_name,
                         "protocol": "Indicator",
-                        "tests": ["custom_components/tests/test_workspace_backtest_indicator.py"],
-                        "source_path": "oxq_components/indicators/workspace_backtest_indicator.py",
+                        "tests": [f"{root_name}/tests/test_{module_file}.py"],
+                        "source_path": f"oxq_components/indicators/{module_file}.py",
                         "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
                         "test_hash": "sha256:" + hashlib.sha256(test_file.read_bytes()).hexdigest(),
                     }

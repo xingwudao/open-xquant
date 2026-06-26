@@ -271,6 +271,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                 checks.append(_check(check_id, actual == expected, "fatal", f"{fname} hash mismatch: stored={expected}, actual={actual}"))
             except (json.JSONDecodeError, OSError):
                 checks.append(_check(check_id, False, "fatal", f"{fname} is corrupted or unreadable"))
+        checks.extend(_check_component_bundle_hashes(run_path))
         if artifact_schema_version >= 5 or "strategy.py" in expected_hashes:
             checks.append(_check_strategy_py_consistency(run_path, spec_hash_actual))
 
@@ -321,6 +322,66 @@ def _hash_artifact(path: Path) -> str:
         return _hash_json_file(path)
     content = path.read_bytes()
     return f"sha256:{hashlib.sha256(content).hexdigest()[:16]}"
+
+
+def _check_component_bundle_hashes(run_path: Path) -> list[dict]:
+    summary_path = run_path / "component_manifests.json"
+    if not summary_path.exists():
+        return []
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        return [_check("component_bundle_hash", False, "fatal", f"component_manifests.json is invalid: {exc}")]
+    if not isinstance(summary, list):
+        return [_check("component_bundle_hash", False, "fatal", "component_manifests.json must be a list")]
+
+    try:
+        from oxq.core.component_manifest import compute_component_bundle_hash
+    except Exception as exc:
+        return [_check("component_bundle_hash", False, "fatal", f"component bundle verifier could not load: {exc}")]
+
+    checks: list[dict] = []
+    for index, item in enumerate(summary):
+        if not isinstance(item, dict):
+            checks.append(_check("component_bundle_hash", False, "fatal", f"component_manifests.json[{index}] must be an object"))
+            continue
+        recorded = item.get("bundle_hash")
+        if not isinstance(recorded, str) or not recorded:
+            checks.append(_check("component_bundle_hash", False, "fatal", f"component_manifests.json[{index}].bundle_hash is required"))
+            continue
+        try:
+            manifest_path = _resolve_component_manifest_for_audit(run_path, item)
+            actual = compute_component_bundle_hash(manifest_path)
+        except Exception as exc:
+            checks.append(_check("component_bundle_hash", False, "fatal", f"component bundle {index} could not be verified: {exc}"))
+            continue
+        checks.append(_check(
+            "component_bundle_hash",
+            actual == recorded,
+            "fatal",
+            f"component bundle {index} hash mismatch: stored={recorded}, actual={actual}",
+        ))
+    return checks
+
+
+def _resolve_component_manifest_for_audit(run_path: Path, item: dict) -> Path:
+    archived_path = item.get("archived_manifest_path")
+    if isinstance(archived_path, str) and archived_path:
+        archived = _safe_artifact_path(run_path, archived_path)
+        if archived.exists():
+            return archived
+    manifest_path = item.get("manifest_path")
+    if not isinstance(manifest_path, str) or not manifest_path:
+        raise OSError("component manifest path is required")
+    candidate = Path(manifest_path)
+    if not candidate.is_absolute():
+        candidate = run_path / candidate
+    if candidate.exists():
+        return candidate
+    legacy = run_path / "component_manifest.json"
+    if legacy.exists():
+        return legacy
+    raise OSError(f"component manifest not found: {candidate}")
 
 
 def _unknown_artifact_check_id(artifact_name: str) -> str:

@@ -102,7 +102,7 @@ def load_component_manifests_from_run(run_dir: str | Path, *, verify_hash: bool 
         recorded_hash = item.get("bundle_hash")
         if not isinstance(recorded_hash, str) or not recorded_hash:
             raise ValueError(f"component_manifests.json[{index}].bundle_hash is required")
-        resolved = _resolve_run_manifest_path(run_path, manifest_path, recorded_hash, len(summary))
+        resolved = _resolve_run_manifest_path(run_path, item, recorded_hash, len(summary))
         loaded = load_component_manifest(resolved, verify_hash=verify_hash)
         loaded_hash = loaded.get("bundle_hash")
         if loaded_hash != recorded_hash:
@@ -130,7 +130,7 @@ def validate_component_manifest_records_from_run(run_dir: str | Path) -> list[st
         if not isinstance(recorded_hash, str) or not recorded_hash:
             raise ValueError(f"component_manifests.json[{index}].bundle_hash is required")
         try:
-            resolved = _resolve_run_manifest_path(run_path, manifest_path, recorded_hash, len(summary))
+            resolved = _resolve_run_manifest_path(run_path, item, recorded_hash, len(summary))
         except ValueError as exc:
             warnings.append(str(exc))
             continue
@@ -157,7 +157,16 @@ def _read_run_manifest_summary(run_path: Path) -> list[Any]:
     return summary
 
 
-def _resolve_run_manifest_path(run_path: Path, manifest_path: str, recorded_hash: str, summary_count: int) -> Path:
+def _resolve_run_manifest_path(run_path: Path, item: dict[str, Any], recorded_hash: str, summary_count: int) -> Path:
+    archived_path = item.get("archived_manifest_path")
+    if isinstance(archived_path, str) and archived_path:
+        archived = _safe_run_relative_file(run_path, archived_path)
+        if archived.exists():
+            return archived
+
+    manifest_path = item.get("manifest_path")
+    if not isinstance(manifest_path, str) or not manifest_path:
+        raise ValueError("component manifest path is required")
     resolved = Path(manifest_path)
     if not resolved.is_absolute():
         resolved = run_path / resolved
@@ -174,6 +183,16 @@ def _resolve_run_manifest_path(run_path: Path, manifest_path: str, recorded_hash
             if archived_payload.get("bundle_hash") == recorded_hash:
                 return archived
     raise ValueError(f"recorded component manifest not found: {resolved}")
+
+
+def _safe_run_relative_file(run_path: Path, raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise ValueError(f"archived component manifest path is unsafe: {raw_path}")
+    resolved = (run_path / path).resolve()
+    if not resolved.is_relative_to(run_path.resolve()):
+        raise ValueError(f"archived component manifest path escapes run directory: {raw_path}")
+    return resolved
 
 
 def compute_component_bundle_hash(path: str | Path) -> str:

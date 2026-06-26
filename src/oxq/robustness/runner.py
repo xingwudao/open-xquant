@@ -22,6 +22,7 @@ from oxq.spec.schema import CostSection, StrategySpec
 
 _BENCHMARK_CURVE_FILES = ("benchmark_curve.csv", "benchmark_equity_curve.csv", "benchmark_prices.csv")
 _COMPONENT_PROVENANCE_FILES = ("component_manifest.json", "component_manifests.json", "component_bundle_hash.txt")
+_COMPONENT_EXTENSION_ARCHIVE_DIR = "component_extensions"
 
 
 def run_robustness(run_dir: str | Path) -> dict:
@@ -351,6 +352,15 @@ def _copy_component_provenance(source_run: Path, child_run: Path) -> None:
         target = child_run / filename
         shutil.copy2(source, target)
         copied.append(filename)
+    source_extensions = source_run / _COMPONENT_EXTENSION_ARCHIVE_DIR
+    if source_extensions.exists():
+        target_extensions = child_run / _COMPONENT_EXTENSION_ARCHIVE_DIR
+        shutil.copytree(
+            source_extensions,
+            target_extensions,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
+        )
     if not copied:
         return
 

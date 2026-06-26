@@ -11,6 +11,7 @@ from click.testing import CliRunner
 
 from oxq.cli.main import main
 from oxq.core.component_catalog import build_component_catalog, component_catalog_json
+from oxq.core.component_manifest import compute_component_bundle_hash
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
@@ -947,8 +948,7 @@ def test_backtest_attach_provenance_rejects_stale_runtime_audit_hashes(tmp_path)
 def test_backtest_attach_provenance_rejects_runtime_audit_component_bundle_mismatch(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
-    run_bundle_hash = "sha256:" + "1" * 64
-    _attach_component_bundle_artifacts(run_dir, run_bundle_hash)
+    run_bundle_hash = _attach_component_bundle_artifacts(run_dir)
     catalog = build_component_catalog(
         [
             {
@@ -993,7 +993,7 @@ def test_backtest_attach_provenance_rejects_runtime_audit_component_bundle_misma
 def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
-    _attach_component_bundle_artifacts(run_dir, "sha256:" + "1" * 64)
+    _attach_component_bundle_artifacts(run_dir)
     catalog = build_component_catalog(
         [
             {
@@ -1035,8 +1035,7 @@ def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_
 def test_backtest_attach_provenance_allows_catalog_component_bundle_superset(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
-    run_bundle_hash = "sha256:" + "1" * 64
-    _attach_component_bundle_artifacts(run_dir, run_bundle_hash)
+    run_bundle_hash = _attach_component_bundle_artifacts(run_dir)
     catalog = build_component_catalog(
         [
             {
@@ -1447,15 +1446,74 @@ def _write_pass_runtime_audit(
     return path
 
 
-def _attach_component_bundle_artifacts(run_dir: Path, bundle_hash: str) -> None:
+def _attach_component_bundle_artifacts(run_dir: Path) -> str:
+    archive_base = run_dir / "component_extensions" / "00_custom_components"
+    source_dir = archive_base / "custom_components" / "oxq_components" / "indicators"
+    source_dir.mkdir(parents=True)
+    (archive_base / "custom_components" / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
+    (source_dir / "__init__.py").write_text("", encoding="utf-8")
+    source = source_dir / "workspace_run_component.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class WorkspaceRunComponent:",
+                "    name = 'WorkspaceRunComponent'",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = archive_base / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "WorkspaceRunComponent",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "oxq_components.indicators.workspace_run_component",
+                        "class": "WorkspaceRunComponent",
+                        "protocol": "Indicator",
+                        "source_path": "oxq_components/indicators/workspace_run_component.py",
+                        "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    bundle_hash = compute_component_bundle_hash(manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     (run_dir / "component_manifests.json").write_text(
         json.dumps(
             [
                 {
-                    "manifest_path": "component_manifest.json",
+                    "manifest_path": "/deleted/component_manifest.json",
+                    "archived_manifest_path": "component_extensions/00_custom_components/component_manifest.json",
+                    "archived_extension_root": "component_extensions/00_custom_components/custom_components",
                     "extension_id": "custom_components",
                     "bundle_hash": bundle_hash,
-                    "components": [],
+                    "components": [
+                        {
+                            "name": "WorkspaceRunComponent",
+                            "kind": "Indicator",
+                            "module": "oxq_components.indicators.workspace_run_component",
+                            "class": "WorkspaceRunComponent",
+                        }
+                    ],
                 }
             ],
             indent=2,
@@ -1471,6 +1529,7 @@ def _attach_component_bundle_artifacts(run_dir: Path, bundle_hash: str) -> None:
     artifact_hashes["component_bundle_hash.txt"] = _hash_file(run_dir / "component_bundle_hash.txt")
     artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
     _append_run_digest(run_dir, _hash_json_file(artifact_hashes_path))
+    return bundle_hash
 
 
 def _write_component_catalog(tmp_path):
