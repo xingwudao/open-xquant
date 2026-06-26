@@ -132,6 +132,60 @@ def test_component_manifest_hash_includes_non_python_resources(tmp_path) -> None
     assert json.loads(first.output)["component_bundle_hash"] != json.loads(second.output)["component_bundle_hash"]
 
 
+def test_component_manifest_hash_skips_manifest_when_extension_root_is_workspace(tmp_path) -> None:
+    module = tmp_path / "workspace_indicator.py"
+    module.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class WorkspaceRootIndicator:",
+                "    name = 'WorkspaceRootIndicator'",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = tmp_path / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "workspace_root",
+                "extension_root": ".",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "WorkspaceRootIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_indicator",
+                        "class": "WorkspaceRootIndicator",
+                        "protocol": "Indicator",
+                        "source_hash": "sha256:" + hashlib.sha256(module.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["component-manifest", "validate", str(manifest), "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["status"] == "pass"
+
+
 def test_component_manifest_validate_does_not_persist_workspace_component(tmp_path) -> None:
     manifest = _write_custom_indicator_extension(tmp_path)
     digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[

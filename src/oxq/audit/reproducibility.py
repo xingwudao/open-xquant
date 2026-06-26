@@ -385,6 +385,10 @@ def _resolve_component_manifest_for_audit(run_path: Path, item: dict) -> Path:
         return candidate
     legacy = run_path / "component_manifest.json"
     if legacy.exists():
+        if legacy.is_symlink():
+            raise OSError("legacy archived component manifest must not be a symlink: component_manifest.json")
+        if not legacy.resolve().is_relative_to(run_path.resolve()):
+            raise OSError("legacy archived component manifest escapes run directory: component_manifest.json")
         return legacy
     raise OSError(f"component manifest not found: {candidate}")
 

@@ -547,6 +547,53 @@ def test_reproducibility_audit_rejects_symlinked_archived_component_manifest(tmp
     )
 
 
+def test_reproducibility_audit_rejects_symlinked_legacy_component_manifest(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    external_manifest = tmp_path / "external_component_manifest.json"
+    external_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "sha256:external",
+                "components": [],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "component_manifest.json").symlink_to(external_manifest)
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": "/deleted/component_manifest.json",
+                    "bundle_hash": "sha256:external",
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["component_manifest.json"] = _hash_json_file(run_dir / "component_manifest.json")
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(
+        check["id"] == "component_bundle_hash" and "legacy archived component manifest must not be a symlink" in check["message"]
+        for check in audit["checks"]
+    )
+
+
 def _write_minimal_run(tmp_path):
     spec = StrategySpec.template(strategy_id="audit_execution_assumptions", hypothesis="audit execution assumptions")
     spec.validation.train_period = []

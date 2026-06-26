@@ -265,6 +265,49 @@ def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
     assert loaded[0]["bundle_hash"] == digest
 
 
+def test_backtest_run_rejects_symlinked_external_manifest_test_file_before_import(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    real_tests = tmp_path / "real_tests"
+    real_tests.mkdir()
+    real_test = real_tests / "test_workspace_backtest_indicator.py"
+    real_test.write_text("def test_real_placeholder():\n    assert True\n", encoding="utf-8")
+    linked_tests = tmp_path / "tests"
+    linked_tests.mkdir()
+    linked_test = linked_tests / "test_workspace_backtest_indicator.py"
+    linked_test.symlink_to(real_test)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["components"][0]["tests"] = ["tests/test_workspace_backtest_indicator.py"]
+    payload["components"][0]["test_hash"] = "sha256:" + hashlib.sha256(real_test.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "component_archive_failed"
+    assert "symlinked external test files" in payload["errors"][0]["message"]
+
+
 def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
     from oxq.core.component_manifest import load_component_manifests_from_run
 
@@ -392,6 +435,24 @@ def test_backtest_run_rejects_component_extension_symlinks_before_running(tmp_pa
 def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
+    marker = tmp_path / "component_imported.txt"
+    source = tmp_path / "custom_components" / "oxq_components" / "indicators" / "workspace_backtest_indicator.py"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "import pandas as pd",
+            "\n".join(
+                [
+                    "import pandas as pd",
+                    "from pathlib import Path",
+                    f"Path({str(marker)!r}).write_text('imported', encoding='utf-8')",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["components"][0]["source_hash"] = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
     bundle_hash = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
         "component_bundle_hash"
     ]
@@ -434,6 +495,7 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
     payload = json.loads(result.output)
     assert payload["errors"][0]["check"] == "runtime_audit_failed"
     assert "component_bundle_hashes" in payload["errors"][0]["message"]
+    assert not marker.exists()
 
     _write_runtime_audit(
         runtime_audit_path,
@@ -464,6 +526,7 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
     )
 
     assert ok.exit_code == 0, ok.output
+    assert marker.read_text(encoding="utf-8") == "imported"
 
 
 def test_run_component_manifest_loader_rejects_recorded_bundle_hash_mismatch(tmp_path) -> None:

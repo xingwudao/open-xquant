@@ -168,6 +168,29 @@ def _load_component_manifests(manifest_paths: tuple[str, ...]) -> list[dict]:
     return manifests
 
 
+def _read_component_manifest_payloads(manifest_paths: tuple[str, ...]) -> list[dict]:
+    """Read and hash workspace component manifests without importing component code."""
+    if not manifest_paths:
+        return []
+    from oxq.core.component_manifest import component_manifest_summary
+
+    manifests: list[dict] = []
+    for raw_path in manifest_paths:
+        manifest_path = Path(raw_path).resolve()
+        summary = component_manifest_summary(manifest_path)
+        if summary["status"] != "pass":
+            raise click.ClickException(
+                "component manifest bundle hash mismatch: "
+                f"stored={summary['bundle_hash']}, actual={summary['computed_bundle_hash']}"
+            )
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise click.ClickException(f"component manifest must be a JSON object: {manifest_path}")
+        payload["_manifest_path"] = str(manifest_path)
+        manifests.append(payload)
+    return manifests
+
+
 def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]) -> None:
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
 
@@ -316,7 +339,10 @@ def _component_extension_external_test_files(manifest: dict, manifest_path: Path
             raw_path = Path(raw)
             if raw_path.is_absolute() or ".." in raw_path.parts:
                 raise click.ClickException(f"component extension test path is unsafe: {raw}")
-            source_file = (workspace_root / raw_path).resolve()
+            raw_source_file = workspace_root / raw_path
+            if raw_source_file.is_symlink():
+                raise click.ClickException("component extension archive refuses symlinked external test files")
+            source_file = raw_source_file.resolve()
             if not source_file.is_relative_to(workspace_root):
                 raise click.ClickException(f"component extension test path escapes the workspace: {raw}")
             if not source_file.exists() or source_file.is_relative_to(source_root):
@@ -441,11 +467,74 @@ def run(
         raise click.ClickException(message)
 
     try:
-        loaded_component_manifests = _load_component_manifests(component_manifest)
+        component_manifest_payloads = _read_component_manifest_payloads(component_manifest)
         spec = StrategySpec.from_yaml(spec_file)
     except Exception as e:
         if as_json:
             click.echo(json.dumps(_backtest_json_failure("parse_error", str(e)), indent=2))
+            raise SystemExit(1)
+        raise
+
+    pre_run_audit_path = Path(spec_audit) if spec_audit is not None else _default_spec_audit_path(spec_path)
+    if pre_run_audit_path is not None:
+        try:
+            _require_pre_backtest_spec_audit(spec, pre_run_audit_path)
+        except click.ClickException as e:
+            if as_json:
+                click.echo(
+                    json.dumps(_backtest_json_failure("spec_audit_failed", e.message), indent=2)
+                )
+                raise SystemExit(1)
+            raise
+    pre_run_runtime_audit_path = (
+        Path(runtime_audit) if runtime_audit is not None else _default_runtime_audit_path(spec_path)
+    )
+    if pre_run_runtime_audit_path is not None and pre_run_audit_path is None:
+        message = "spec_audit.json is required when a runtime audit gates a formal backtest"
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("spec_audit_missing", message), indent=2))
+            raise SystemExit(1)
+        raise click.ClickException(message)
+    if pre_run_audit_path is not None and pre_run_runtime_audit_path is None:
+        message = "runtime_audit.json is required when a spec audit gates a formal backtest"
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("runtime_audit_missing", message), indent=2))
+            raise SystemExit(1)
+        raise click.ClickException(message)
+    component_bundle_hashes = _component_bundle_hashes(component_manifest_payloads)
+    if pre_run_runtime_audit_path is not None:
+        try:
+            _require_component_bundles_authorized_before_import(
+                spec,
+                pre_run_runtime_audit_path,
+                spec_audit_path=pre_run_audit_path,
+                component_bundle_hashes=component_bundle_hashes,
+            )
+        except click.ClickException as e:
+            if as_json:
+                click.echo(json.dumps(_backtest_json_failure("runtime_audit_failed", e.message), indent=2))
+                raise SystemExit(1)
+            raise
+
+    if component_manifest_payloads:
+        out_path = Path(out)
+        if out_path.name == "auto":
+            preflight_run_dir = out_path.parent / "__component_archive_preflight__"
+        else:
+            preflight_run_dir = out_path / "__component_archive_preflight__"
+        try:
+            _preflight_component_extension_archives(preflight_run_dir, component_manifest_payloads)
+        except click.ClickException as e:
+            if as_json:
+                click.echo(json.dumps(_backtest_json_failure("component_archive_failed", e.message), indent=2))
+                raise SystemExit(1)
+            raise
+
+    try:
+        loaded_component_manifests = _load_component_manifests(component_manifest)
+    except Exception as e:
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("component_manifest_failed", str(e)), indent=2))
             raise SystemExit(1)
         raise
 
@@ -476,39 +565,6 @@ def run(
         for w in validation.warnings:
             click.echo(f"  [{w['severity']}] {w['check']}: {w['message']}")
 
-    pre_run_audit_path = Path(spec_audit) if spec_audit is not None else _default_spec_audit_path(spec_path)
-    if pre_run_audit_path is not None:
-        try:
-            _require_pre_backtest_spec_audit(spec, pre_run_audit_path)
-        except click.ClickException as e:
-            if as_json:
-                click.echo(
-                    json.dumps(
-                        _backtest_json_failure("spec_audit_failed", e.message, warnings=validation.warnings),
-                        indent=2,
-                    )
-                )
-                raise SystemExit(1)
-            raise
-    pre_run_runtime_audit_path = (
-        Path(runtime_audit) if runtime_audit is not None else _default_runtime_audit_path(spec_path)
-    )
-    if pre_run_runtime_audit_path is not None and pre_run_audit_path is None:
-        message = "spec_audit.json is required when a runtime audit gates a formal backtest"
-        if as_json:
-            click.echo(
-                json.dumps(_backtest_json_failure("spec_audit_missing", message, warnings=validation.warnings), indent=2)
-            )
-            raise SystemExit(1)
-        raise click.ClickException(message)
-    if pre_run_audit_path is not None and pre_run_runtime_audit_path is None:
-        message = "runtime_audit.json is required when a spec audit gates a formal backtest"
-        if as_json:
-            click.echo(
-                json.dumps(_backtest_json_failure("runtime_audit_missing", message, warnings=validation.warnings), indent=2)
-            )
-            raise SystemExit(1)
-        raise click.ClickException(message)
     if pre_run_runtime_audit_path is not None:
         try:
             _require_pre_backtest_runtime_audit(
@@ -516,7 +572,7 @@ def run(
                 pre_run_runtime_audit_path,
                 spec_audit_path=pre_run_audit_path,
                 effective_data_dir=_resolve_effective_data_dir(spec, data_dir),
-                component_bundle_hashes=_component_bundle_hashes(loaded_component_manifests),
+                component_bundle_hashes=component_bundle_hashes,
             )
         except click.ClickException as e:
             if as_json:
@@ -534,24 +590,6 @@ def run(
         effective_data_dir = _resolve_effective_data_dir(spec, data_dir)
         click.echo(f"  Effective data dir: {effective_data_dir}")
         click.echo("  Note: effective data_dir is included in compiled_plan.json and its hash.")
-    if loaded_component_manifests:
-        out_path = Path(out)
-        if out_path.name == "auto":
-            preflight_run_dir = out_path.parent / "__component_archive_preflight__"
-        else:
-            preflight_run_dir = out_path / "__component_archive_preflight__"
-        try:
-            _preflight_component_extension_archives(preflight_run_dir, loaded_component_manifests)
-        except click.ClickException as e:
-            if as_json:
-                click.echo(
-                    json.dumps(
-                        _backtest_json_failure("component_archive_failed", e.message, warnings=validation.warnings),
-                        indent=2,
-                    )
-                )
-                raise SystemExit(1)
-            raise
     try:
         result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
     except Exception as e:
@@ -845,6 +883,36 @@ def _require_pre_backtest_runtime_audit(
         spec_hash=spec_hash,
         spec_audit_path=spec_audit_path,
         compiled_plan_payload=compile_plan(spec, effective_data_dir=effective_data_dir),
+        component_bundle_hashes=component_bundle_hashes,
+    )
+
+
+def _require_component_bundles_authorized_before_import(
+    spec: StrategySpec,
+    runtime_audit_path: Path,
+    *,
+    spec_audit_path: Path | None,
+    component_bundle_hashes: set[str],
+) -> None:
+    """Gate workspace component imports on deterministic manifest hashes."""
+    if not component_bundle_hashes:
+        return
+    from oxq.spec.runtime_audit_schema import validate_runtime_audit_file
+
+    audit_validation = validate_runtime_audit_file(runtime_audit_path)
+    if audit_validation["status"] == "fail":
+        raise click.ClickException(f"invalid runtime audit: {audit_validation['errors']}")
+    audit_payload = json.loads(runtime_audit_path.read_text(encoding="utf-8"))
+    audit_status = _require_json_str(audit_payload, "status")
+    if audit_status != "pass":
+        raise click.ClickException(f"runtime audit status must be pass before component import: {audit_status}")
+    if audit_payload.get("runtime_semantics_pass") is not True:
+        raise click.ClickException("runtime audit runtime_semantics_pass must be true before component import")
+    _reject_blocking_runtime_audit_rows(audit_payload)
+    _require_runtime_audit_hashes(
+        audit_payload,
+        spec_hash=spec.compute_hash(),
+        spec_audit_path=spec_audit_path,
         component_bundle_hashes=component_bundle_hashes,
     )
 
