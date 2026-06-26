@@ -4,7 +4,9 @@ import shutil
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import yaml
+from click import ClickException
 from click.testing import CliRunner
 
 from oxq.cli.main import main
@@ -219,6 +221,48 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     assert loaded[0]["bundle_hash"] == digest
 
 
+def test_run_component_manifest_loader_prefers_archived_legacy_manifest(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    run_dir = Path(json.loads(result.output)["run_dir"])
+    summary = json.loads((run_dir / "component_manifests.json").read_text(encoding="utf-8"))
+    shutil.copytree(run_dir / summary[0]["archived_extension_root"], run_dir / "custom_components")
+    summary[0].pop("archived_manifest_path", None)
+    summary[0].pop("archived_extension_root", None)
+    (run_dir / "component_manifests.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    mutable_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    mutable_payload["bundle_hash"] = "sha256:mutable-workspace"
+    manifest.write_text(json.dumps(mutable_payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    loaded = load_component_manifests_from_run(run_dir)
+
+    assert loaded[0]["bundle_hash"] == digest
+
+
 def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
     from oxq.core.component_manifest import load_component_manifests_from_run
 
@@ -266,7 +310,6 @@ def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
 
 
 def test_backtest_run_rejects_symlinked_external_manifest_test_file_before_import(tmp_path) -> None:
-    spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
     real_tests = tmp_path / "real_tests"
     real_tests.mkdir()
@@ -280,32 +323,30 @@ def test_backtest_run_rejects_symlinked_external_manifest_test_file_before_impor
     payload["components"][0]["tests"] = ["tests/test_workspace_backtest_indicator.py"]
     payload["components"][0]["test_hash"] = "sha256:" + hashlib.sha256(real_test.read_bytes()).hexdigest()
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
-    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
-        "component_bundle_hash"
-    ]
-    payload["bundle_hash"] = digest
-    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
 
-    result = CliRunner().invoke(
-        main,
-        [
-            "backtest",
-            "run",
-            str(spec_path),
-            "--component-manifest",
-            str(manifest),
-            "--data-dir",
-            str(data_dir),
-            "--out",
-            str(tmp_path / "runs"),
-            "--json",
-        ],
-    )
+    result = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
 
     assert result.exit_code == 1
-    payload = json.loads(result.output)
-    assert payload["errors"][0]["check"] == "component_archive_failed"
-    assert "symlinked external test files" in payload["errors"][0]["message"]
+    assert "must not traverse symlinks" in str(result.exception)
+
+
+def test_component_extension_external_tests_reject_symlinked_parent(tmp_path) -> None:
+    from oxq.cli.main import _component_extension_external_test_files
+
+    manifest = _write_component_manifest(tmp_path)
+    real_tests = tmp_path / "real_tests"
+    real_tests.mkdir()
+    (real_tests / "test_workspace_backtest_indicator.py").write_text(
+        "def test_real_placeholder():\n    assert True\n",
+        encoding="utf-8",
+    )
+    linked_tests = tmp_path / "tests"
+    linked_tests.symlink_to(real_tests, target_is_directory=True)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["components"][0]["tests"] = ["tests/test_workspace_backtest_indicator.py"]
+
+    with pytest.raises(ClickException, match="symlinked external test files"):
+        _component_extension_external_test_files(payload, manifest, tmp_path / "custom_components")
 
 
 def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
@@ -397,38 +438,17 @@ def test_backtest_run_rejects_archiving_extension_into_itself(tmp_path) -> None:
 
 
 def test_backtest_run_rejects_component_extension_symlinks_before_running(tmp_path) -> None:
-    spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
     external = tmp_path / "external_files"
     external.mkdir()
     (external / "secret.txt").write_text("not part of the component bundle\n", encoding="utf-8")
     (tmp_path / "custom_components" / "linked_external").symlink_to(external, target_is_directory=True)
-    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
-        "component_bundle_hash"
-    ]
-    payload = json.loads(manifest.read_text(encoding="utf-8"))
-    payload["bundle_hash"] = digest
-    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     out_dir = tmp_path / "runs"
 
-    result = CliRunner().invoke(
-        main,
-        [
-            "backtest",
-            "run",
-            str(spec_path),
-            "--component-manifest",
-            str(manifest),
-            "--data-dir",
-            str(data_dir),
-            "--out",
-            str(out_dir),
-            "--json",
-        ],
-    )
+    result = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
 
     assert result.exit_code == 1
-    assert "refuses symlinks" in result.output
+    assert "must not be a symlink" in str(result.exception)
     assert not out_dir.exists()
 
 

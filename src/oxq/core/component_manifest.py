@@ -166,6 +166,16 @@ def _resolve_run_manifest_path(run_path: Path, item: dict[str, Any], recorded_ha
         if archived.exists():
             return archived
 
+    archived = run_path / "component_manifest.json"
+    if summary_count == 1 and archived.exists():
+        archived_payload, actual_hash = _read_legacy_archived_manifest(run_path, archived)
+        if archived_payload.get("bundle_hash") == recorded_hash and actual_hash == recorded_hash:
+            return archived
+        raise ValueError(
+            "legacy archived component manifest hash mismatch: "
+            f"recorded={recorded_hash}, manifest={archived_payload.get('bundle_hash')}, actual={actual_hash}"
+        )
+
     manifest_path = item.get("manifest_path")
     if not isinstance(manifest_path, str) or not manifest_path:
         raise ValueError("component manifest path is required")
@@ -175,20 +185,20 @@ def _resolve_run_manifest_path(run_path: Path, item: dict[str, Any], recorded_ha
     if resolved.exists():
         return resolved
 
-    archived = run_path / "component_manifest.json"
-    if summary_count == 1 and archived.exists():
-        if archived.is_symlink():
-            raise ValueError("legacy archived component manifest must not be a symlink: component_manifest.json")
-        if not archived.resolve().is_relative_to(run_path.resolve()):
-            raise ValueError("legacy archived component manifest escapes run directory: component_manifest.json")
-        try:
-            archived_payload = _read_manifest(archived)
-        except ValueError:
-            pass
-        else:
-            if archived_payload.get("bundle_hash") == recorded_hash:
-                return archived
     raise ValueError(f"recorded component manifest not found: {resolved}")
+
+
+def _read_legacy_archived_manifest(run_path: Path, archived: Path) -> tuple[dict[str, Any], str]:
+    if archived.is_symlink():
+        raise ValueError("legacy archived component manifest must not be a symlink: component_manifest.json")
+    if not archived.resolve().is_relative_to(run_path.resolve()):
+        raise ValueError("legacy archived component manifest escapes run directory: component_manifest.json")
+    try:
+        payload = _read_manifest(archived)
+        actual_hash = compute_component_bundle_hash(archived)
+    except ValueError as exc:
+        raise ValueError(f"legacy archived component manifest is invalid: {exc}") from exc
+    return payload, actual_hash
 
 
 def _safe_run_relative_file(run_path: Path, raw_path: str) -> Path:
@@ -221,6 +231,8 @@ def compute_component_bundle_hash(path: str | Path) -> str:
     for bundle_file in sorted(root.rglob("*")):
         if bundle_file.resolve() == manifest_path:
             continue
+        if bundle_file.is_symlink():
+            raise ValueError(f"component bundle file must not be a symlink: {_relative_path(bundle_file, manifest_path.parent)}")
         if _is_bundle_file(bundle_file):
             _add_hash_piece(pieces_by_path, _relative_path(bundle_file, manifest_path.parent), _sha256_file(bundle_file))
     for component in _components(payload):
@@ -380,10 +392,25 @@ def _extension_root(manifest_path: Path, payload: dict[str, Any]) -> Path:
 
 
 def _safe_relative_file(root: Path, raw_path: str) -> Path:
-    path = (root / raw_path).resolve()
+    candidate = root / raw_path
+    if _relative_path_contains_symlink(root, raw_path):
+        raise ValueError(f"path must not traverse symlinks: {raw_path}")
+    path = candidate.resolve()
     if not path.is_relative_to(root):
         raise ValueError(f"path escapes component extension root: {raw_path}")
     return path
+
+
+def _relative_path_contains_symlink(root: Path, raw_path: str) -> bool:
+    path = Path(raw_path)
+    if path.is_absolute() or ".." in path.parts:
+        return True
+    current = root
+    for part in path.parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
 
 
 def _relative_path(path: Path, root: Path) -> str:

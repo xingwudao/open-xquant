@@ -340,7 +340,7 @@ def _component_extension_external_test_files(manifest: dict, manifest_path: Path
             if raw_path.is_absolute() or ".." in raw_path.parts:
                 raise click.ClickException(f"component extension test path is unsafe: {raw}")
             raw_source_file = workspace_root / raw_path
-            if raw_source_file.is_symlink():
+            if _path_contains_symlink(raw_source_file, workspace_root):
                 raise click.ClickException("component extension archive refuses symlinked external test files")
             source_file = raw_source_file.resolve()
             if not source_file.is_relative_to(workspace_root):
@@ -351,6 +351,20 @@ def _component_extension_external_test_files(manifest: dict, manifest_path: Path
                 raise click.ClickException("component extension archive refuses non-file or symlinked external test files")
             files.append((source_file, raw_path))
     return files
+
+
+def _path_contains_symlink(path: Path, root: Path) -> bool:
+    root = root.resolve()
+    try:
+        relative = path.relative_to(root)
+    except ValueError:
+        return True
+    current = root
+    for part in relative.parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
 
 
 def _component_archive_slug(manifest: dict, manifest_path: Path) -> str:

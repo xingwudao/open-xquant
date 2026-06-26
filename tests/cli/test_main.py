@@ -132,6 +132,20 @@ def test_component_manifest_hash_includes_non_python_resources(tmp_path) -> None
     assert json.loads(first.output)["component_bundle_hash"] != json.loads(second.output)["component_bundle_hash"]
 
 
+def test_component_manifest_hash_rejects_symlinked_bundle_file(tmp_path) -> None:
+    manifest = _write_custom_indicator_extension(tmp_path)
+    outside = tmp_path / "outside_lookup.json"
+    outside.write_text(json.dumps({"threshold": 1}), encoding="utf-8")
+    resource = tmp_path / "custom_components" / "resources" / "lookup.json"
+    resource.parent.mkdir(parents=True)
+    resource.symlink_to(outside)
+
+    result = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
+
+    assert result.exit_code == 1
+    assert "must not be a symlink" in str(result.exception)
+
+
 def test_component_manifest_hash_skips_manifest_when_extension_root_is_workspace(tmp_path) -> None:
     module = tmp_path / "workspace_indicator.py"
     module.write_text(

@@ -613,7 +613,7 @@ def _install_target(
             continue
         if dest is not None and _remove_managed_skill_dir(target.id, dest.parent, dry_run=dry_run):
             removed_names.append(name)
-    _remove_deprecated_managed_skill_dirs(target, dry_run=dry_run)
+    removed_names.extend(_remove_deprecated_managed_skill_dirs(target, dry_run=dry_run))
     for skill in skills:
         content = _render_skill_for_target_and_profile(skill, target.id, agent_profile)
         dest_dir = _safe_skill_dest_dir(target, skill.name)
@@ -739,7 +739,7 @@ def _upgrade_target(
             continue
         if _remove_managed_skill_dir(target.id, expand_path(record["dest"]).parent, dry_run=dry_run):
             removed_names.append(name)
-    _remove_deprecated_managed_skill_dirs(target, dry_run=dry_run)
+    removed_names.extend(_remove_deprecated_managed_skill_dirs(target, dry_run=dry_run))
     for source_skill in skills:
         name = source_skill.name
         existing_record = old_records.get(name)
@@ -829,8 +829,9 @@ def _remove_managed_skill_dir(target_id: str, path: Path, dry_run: bool) -> bool
     return True
 
 
-def _remove_deprecated_managed_skill_dirs(target: AgentTarget, dry_run: bool) -> None:
+def _remove_deprecated_managed_skill_dirs(target: AgentTarget, dry_run: bool) -> list[str]:
     assert target.skills_dir is not None
+    removed_names: list[str] = []
     for name in sorted(DEPRECATED_SKILLS):
         path = target.skills_dir / name
         if not path.exists():
@@ -842,7 +843,9 @@ def _remove_deprecated_managed_skill_dirs(target: AgentTarget, dry_run: bool) ->
             if marker_data.get("managed_by") == "open-xquant" and sha256_file(dest) != marker_data.get("dest_sha256"):
                 click.echo(f"{target.id}: skip modified deprecated skill {path}")
                 continue
-        _remove_managed_skill_dir(target.id, path, dry_run=dry_run)
+        if _remove_managed_skill_dir(target.id, path, dry_run=dry_run):
+            removed_names.append(name)
+    return removed_names
 
 
 def _install_agent_roles_for_target(

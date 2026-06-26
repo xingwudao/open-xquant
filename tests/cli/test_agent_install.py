@@ -541,6 +541,66 @@ def test_agent_upgrade_cleans_renamed_managed_skill_dirs(monkeypatch, tmp_path) 
     assert names == {"build-strategy-spec", "run-authorized-backtest"}
 
 
+def test_agent_upgrade_removes_openclaw_config_for_deprecated_skills(monkeypatch, tmp_path) -> None:
+    new_source = tmp_path / "new-source"
+    home = tmp_path / "home"
+    _write_source(new_source)
+    monkeypatch.setenv("HOME", str(home))
+    skills_dir = home / ".openclaw" / "skills"
+    config_file = home / ".openclaw" / "openclaw.json"
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    config_file.write_text(
+        json.dumps(
+            {
+                "skills": {
+                    "entries": {
+                        "strategy-builder": {"enabled": True},
+                        "backtest-runner": {"enabled": True},
+                    }
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    for name in ("strategy-builder", "backtest-runner"):
+        skill_dir = skills_dir / name
+        skill_file = skill_dir / "SKILL.md"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(
+            f"---\nname: {name}\ndescription: Legacy skill\n---\n\n# Legacy\n",
+            encoding="utf-8",
+        )
+        skill_sha = hashlib.sha256(skill_file.read_bytes()).hexdigest()
+        (skill_dir / ".open-xquant-managed.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "managed_by": "open-xquant",
+                    "target": "openclaw",
+                    "name": name,
+                    "dest_sha256": skill_sha,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    upgrade = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "openclaw", "--from-local", str(new_source), "--yes"],
+    )
+
+    assert upgrade.exit_code == 0, upgrade.output
+    assert not (skills_dir / "strategy-builder").exists()
+    assert not (skills_dir / "backtest-runner").exists()
+    config = json.loads(config_file.read_text(encoding="utf-8"))
+    entries = config["skills"]["entries"]
+    assert "strategy-builder" not in entries
+    assert "backtest-runner" not in entries
+    assert entries["build-strategy-spec"]["enabled"] is True
+    assert entries["run-authorized-backtest"]["enabled"] is True
+
+
 def test_agent_upgrade_preserves_modified_removed_managed_skill(monkeypatch, tmp_path) -> None:
     old_source = tmp_path / "old-source"
     new_source = tmp_path / "new-source"
