@@ -17,6 +17,7 @@ from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.robustness.runner import (
     _clone_spec_with_cost_multiplier,
+    _copy_component_provenance,
     _read_curve_csv,
     _read_trade_date_counts,
     run_robustness,
@@ -102,6 +103,42 @@ def test_run_robustness_restores_workspace_component_registry(monkeypatch, tmp_p
     assert (child_run / "component_manifests.json").exists()
     assert (child_run / "component_bundle_hash.txt").exists()
     assert (child_run / "component_extensions" / "00_custom_components" / "custom_components").exists()
+    assert "component_manifests.json" in child_hashes
+    assert "component_bundle_hash.txt" in child_hashes
+
+
+def test_copy_component_provenance_includes_legacy_component_root(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
+    source_run = tmp_path / "source"
+    child_run = tmp_path / "child"
+    source_run.mkdir()
+    child_run.mkdir()
+    manifest = _write_robustness_component_manifest(source_run)
+    bundle_hash = compute_component_bundle_hash(manifest)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    (source_run / "component_manifests.json").write_text(
+        json.dumps([
+            {
+                "manifest_path": str(manifest),
+                "bundle_hash": bundle_hash,
+            }
+        ]),
+        encoding="utf-8",
+    )
+    (source_run / "component_bundle_hash.txt").write_text(bundle_hash + "\n", encoding="utf-8")
+    (child_run / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:metrics"}), encoding="utf-8")
+
+    _copy_component_provenance(source_run, child_run)
+    shutil.rmtree(source_run / "custom_components")
+    manifest.unlink()
+    loaded = load_component_manifests_from_run(child_run)
+    child_hashes = json.loads((child_run / "artifact_hashes.json").read_text(encoding="utf-8"))
+
+    assert loaded[0]["bundle_hash"] == bundle_hash
+    assert (child_run / "custom_components" / "oxq_components" / "indicators").exists()
     assert "component_manifests.json" in child_hashes
     assert "component_bundle_hash.txt" in child_hashes
 

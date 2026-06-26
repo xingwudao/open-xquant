@@ -1,4 +1,5 @@
 import hashlib
+import importlib.util
 import json
 import shutil
 from pathlib import Path
@@ -172,10 +173,15 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
 
 
 def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
-    from oxq.core.component_manifest import load_component_manifests_from_run
+    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
 
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
+    spec = StrategySpec.from_yaml(spec_path)
+    spec.signal.indicators = {
+        "roc_1": IndicatorDef(type="WorkspaceBacktestIndicator", params={"value": 1.0})
+    }
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
         "component_bundle_hash"
     ]
@@ -219,6 +225,14 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     shutil.rmtree(tmp_path / "custom_components")
     loaded = load_component_manifests_from_run(run_dir)
     assert loaded[0]["bundle_hash"] == digest
+    module_spec = importlib.util.spec_from_file_location("generated_strategy_artifact", run_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    with scoped_component_registries():
+        strategy = module.build_strategy()
+    assert strategy.name == "json_backtest"
 
 
 def test_run_component_manifest_loader_prefers_archived_legacy_manifest(tmp_path) -> None:
@@ -404,6 +418,42 @@ def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
 
     loaded = load_component_manifests_from_run(run_dir)
     assert [item["bundle_hash"] for item in loaded] == digests
+
+
+def test_run_component_manifest_loader_rejects_missing_recorded_archive(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    run_dir = Path(json.loads(result.output)["run_dir"])
+    summary = json.loads((run_dir / "component_manifests.json").read_text(encoding="utf-8"))
+    archived_manifest = run_dir / summary[0]["archived_manifest_path"]
+    archived_manifest.unlink()
+
+    with pytest.raises(ValueError, match="archived component manifest not found"):
+        load_component_manifests_from_run(run_dir)
 
 
 def test_backtest_run_rejects_archiving_extension_into_itself(tmp_path) -> None:

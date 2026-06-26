@@ -165,6 +165,7 @@ def _resolve_run_manifest_path(run_path: Path, item: dict[str, Any], recorded_ha
         archived = _safe_run_relative_file(run_path, archived_path)
         if archived.exists():
             return archived
+        raise ValueError(f"archived component manifest not found: {archived}")
 
     archived = run_path / "component_manifest.json"
     if summary_count == 1 and archived.exists():

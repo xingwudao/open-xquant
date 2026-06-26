@@ -361,6 +361,7 @@ def _copy_component_provenance(source_run: Path, child_run: Path) -> None:
             dirs_exist_ok=True,
             ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
         )
+    _copy_legacy_component_roots(source_run, child_run)
     if not copied:
         return
 
@@ -375,6 +376,41 @@ def _copy_component_provenance(source_run: Path, child_run: Path) -> None:
         hashes[filename] = _hash_json_file(path) if path.suffix == ".json" else _hash_file(path)
     hashes_path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _append_run_digest(child_run, _hash_json_file(hashes_path))
+
+
+def _copy_legacy_component_roots(source_run: Path, child_run: Path) -> None:
+    """Copy run-local legacy component roots referenced by component_manifest.json."""
+
+    manifest_path = source_run / "component_manifest.json"
+    summary_path = source_run / "component_manifests.json"
+    if not manifest_path.exists() or not summary_path.exists():
+        return
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return
+    if not isinstance(summary, list) or len(summary) != 1 or not isinstance(summary[0], dict):
+        return
+    if summary[0].get("archived_manifest_path"):
+        return
+    raw_root = manifest.get("extension_root") or manifest.get("extension_id")
+    if not isinstance(raw_root, str) or not raw_root:
+        return
+    root_path = Path(raw_root)
+    if root_path.is_absolute() or ".." in root_path.parts:
+        return
+    source_root = (source_run / root_path).resolve()
+    source_run_resolved = source_run.resolve()
+    if not source_root.is_dir() or not source_root.is_relative_to(source_run_resolved):
+        return
+    target_root = child_run / root_path
+    shutil.copytree(
+        source_root,
+        target_root,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
+    )
 
 
 def _perturbation_result(
