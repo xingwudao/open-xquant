@@ -171,6 +171,7 @@ def _load_component_manifests(manifest_paths: tuple[str, ...]) -> list[dict]:
 def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]) -> None:
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
 
+    _preflight_component_extension_archives(run_dir, manifests)
     archived_paths: dict[int, tuple[str, str]] = {}
     for index, manifest in enumerate(manifests):
         archived = _archive_component_extension(run_dir, manifest, index)
@@ -230,7 +231,12 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
     _append_run_digest(run_dir, _hash_json_file(artifact_hashes_path))
 
 
-def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> tuple[str, str] | None:
+def _preflight_component_extension_archives(run_dir: Path, manifests: list[dict]) -> None:
+    for index, manifest in enumerate(manifests):
+        _component_extension_archive_paths(run_dir, manifest, index)
+
+
+def _component_extension_archive_paths(run_dir: Path, manifest: dict, index: int) -> tuple[Path, Path, Path, str] | None:
     manifest_path_raw = manifest.get("_manifest_path")
     if not isinstance(manifest_path_raw, str) or not manifest_path_raw:
         return None
@@ -238,9 +244,11 @@ def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> t
     if not isinstance(raw_root, str) or not raw_root:
         return None
     manifest_path = Path(manifest_path_raw).resolve()
-    source_root = (manifest_path.parent / raw_root).resolve()
+    source_root_raw = manifest_path.parent / raw_root
+    source_root = source_root_raw.resolve()
     if not source_root.is_dir() or not source_root.is_relative_to(manifest_path.parent):
         return None
+    _reject_component_extension_symlinks(source_root_raw)
     archive_name = f"{index:02d}_{_component_archive_slug(manifest, manifest_path)}"
     archive_base = (run_dir / "component_extensions" / archive_name).resolve()
     archived_root = (archive_base / raw_root).resolve()
@@ -251,6 +259,23 @@ def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> t
             "component extension archive would be nested inside the source extension; "
             "choose an --out directory outside the component extension root"
         )
+    return manifest_path, source_root, archive_base, raw_root
+
+
+def _reject_component_extension_symlinks(source_root: Path) -> None:
+    if source_root.is_symlink():
+        raise click.ClickException("component extension archive refuses symlinks inside the extension root")
+    for path in source_root.rglob("*"):
+        if path.is_symlink():
+            raise click.ClickException("component extension archive refuses symlinks inside the extension root")
+
+
+def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> tuple[str, str] | None:
+    archive_paths = _component_extension_archive_paths(run_dir, manifest, index)
+    if archive_paths is None:
+        return None
+    manifest_path, source_root, archive_base, raw_root = archive_paths
+    archived_root = (archive_base / raw_root).resolve()
     shutil.copytree(
         source_root,
         archived_root,
@@ -477,6 +502,24 @@ def run(
         effective_data_dir = _resolve_effective_data_dir(spec, data_dir)
         click.echo(f"  Effective data dir: {effective_data_dir}")
         click.echo("  Note: effective data_dir is included in compiled_plan.json and its hash.")
+    if loaded_component_manifests:
+        out_path = Path(out)
+        if out_path.name == "auto":
+            preflight_run_dir = out_path.parent / "__component_archive_preflight__"
+        else:
+            preflight_run_dir = out_path / "__component_archive_preflight__"
+        try:
+            _preflight_component_extension_archives(preflight_run_dir, loaded_component_manifests)
+        except click.ClickException as e:
+            if as_json:
+                click.echo(
+                    json.dumps(
+                        _backtest_json_failure("component_archive_failed", e.message, warnings=validation.warnings),
+                        indent=2,
+                    )
+                )
+                raise SystemExit(1)
+            raise
     try:
         result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
     except Exception as e:

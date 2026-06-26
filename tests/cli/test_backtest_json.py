@@ -304,6 +304,43 @@ def test_backtest_run_rejects_archiving_extension_into_itself(tmp_path) -> None:
 
     assert result.exit_code == 1
     assert "archive would be nested inside the source extension" in result.output
+    assert not (tmp_path / "custom_components" / "runs").exists()
+
+
+def test_backtest_run_rejects_component_extension_symlinks_before_running(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    external = tmp_path / "external_files"
+    external.mkdir()
+    (external / "secret.txt").write_text("not part of the component bundle\n", encoding="utf-8")
+    (tmp_path / "custom_components" / "linked_external").symlink_to(external, target_is_directory=True)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    out_dir = tmp_path / "runs"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(out_dir),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "refuses symlinks" in result.output
+    assert not out_dir.exists()
 
 
 def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_path) -> None:

@@ -35,6 +35,7 @@ _COMPONENT_REGISTRIES = (
     _PORTFOLIO_OPTIMIZER_REGISTRY,
     _RULE_REGISTRY,
 )
+_LOADED_EXTENSION_ROOTS: set[Path] = set()
 
 
 def snapshot_component_registries() -> Callable[[], None]:
@@ -83,6 +84,7 @@ def load_component_manifest(path: str | Path, *, verify_hash: bool = True) -> di
     with _prepend_sys_path(root):
         for index, component in enumerate(_components(payload)):
             _register_manifest_component(component, index, root)
+    _LOADED_EXTENSION_ROOTS.add(root.resolve())
     return payload
 
 
@@ -280,6 +282,7 @@ def _register_manifest_component(component: dict[str, Any], index: int, root: Pa
 
 
 def _clear_extension_module_cache(payload: dict[str, Any], root: Path) -> None:
+    root = root.resolve()
     top_level_packages = {
         module.split(".", 1)[0]
         for component in _components(payload)
@@ -287,15 +290,19 @@ def _clear_extension_module_cache(payload: dict[str, Any], root: Path) -> None:
     }
     if "oxq" in top_level_packages:
         raise ValueError("workspace component modules must not be declared under the oxq package")
-    for package in top_level_packages:
-        for module_name in list(sys.modules):
+    previous_roots = {loaded_root for loaded_root in _LOADED_EXTENSION_ROOTS if loaded_root != root}
+    for module_name in list(sys.modules):
+        module = sys.modules.get(module_name)
+        module_file = getattr(module, "__file__", None)
+        module_path = Path(module_file).resolve() if isinstance(module_file, str) else None
+        if module_path is not None and any(module_path.is_relative_to(loaded_root) for loaded_root in previous_roots):
+            sys.modules.pop(module_name, None)
+            continue
+        for package in top_level_packages:
             if module_name == package or module_name.startswith(package + "."):
-                module = sys.modules.get(module_name)
-                module_file = getattr(module, "__file__", None)
-                if isinstance(module_file, str):
-                    module_path = Path(module_file).resolve()
-                    if module_path.is_relative_to(root) or not _is_protected_runtime_module(module_path):
-                        sys.modules.pop(module_name, None)
+                if module_path is not None and (module_path.is_relative_to(root) or not _is_protected_runtime_module(module_path)):
+                    sys.modules.pop(module_name, None)
+                break
 
 
 def _is_protected_runtime_module(path: Path) -> bool:
