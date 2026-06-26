@@ -114,10 +114,17 @@ def _register_manifest_component(component: dict[str, Any], index: int) -> None:
     register = _KIND_TO_REGISTER.get(kind)
     if register is None:
         raise ValueError(f"components[{index}].kind is unsupported: {kind}")
+    declared_name = _require_str(component, "name", index)
     module_name = _require_str(component, "module", index)
     class_name = _require_str(component, "class", index)
     module = importlib.import_module(module_name)
     cls = getattr(module, class_name)
+    registry_name = getattr(cls, "name", cls.__name__)
+    if registry_name != declared_name:
+        raise ValueError(
+            f"components[{index}].name must match registered class name: "
+            f"declared={declared_name}, actual={registry_name}"
+        )
     register(cls)
 
 
@@ -125,7 +132,7 @@ def _clear_extension_module_cache(payload: dict[str, Any]) -> None:
     top_level_packages = {
         module.split(".", 1)[0]
         for component in _components(payload)
-        if isinstance((module := component.get("module")), str) and "." in module
+        if isinstance((module := component.get("module")), str) and module
     }
     if "oxq" in top_level_packages:
         raise ValueError("workspace component modules must not be declared under the oxq package")

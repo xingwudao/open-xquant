@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from pathlib import Path
@@ -200,7 +201,7 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
 
     artifact_hashes_path = run_dir / "artifact_hashes.json"
     artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
-    artifact_hashes["component_manifests.json"] = _hash_file(run_dir / "component_manifests.json")
+    artifact_hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
     if (run_dir / "component_manifest.json").exists():
         artifact_hashes["component_manifest.json"] = _hash_json_file(run_dir / "component_manifest.json")
     if (run_dir / "component_bundle_hash.txt").exists():
@@ -372,7 +373,12 @@ def run(
         raise click.ClickException(message)
     if pre_run_runtime_audit_path is not None:
         try:
-            _require_pre_backtest_runtime_audit(spec, pre_run_runtime_audit_path)
+            _require_pre_backtest_runtime_audit(
+                spec,
+                pre_run_runtime_audit_path,
+                spec_audit_path=pre_run_audit_path,
+                effective_data_dir=data_dir,
+            )
         except click.ClickException as e:
             if as_json:
                 click.echo(
@@ -500,9 +506,16 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, 
             raise click.ClickException(f"runtime audit status must be pass before attaching provenance: {runtime_status}")
         if runtime_payload.get("runtime_semantics_pass") is not True:
             raise click.ClickException("runtime audit runtime_semantics_pass must be true before attaching provenance")
+        _reject_blocking_runtime_audit_rows(runtime_payload)
         runtime_spec_hash = _require_json_str(runtime_payload, "spec_hash")
         if runtime_spec_hash != run_spec_hash:
             raise click.ClickException(f"runtime audit hash mismatch: audit={runtime_spec_hash}, run={run_spec_hash}")
+        _require_runtime_audit_hashes(
+            runtime_payload,
+            spec_hash=run_spec_hash,
+            spec_audit_path=Path(spec_audit),
+            compiled_plan_path=run_path / "compiled_plan.json",
+        )
 
     conversation_hash = _require_json_str(audit_payload, "conversation_hash")
     catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
@@ -518,6 +531,7 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, 
         raise click.ClickException(
             f"recipe catalog hash mismatch: stored={recipe_catalog_hash}, actual={computed_recipe_catalog_hash}"
         )
+    _require_run_component_bundles_in_catalog(run_path, catalog_payload)
 
     (run_path / "spec_audit.json").write_text(Path(spec_audit).read_text(encoding="utf-8"), encoding="utf-8")
     attached = [
@@ -594,6 +608,22 @@ def _reject_blocking_spec_audit_rows(audit_payload: object) -> None:
             raise click.ClickException(f"spec audit has blocking component audit row: component_audits[{index}]")
 
 
+def _reject_blocking_runtime_audit_rows(audit_payload: object) -> None:
+    if not isinstance(audit_payload, dict):
+        raise click.ClickException("runtime audit must be an object")
+    blocking_findings = audit_payload.get("blocking_findings")
+    if isinstance(blocking_findings, list) and blocking_findings:
+        raise click.ClickException("runtime audit has blocking findings")
+    if blocking_findings is not None and not isinstance(blocking_findings, list):
+        raise click.ClickException("blocking_findings must be a list")
+    field_statuses = {"missing", "mismatch"}
+    for index, item in enumerate(audit_payload.get("material_field_audits", [])):
+        if not isinstance(item, dict):
+            continue
+        if item.get("blocking") is True or item.get("status") in field_statuses:
+            raise click.ClickException(f"runtime audit has blocking material field row: material_field_audits[{index}]")
+
+
 def _require_pre_backtest_spec_audit(spec: StrategySpec, spec_audit_path: Path) -> None:
     """Deterministically gate a formal backtest on a pre-run spec audit."""
     from oxq.spec.audit_schema import validate_spec_audit_file
@@ -621,8 +651,15 @@ def _require_pre_backtest_spec_audit(spec: StrategySpec, spec_audit_path: Path) 
         raise click.ClickException(f"spec audit hash mismatch: audit={audit_spec_hash}, spec={spec_hash}")
 
 
-def _require_pre_backtest_runtime_audit(spec: StrategySpec, runtime_audit_path: Path) -> None:
+def _require_pre_backtest_runtime_audit(
+    spec: StrategySpec,
+    runtime_audit_path: Path,
+    *,
+    spec_audit_path: Path | None,
+    effective_data_dir: str | None,
+) -> None:
     """Deterministically gate a formal backtest on a pre-run runtime audit."""
+    from oxq.spec.compiler import compile_plan
     from oxq.spec.runtime_audit_schema import validate_runtime_audit_file
 
     audit_validation = validate_runtime_audit_file(runtime_audit_path)
@@ -635,22 +672,115 @@ def _require_pre_backtest_runtime_audit(spec: StrategySpec, runtime_audit_path: 
         raise click.ClickException(f"runtime audit status must be pass before backtest: {audit_status}")
     if audit_payload.get("runtime_semantics_pass") is not True:
         raise click.ClickException("runtime audit runtime_semantics_pass must be true before backtest")
-    blocking_findings = audit_payload.get("blocking_findings")
-    if isinstance(blocking_findings, list) and blocking_findings:
-        raise click.ClickException("runtime audit has blocking findings")
-    if blocking_findings is not None and not isinstance(blocking_findings, list):
-        raise click.ClickException("blocking_findings must be a list")
-    field_statuses = {"missing", "mismatch"}
-    for index, item in enumerate(audit_payload.get("material_field_audits", [])):
-        if not isinstance(item, dict):
-            continue
-        if item.get("blocking") is True or item.get("status") in field_statuses:
-            raise click.ClickException(f"runtime audit has blocking material field row: material_field_audits[{index}]")
+    _reject_blocking_runtime_audit_rows(audit_payload)
 
     audit_spec_hash = _require_json_str(audit_payload, "spec_hash")
     spec_hash = spec.compute_hash()
     if audit_spec_hash != spec_hash:
         raise click.ClickException(f"runtime audit hash mismatch: audit={audit_spec_hash}, spec={spec_hash}")
+    _require_runtime_audit_hashes(
+        audit_payload,
+        spec_hash=spec_hash,
+        spec_audit_path=spec_audit_path,
+        compiled_plan_payload=compile_plan(spec, effective_data_dir=effective_data_dir),
+    )
+
+
+def _require_runtime_audit_hashes(
+    audit_payload: dict[str, object],
+    *,
+    spec_hash: str,
+    spec_audit_path: Path | None = None,
+    compiled_plan_path: Path | None = None,
+    compiled_plan_payload: object | None = None,
+) -> None:
+    audit_spec_hash = _require_json_str(audit_payload, "spec_hash")
+    if audit_spec_hash != spec_hash:
+        raise click.ClickException(f"runtime audit hash mismatch: audit={audit_spec_hash}, spec={spec_hash}")
+    if spec_audit_path is not None:
+        from oxq.spec.compiler import _hash_json_file
+
+        expected_spec_audit_hash = _hash_json_file(spec_audit_path)
+        audit_spec_audit_hash = _require_json_str(audit_payload, "spec_audit_hash")
+        if audit_spec_audit_hash != expected_spec_audit_hash:
+            raise click.ClickException(
+                "runtime audit spec_audit_hash mismatch: "
+                f"audit={audit_spec_audit_hash}, expected={expected_spec_audit_hash}"
+            )
+    if compiled_plan_path is not None:
+        if not compiled_plan_path.exists():
+            raise click.ClickException(f"compiled_plan.json is required for runtime audit verification: {compiled_plan_path}")
+        from oxq.spec.compiler import _hash_json_file
+
+        expected_compiled_plan_hash = _hash_json_file(compiled_plan_path)
+    elif compiled_plan_payload is not None:
+        expected_compiled_plan_hash = _hash_json_payload(compiled_plan_payload)
+    else:
+        expected_compiled_plan_hash = ""
+    if expected_compiled_plan_hash:
+        audit_compiled_plan_hash = _require_json_str(audit_payload, "compiled_plan_hash")
+        if audit_compiled_plan_hash != expected_compiled_plan_hash:
+            raise click.ClickException(
+                "runtime audit compiled_plan_hash mismatch: "
+                f"audit={audit_compiled_plan_hash}, expected={expected_compiled_plan_hash}"
+            )
+
+
+def _hash_json_payload(payload: object) -> str:
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
+def _require_run_component_bundles_in_catalog(run_path: Path, catalog_payload: object) -> None:
+    run_hashes = _run_component_bundle_hashes(run_path)
+    catalog_hashes = _catalog_component_bundle_hashes(catalog_payload)
+    if not run_hashes and not catalog_hashes:
+        return
+    if run_hashes != catalog_hashes:
+        raise click.ClickException(
+            "component bundle hash mismatch between run artifacts and component catalog: "
+            f"run={sorted(run_hashes)}, catalog={sorted(catalog_hashes)}"
+        )
+
+
+def _run_component_bundle_hashes(run_path: Path) -> set[str]:
+    hashes: set[str] = set()
+    summary_path = run_path / "component_manifests.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        if not isinstance(summary, list):
+            raise click.ClickException("component_manifests.json must be a list")
+        for item in summary:
+            if isinstance(item, dict) and isinstance(item.get("bundle_hash"), str) and item["bundle_hash"]:
+                hashes.add(item["bundle_hash"])
+    manifest_path = run_path / "component_manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if isinstance(manifest, dict) and isinstance(manifest.get("bundle_hash"), str) and manifest["bundle_hash"]:
+            hashes.add(manifest["bundle_hash"])
+    bundle_hash_path = run_path / "component_bundle_hash.txt"
+    if bundle_hash_path.exists():
+        digest = bundle_hash_path.read_text(encoding="utf-8").strip()
+        if digest:
+            hashes.add(digest)
+    return hashes
+
+
+def _catalog_component_bundle_hashes(catalog_payload: object) -> set[str]:
+    if not isinstance(catalog_payload, dict):
+        raise click.ClickException("component catalog must be an object")
+    hashes: set[str] = set()
+    for section in ("indicators", "signals", "portfolios", "rules"):
+        entries = catalog_payload.get(section)
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            is_workspace_component = entry.get("source") == "workspace_extension"
+            if is_workspace_component and isinstance(entry.get("bundle_hash"), str) and entry["bundle_hash"]:
+                hashes.add(entry["bundle_hash"])
+    return hashes
 
 
 def _default_spec_audit_path(spec_path: Path) -> Path | None:

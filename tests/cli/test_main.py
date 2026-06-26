@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from decimal import Decimal
+from pathlib import Path
 
 import pandas as pd
 import yaml
@@ -13,7 +14,7 @@ from oxq.core.component_catalog import build_component_catalog, component_catalo
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
-from oxq.spec.compiler import _write_artifacts
+from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, _write_artifacts
 from oxq.spec.schema import StrategySpec
 
 
@@ -109,6 +110,49 @@ def test_component_manifest_loads_workspace_indicator_and_updates_catalog(tmp_pa
     assert custom["source"] == "workspace_extension"
     assert custom["bundle_hash"] == digest
     assert custom["manifest_path"] == str(manifest.resolve())
+
+
+def test_component_manifest_rejects_declared_name_mismatch(tmp_path) -> None:
+    manifest = _write_custom_indicator_extension(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["components"][0]["name"] = "DeclaredButNotRegistered"
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["component-manifest", "validate", str(manifest), "--json"])
+
+    assert result.exit_code == 1
+    assert "must match registered class name" in result.output
+
+
+def test_component_manifest_clears_single_module_cache() -> None:
+    import sys
+    import types
+
+    from oxq.core.component_manifest import _clear_extension_module_cache
+
+    sys.modules["workspace_indicator"] = types.ModuleType("workspace_indicator")
+
+    _clear_extension_module_cache(
+        {
+            "schema_version": 1,
+            "extension_id": "custom_components",
+            "components": [
+                {
+                    "name": "WorkspaceIndicator",
+                    "kind": "Indicator",
+                    "module": "workspace_indicator",
+                    "class": "WorkspaceIndicator",
+                }
+            ],
+        }
+    )
+
+    assert "workspace_indicator" not in sys.modules
 
 
 def test_spec_validate_loads_workspace_component_manifest(tmp_path) -> None:
@@ -703,6 +747,103 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
     assert last_digest["artifact_hashes"] == payload["artifact_hashes_digest"]
 
 
+def test_backtest_attach_provenance_rejects_blocking_runtime_audit(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(tmp_path, spec_hash, catalog["catalog_hash"])
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit, blocking=True)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "blocking material field row" in result.output
+
+
+def test_backtest_attach_provenance_rejects_stale_runtime_audit_hashes(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(tmp_path, spec_hash, catalog["catalog_hash"])
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    payload["compiled_plan_hash"] = "sha256:" + "0" * 16
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "compiled_plan_hash mismatch" in result.output
+
+
+def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    _attach_component_bundle_artifacts(run_dir, "sha256:" + "1" * 64)
+    catalog = build_component_catalog(
+        [
+            {
+                "_manifest_path": str(tmp_path / "component_manifest.json"),
+                "bundle_hash": "sha256:" + "2" * 64,
+                "components": [
+                    {
+                        "name": "WorkspaceCatalogOnly",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_catalog_only",
+                        "class": "WorkspaceCatalogOnly",
+                    }
+                ],
+            }
+        ]
+    )
+    component_catalog = tmp_path / "component_catalog.json"
+    component_catalog.write_text(component_catalog_json(catalog), encoding="utf-8")
+    spec_audit = _write_pass_spec_audit(tmp_path, spec_hash, catalog["catalog_hash"])
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "component bundle hash mismatch" in result.output
+
+
 def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
@@ -993,6 +1134,92 @@ def _write_minimal_cli_run(tmp_path):
     run_dir.mkdir(parents=True)
     _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
     return run_dir
+
+
+def _write_pass_spec_audit(tmp_path: Path, spec_hash: str, catalog_hash: str) -> Path:
+    audit = {
+        "schema_version": 3,
+        "status": "pass",
+        "spec_provenance_pass": True,
+        "spec_hash": spec_hash,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": catalog_hash,
+        "recipe_matches": [],
+        "field_audits": [
+            {
+                "field_path": "portfolio.type",
+                "spec_value": "EqualWeight",
+                "status": "confirmed",
+                "evidence": [],
+            }
+        ],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+    return path
+
+
+def _write_pass_runtime_audit(run_dir: Path, spec_audit: Path, *, blocking: bool = False) -> Path:
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    path = spec_audit.with_name("runtime_audit.json")
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "pass",
+                "runtime_semantics_pass": True,
+                "spec_hash": spec_hash,
+                "spec_audit_hash": _hash_json_file(spec_audit),
+                "compiled_plan_hash": _hash_json_file(run_dir / "compiled_plan.json"),
+                "compiled_plan_path": str(run_dir / "compiled_plan.json"),
+                "material_field_audits": [
+                    {
+                        "field_path": "portfolio.rules.rebalance",
+                        "spec_value": {"type": "RebalanceFrequencyRule"},
+                        "runtime_path": "execution.rebalance",
+                        "runtime_value": {},
+                        "status": "mismatch" if blocking else "preserved",
+                        "evidence": ["test fixture"],
+                        "blocking": blocking,
+                    }
+                ],
+                "blocking_findings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _attach_component_bundle_artifacts(run_dir: Path, bundle_hash: str) -> None:
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": "component_manifest.json",
+                    "extension_id": "custom_components",
+                    "bundle_hash": bundle_hash,
+                    "components": [],
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "component_bundle_hash.txt").write_text(bundle_hash + "\n", encoding="utf-8")
+    artifact_hashes_path = run_dir / "artifact_hashes.json"
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    artifact_hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    artifact_hashes["component_bundle_hash.txt"] = _hash_file(run_dir / "component_bundle_hash.txt")
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
+    _append_run_digest(run_dir, _hash_json_file(artifact_hashes_path))
 
 
 def _write_component_catalog(tmp_path):

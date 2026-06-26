@@ -138,6 +138,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         "component_catalog_hash.txt": "component_catalog_hash_file_hash",
         "recipe_catalog_hash.txt": "recipe_catalog_hash_file_hash",
     }
+    optional_provenance_artifact_hashes = {
+        "runtime_audit.json": "runtime_audit_hash",
+        "component_manifest.json": "component_manifest_hash",
+        "component_manifests.json": "component_manifests_hash",
+        "component_bundle_hash.txt": "component_bundle_hash_file_hash",
+    }
     artifact_schema_version = 0
     try:
         expected_hashes = json.loads((run_path / "artifact_hashes.json").read_text(encoding="utf-8"))
@@ -199,6 +205,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                         **required_hashes,
                         **provenance_artifact_hashes,
                     }
+                for artifact_name, check_id in optional_provenance_artifact_hashes.items():
+                    if artifact_name in expected_hashes or (run_path / artifact_name).exists():
+                        required_hashes = {
+                            **required_hashes,
+                            artifact_name: check_id,
+                        }
                 if artifact_schema_version < 4 and "compiled_plan.json" in expected_hashes:
                     required_hashes = {
                         **required_hashes,
@@ -297,7 +309,15 @@ def _hash_artifact(path: Path) -> str:
         return _hash_json_file(path, exclude_keys={"run_id"})
     if path.name == "environment.json":
         return _hash_json_file(path, exclude_keys={"run_timestamp"})
-    if path.name in {"data_manifest.json", "execution_assumptions.json", "compiled_plan.json", "spec_audit.json"}:
+    if path.name in {
+        "data_manifest.json",
+        "execution_assumptions.json",
+        "compiled_plan.json",
+        "spec_audit.json",
+        "runtime_audit.json",
+        "component_manifest.json",
+        "component_manifests.json",
+    }:
         return _hash_json_file(path)
     content = path.read_bytes()
     return f"sha256:{hashlib.sha256(content).hexdigest()[:16]}"

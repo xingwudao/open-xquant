@@ -7,6 +7,7 @@ import yaml
 from click.testing import CliRunner
 
 from oxq.cli.main import main
+from oxq.spec.compiler import _hash_json_file, compile_plan
 from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 
 
@@ -75,7 +76,22 @@ def _write_spec_audit(path: Path, spec_hash: str) -> None:
     )
 
 
-def _write_runtime_audit(path: Path, spec_hash: str, *, runtime_semantics_pass: bool = True) -> None:
+def _write_runtime_audit(
+    path: Path,
+    spec_hash: str,
+    *,
+    runtime_semantics_pass: bool = True,
+    spec_path: Path | None = None,
+    spec_audit_path: Path | None = None,
+    effective_data_dir: str | None = None,
+) -> None:
+    spec_audit_hash = "sha256:" + "4" * 16
+    compiled_plan_hash = "sha256:" + "5" * 16
+    if spec_audit_path is not None:
+        spec_audit_hash = _hash_json_file(spec_audit_path)
+    if spec_path is not None:
+        spec = StrategySpec.from_yaml(spec_path)
+        compiled_plan_hash = _canonical_json_hash(compile_plan(spec, effective_data_dir=effective_data_dir))
     path.write_text(
         json.dumps(
             {
@@ -83,8 +99,8 @@ def _write_runtime_audit(path: Path, spec_hash: str, *, runtime_semantics_pass: 
                 "status": "pass",
                 "runtime_semantics_pass": runtime_semantics_pass,
                 "spec_hash": spec_hash,
-                "spec_audit_hash": "sha256:" + "4" * 16,
-                "compiled_plan_hash": "sha256:" + "5" * 16,
+                "spec_audit_hash": spec_audit_hash,
+                "compiled_plan_hash": compiled_plan_hash,
                 "compiled_plan_path": "compile_preview/compiled_plan.json",
                 "material_field_audits": [],
                 "blocking_findings": [],
@@ -93,6 +109,11 @@ def _write_runtime_audit(path: Path, spec_hash: str, *, runtime_semantics_pass: 
         ),
         encoding="utf-8",
     )
+
+
+def _canonical_json_hash(payload: object) -> str:
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
 
 def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
@@ -392,7 +413,13 @@ def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
     audit_path = tmp_path / "spec_audit.json"
     runtime_audit_path = tmp_path / "runtime_audit.json"
     _write_spec_audit(audit_path, spec_hash)
-    _write_runtime_audit(runtime_audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
     runner = CliRunner()
 
     result = runner.invoke(
@@ -415,6 +442,39 @@ def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["status"] == "pass"
+
+
+def test_backtest_run_json_rejects_stale_runtime_audit_hashes(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(runtime_audit_path, spec_hash)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["errors"][0]["check"] == "runtime_audit_failed"
+    assert "spec_audit_hash mismatch" in payload["errors"][0]["message"]
 
 
 def test_backtest_run_json_uses_artifact_metrics_for_oos_window(tmp_path) -> None:

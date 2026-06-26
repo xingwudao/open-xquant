@@ -371,6 +371,56 @@ def test_reproducibility_audit_checks_target_weights_when_schema_2_manifest(tmp_
     assert any(check["id"] == "target_weights_hash" for check in audit["checks"])
 
 
+def test_reproducibility_audit_hashes_provenance_json_canonically(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    (run_dir / "runtime_audit.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "pass",
+                "runtime_semantics_pass": True,
+                "spec_hash": (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip(),
+                "spec_audit_hash": "sha256:" + "1" * 16,
+                "compiled_plan_hash": _hash_json_file(run_dir / "compiled_plan.json"),
+                "compiled_plan_path": "compiled_plan.json",
+                "material_field_audits": [],
+                "blocking_findings": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": "component_manifest.json",
+                    "extension_id": "custom_components",
+                    "bundle_hash": "sha256:" + "2" * 16,
+                    "components": [],
+                }
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["runtime_audit.json"] = _hash_json_file(run_dir / "runtime_audit.json")
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+    runtime_payload = json.loads((run_dir / "runtime_audit.json").read_text(encoding="utf-8"))
+    component_payload = json.loads((run_dir / "component_manifests.json").read_text(encoding="utf-8"))
+    (run_dir / "runtime_audit.json").write_text(json.dumps(runtime_payload, sort_keys=True), encoding="utf-8")
+    (run_dir / "component_manifests.json").write_text(json.dumps(component_payload, sort_keys=True), encoding="utf-8")
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
+    assert any(check["id"] == "runtime_audit_hash" and check["status"] == "pass" for check in audit["checks"])
+    assert any(check["id"] == "component_manifests_hash" and check["status"] == "pass" for check in audit["checks"])
+
+
 def _write_minimal_run(tmp_path):
     spec = StrategySpec.template(strategy_id="audit_execution_assumptions", hypothesis="audit execution assumptions")
     spec.validation.train_period = []
