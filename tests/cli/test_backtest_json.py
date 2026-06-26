@@ -1,5 +1,6 @@
 import hashlib
 import json
+import shutil
 from pathlib import Path
 
 import pandas as pd
@@ -169,6 +170,8 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
 
 
 def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     manifest = _write_component_manifest(tmp_path)
     digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
@@ -201,10 +204,15 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     assert result_payload["artifacts"]["component_manifests_json"].endswith("component_manifests.json")
     assert result_payload["artifacts"]["component_bundle_hash_txt"].endswith("component_bundle_hash.txt")
     assert (run_dir / "component_bundle_hash.txt").read_text(encoding="utf-8").strip() == digest
+    assert (run_dir / "custom_components" / "oxq_components" / "indicators" / "workspace_backtest_indicator.py").exists()
     hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
     assert "component_manifest.json" in hashes
     assert "component_manifests.json" in hashes
     assert "component_bundle_hash.txt" in hashes
+    manifest.unlink()
+    shutil.rmtree(tmp_path / "custom_components")
+    loaded = load_component_manifests_from_run(run_dir)
+    assert loaded[0]["bundle_hash"] == digest
 
 
 def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_path) -> None:

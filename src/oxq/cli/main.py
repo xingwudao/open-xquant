@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import shutil
 from pathlib import Path
 
 import click
@@ -170,6 +171,9 @@ def _load_component_manifests(manifest_paths: tuple[str, ...]) -> list[dict]:
 def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]) -> None:
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
 
+    for manifest in manifests:
+        _archive_component_extension(run_dir, manifest)
+
     summary = [
         {
             "manifest_path": manifest.get("_manifest_path", ""),
@@ -213,6 +217,28 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
         artifact_hashes["component_bundle_hash.txt"] = _hash_file(run_dir / "component_bundle_hash.txt")
     artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     _append_run_digest(run_dir, _hash_json_file(artifact_hashes_path))
+
+
+def _archive_component_extension(run_dir: Path, manifest: dict) -> None:
+    manifest_path_raw = manifest.get("_manifest_path")
+    if not isinstance(manifest_path_raw, str) or not manifest_path_raw:
+        return
+    raw_root = manifest.get("extension_root") or manifest.get("extension_id")
+    if not isinstance(raw_root, str) or not raw_root:
+        return
+    manifest_path = Path(manifest_path_raw).resolve()
+    source_root = (manifest_path.parent / raw_root).resolve()
+    if not source_root.is_dir() or not source_root.is_relative_to(manifest_path.parent):
+        return
+    archived_root = (run_dir / raw_root).resolve()
+    if not archived_root.is_relative_to(run_dir.resolve()) or archived_root == source_root:
+        return
+    shutil.copytree(
+        source_root,
+        archived_root,
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
+    )
 
 
 @main.group()

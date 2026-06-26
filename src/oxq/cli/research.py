@@ -7,8 +7,11 @@ from pathlib import Path
 
 import click
 
-from oxq.cli.agent_manifest import read_yaml_file, upsert_marker_block, write_text_file, write_yaml_file
+from oxq.cli.agent_manifest import read_yaml_file, remove_marker_block, upsert_marker_block, write_text_file, write_yaml_file
 from oxq.cli.sdk_bundle import install_workspace_sdk
+
+AGENT_PROFILE_MULTI = "multi-agent"
+AGENT_PROFILE_STANDALONE = "standalone-agent"
 
 WORKSPACE_BLOCK = """This is an open-xquant research workspace.
 
@@ -104,7 +107,10 @@ def initialize_workspace(
     if not minimal and comparison_registry is not None and not comparison_registry.exists():
         write_text_file(comparison_registry, "")
     upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
-    upsert_marker_block(cwd / "AGENTS.md", "open-xquant-subagents", SUBAGENT_POLICY_BLOCK)
+    if _installed_agent_profile() == AGENT_PROFILE_STANDALONE:
+        remove_marker_block(cwd / "AGENTS.md", "open-xquant-subagents")
+    else:
+        upsert_marker_block(cwd / "AGENTS.md", "open-xquant-subagents", SUBAGENT_POLICY_BLOCK)
 
 
 def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state: dict[str, object] | None = None) -> dict[str, object]:
@@ -161,3 +167,13 @@ def _resolve_sdk_venv(cwd: Path, raw_path: str) -> Path:
     if expanded.is_absolute():
         return expanded.resolve()
     return (cwd / expanded).resolve()
+
+
+def _installed_agent_profile() -> str:
+    config_path = Path.home() / ".config" / "open-xquant" / "agent.yaml"
+    if not config_path.exists():
+        return AGENT_PROFILE_MULTI
+    value = read_yaml_file(config_path).get("agent_profile")
+    if value == AGENT_PROFILE_STANDALONE:
+        return AGENT_PROFILE_STANDALONE
+    return AGENT_PROFILE_MULTI

@@ -34,7 +34,11 @@ def audit_research(run_dir: str | Path) -> dict:
     run_path = Path(run_dir)
     checks: list[dict] = []
     try:
-        from oxq.core.component_manifest import validate_component_manifest_records_from_run
+        from oxq.core.component_manifest import (
+            load_component_manifests_from_run,
+            scoped_component_registries,
+            validate_component_manifest_records_from_run,
+        )
 
         for warning in validate_component_manifest_records_from_run(run_path):
             checks.append(_finding(
@@ -56,40 +60,51 @@ def audit_research(run_dir: str | Path) -> dict:
             "warning_count": 0,
         }
 
-    # Load spec
-    spec_path = run_path / "strategy_spec.yaml"
-    if not spec_path.exists():
-        return {
-            "status": "fail",
-            "checks": [{"id": "spec_missing", "status": "fail", "severity": "fatal", "message": "strategy_spec.yaml not found"}],
-            "fatal_count": 1,
-            "warning_count": 0,
-        }
+    with scoped_component_registries():
+        try:
+            load_component_manifests_from_run(run_path)
+        except Exception as exc:
+            checks.append(_finding(
+                "component_manifest_load",
+                "fail",
+                "warning",
+                f"run component manifests could not be loaded for spec validation: {exc}",
+            ))
 
-    try:
-        spec = StrategySpec.from_yaml(str(spec_path))
-    except Exception as exc:
-        return {
-            "status": "fail",
-            "checks": [{
-                "id": "spec_parse_error",
+        # Load spec
+        spec_path = run_path / "strategy_spec.yaml"
+        if not spec_path.exists():
+            return {
                 "status": "fail",
-                "severity": "fatal",
-                "message": f"strategy_spec.yaml could not be parsed: {exc}",
-            }],
-            "fatal_count": 1,
-            "warning_count": 0,
-        }
-    from oxq.spec.validator import validate
+                "checks": [{"id": "spec_missing", "status": "fail", "severity": "fatal", "message": "strategy_spec.yaml not found"}],
+                "fatal_count": 1,
+                "warning_count": 0,
+            }
 
-    validation = validate(spec)
-    for error in validation.errors:
-        checks.append(_finding(
-            "spec_validation",
-            "fail",
-            "fatal" if error.get("severity") == "fatal" else "warning",
-            f"{error.get('check')}: {error.get('message')}",
-        ))
+        try:
+            spec = StrategySpec.from_yaml(str(spec_path))
+        except Exception as exc:
+            return {
+                "status": "fail",
+                "checks": [{
+                    "id": "spec_parse_error",
+                    "status": "fail",
+                    "severity": "fatal",
+                    "message": f"strategy_spec.yaml could not be parsed: {exc}",
+                }],
+                "fatal_count": 1,
+                "warning_count": 0,
+            }
+        from oxq.spec.validator import validate
+
+        validation = validate(spec)
+        for error in validation.errors:
+            checks.append(_finding(
+                "spec_validation",
+                "fail",
+                "fatal" if error.get("severity") == "fatal" else "warning",
+                f"{error.get('check')}: {error.get('message')}",
+            ))
 
     # Load metrics if available
     metrics = {}

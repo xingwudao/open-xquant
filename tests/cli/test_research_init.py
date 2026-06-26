@@ -10,7 +10,8 @@ from oxq.cli.main import main
 from oxq.cli.sdk_bundle import install_workspace_sdk
 
 
-def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> None:
+def test_research_init_creates_workspace_and_preserves_agents_md(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
         cwd_path = tmp_path / cwd
@@ -41,6 +42,29 @@ def test_research_init_creates_workspace_and_preserves_agents_md(tmp_path) -> No
         assert again.exit_code == 0, again.output
         assert (cwd_path / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant-workspace:begin") == 1
         assert (cwd_path / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant-subagents:begin") == 1
+
+
+def test_research_init_skips_subagent_policy_for_standalone_profile(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    config_dir = home / ".config" / "open-xquant"
+    config_dir.mkdir(parents=True)
+    (config_dir / "agent.yaml").write_text("agent_profile: standalone-agent\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / "AGENTS.md").write_text(
+            "<!-- open-xquant-subagents:begin -->\nold\n<!-- open-xquant-subagents:end -->\n",
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 0, result.output
+        agents_text = (cwd_path / "AGENTS.md").read_text(encoding="utf-8")
+        assert "open-xquant-workspace:begin" in agents_text
+        assert "open-xquant-subagents:begin" not in agents_text
+        assert "For open-xquant workflows, prefer SubAgents by default" not in agents_text
 
 
 def test_research_init_workspace_paths_match_run_centric_layout(tmp_path) -> None:

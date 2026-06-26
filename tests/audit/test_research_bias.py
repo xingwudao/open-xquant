@@ -6,7 +6,7 @@ import yaml
 
 from oxq.audit.research_bias import audit_research
 from oxq.core.component_manifest import compute_component_bundle_hash
-from oxq.spec.schema import SignalRuleDef, StrategySpec
+from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 
 
 def test_research_audit_fails_when_metrics_json_is_missing(tmp_path) -> None:
@@ -87,6 +87,80 @@ def test_research_audit_accepts_archived_single_component_manifest(tmp_path) -> 
 
     assert result["fatal_count"] == 0
     assert not any(check["id"] == "component_manifest_record" for check in result["checks"])
+
+
+def test_research_audit_loads_archived_component_manifest_before_spec_validation(tmp_path) -> None:
+    root = tmp_path / "custom_components"
+    source_dir = root / "oxq_components" / "indicators"
+    source_dir.mkdir(parents=True)
+    (root / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
+    (source_dir / "__init__.py").write_text("", encoding="utf-8")
+    source = source_dir / "audit_workspace_indicator.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class AuditWorkspaceIndicator:",
+                "    name = 'AuditWorkspaceIndicator'",
+                "    def compute(self, mktdata: pd.DataFrame, value: float = 1.0) -> pd.Series:",
+                "        return pd.Series(float(value), index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    archived_manifest = tmp_path / "component_manifest.json"
+    archived_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "AuditWorkspaceIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "oxq_components.indicators.audit_workspace_indicator",
+                        "class": "AuditWorkspaceIndicator",
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    payload = json.loads(archived_manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = compute_component_bundle_hash(archived_manifest)
+    archived_manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    spec = StrategySpec.template(strategy_id="custom_component_spec_validation", hypothesis="custom component validates")
+    spec.signal.indicators = {
+        "custom": IndicatorDef(type="AuditWorkspaceIndicator", params={})
+    }
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({"trade_count": 12, "max_drawdown": -0.1}),
+        encoding="utf-8",
+    )
+    (tmp_path / "component_manifests.json").write_text(
+        json.dumps([{"manifest_path": "/deleted/component_manifest.json", "bundle_hash": payload["bundle_hash"]}]),
+        encoding="utf-8",
+    )
+
+    result = audit_research(tmp_path)
+
+    assert not any(
+        check["id"] == "component_manifest_load" or (
+            check["id"] == "spec_validation" and "Unknown indicator" in check["message"]
+        )
+        for check in result["checks"]
+    )
 
 
 def test_research_audit_returns_fatal_when_spec_cannot_parse(tmp_path) -> None:
