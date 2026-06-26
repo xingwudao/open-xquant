@@ -6,11 +6,16 @@ import hashlib
 import importlib
 import json
 import sys
+from collections.abc import Callable
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
 from oxq.core.registry import (
+    _INDICATOR_REGISTRY,
+    _PORTFOLIO_OPTIMIZER_REGISTRY,
+    _RULE_REGISTRY,
+    _SIGNAL_REGISTRY,
     register_indicator,
     register_portfolio_optimizer,
     register_rule,
@@ -24,6 +29,36 @@ _KIND_TO_REGISTER = {
     "Rule": register_rule,
     "PortfolioOptimizer": register_portfolio_optimizer,
 }
+_COMPONENT_REGISTRIES = (
+    _INDICATOR_REGISTRY,
+    _SIGNAL_REGISTRY,
+    _PORTFOLIO_OPTIMIZER_REGISTRY,
+    _RULE_REGISTRY,
+)
+
+
+def snapshot_component_registries() -> Callable[[], None]:
+    """Capture component registries and return a restore callback."""
+
+    snapshots = [dict(registry) for registry in _COMPONENT_REGISTRIES]
+
+    def restore() -> None:
+        for registry, snapshot in zip(_COMPONENT_REGISTRIES, snapshots, strict=True):
+            registry.clear()
+            registry.update(snapshot)
+
+    return restore
+
+
+@contextmanager
+def scoped_component_registries():
+    """Temporarily allow workspace component registration inside a scope."""
+
+    restore = snapshot_component_registries()
+    try:
+        yield
+    finally:
+        restore()
 
 
 def load_component_manifest(path: str | Path, *, verify_hash: bool = True) -> dict[str, Any]:

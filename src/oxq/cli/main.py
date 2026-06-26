@@ -152,7 +152,12 @@ def _load_component_manifests(manifest_paths: tuple[str, ...]) -> list[dict]:
     """Load workspace component manifests and annotate them for catalog export."""
     if not manifest_paths:
         return []
-    from oxq.core.component_manifest import load_component_manifest
+    from oxq.core.component_manifest import load_component_manifest, snapshot_component_registries
+
+    restore_registries = snapshot_component_registries()
+    ctx = click.get_current_context(silent=True)
+    if ctx is not None:
+        ctx.call_on_close(restore_registries)
 
     manifests: list[dict] = []
     for raw_path in manifest_paths:
@@ -961,11 +966,12 @@ def component_manifest_hash(manifest_file: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
 def component_manifest_validate(manifest_file: str, as_json: bool):
     """Validate a component extension manifest hash and importability."""
-    from oxq.core.component_manifest import component_manifest_summary, load_component_manifest
+    from oxq.core.component_manifest import component_manifest_summary, load_component_manifest, scoped_component_registries
 
     try:
-        load_component_manifest(manifest_file, verify_hash=True)
-        result = component_manifest_summary(manifest_file)
+        with scoped_component_registries():
+            load_component_manifest(manifest_file, verify_hash=True)
+            result = component_manifest_summary(manifest_file)
         result["importable"] = True
     except Exception as exc:
         result = {

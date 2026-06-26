@@ -112,6 +112,34 @@ def test_component_manifest_loads_workspace_indicator_and_updates_catalog(tmp_pa
     assert custom["manifest_path"] == str(manifest.resolve())
 
 
+def test_component_manifest_validate_does_not_persist_workspace_component(tmp_path) -> None:
+    manifest = _write_custom_indicator_extension(tmp_path)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    spec = StrategySpec.template(strategy_id="custom_indicator_scope", hypothesis="custom indicators are scoped")
+    spec.signal.indicators = {
+        "custom_score": {
+            "type": "WorkspaceConstantIndicator",
+            "params": {"value": 2.0},
+        }
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "custom_score", "n": 1}
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+
+    validate_manifest = CliRunner().invoke(main, ["component-manifest", "validate", str(manifest), "--json"])
+    without_manifest = CliRunner().invoke(main, ["spec", "validate", str(spec_path), "--json"])
+
+    assert validate_manifest.exit_code == 0, validate_manifest.output
+    assert without_manifest.exit_code == 1
+    assert "WorkspaceConstantIndicator" in without_manifest.output
+
+
 def test_component_manifest_rejects_declared_name_mismatch(tmp_path) -> None:
     manifest = _write_custom_indicator_extension(tmp_path)
     payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -230,10 +258,13 @@ def test_spec_validate_loads_workspace_component_manifest(tmp_path) -> None:
         main,
         ["spec", "validate", str(spec_path), "--component-manifest", str(manifest), "--json"],
     )
+    missing_after_loaded = CliRunner().invoke(main, ["spec", "validate", str(spec_path), "--json"])
 
     assert missing.exit_code == 1
     assert loaded.exit_code == 0, loaded.output
     assert json.loads(loaded.output)["status"] == "pass"
+    assert missing_after_loaded.exit_code == 1
+    assert "WorkspaceConstantIndicator" in missing_after_loaded.output
 
 
 def test_spec_hash_and_fields_are_deterministic(tmp_path) -> None:
