@@ -363,6 +363,14 @@ def run(
     pre_run_runtime_audit_path = (
         Path(runtime_audit) if runtime_audit is not None else _default_runtime_audit_path(spec_path)
     )
+    if pre_run_runtime_audit_path is not None and pre_run_audit_path is None:
+        message = "spec_audit.json is required when a runtime audit gates a formal backtest"
+        if as_json:
+            click.echo(
+                json.dumps(_backtest_json_failure("spec_audit_missing", message, warnings=validation.warnings), indent=2)
+            )
+            raise SystemExit(1)
+        raise click.ClickException(message)
     if pre_run_audit_path is not None and pre_run_runtime_audit_path is None:
         message = "runtime_audit.json is required when a spec audit gates a formal backtest"
         if as_json:
@@ -377,7 +385,7 @@ def run(
                 spec,
                 pre_run_runtime_audit_path,
                 spec_audit_path=pre_run_audit_path,
-                effective_data_dir=data_dir,
+                effective_data_dir=_resolve_effective_data_dir(spec, data_dir),
             )
         except click.ClickException as e:
             if as_json:
@@ -731,15 +739,23 @@ def _hash_json_payload(payload: object) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
 
+def _resolve_effective_data_dir(spec: StrategySpec, data_dir: str | None) -> str:
+    from oxq.data.loaders import resolve_data_dir
+
+    raw_data_dir = data_dir or (spec.data.data_dir or None)
+    return str(resolve_data_dir(Path(raw_data_dir) if raw_data_dir else None).resolve())
+
+
 def _require_run_component_bundles_in_catalog(run_path: Path, catalog_payload: object) -> None:
     run_hashes = _run_component_bundle_hashes(run_path)
     catalog_hashes = _catalog_component_bundle_hashes(catalog_payload)
-    if not run_hashes and not catalog_hashes:
+    if not run_hashes:
         return
-    if run_hashes != catalog_hashes:
+    missing = run_hashes.difference(catalog_hashes)
+    if missing:
         raise click.ClickException(
             "component bundle hash mismatch between run artifacts and component catalog: "
-            f"run={sorted(run_hashes)}, catalog={sorted(catalog_hashes)}"
+            f"missing={sorted(missing)}, run={sorted(run_hashes)}, catalog={sorted(catalog_hashes)}"
         )
 
 

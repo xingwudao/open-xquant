@@ -43,11 +43,11 @@ def load_component_manifest(path: str | Path, *, verify_hash: bool = True) -> di
     root = _extension_root(manifest_path, payload)
     if verify_hash:
         _validate_declared_file_hashes(payload, root, manifest_path.parent)
-    _clear_extension_module_cache(payload)
+    _clear_extension_module_cache(payload, root)
     importlib.invalidate_caches()
     with _prepend_sys_path(root):
         for index, component in enumerate(_components(payload)):
-            _register_manifest_component(component, index)
+            _register_manifest_component(component, index, root)
     return payload
 
 
@@ -109,7 +109,7 @@ def component_manifest_summary(path: str | Path) -> dict[str, Any]:
     }
 
 
-def _register_manifest_component(component: dict[str, Any], index: int) -> None:
+def _register_manifest_component(component: dict[str, Any], index: int, root: Path) -> None:
     kind = component.get("kind")
     register = _KIND_TO_REGISTER.get(kind)
     if register is None:
@@ -118,6 +118,9 @@ def _register_manifest_component(component: dict[str, Any], index: int) -> None:
     module_name = _require_str(component, "module", index)
     class_name = _require_str(component, "class", index)
     module = importlib.import_module(module_name)
+    module_file = getattr(module, "__file__", None)
+    if not isinstance(module_file, str) or not Path(module_file).resolve().is_relative_to(root):
+        raise ValueError(f"components[{index}].module must resolve inside the component extension root")
     cls = getattr(module, class_name)
     registry_name = getattr(cls, "name", cls.__name__)
     if registry_name != declared_name:
@@ -128,7 +131,7 @@ def _register_manifest_component(component: dict[str, Any], index: int) -> None:
     register(cls)
 
 
-def _clear_extension_module_cache(payload: dict[str, Any]) -> None:
+def _clear_extension_module_cache(payload: dict[str, Any], root: Path) -> None:
     top_level_packages = {
         module.split(".", 1)[0]
         for component in _components(payload)
@@ -139,7 +142,17 @@ def _clear_extension_module_cache(payload: dict[str, Any]) -> None:
     for package in top_level_packages:
         for module_name in list(sys.modules):
             if module_name == package or module_name.startswith(package + "."):
-                sys.modules.pop(module_name, None)
+                module = sys.modules.get(module_name)
+                module_file = getattr(module, "__file__", None)
+                if isinstance(module_file, str):
+                    module_path = Path(module_file).resolve()
+                    if module_path.is_relative_to(root) or not _is_protected_runtime_module(module_path):
+                        sys.modules.pop(module_name, None)
+
+
+def _is_protected_runtime_module(path: Path) -> bool:
+    protected_roots = {Path(sys.prefix).resolve(), Path(sys.base_prefix).resolve()}
+    return any(path.is_relative_to(root) for root in protected_roots)
 
 
 def _validate_declared_file_hashes(payload: dict[str, Any], root: Path, workspace_root: Path) -> None:

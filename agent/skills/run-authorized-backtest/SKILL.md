@@ -23,6 +23,7 @@ directory, monitor robustness, or write/review reports.
 - `spec_audit.json`
 - `runtime_audit.json`
 - `component_catalog.json` when provenance attachment is required
+- `component_manifest.json` or manifest paths when workspace-local custom components are used
 - Approved local market data directory or data manifest
 
 ## Authorization Gate
@@ -37,6 +38,7 @@ at least:
   "spec_audit": "spec_audit.json",
   "runtime_audit": "runtime_audit.json",
   "component_catalog": "component_catalog.json",
+  "component_manifests": ["component_manifest.json"],
   "data_dir": "data",
   "run_out": "runs/auto",
   "spec_hash": "sha256:<hash>",
@@ -57,10 +59,15 @@ Run the formal backtest with both pre-run gates:
 uv run oxq backtest run strategy_spec.yaml \
   --spec-audit spec_audit.json \
   --runtime-audit runtime_audit.json \
+  --component-manifest component_manifest.json \
   --data-dir data \
   --out runs/auto \
   --json
 ```
+
+Omit `--component-manifest` only when the authorization explicitly contains no
+workspace-local custom component manifests. Pass one `--component-manifest`
+option for each authorized manifest path.
 
 After a successful run, attach provenance when `component_catalog.json` is
 available:

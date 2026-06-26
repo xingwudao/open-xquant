@@ -379,6 +379,35 @@ def test_backtest_run_json_rejects_missing_runtime_audit_for_formal_spec_audit(t
     assert "runtime_audit.json is required" in payload["errors"][0]["message"]
 
 
+def test_backtest_run_json_rejects_runtime_audit_without_spec_audit(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_runtime_audit(runtime_audit_path, spec_hash)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["errors"][0]["check"] == "spec_audit_missing"
+    assert "spec_audit.json is required" in payload["errors"][0]["message"]
+
+
 def test_backtest_run_json_auto_rejects_sibling_failed_runtime_audit(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
@@ -442,6 +471,45 @@ def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["status"] == "pass"
+
+
+def test_backtest_run_json_hashes_runtime_audit_with_resolved_data_dir(monkeypatch, tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir.resolve()),
+    )
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            "strategy_spec.yaml",
+            "--spec-audit",
+            "spec_audit.json",
+            "--runtime-audit",
+            "runtime_audit.json",
+            "--data-dir",
+            "data",
+            "--out",
+            "runs",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(json.loads(result.output)["run_dir"])
+    compiled_plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    assert compiled_plan["data"]["data_dir"] == str(data_dir.resolve())
 
 
 def test_backtest_run_json_rejects_stale_runtime_audit_hashes(tmp_path) -> None:

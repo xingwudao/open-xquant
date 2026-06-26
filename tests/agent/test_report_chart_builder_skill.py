@@ -399,10 +399,19 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "backtest_authorization.json" in text
     assert "--spec-audit spec_audit.json" in text
     assert "--runtime-audit runtime_audit.json" in text
+    assert "--component-manifest component_manifest.json" in text
+    assert "Omit `--component-manifest` only when" in text
     assert "runner_result.json" in text
     assert "Do not edit `strategy_spec.yaml`" in text
     assert "Do not edit `spec_audit.json`" in text
     assert "Do not edit `runtime_audit.json`" in text
+
+
+def test_pyproject_packages_agent_roles() -> None:
+    text = Path("pyproject.toml").read_text(encoding="utf-8")
+
+    assert '"agent/skills" = "agent/skills"' in text
+    assert '"agent/roles" = "agent/roles"' in text
 
 
 def test_report_writer_and_reviewer_require_spec_audit_disclosure() -> None:

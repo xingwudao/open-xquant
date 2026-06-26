@@ -129,13 +129,62 @@ def test_component_manifest_rejects_declared_name_mismatch(tmp_path) -> None:
     assert "must match registered class name" in result.output
 
 
-def test_component_manifest_clears_single_module_cache() -> None:
+def test_component_manifest_rejects_module_outside_extension_root(tmp_path) -> None:
+    import sys
+
+    root = tmp_path / "custom_components"
+    root.mkdir()
+    manifest = tmp_path / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "JSONDecoder",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "json",
+                        "class": "JSONDecoder",
+                        "protocol": "Indicator",
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["component-manifest", "validate", str(manifest), "--json"])
+
+    assert result.exit_code == 1
+    assert "must resolve inside the component extension root" in result.output
+    assert sys.modules["json"] is json
+
+
+def test_component_manifest_clears_single_module_cache(tmp_path) -> None:
     import sys
     import types
 
     from oxq.core.component_manifest import _clear_extension_module_cache
 
-    sys.modules["workspace_indicator"] = types.ModuleType("workspace_indicator")
+    root = tmp_path / "custom_components"
+    root.mkdir()
+    module_file = root / "workspace_indicator.py"
+    module_file.write_text("", encoding="utf-8")
+    module = types.ModuleType("workspace_indicator")
+    module.__file__ = str(module_file)
+    sys.modules["workspace_indicator"] = module
 
     _clear_extension_module_cache(
         {
@@ -149,7 +198,8 @@ def test_component_manifest_clears_single_module_cache() -> None:
                     "class": "WorkspaceIndicator",
                 }
             ],
-        }
+        },
+        root,
     )
 
     assert "workspace_indicator" not in sys.modules
@@ -842,6 +892,62 @@ def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_
 
     assert result.exit_code == 1
     assert "component bundle hash mismatch" in result.output
+
+
+def test_backtest_attach_provenance_allows_catalog_component_bundle_superset(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    run_bundle_hash = "sha256:" + "1" * 64
+    _attach_component_bundle_artifacts(run_dir, run_bundle_hash)
+    catalog = build_component_catalog(
+        [
+            {
+                "_manifest_path": str(tmp_path / "run_component_manifest.json"),
+                "bundle_hash": run_bundle_hash,
+                "components": [
+                    {
+                        "name": "WorkspaceRunComponent",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_run_component",
+                        "class": "WorkspaceRunComponent",
+                    }
+                ],
+            },
+            {
+                "_manifest_path": str(tmp_path / "unused_component_manifest.json"),
+                "bundle_hash": "sha256:" + "2" * 64,
+                "components": [
+                    {
+                        "name": "WorkspaceUnusedComponent",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_unused_component",
+                        "class": "WorkspaceUnusedComponent",
+                    }
+                ],
+            },
+        ]
+    )
+    component_catalog = tmp_path / "component_catalog.json"
+    component_catalog.write_text(component_catalog_json(catalog), encoding="utf-8")
+    spec_audit = _write_pass_spec_audit(tmp_path, spec_hash, catalog["catalog_hash"])
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Status: PASS" in result.output
 
 
 def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:

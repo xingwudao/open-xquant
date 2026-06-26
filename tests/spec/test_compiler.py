@@ -20,6 +20,17 @@ from oxq.spec.compiler import _build_metrics, _build_optimizer, _write_artifacts
 from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, SignalRuleDef, StrategySpec
 
 
+@pytest.fixture(autouse=True)
+def _isolate_parent_run_digest(tmp_path):
+    digest = tmp_path.parent / "run_digests.jsonl"
+    lock = tmp_path.parent / "run_digests.jsonl.lock"
+    digest.unlink(missing_ok=True)
+    lock.unlink(missing_ok=True)
+    yield
+    digest.unlink(missing_ok=True)
+    lock.unlink(missing_ok=True)
+
+
 def test_artifact_spec_hash_matches_serialized_spec(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="hash_test", hypothesis="hash artifacts are reproducible")
     spec.execution.initial_cash = 100_000

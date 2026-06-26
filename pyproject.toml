@@ -91,6 +91,7 @@ packages = ["src/oxq"]
 
 [tool.hatch.build.targets.wheel.force-include]
 "agent/skills" = "agent/skills"
+"agent/roles" = "agent/roles"
 
 [tool.ruff]
 target-version = "py312"
