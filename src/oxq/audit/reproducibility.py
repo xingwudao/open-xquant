@@ -379,9 +379,10 @@ def _resolve_component_manifest_for_audit(run_path: Path, item: dict, recorded_h
     archived_path = item.get("archived_manifest_path")
     if isinstance(archived_path, str) and archived_path:
         archived = _safe_artifact_path(run_path, archived_path)
-        if archived.exists():
-            _verify_run_local_component_manifest(run_path, archived, str(archived_path), recorded_hash)
-            return archived
+        if not archived.exists():
+            raise OSError(f"archived component manifest not found: {archived_path}")
+        _verify_run_local_component_manifest(run_path, archived, str(archived_path), recorded_hash)
+        return archived
 
     legacy = run_path / "component_manifest.json"
     if summary_count == 1 and legacy.exists():

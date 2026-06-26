@@ -533,6 +533,41 @@ def test_reproducibility_audit_prefers_legacy_run_manifest_over_mutable_manifest
     assert any(check["id"] == "component_bundle_hash" and check["status"] == "pass" for check in audit["checks"])
 
 
+def test_reproducibility_audit_rejects_missing_archived_component_manifest(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_manifest, bundle_hash = _write_component_manifest_bundle(workspace, value="1.0")
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": str(workspace_manifest),
+                    "archived_manifest_path": "component_extensions/00_custom_components/component_manifest.json",
+                    "archived_extension_root": "component_extensions/00_custom_components/custom_components",
+                    "bundle_hash": bundle_hash,
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(
+        check["id"] == "component_bundle_hash" and "archived component manifest not found" in check["message"]
+        for check in audit["checks"]
+    )
+
+
 def test_reproducibility_audit_rejects_tampered_archived_manifest_bundle_hash(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     manifest, bundle_hash = _write_component_manifest_bundle(run_dir, value="1.0")
