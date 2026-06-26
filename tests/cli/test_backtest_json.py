@@ -219,6 +219,52 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     assert loaded[0]["bundle_hash"] == digest
 
 
+def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    external_tests = tmp_path / "tests"
+    external_tests.mkdir()
+    external_test = external_tests / "test_workspace_backtest_indicator.py"
+    external_test.write_text("def test_external_placeholder():\n    assert True\n", encoding="utf-8")
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["components"][0]["tests"] = ["tests/test_workspace_backtest_indicator.py"]
+    payload["components"][0]["test_hash"] = "sha256:" + hashlib.sha256(external_test.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(json.loads(result.output)["run_dir"])
+    archived_external_test = next(run_dir.glob("component_extensions/*/tests/test_workspace_backtest_indicator.py"))
+    assert archived_external_test.read_text(encoding="utf-8") == external_test.read_text(encoding="utf-8")
+    manifest.unlink()
+    shutil.rmtree(tmp_path / "custom_components")
+    shutil.rmtree(external_tests)
+    loaded = load_component_manifests_from_run(run_dir)
+    assert loaded[0]["bundle_hash"] == digest
+
+
 def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
     from oxq.core.component_manifest import load_component_manifests_from_run
 

@@ -259,6 +259,7 @@ def _component_extension_archive_paths(run_dir: Path, manifest: dict, index: int
             "component extension archive would be nested inside the source extension; "
             "choose an --out directory outside the component extension root"
         )
+    _component_extension_external_test_files(manifest, manifest_path, source_root)
     return manifest_path, source_root, archive_base, raw_root
 
 
@@ -282,6 +283,10 @@ def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> t
         dirs_exist_ok=True,
         ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
     )
+    for source_file, relative_path in _component_extension_external_test_files(manifest, manifest_path, source_root):
+        target = archive_base / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_file, target)
     manifest_copy = dict(manifest)
     manifest_copy.pop("_manifest_path", None)
     archived_manifest = archive_base / manifest_path.name
@@ -293,6 +298,33 @@ def _archive_component_extension(run_dir: Path, manifest: dict, index: int) -> t
         archived_manifest.relative_to(run_dir.resolve()).as_posix(),
         archived_root.relative_to(run_dir.resolve()).as_posix(),
     )
+
+
+def _component_extension_external_test_files(manifest: dict, manifest_path: Path, source_root: Path) -> list[tuple[Path, Path]]:
+    workspace_root = manifest_path.parent.resolve()
+    source_root = source_root.resolve()
+    files: list[tuple[Path, Path]] = []
+    for component in manifest.get("components") or []:
+        if not isinstance(component, dict):
+            continue
+        tests = component.get("tests")
+        if not isinstance(tests, list):
+            continue
+        for raw in tests:
+            if not isinstance(raw, str):
+                continue
+            raw_path = Path(raw)
+            if raw_path.is_absolute() or ".." in raw_path.parts:
+                raise click.ClickException(f"component extension test path is unsafe: {raw}")
+            source_file = (workspace_root / raw_path).resolve()
+            if not source_file.is_relative_to(workspace_root):
+                raise click.ClickException(f"component extension test path escapes the workspace: {raw}")
+            if not source_file.exists() or source_file.is_relative_to(source_root):
+                continue
+            if source_file.is_symlink() or not source_file.is_file():
+                raise click.ClickException("component extension archive refuses non-file or symlinked external test files")
+            files.append((source_file, raw_path))
+    return files
 
 
 def _component_archive_slug(manifest: dict, manifest_path: Path) -> str:

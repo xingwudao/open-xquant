@@ -369,6 +369,11 @@ def _resolve_component_manifest_for_audit(run_path: Path, item: dict) -> Path:
     if isinstance(archived_path, str) and archived_path:
         archived = _safe_artifact_path(run_path, archived_path)
         if archived.exists():
+            if archived.is_symlink():
+                raise OSError(f"archived component manifest must not be a symlink: {archived_path}")
+            resolved = archived.resolve()
+            if not resolved.is_relative_to(run_path.resolve()):
+                raise OSError(f"archived component manifest escapes run directory: {archived_path}")
             return archived
     manifest_path = item.get("manifest_path")
     if not isinstance(manifest_path, str) or not manifest_path:
@@ -392,7 +397,11 @@ def _unknown_artifact_check_id(artifact_name: str) -> str:
 def _safe_artifact_path(run_path: Path, artifact_name: str) -> Path:
     if not _is_safe_artifact_name(artifact_name):
         raise OSError(f"unsafe artifact path: {artifact_name}")
-    return run_path / artifact_name
+    path = run_path / artifact_name
+    resolved_parent = path.parent.resolve()
+    if not resolved_parent.is_relative_to(run_path.resolve()):
+        raise OSError(f"unsafe artifact path escapes run directory: {artifact_name}")
+    return path
 
 
 def _is_safe_artifact_name(artifact_name: str) -> bool:

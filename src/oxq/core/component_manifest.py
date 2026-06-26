@@ -290,12 +290,13 @@ def _clear_extension_module_cache(payload: dict[str, Any], root: Path) -> None:
     }
     if "oxq" in top_level_packages:
         raise ValueError("workspace component modules must not be declared under the oxq package")
-    previous_roots = {loaded_root for loaded_root in _LOADED_EXTENSION_ROOTS if loaded_root != root}
+    loaded_roots = set(_LOADED_EXTENSION_ROOTS)
+    loaded_roots.add(root)
     for module_name in list(sys.modules):
         module = sys.modules.get(module_name)
         module_file = getattr(module, "__file__", None)
         module_path = Path(module_file).resolve() if isinstance(module_file, str) else None
-        if module_path is not None and any(module_path.is_relative_to(loaded_root) for loaded_root in previous_roots):
+        if module_path is not None and any(module_path.is_relative_to(loaded_root) for loaded_root in loaded_roots):
             sys.modules.pop(module_name, None)
             continue
         for package in top_level_packages:

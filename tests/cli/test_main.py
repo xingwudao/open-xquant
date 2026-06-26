@@ -316,6 +316,71 @@ def test_component_manifest_clears_helper_modules_from_previous_extension(tmp_pa
     assert sys.modules["helpers"].__file__.startswith(str(tmp_path / "second_components"))
 
 
+def test_component_manifest_clears_helper_modules_when_reloading_same_extension(tmp_path) -> None:
+    import sys
+
+    from oxq.core.component_manifest import load_component_manifest
+
+    root = tmp_path / "custom_components"
+    root.mkdir()
+    helper = root / "helpers.py"
+    component = root / "workspace_indicator.py"
+    manifest = tmp_path / "component_manifest.json"
+    component.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "import helpers",
+                "class WorkspaceIndicator:",
+                "    name = helpers.CLASS_NAME",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    def write_manifest(class_name: str) -> None:
+        helper.write_text(f"CLASS_NAME = {class_name!r}\n", encoding="utf-8")
+        manifest.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "extension_id": "custom_components",
+                    "extension_root": "custom_components",
+                    "bundle_hash": "",
+                    "components": [
+                        {
+                            "name": class_name,
+                            "kind": "Indicator",
+                            "source": "workspace_extension",
+                            "module": "workspace_indicator",
+                            "class": "WorkspaceIndicator",
+                            "protocol": "Indicator",
+                        }
+                    ],
+                },
+                indent=2,
+                sort_keys=True,
+            ),
+            encoding="utf-8",
+        )
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["bundle_hash"] = compute_component_bundle_hash(manifest)
+        manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    write_manifest("FirstIndicator")
+    load_component_manifest(manifest)
+    assert sys.modules["helpers"].CLASS_NAME == "FirstIndicator"
+
+    write_manifest("SecondReloadedIndicator")
+    load_component_manifest(manifest)
+
+    assert sys.modules["helpers"].CLASS_NAME == "SecondReloadedIndicator"
+
+
 def test_spec_validate_loads_workspace_component_manifest(tmp_path) -> None:
     manifest = _write_custom_indicator_extension(tmp_path)
     digest = json.loads(
