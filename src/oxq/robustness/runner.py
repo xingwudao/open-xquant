@@ -40,6 +40,12 @@ def run_robustness(run_dir: str | Path) -> dict:
     """
     run_path = Path(run_dir)
     tests: list[dict] = []
+    try:
+        from oxq.core.component_manifest import load_component_manifests_from_run
+
+        load_component_manifests_from_run(run_path)
+    except Exception as exc:
+        return {"status": "error", "tests": [], "message": f"run component manifests could not be loaded: {exc}"}
 
     # Load spec and baseline metrics
     spec_path = run_path / "strategy_spec.yaml"

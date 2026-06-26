@@ -99,10 +99,11 @@ SDK-based custom research code.
 - Semantic review of a completed report, decision consistency, audit fidelity,
   robustness interpretation, or chart narrative quality: use
   `review-research-report`.
-- New Indicator, Signal, Rule, or PortfolioOptimizer component: use
-  `author-component` for workspace-local custom components, or
-  `create-component` when the user explicitly asks to develop built-in
-  OpenXQuant source components.
+- New workspace-local Indicator, Signal, or PortfolioOptimizer component: use
+  `author-component`. Workspace-local custom Rule requests must block unless
+  the user explicitly asks for OpenXQuant framework development that adds
+  audited spec, compile, runtime, and backtest support; in that framework case
+  use `create-component`.
 - Broker connectivity, paper trading, live trading, account checks, or order
   submission: use `manage-live-trading`.
 

@@ -37,6 +37,20 @@ def test_regime_analysis_request_is_not_reported_as_pass_when_unimplemented(tmp_
     assert "equity_curve.csv" in regime["message"]
 
 
+def test_run_robustness_errors_when_run_component_manifest_cannot_load(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="missing_component_manifest", hypothesis="custom component manifest is required")
+    _write_run_inputs(tmp_path, spec, {"sharpe_ratio": 1.0, "trade_count": 12, "max_drawdown": -0.1})
+    (tmp_path / "component_manifests.json").write_text(
+        json.dumps([{"manifest_path": "missing_component_manifest.json", "bundle_hash": "sha256:missing"}]),
+        encoding="utf-8",
+    )
+
+    result = run_robustness(tmp_path)
+
+    assert result["status"] == "error"
+    assert "recorded component manifest not found" in result["message"]
+
+
 def test_read_curve_csv_handles_mixed_timezone_offsets(tmp_path) -> None:
     path = tmp_path / "equity_curve.csv"
     path.write_text(

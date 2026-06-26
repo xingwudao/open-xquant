@@ -51,6 +51,36 @@ def load_component_manifest(path: str | Path, *, verify_hash: bool = True) -> di
     return payload
 
 
+def load_component_manifests_from_run(run_dir: str | Path, *, verify_hash: bool = True) -> list[dict[str, Any]]:
+    """Load component manifests recorded by a completed run, if any."""
+
+    run_path = Path(run_dir)
+    summary_path = run_path / "component_manifests.json"
+    if not summary_path.exists():
+        return []
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"component_manifests.json is invalid: {exc}") from exc
+    if not isinstance(summary, list):
+        raise ValueError("component_manifests.json must be a list")
+
+    manifests: list[dict[str, Any]] = []
+    for index, item in enumerate(summary):
+        if not isinstance(item, dict):
+            raise ValueError(f"component_manifests.json[{index}] must be an object")
+        manifest_path = item.get("manifest_path")
+        if not isinstance(manifest_path, str) or not manifest_path:
+            raise ValueError(f"component_manifests.json[{index}].manifest_path is required")
+        resolved = Path(manifest_path)
+        if not resolved.is_absolute():
+            resolved = run_path / resolved
+        if not resolved.exists():
+            raise ValueError(f"recorded component manifest not found: {resolved}")
+        manifests.append(load_component_manifest(resolved, verify_hash=verify_hash))
+    return manifests
+
+
 def compute_component_bundle_hash(path: str | Path) -> str:
     """Compute the deterministic hash for a component extension bundle."""
 

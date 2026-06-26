@@ -26,7 +26,10 @@ Read:
 
 If `component_request.json` does not identify exactly one component kind from
 `Indicator`, `Signal`, `Rule`, or `PortfolioOptimizer`, stop with a blocked
-result. Do not guess.
+result. Do not guess. Workspace-local `Rule` authoring is currently blocked:
+the audited SPEC/runtime path only supports built-in runtime rules such as
+`RebalanceFrequencyRule`, and a custom workspace `Rule` would not be consumed
+by formal compile/backtest semantics.
 
 ## Output Layout
 
@@ -61,30 +64,34 @@ explicitly provides another task-local root.
 
 3. If an existing component or recipe satisfies the request, write a blocked
    `result.json` and stop.
-4. Block when behavior, formula, thresholds, output domain, state semantics, or
+4. If the request asks for a workspace-local `Rule`, write a blocked
+   `result.json` explaining that custom `Rule` components require explicit
+   OpenXQuant framework development and runtime support before they can be
+   used in audited backtests.
+5. Block when behavior, formula, thresholds, output domain, state semantics, or
    causal suitability are ambiguous.
-5. Create or update the local extension package.
-6. Write targeted tests before implementation for new components.
-7. Implement using OpenXQuant protocols and existing component patterns.
-8. Register the component from the extension package, without modifying the
+6. Create or update the local extension package.
+7. Write targeted tests before implementation for new components.
+8. Implement using OpenXQuant protocols and existing component patterns.
+9. Register the component from the extension package, without modifying the
    installed SDK bundle.
    Use an extension module namespace such as `oxq_components.*`; do not declare
    workspace components under `oxq.*`.
-9. Run targeted tests.
-10. Write `component_manifest.json` without `bundle_hash`, compute it with:
+10. Run targeted tests.
+11. Write `component_manifest.json` without `bundle_hash`, compute it with:
 
     ```bash
     uv run oxq component-manifest hash component_manifest.json
     ```
 
-11. Update `component_manifest.json` with the returned `bundle_hash`.
-12. Validate importability and hash:
+12. Update `component_manifest.json` with the returned `bundle_hash`.
+13. Validate importability and hash:
 
     ```bash
     uv run oxq component-manifest validate component_manifest.json
     ```
 
-13. Refresh the catalog with:
+14. Refresh the catalog with:
 
     ```bash
     uv run oxq registry export \
@@ -92,7 +99,7 @@ explicitly provides another task-local root.
       --out component_catalog.json
     ```
 
-14. Write `result.json`.
+15. Write `result.json`.
 
 ## Component Requirements
 
@@ -114,11 +121,11 @@ Signal:
 
 Rule:
 
-- Return `RuleResult`.
-- Do not mutate `Portfolio`.
-- Distinguish pre-trade and post-trade behavior.
-- Do not rely on `RuleResult.constraints` for execution-critical behavior
-  unless the engine consumes it and tests prove that path.
+- Block workspace-local `Rule` authoring by default. A custom `Rule` is only
+  allowed when the user explicitly states this is OpenXQuant framework
+  development and the implementation adds audited spec validation, compile,
+  runtime, and backtest support in the source tree.
+- Do not emit `component_ready` for a workspace-local custom `Rule`.
 
 PortfolioOptimizer:
 

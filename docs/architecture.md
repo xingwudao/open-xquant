@@ -674,7 +674,8 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 
 - `oxq-coordinator`: 面向用户的主控 Agent，只负责阶段路由和确认。
 - `oxq-strategy-builder-worker`: 构建和验证 `strategy_spec.yaml`。
-- `oxq-component-author-worker`: 创建 workspace-local custom components。
+- `oxq-component-author-worker`: 创建 workspace-local Indicator、Signal、
+  PortfolioOptimizer custom components；workspace-local Rule 默认阻塞。
 - `oxq-spec-auditor-worker`: 审用户确认、字段来源和组件 provenance。
 - `oxq-runtime-auditor-worker`: 编译并审核 runtime semantics。
 - `oxq-runner-worker`: 授权后运行 backtest 和确定性跑后检查。

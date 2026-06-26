@@ -25,6 +25,29 @@ def test_research_audit_fails_when_metrics_json_is_missing(tmp_path) -> None:
     assert any(check["id"] == "metrics_json" and check["severity"] == "fatal" for check in result["checks"])
 
 
+def test_research_audit_fails_when_run_component_manifest_cannot_load(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="missing_component_manifest", hypothesis="custom component manifest is required")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({"trade_count": 12, "max_drawdown": -0.1}),
+        encoding="utf-8",
+    )
+    (tmp_path / "component_manifests.json").write_text(
+        json.dumps([{"manifest_path": "missing_component_manifest.json", "bundle_hash": "sha256:missing"}]),
+        encoding="utf-8",
+    )
+
+    result = audit_research(tmp_path)
+
+    assert result["status"] == "fail"
+    assert result["fatal_count"] == 1
+    assert result["checks"][0]["id"] == "component_manifest_load"
+    assert "recorded component manifest not found" in result["checks"][0]["message"]
+
+
 def test_research_audit_returns_fatal_when_spec_cannot_parse(tmp_path) -> None:
     (tmp_path / "strategy_spec.yaml").write_text(
         """

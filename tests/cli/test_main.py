@@ -333,14 +333,26 @@ def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
     out_dir = tmp_path / "compile_preview"
     monkeypatch.chdir(tmp_path)
 
-    result = CliRunner().invoke(main, ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)])
+    explicit_data_dir = tmp_path / "formal_data"
+    result = CliRunner().invoke(
+        main,
+        [
+            "strategy",
+            "compile",
+            "strategy_spec.yaml",
+            "--data-dir",
+            str(explicit_data_dir),
+            "--out",
+            str(out_dir),
+        ],
+    )
 
     assert result.exit_code == 0, result.output
     compiled_plan = json.loads((out_dir / "compiled_plan.json").read_text(encoding="utf-8"))
     assert compiled_plan["execution"]["rebalance"]["interval_days"] == 10
     assert compiled_plan["execution"]["rebalance"]["source"] == "portfolio.rules.rebalance"
     assert compiled_plan["data"]["spec_data_dir"] == "data"
-    assert compiled_plan["data"]["effective_data_dir"] == str((tmp_path / "data").resolve())
+    assert compiled_plan["data"]["effective_data_dir"] == str(explicit_data_dir.resolve())
     assert (out_dir / "spec_hash.txt").read_text(encoding="utf-8").strip() == compiled_plan["spec_hash"]
     assert "Effective data dir:" in result.output
     assert "included in compiled_plan.json and its hash" in result.output

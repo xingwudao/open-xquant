@@ -97,7 +97,8 @@ uv run oxq agent install --target trae --profile standalone-agent --yes
 - `oxq-strategy-builder-worker`: 使用 `build-strategy-spec`，只构建和验证
   `strategy_spec.yaml`。
 - `oxq-component-author-worker`: 使用 `author-component`，只创建
-  workspace-local custom components、测试、manifest 和 catalog。
+  workspace-local Indicator、Signal、PortfolioOptimizer components、测试、
+  manifest 和 catalog；workspace-local Rule 默认阻塞。
 - `oxq-spec-auditor-worker`: 使用 `audit-strategy-spec`，只审用户确认、字段来源
   和组件 provenance。
 - `oxq-runtime-auditor-worker`: 使用 `audit-runtime-semantics`，只编译并审核
@@ -274,6 +275,8 @@ skill 决定是否需要运行 `research init` 或 `research init --sdk`。
 
 当 builder 输出 `needs_custom_component` 时，multi-agent 编排应调用
 `oxq-component-author-worker`，而不是让 builder 写组件代码。
+workspace-local custom Rule 当前不属于普通 authoring 能力；如果需要 Rule，
+应阻塞并要求用户明确是否进入 OpenXQuant 框架开发。
 
 组件 authoring 阶段默认写入：
 

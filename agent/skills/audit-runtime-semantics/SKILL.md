@@ -21,6 +21,8 @@ a report.
 - `strategy_spec.yaml`
 - `spec_audit.json`
 - `component_catalog.json` when available
+- `backtest_authorization.json` or the intended formal run inputs when
+  available, including `data_dir` and `component_manifest` paths
 - Optional prior `compile_preview/compiled_plan.json`
 
 ## Compile Preview
@@ -28,8 +30,18 @@ a report.
 If no current compile preview exists for the current `spec_hash`, run:
 
 ```bash
-uv run oxq strategy compile strategy_spec.yaml --out compile_preview
+uv run oxq strategy compile strategy_spec.yaml \
+  --data-dir data \
+  --component-manifest component_manifest.json \
+  --out compile_preview
 ```
+
+Use the same `data_dir` and every `component_manifest` path that the formal
+`oxq backtest run` will use. Omit `--data-dir` only when the formal run will
+also omit it, and omit `--component-manifest` only when no workspace-local
+custom components are authorized. The preview `compiled_plan.json` includes the
+resolved effective `data_dir`, so a preview made with different run inputs is
+not a valid runtime gate.
 
 Read `compile_preview/compiled_plan.json` and
 `compile_preview/spec_hash.txt`. The `spec_hash` in the compile preview must

@@ -33,6 +33,22 @@ def audit_research(run_dir: str | Path) -> dict:
     """
     run_path = Path(run_dir)
     checks: list[dict] = []
+    try:
+        from oxq.core.component_manifest import load_component_manifests_from_run
+
+        load_component_manifests_from_run(run_path)
+    except Exception as exc:
+        return {
+            "status": "fail",
+            "checks": [{
+                "id": "component_manifest_load",
+                "status": "fail",
+                "severity": "fatal",
+                "message": f"run component manifests could not be loaded: {exc}",
+            }],
+            "fatal_count": 1,
+            "warning_count": 0,
+        }
 
     # Load spec
     spec_path = run_path / "strategy_spec.yaml"

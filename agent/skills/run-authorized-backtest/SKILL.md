@@ -90,6 +90,12 @@ uv run oxq robustness run runs/<run_id> --json
 uv run oxq experiment add runs/<run_id>
 ```
 
+The post-run `audit research` and `robustness run` commands reload the
+component manifests recorded in `runs/<run_id>/component_manifests.json` before
+validating or compiling. If those recorded manifests are missing, invalid, or
+unloadable, stop and record a failed `runner_result.json`; do not rerun the
+checks without the workspace-local custom components.
+
 If any required command fails, stop the runner phase and record the failure in
 `runner_result.json`.
 

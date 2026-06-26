@@ -824,6 +824,14 @@ def strategy():
 @strategy.command()
 @click.argument("spec_file", type=click.Path(exists=True))
 @click.option(
+    "--data-dir",
+    default=None,
+    help=(
+        "Directory for market data files. Use the same value as the formal "
+        "backtest run when writing compile preview artifacts."
+    ),
+)
+@click.option(
     "--component-manifest",
     "component_manifest",
     multiple=True,
@@ -836,7 +844,7 @@ def strategy():
     default=None,
     help="Write deterministic compile preview artifacts to this directory.",
 )
-def compile(spec_file: str, component_manifest: tuple[str, ...], out: str | None):
+def compile(spec_file: str, data_dir: str | None, component_manifest: tuple[str, ...], out: str | None):
     """Compile a strategy spec into an executable strategy.
 
     SPEC_FILE is the path to a strategy_spec.yaml file.
@@ -861,7 +869,7 @@ def compile(spec_file: str, component_manifest: tuple[str, ...], out: str | None
     if out:
         out_dir = Path(out)
         out_dir.mkdir(parents=True, exist_ok=True)
-        effective_data_dir = _resolve_effective_data_dir(spec, None)
+        effective_data_dir = _resolve_effective_data_dir(spec, data_dir)
         plan = compile_plan(spec, effective_data_dir=effective_data_dir)
         (out_dir / "compiled_plan.json").write_text(
             json.dumps(plan, indent=2, sort_keys=True, default=str) + "\n",

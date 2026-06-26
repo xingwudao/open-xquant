@@ -185,6 +185,8 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     ]:
         assert leaf_skill in text
     assert "Multi-Agent workflows use narrow leaf skills only" in text
+    assert "Workspace-local custom Rule requests must block" in text
+    assert "audited spec, compile, runtime, and backtest support" in text
     assert "strategy-builder-standalone" not in text
     assert "quant-research" not in text
 
@@ -218,10 +220,14 @@ def test_component_author_skill_documents_workspace_extension_contract() -> None
     assert "oxq component-manifest hash" in text
     assert "oxq component-manifest validate" in text
     assert "--component-manifest component_manifest.json" in text
+    assert "Workspace-local `Rule` authoring is currently blocked" in text
+    assert "Do not emit `component_ready` for a workspace-local custom `Rule`" in text
     assert "Do not build or edit `strategy_spec.yaml`" in text
     assert "Do not modify the installed SDK bundle" in text
     assert "role_kind: component_author" in role_text
     assert "author-component" in role_text
+    assert "create-rule" not in role_text
+    assert "Block workspace-local custom `Rule` requests" in role_text
     assert "forbidden_outputs" in role_text
 
 
@@ -324,10 +330,12 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
     text = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
     assert "audit-runtime-semantics" in text
-    assert "oxq strategy compile strategy_spec.yaml --out compile_preview" in text
+    assert "oxq strategy compile strategy_spec.yaml \\" in text
+    assert "--data-dir data" in text
     assert "compiled_plan.json" in text
     assert "runtime_audit.json" in text
     assert "oxq runtime-audit validate runtime_audit.json" in text
+    assert "same `data_dir` and every `component_manifest` path" in text
     assert "rebalance interval" in text
     assert "runtime_semantics_pass" in text
 
@@ -415,6 +423,9 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "--runtime-audit runtime_audit.json" in text
     assert "--component-manifest component_manifest.json" in text
     assert "Omit `--component-manifest` only when" in text
+    assert "component_manifests.json" in text
+    assert "do not rerun the" in text
+    assert "workspace-local custom components" in text
     assert "runner_result.json" in text
     assert "Do not edit `strategy_spec.yaml`" in text
     assert "Do not edit `spec_audit.json`" in text
