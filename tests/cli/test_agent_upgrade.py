@@ -12,9 +12,10 @@ from oxq.cli.main import main
 
 def _write_source(root: Path, body: str) -> None:
     skills = root / "agent" / "skills"
-    skills.mkdir(parents=True)
-    (skills / "strategy-builder.md").write_text(
-        "---\nname: strategy-builder\ndescription: Build quant strategies\n---\n\n"
+    skill_dir = skills / "build-strategy-spec"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: build-strategy-spec\ndescription: Build quant strategies\n---\n\n"
         f"# Strategy Builder\n\n{body}\n",
         encoding="utf-8",
     )
@@ -88,7 +89,7 @@ def test_agent_upgrade_replaces_unmodified_managed_skill(monkeypatch, tmp_path) 
     )
 
     assert result.exit_code == 0, result.output
-    installed = home / ".cursor/skills/strategy-builder/SKILL.md"
+    installed = home / ".cursor/skills/build-strategy-spec/SKILL.md"
     assert "new workflow" in installed.read_text(encoding="utf-8")
 
 
@@ -106,7 +107,7 @@ def test_agent_upgrade_skips_locally_modified_skill(monkeypatch, tmp_path) -> No
     )
     assert install.exit_code == 0, install.output
 
-    installed = home / ".cursor/skills/strategy-builder/SKILL.md"
+    installed = home / ".cursor/skills/build-strategy-spec/SKILL.md"
     installed.write_text(installed.read_text(encoding="utf-8") + "\nlocal edit\n", encoding="utf-8")
 
     result = CliRunner().invoke(

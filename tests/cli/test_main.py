@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from decimal import Decimal
 
@@ -80,6 +81,67 @@ def test_registry_export_writes_component_catalog(tmp_path) -> None:
     assert "Catalog hash:" in result.output
 
 
+def test_component_manifest_loads_workspace_indicator_and_updates_catalog(tmp_path) -> None:
+    manifest = _write_custom_indicator_extension(tmp_path)
+
+    hash_result = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
+
+    assert hash_result.exit_code == 0, hash_result.output
+    digest = json.loads(hash_result.output)["component_bundle_hash"]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    validate_result = CliRunner().invoke(main, ["component-manifest", "validate", str(manifest), "--json"])
+
+    assert validate_result.exit_code == 0, validate_result.output
+    assert json.loads(validate_result.output)["computed_bundle_hash"] == digest
+
+    catalog_path = tmp_path / "component_catalog.json"
+    export_result = CliRunner().invoke(
+        main,
+        ["registry", "export", "--component-manifest", str(manifest), "--out", str(catalog_path)],
+    )
+
+    assert export_result.exit_code == 0, export_result.output
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    custom = next(item for item in catalog["indicators"] if item["name"] == "WorkspaceConstantIndicator")
+    assert custom["source"] == "workspace_extension"
+    assert custom["bundle_hash"] == digest
+    assert custom["manifest_path"] == str(manifest.resolve())
+
+
+def test_spec_validate_loads_workspace_component_manifest(tmp_path) -> None:
+    manifest = _write_custom_indicator_extension(tmp_path)
+    digest = json.loads(
+        CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output
+    )["component_bundle_hash"]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    spec = StrategySpec.template(strategy_id="custom_indicator", hypothesis="custom indicators must load")
+    spec.signal.indicators = {
+        "custom_score": {
+            "type": "WorkspaceConstantIndicator",
+            "params": {"value": 2.0},
+        }
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "custom_score", "n": 1}
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+
+    missing = CliRunner().invoke(main, ["spec", "validate", str(spec_path), "--json"])
+    loaded = CliRunner().invoke(
+        main,
+        ["spec", "validate", str(spec_path), "--component-manifest", str(manifest), "--json"],
+    )
+
+    assert missing.exit_code == 1
+    assert loaded.exit_code == 0, loaded.output
+    assert json.loads(loaded.output)["status"] == "pass"
+
+
 def test_spec_hash_and_fields_are_deterministic(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     init_result = CliRunner().invoke(main, ["spec", "init", "SMA crossover", "--out", str(spec_path)])
@@ -97,6 +159,72 @@ def test_spec_hash_and_fields_are_deterministic(tmp_path) -> None:
     assert {"path": "research.hypothesis", "value": "SMA crossover"} in fields["fields"]
     assert {"path": "execution.initial_cash", "value": 100000.0} in fields["fields"]
     assert {"path": "execution.lot_size_config.default", "value": 1} in fields["fields"]
+
+
+def _write_custom_indicator_extension(tmp_path):
+    root = tmp_path / "custom_components"
+    source_dir = root / "oxq_components" / "indicators"
+    tests_dir = root / "tests"
+    source_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+    (root / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
+    (source_dir / "__init__.py").write_text("", encoding="utf-8")
+    source = source_dir / "workspace_constant_indicator.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "",
+                "import pandas as pd",
+                "",
+                "",
+                "class WorkspaceConstantIndicator:",
+                "    name = 'WorkspaceConstantIndicator'",
+                "",
+                "    def compute(self, mktdata: pd.DataFrame, value: float = 1.0) -> pd.Series:",
+                "        return pd.Series(float(value), index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    test_file = tests_dir / "test_workspace_constant_indicator.py"
+    test_file.write_text(
+        "def test_placeholder():\n    assert True\n",
+        encoding="utf-8",
+    )
+    source_hash = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+    test_hash = "sha256:" + hashlib.sha256(test_file.read_bytes()).hexdigest()
+    manifest = tmp_path / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "WorkspaceConstantIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "oxq_components.indicators.workspace_constant_indicator",
+                        "class": "WorkspaceConstantIndicator",
+                        "protocol": "Indicator",
+                        "parameters": {"value": 1.0},
+                        "tests": ["custom_components/tests/test_workspace_constant_indicator.py"],
+                        "source_path": "oxq_components/indicators/workspace_constant_indicator.py",
+                        "source_hash": source_hash,
+                        "test_hash": test_hash,
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def test_strategy_compile_writes_compile_preview(tmp_path) -> None:
@@ -120,10 +248,9 @@ def test_strategy_compile_writes_compile_preview(tmp_path) -> None:
 
 def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "block",
         "spec_provenance_pass": False,
-        "runtime_semantics_pass": False,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -179,7 +306,6 @@ def test_spec_audit_validate_rejects_missing_required_fields(tmp_path) -> None:
     assert any(error["path"] == "spec_hash" for error in payload["errors"])
     assert any(error["path"] == "schema_version" for error in payload["errors"])
     assert any(error["path"] == "spec_provenance_pass" for error in payload["errors"])
-    assert any(error["path"] == "runtime_semantics_pass" for error in payload["errors"])
 
 
 def test_spec_audit_validate_rejects_legacy_v1_after_gate_breaking_change(tmp_path) -> None:
@@ -187,7 +313,6 @@ def test_spec_audit_validate_rejects_legacy_v1_after_gate_breaking_change(tmp_pa
         "schema_version": 1,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -206,15 +331,14 @@ def test_spec_audit_validate_rejects_legacy_v1_after_gate_breaking_change(tmp_pa
 
     assert result.exit_code == 1
     payload = json.loads(result.output)
-    assert any(error["path"] == "schema_version" and "must be 2" in error["message"] for error in payload["errors"])
+    assert any(error["path"] == "schema_version" and "must be 3" in error["message"] for error in payload["errors"])
 
 
 def test_spec_audit_validate_rejects_malformed_entries(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "blocked",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -243,10 +367,9 @@ def test_spec_audit_validate_rejects_malformed_entries(tmp_path) -> None:
 
 def test_spec_audit_validate_rejects_confirmed_when_evidence_denies_user_confirmation(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": False,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -275,15 +398,13 @@ def test_spec_audit_validate_rejects_confirmed_when_evidence_denies_user_confirm
     payload = json.loads(result.output)
     assert payload["status"] == "fail"
     assert any(error["path"] == "field_audits[0].status" for error in payload["errors"])
-    assert any(error["path"] == "runtime_semantics_pass" for error in payload["errors"])
 
 
 def test_spec_audit_validate_rejects_confirmed_when_same_evidence_denies_field_confirmation(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -316,10 +437,9 @@ def test_spec_audit_validate_rejects_confirmed_when_same_evidence_denies_field_c
 
 def test_spec_audit_validate_rejects_confirmation_for_other_field_before_denial(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -352,10 +472,9 @@ def test_spec_audit_validate_rejects_confirmation_for_other_field_before_denial(
 
 def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -386,10 +505,9 @@ def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path)
 
 def test_spec_audit_validate_allows_later_confirmation_in_separate_evidence_entry(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -420,10 +538,9 @@ def test_spec_audit_validate_allows_later_confirmation_in_separate_evidence_entr
 
 def test_spec_audit_validate_allows_confirmation_before_historical_negative_context(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -451,12 +568,11 @@ def test_spec_audit_validate_allows_confirmation_before_historical_negative_cont
     assert result.exit_code == 0, result.output
 
 
-def test_spec_audit_validate_rejects_pass_with_false_gate(tmp_path) -> None:
+def test_spec_audit_validate_rejects_pass_with_false_provenance_gate(tmp_path) -> None:
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
-        "spec_provenance_pass": True,
-        "runtime_semantics_pass": False,
+        "spec_provenance_pass": False,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
@@ -475,6 +591,59 @@ def test_spec_audit_validate_rejects_pass_with_false_gate(tmp_path) -> None:
 
     assert result.exit_code == 1
     payload = json.loads(result.output)
+    assert any(error["path"] == "spec_provenance_pass" for error in payload["errors"])
+
+
+def test_runtime_audit_validate_accepts_required_schema(tmp_path) -> None:
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "runtime_semantics_pass": True,
+        "spec_hash": "sha256:" + "1" * 16,
+        "spec_audit_hash": "sha256:" + "2" * 16,
+        "compiled_plan_hash": "sha256:" + "3" * 16,
+        "compiled_plan_path": "compile_preview/compiled_plan.json",
+        "material_field_audits": [
+            {
+                "field_path": "portfolio.rules.rebalance",
+                "spec_value": {"params": {"interval_days": 10}},
+                "runtime_path": "execution.rebalance",
+                "runtime_value": {"interval_days": 10},
+                "status": "preserved",
+                "evidence": ["compiled plan preserved interval_days"],
+                "blocking": False,
+            }
+        ],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "runtime_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["runtime-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["status"] == "pass"
+
+
+def test_runtime_audit_validate_rejects_pass_with_false_runtime_gate(tmp_path) -> None:
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "runtime_semantics_pass": False,
+        "spec_hash": "sha256:" + "1" * 16,
+        "spec_audit_hash": "sha256:" + "2" * 16,
+        "compiled_plan_hash": "sha256:" + "3" * 16,
+        "compiled_plan_path": "compile_preview/compiled_plan.json",
+        "material_field_audits": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "runtime_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["runtime-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
     assert any(error["path"] == "runtime_semantics_pass" for error in payload["errors"])
 
 
@@ -483,10 +652,9 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog["catalog_hash"],
@@ -540,10 +708,9 @@ def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "block",
         "spec_provenance_pass": False,
-        "runtime_semantics_pass": False,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog["catalog_hash"],
@@ -587,10 +754,9 @@ def test_backtest_attach_provenance_rejects_hash_mismatch(tmp_path) -> None:
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog["catalog_hash"],
@@ -659,10 +825,9 @@ def test_backtest_attach_provenance_rejects_nested_blockers(tmp_path) -> None:
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog["catalog_hash"],
@@ -707,10 +872,9 @@ def test_backtest_attach_provenance_rejects_tampered_catalog_body(tmp_path) -> N
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog["catalog_hash"],
@@ -757,10 +921,9 @@ def test_backtest_attach_provenance_rejects_non_reproducible_run(tmp_path) -> No
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
     audit = {
-        "schema_version": 2,
+        "schema_version": 3,
         "status": "pass",
         "spec_provenance_pass": True,
-        "runtime_semantics_pass": True,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog["catalog_hash"],

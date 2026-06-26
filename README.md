@@ -76,17 +76,19 @@ equity curve、artifact hashes、audit、report——可版本化、可 diff、�
 
 ```
 Agent loads open-xquant skill
-  → strategy-builder writes and validates strategy_spec.yaml
-  → spec-auditor checks assumption provenance
-  → oxq strategy compile strategy_spec.yaml
-  → oxq backtest run strategy_spec.yaml --json
+  → build-strategy-spec writes and validates strategy_spec.yaml
+  → audit-strategy-spec checks assumption provenance
+  → oxq spec-audit validate spec_audit.json
+  → audit-runtime-semantics compiles and checks compiled_plan.json semantics
+  → oxq runtime-audit validate runtime_audit.json
+  → run-authorized-backtest runs gated backtest
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
-  → report-chart-builder registers chart assets when needed
-  → research-report-writer writes research_report.md/html
+  → build-report-charts registers chart assets when needed
+  → write-research-report writes research_report.md/html
   → oxq report qa runs/<run_id>/
-  → research-report-reviewer reviews the final report
+  → review-research-report reviews the final report
   → oxq experiment add runs/<run_id>/
 ```
 
@@ -177,6 +179,10 @@ open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Rese
 - Report asset manifest and deterministic report QA
 - Agent skills for report writing, chart building, spec auditing, and
   experiment comparison
+- Workspace-local custom component manifests and deterministic extension
+  loading
+- Multi-Agent role presets for Codex, OpenCode, Claude Code, and Cursor,
+  including component authoring
 - OpenCode 集成
 
 ## License
@@ -263,17 +269,19 @@ diffable, and persistent.
 
 ```
 Agent loads the open-xquant skill
-  → strategy-builder writes and validates strategy_spec.yaml
-  → spec-auditor checks assumption provenance
-  → oxq strategy compile strategy_spec.yaml
-  → oxq backtest run strategy_spec.yaml --json
+  → build-strategy-spec writes and validates strategy_spec.yaml
+  → audit-strategy-spec checks assumption provenance
+  → oxq spec-audit validate spec_audit.json
+  → audit-runtime-semantics compiles and checks compiled_plan.json semantics
+  → oxq runtime-audit validate runtime_audit.json
+  → run-authorized-backtest runs gated backtest
   → oxq audit reproducibility runs/<run_id>/
   → oxq audit research runs/<run_id>/
   → oxq robustness run runs/<run_id>/
-  → report-chart-builder registers chart assets when needed
-  → research-report-writer writes research_report.md/html
+  → build-report-charts registers chart assets when needed
+  → write-research-report writes research_report.md/html
   → oxq report qa runs/<run_id>/
-  → research-report-reviewer reviews the final report
+  → review-research-report reviews the final report
   → oxq experiment add runs/<run_id>/
 ```
 
@@ -363,6 +371,10 @@ Completed:
 - Report asset manifest and deterministic report QA
 - Agent skills for report writing, chart building, spec auditing, and
   experiment comparison
+- Workspace-local custom component manifests and deterministic extension
+  loading
+- Multi-Agent role presets for Codex, OpenCode, Claude Code, and Cursor,
+  including component authoring
 - OpenCode integration
 
 ## License

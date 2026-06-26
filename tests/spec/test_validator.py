@@ -981,6 +981,29 @@ def test_validate_rejects_required_oos_without_two_date_train_period() -> None:
     assert any(error["check"] == "oos_incomplete" for error in result.errors)
 
 
+def test_validate_accepts_full_period_backtest_without_required_oos() -> None:
+    spec = StrategySpec.template(strategy_id="full_period", hypothesis="full period backtest is not forced OOS")
+    spec.validation.required_oos = False
+    spec.validation.train_period = []
+    spec.validation.test_period = ["2025-01-01", "2026-06-18"]
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_labels_missing_full_period_when_oos_not_required() -> None:
+    spec = StrategySpec.template(strategy_id="missing_full_period", hypothesis="full period still needs dates")
+    spec.validation.required_oos = False
+    spec.validation.train_period = []
+    spec.validation.test_period = []
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "backtest_period_missing" for error in result.errors)
+
+
 def test_validate_rejects_next_high_and_next_low_fill_modes() -> None:
     spec = StrategySpec.template(strategy_id="bad_fill", hypothesis="unsupported next extrema fills fail")
     spec.execution.fill_price_mode = "next_high"

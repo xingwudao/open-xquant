@@ -12,9 +12,10 @@ from oxq.cli.main import main
 
 def _write_source(root: Path) -> None:
     skills = root / "agent" / "skills"
-    skills.mkdir(parents=True)
-    (skills / "strategy-builder.md").write_text(
-        "---\nname: strategy-builder\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
+    skill_dir = skills / "build-strategy-spec"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: build-strategy-spec\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
         encoding="utf-8",
     )
 

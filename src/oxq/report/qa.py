@@ -91,7 +91,7 @@ def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) 
 
     Deterministic artifact checks always run. Advisory semantic checks are kept
     available for targeted tests and tooling, but the CLI leaves them to the
-    research-report-reviewer skill by default.
+    review-research-report skill by default.
     """
     run_path = Path(run_dir)
     artifacts = RunArtifacts.load(run_path)

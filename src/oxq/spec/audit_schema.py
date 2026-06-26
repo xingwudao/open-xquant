@@ -7,13 +7,12 @@ import re
 from pathlib import Path
 from typing import Any
 
-SPEC_AUDIT_SCHEMA_VERSION = 2
+SPEC_AUDIT_SCHEMA_VERSION = 3
 
 REQUIRED_TOP_LEVEL_FIELDS = {
     "schema_version",
     "status",
     "spec_provenance_pass",
-    "runtime_semantics_pass",
     "spec_hash",
     "conversation_hash",
     "catalog_hash",
@@ -83,13 +82,11 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
     if not isinstance(schema_version, int) or schema_version != SPEC_AUDIT_SCHEMA_VERSION:
         errors.append({"path": "schema_version", "message": f"must be {SPEC_AUDIT_SCHEMA_VERSION}"})
 
-    for field in ("spec_provenance_pass", "runtime_semantics_pass"):
-        if field in payload and not isinstance(payload[field], bool):
-            errors.append({"path": field, "message": "must be a boolean"})
+    if "spec_provenance_pass" in payload and not isinstance(payload["spec_provenance_pass"], bool):
+        errors.append({"path": "spec_provenance_pass", "message": "must be a boolean"})
     if status == "pass":
-        for field in ("spec_provenance_pass", "runtime_semantics_pass"):
-            if field in payload and payload.get(field) is not True:
-                errors.append({"path": field, "message": "must be true when status is pass"})
+        if "spec_provenance_pass" in payload and payload.get("spec_provenance_pass") is not True:
+            errors.append({"path": "spec_provenance_pass", "message": "must be true when status is pass"})
 
     for field in ("spec_hash", "conversation_hash", "catalog_hash"):
         value = payload.get(field)

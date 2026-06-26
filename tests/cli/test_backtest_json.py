@@ -1,3 +1,4 @@
+import hashlib
 import json
 from pathlib import Path
 
@@ -48,6 +49,50 @@ def _write_spec_and_data(tmp_path, *, evaluation_window: str = "full"):
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     return spec_path, data_dir
+
+
+def _write_spec_audit(path: Path, spec_hash: str) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "status": "pass",
+                "spec_provenance_pass": True,
+                "spec_hash": spec_hash,
+                "conversation_hash": "sha256:" + "2" * 16,
+                "catalog_hash": "sha256:" + "3" * 16,
+                "recipe_matches": [],
+                "field_audits": [],
+                "component_audits": [],
+                "missing_user_requirements": [],
+                "agent_added_fields": [],
+                "contradictions": [],
+                "blocking_findings": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _write_runtime_audit(path: Path, spec_hash: str, *, runtime_semantics_pass: bool = True) -> None:
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "pass",
+                "runtime_semantics_pass": runtime_semantics_pass,
+                "spec_hash": spec_hash,
+                "spec_audit_hash": "sha256:" + "4" * 16,
+                "compiled_plan_hash": "sha256:" + "5" * 16,
+                "compiled_plan_path": "compile_preview/compiled_plan.json",
+                "material_field_audits": [],
+                "blocking_findings": [],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
@@ -101,6 +146,45 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
     assert payload["artifacts"]["artifact_hashes_json"].endswith("artifact_hashes.json")
 
 
+def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    result_payload = json.loads(result.output)
+    run_dir = Path(result_payload["run_dir"])
+    assert result_payload["artifacts"]["component_manifest_json"].endswith("component_manifest.json")
+    assert result_payload["artifacts"]["component_manifests_json"].endswith("component_manifests.json")
+    assert result_payload["artifacts"]["component_bundle_hash_txt"].endswith("component_bundle_hash.txt")
+    assert (run_dir / "component_bundle_hash.txt").read_text(encoding="utf-8").strip() == digest
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert "component_manifest.json" in hashes
+    assert "component_manifests.json" in hashes
+    assert "component_bundle_hash.txt" in hashes
+
+
 def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     raw = spec_path.read_text(encoding="utf-8")
@@ -128,6 +212,62 @@ def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:
     assert payload["run_dir"] == ""
     assert payload["errors"]
     assert payload["artifacts"] == {}
+
+
+def _write_component_manifest(tmp_path: Path) -> Path:
+    root = tmp_path / "custom_components"
+    source_dir = root / "oxq_components" / "indicators"
+    tests_dir = root / "tests"
+    source_dir.mkdir(parents=True)
+    tests_dir.mkdir(parents=True)
+    (root / "oxq_components" / "__init__.py").write_text("", encoding="utf-8")
+    (source_dir / "__init__.py").write_text("", encoding="utf-8")
+    source = source_dir / "workspace_backtest_indicator.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                "class WorkspaceBacktestIndicator:",
+                "    name = 'WorkspaceBacktestIndicator'",
+                "    def compute(self, mktdata: pd.DataFrame, value: float = 1.0) -> pd.Series:",
+                "        return pd.Series(float(value), index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    test_file = tests_dir / "test_workspace_backtest_indicator.py"
+    test_file.write_text("def test_placeholder():\n    assert True\n", encoding="utf-8")
+    manifest = tmp_path / "component_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": "WorkspaceBacktestIndicator",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "oxq_components.indicators.workspace_backtest_indicator",
+                        "class": "WorkspaceBacktestIndicator",
+                        "protocol": "Indicator",
+                        "tests": ["custom_components/tests/test_workspace_backtest_indicator.py"],
+                        "source_path": "oxq_components/indicators/workspace_backtest_indicator.py",
+                        "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                        "test_hash": "sha256:" + hashlib.sha256(test_file.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def test_backtest_run_json_reports_missing_spec_file(tmp_path) -> None:
@@ -183,6 +323,98 @@ def test_backtest_run_json_reports_runtime_failure(tmp_path) -> None:
     assert payload["artifacts"] == {}
     assert payload["metrics"] == {}
     assert payload["errors"][0]["check"] == "runtime_error"
+
+
+def test_backtest_run_json_rejects_missing_runtime_audit_for_formal_spec_audit(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["run_id"] == ""
+    assert payload["run_dir"] == ""
+    assert payload["artifacts"] == {}
+    assert payload["errors"][0]["check"] == "runtime_audit_missing"
+    assert "runtime_audit.json is required" in payload["errors"][0]["message"]
+
+
+def test_backtest_run_json_auto_rejects_sibling_failed_runtime_audit(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    _write_spec_audit(tmp_path / "spec_audit.json", spec_hash)
+    _write_runtime_audit(tmp_path / "runtime_audit.json", spec_hash, runtime_semantics_pass=False)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["errors"][0]["check"] == "runtime_audit_failed"
+    assert "runtime_semantics_pass" in payload["errors"][0]["message"]
+
+
+def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(runtime_audit_path, spec_hash)
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["status"] == "pass"
 
 
 def test_backtest_run_json_uses_artifact_metrics_for_oos_window(tmp_path) -> None:

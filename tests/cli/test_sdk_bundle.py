@@ -350,13 +350,13 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
     site = tmp_path / "fake-site"
     dist_info = site / "open_xquant-0.2.0.dist-info"
     (site / "oxq").mkdir(parents=True)
-    (site / "agent/skills").mkdir(parents=True)
+    (site / "agent/skills/build-strategy-spec").mkdir(parents=True)
     dist_info.mkdir(parents=True)
     escaped_script = tmp_path / "bin/oxq"
     escaped_script.parent.mkdir(parents=True)
     escaped_script.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     (site / "oxq/__init__.py").write_text("", encoding="utf-8")
-    (site / "agent/skills/strategy-builder.md").write_text("# Strategy Builder\n", encoding="utf-8")
+    (site / "agent/skills/build-strategy-spec/SKILL.md").write_text("# Strategy Builder\n", encoding="utf-8")
     (dist_info / "METADATA").write_text("Name: open-xquant\nVersion: 0.2.0\n", encoding="utf-8")
     (dist_info / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n", encoding="utf-8")
     (dist_info / "RECORD").write_text("", encoding="utf-8")
@@ -373,7 +373,7 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
         metadata = FakeMetadata({"Name": "open-xquant"})
         files = [
             Path("oxq/__init__.py"),
-            Path("agent/skills/strategy-builder.md"),
+            Path("agent/skills/build-strategy-spec/SKILL.md"),
             Path("../../../bin/oxq"),
             Path("open_xquant-0.2.0.dist-info/METADATA"),
             Path("open_xquant-0.2.0.dist-info/WHEEL"),
@@ -397,7 +397,7 @@ def test_build_sdk_bundle_uses_installed_distribution_without_project_metadata(m
     assert req.startswith("open-xquant[chart,researchx] @ ")
     with zipfile.ZipFile(payload["wheel"]["path"]) as wheel:
         names = wheel.namelist()
-        assert "agent/skills/strategy-builder.md" in names
+        assert "agent/skills/build-strategy-spec/SKILL.md" in names
         assert "../../../bin/oxq" not in names
 
 

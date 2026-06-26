@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -13,14 +15,16 @@ from oxq.cli.main import main
 
 def _write_source(root: Path, skills: dict[str, str] | None = None) -> None:
     skill_descriptions = skills or {
-        "strategy-builder": "Build quant strategies",
-        "backtest-runner": "Run backtests",
+        "build-strategy-spec": "Build quant strategies",
+        "run-authorized-backtest": "Run backtests",
     }
     skills = root / "agent" / "skills"
     skills.mkdir(parents=True)
     for name, description in skill_descriptions.items():
         title = name.replace("-", " ").title()
-        (skills / f"{name}.md").write_text(
+        skill_dir = skills / name
+        skill_dir.mkdir(parents=True)
+        (skill_dir / "SKILL.md").write_text(
             f"---\nname: {name}\ndescription: >-\n  {description}\n---\n\n# {title}\n",
             encoding="utf-8",
         )
@@ -93,23 +97,26 @@ def test_agent_install_all_targets_writes_managed_skills(monkeypatch, tmp_path) 
     )
 
     assert result.exit_code == 0, result.output
-    assert (codex_home / "skills/strategy-builder/SKILL.md").exists()
-    assert (home / ".config/opencode/skills/strategy-builder/SKILL.md").exists()
-    assert (home / ".claude/skills/strategy-builder/SKILL.md").exists()
-    assert (home / ".cursor/skills/strategy-builder/SKILL.md").exists()
-    assert (home / ".openclaw/skills/strategy-builder/SKILL.md").exists()
-    assert (home / ".trae/skills/strategy-builder/SKILL.md").exists()
+    assert (codex_home / "skills/build-strategy-spec/SKILL.md").exists()
+    assert (home / ".config/opencode/skills/build-strategy-spec/SKILL.md").exists()
+    assert (home / ".claude/skills/build-strategy-spec/SKILL.md").exists()
+    assert (home / ".cursor/skills/build-strategy-spec/SKILL.md").exists()
+    assert (home / ".openclaw/skills/build-strategy-spec/SKILL.md").exists()
+    assert (home / ".trae/skills/build-strategy-spec/SKILL.md").exists()
+    assert (codex_home / "skills/run-authorized-backtest/SKILL.md").exists()
     assert (codex_home / "AGENTS.md").read_text(encoding="utf-8").count("open-xquant:begin") == 1
     assert "open-xquant:begin" in (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
     assert "open-xquant:begin" in (home / ".claude/CLAUDE.md").read_text(encoding="utf-8")
 
-    marker = codex_home / "skills/strategy-builder/.open-xquant-managed.json"
+    marker = codex_home / "skills/build-strategy-spec/.open-xquant-managed.json"
     assert json.loads(marker.read_text(encoding="utf-8"))["target"] == "codex"
 
     manifest = home / ".config/open-xquant/agent-install.json"
     payload = json.loads(manifest.read_text(encoding="utf-8"))
     targets = payload["targets"]
     assert set(targets) == {"codex", "opencode", "claude-code", "cursor", "openclaw", "trae"}
+    assert payload["agent_profile"] == "multi-agent"
+    assert targets["codex"]["agent_profile"] == "multi-agent"
     assert payload["sdk_bundle"]["id"] == "bundle-test"
 
 
@@ -125,14 +132,16 @@ def test_agent_install_trae_writes_global_skills(monkeypatch, tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    installed = home / ".trae/skills/strategy-builder/SKILL.md"
+    installed = home / ".trae/skills/build-strategy-spec/SKILL.md"
     assert installed.exists()
     assert "Build quant strategies" in installed.read_text(encoding="utf-8")
+    assert (home / ".trae/skills/run-authorized-backtest/SKILL.md").exists()
 
-    marker = home / ".trae/skills/strategy-builder/.open-xquant-managed.json"
+    marker = home / ".trae/skills/build-strategy-spec/.open-xquant-managed.json"
     assert json.loads(marker.read_text(encoding="utf-8"))["target"] == "trae"
 
     config = read_yaml_file(home / ".config/open-xquant/agent.yaml")
+    assert config["agent_profile"] == "standalone-agent"
     assert config["preferred_runner"].endswith("/sdk-bundles/bundle-test/runner/.venv/bin/oxq")
     assert config["preferred_runner_argv"] == [config["preferred_runner"]]
 
@@ -163,6 +172,27 @@ def test_agent_install_writes_cached_runner(monkeypatch, tmp_path, fake_sdk_bund
     assert "preferred_runner_argv" in instructions
 
 
+def test_agent_install_interactive_profile_can_choose_standalone(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    _write_source(source)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(source)],
+        input="standalone-agent\n",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "Install profile" in result.output
+    assert (home / ".config/opencode/skills/build-strategy-spec/SKILL.md").exists()
+    assert (home / ".config/opencode/skills/run-authorized-backtest/SKILL.md").exists()
+    manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
+    assert manifest["agent_profile"] == "standalone-agent"
+    assert manifest["targets"]["opencode"]["agent_profile"] == "standalone-agent"
+
+
 def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_path) -> None:
     source = Path.cwd()
     home = tmp_path / "home"
@@ -176,7 +206,14 @@ def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_
     assert result.exit_code == 0, result.output
     router = home / ".config/opencode/skills/open-xquant/SKILL.md"
     assert router.exists()
-    assert "Router Contract" in router.read_text(encoding="utf-8")
+    router_text = router.read_text(encoding="utf-8")
+    assert "Router Contract" in router_text
+    assert "Multi-Agent workflows use narrow leaf skills only" in router_text
+    assert "run-authorized-backtest" in router_text
+    assert "strategy-builder-standalone" not in router_text
+    assert "quant-research" not in router_text
+    assert not (home / ".config/opencode/skills/strategy-builder-standalone").exists()
+    assert not (home / ".config/opencode/skills/quant-research").exists()
 
     instructions = (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
     assert "use the installed `open-xquant` skill first" in instructions
@@ -186,6 +223,60 @@ def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_
     manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
     names = {record["name"] for record in manifest["targets"]["opencode"]["skills"]}
     assert "open-xquant" in names
+    assert "run-authorized-backtest" in names
+    assert "strategy-builder-standalone" not in names
+    assert "quant-research" not in names
+
+    coordinator = home / ".config/opencode/agents/oxq-coordinator.md"
+    builder = home / ".config/opencode/agents/oxq-strategy-builder-worker.md"
+    assert coordinator.exists()
+    assert builder.exists()
+    assert "mode: primary" in coordinator.read_text(encoding="utf-8")
+    assert "mode: subagent" in builder.read_text(encoding="utf-8")
+    roles = {record["name"] for record in manifest["targets"]["opencode"]["agent_roles"]}
+    assert roles == {
+        "oxq-coordinator",
+        "oxq-component-author-worker",
+        "oxq-strategy-builder-worker",
+        "oxq-spec-auditor-worker",
+        "oxq-runtime-auditor-worker",
+        "oxq-runner-worker",
+        "oxq-report-writer-worker",
+        "oxq-report-reviewer-worker",
+    }
+
+
+def test_agent_install_real_source_standalone_profile_uses_narrow_skills(monkeypatch, tmp_path) -> None:
+    source = Path.cwd()
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "agent",
+            "install",
+            "--target",
+            "opencode",
+            "--from-local",
+            str(source),
+            "--profile",
+            "standalone-agent",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (home / ".config/opencode/skills/run-authorized-backtest/SKILL.md").exists()
+    assert (home / ".config/opencode/skills/audit-runtime-semantics/SKILL.md").exists()
+    assert not (home / ".config/opencode/skills/strategy-builder-standalone").exists()
+    assert not (home / ".config/opencode/skills/quant-research").exists()
+    assert not (home / ".config/opencode/agents/oxq-coordinator.md").exists()
+    router = (home / ".config/opencode/skills/open-xquant/SKILL.md").read_text(encoding="utf-8")
+    assert "run-authorized-backtest" in router
+    assert "audit-runtime-semantics" in router
+    assert "strategy-builder-standalone" not in router
+    assert "quant-research" not in router
 
 
 def test_agent_install_generic_does_not_advertise_cached_runner(monkeypatch, tmp_path, fake_sdk_bundle) -> None:
@@ -196,7 +287,7 @@ def test_agent_install_generic_does_not_advertise_cached_runner(monkeypatch, tmp
 
     assert result.exit_code == 0, result.output
     assert fake_sdk_bundle == []
-    assert "agent/skills/*.md" in result.output
+    assert "agent/skills/<name>/SKILL.md" in result.output
     assert "sdk-bundles" not in result.output
     assert "agent-install.json" not in result.output
     assert "preferred_runner_argv" not in result.output
@@ -311,7 +402,61 @@ def test_agent_status_json_reports_installed_targets(monkeypatch, tmp_path) -> N
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["targets"]["opencode"]["installed"] is True
+    assert payload["agent_profile"] == "multi-agent"
+    assert payload["targets"]["opencode"]["agent_profile"] == "multi-agent"
     assert payload["targets"]["opencode"]["skills"]["installed"] == 2
+    assert payload["targets"]["opencode"]["agent_roles"]["installed"] == 0
+
+
+def test_agent_install_real_source_writes_codex_agent_roles(monkeypatch, tmp_path) -> None:
+    source = Path.cwd()
+    home = tmp_path / "home"
+    codex_home = home / ".codex-profile"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "codex", "--from-local", str(source), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    coordinator = codex_home / "agents/oxq-coordinator.toml"
+    runner = codex_home / "agents/oxq-runner-worker.toml"
+    assert coordinator.exists()
+    assert runner.exists()
+    coordinator_payload = tomllib.loads(coordinator.read_text(encoding="utf-8"))
+    assert coordinator_payload["name"] == "oxq-coordinator"
+    assert "oxq-strategy-builder-worker" in coordinator_payload["developer_instructions"]
+    runner_payload = tomllib.loads(runner.read_text(encoding="utf-8"))
+    assert "run-authorized-backtest" in runner_payload["developer_instructions"]
+
+
+def test_agent_install_skips_agent_roles_for_targets_without_subagents(monkeypatch, tmp_path) -> None:
+    source = Path.cwd()
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "agent",
+            "install",
+            "--target",
+            "trae",
+            "--from-local",
+            str(source),
+            "--profile",
+            "multi-agent",
+            "--yes",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "skip agent roles" in result.output
+    assert not (home / ".trae/agents/oxq-coordinator.md").exists()
+    manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
+    assert manifest["targets"]["trae"]["agent_roles"] == []
 
 
 def test_agent_upgrade_reconciles_added_and_removed_managed_skills(monkeypatch, tmp_path) -> None:
@@ -341,6 +486,49 @@ def test_agent_upgrade_reconciles_added_and_removed_managed_skills(monkeypatch, 
     manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
     names = {record["name"] for record in manifest["targets"]["opencode"]["skills"]}
     assert names == {"kept-skill", "new-skill"}
+
+
+def test_agent_upgrade_cleans_renamed_managed_skill_dirs(monkeypatch, tmp_path) -> None:
+    new_source = tmp_path / "new-source"
+    home = tmp_path / "home"
+    _write_source(new_source)
+    monkeypatch.setenv("HOME", str(home))
+    skills_dir = home / ".config/opencode/skills"
+    for name in ("strategy-builder", "backtest-runner"):
+        skill_dir = skills_dir / name
+        skill_file = skill_dir / "SKILL.md"
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_file.write_text(
+            f"---\nname: {name}\ndescription: Legacy skill\n---\n\n# Legacy\n",
+            encoding="utf-8",
+        )
+        skill_sha = hashlib.sha256(skill_file.read_bytes()).hexdigest()
+        (skill_dir / ".open-xquant-managed.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "managed_by": "open-xquant",
+                    "target": "opencode",
+                    "name": name,
+                    "dest_sha256": skill_sha,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+    upgrade = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "opencode", "--from-local", str(new_source), "--yes"],
+    )
+
+    assert upgrade.exit_code == 0, upgrade.output
+    assert not (skills_dir / "strategy-builder").exists()
+    assert not (skills_dir / "backtest-runner").exists()
+    assert (skills_dir / "build-strategy-spec/SKILL.md").exists()
+    assert (skills_dir / "run-authorized-backtest/SKILL.md").exists()
+    manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
+    names = {record["name"] for record in manifest["targets"]["opencode"]["skills"]}
+    assert names == {"build-strategy-spec", "run-authorized-backtest"}
 
 
 def test_agent_upgrade_preserves_modified_removed_managed_skill(monkeypatch, tmp_path) -> None:
@@ -382,7 +570,7 @@ def test_agent_install_repair_restores_missing_managed_skill(monkeypatch, tmp_pa
         ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
     )
     assert install.exit_code == 0, install.output
-    skill_file = home / ".config/opencode/skills/strategy-builder/SKILL.md"
+    skill_file = home / ".config/opencode/skills/build-strategy-spec/SKILL.md"
     skill_file.unlink()
 
     repair = CliRunner().invoke(
@@ -405,7 +593,7 @@ def test_agent_install_repair_preserves_modified_skill_manifest_record(monkeypat
         ["agent", "install", "--target", "opencode", "--from-local", str(source), "--yes"],
     )
     assert install.exit_code == 0, install.output
-    skill_file = home / ".config/opencode/skills/strategy-builder/SKILL.md"
+    skill_file = home / ".config/opencode/skills/build-strategy-spec/SKILL.md"
     skill_file.write_text(skill_file.read_text(encoding="utf-8") + "\nlocal edit\n", encoding="utf-8")
 
     repair = CliRunner().invoke(
@@ -416,7 +604,7 @@ def test_agent_install_repair_preserves_modified_skill_manifest_record(monkeypat
     assert repair.exit_code == 0, repair.output
     manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
     names = {record["name"] for record in manifest["targets"]["opencode"]["skills"]}
-    assert names == {"strategy-builder", "backtest-runner"}
+    assert names == {"build-strategy-spec", "run-authorized-backtest"}
 
 
 def test_agent_uninstall_requires_explicit_target_or_all_targets(monkeypatch, tmp_path) -> None:
@@ -435,15 +623,16 @@ def test_agent_uninstall_requires_explicit_target_or_all_targets(monkeypatch, tm
 
     assert result.exit_code != 0
     assert "Use --target or --all-targets" in result.output
-    assert (home / ".config/opencode/skills/strategy-builder/SKILL.md").exists()
+    assert (home / ".config/opencode/skills/build-strategy-spec/SKILL.md").exists()
 
 
 def test_agent_install_rejects_unsafe_skill_names(monkeypatch, tmp_path) -> None:
     source = tmp_path / "source"
     home = tmp_path / "home"
     skills = source / "agent" / "skills"
-    skills.mkdir(parents=True)
-    (skills / "escape.md").write_text(
+    skill_dir = skills / "escape"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
         "---\nname: ../AGENTS\ndescription: Escape target\n---\n\n# Escape\n",
         encoding="utf-8",
     )

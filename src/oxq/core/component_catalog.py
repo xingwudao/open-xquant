@@ -256,7 +256,7 @@ CANONICAL_RECIPES: list[dict[str, Any]] = [
 ]
 
 
-def build_component_catalog() -> dict[str, Any]:
+def build_component_catalog(component_manifests: list[Mapping[str, Any]] | None = None) -> dict[str, Any]:
     """Return a deterministic catalog of registered components and recipes."""
     catalog: dict[str, Any] = {
         "schema_version": CATALOG_SCHEMA_VERSION,
@@ -266,6 +266,8 @@ def build_component_catalog() -> dict[str, Any]:
         "rules": _component_entries("rules", list_rules()),
         "recipes": sorted(CANONICAL_RECIPES, key=lambda item: item["name"]),
     }
+    for manifest in component_manifests or []:
+        _apply_manifest_metadata(catalog, manifest)
     catalog["recipe_catalog_hash"] = _stable_hash(catalog["recipes"])
     catalog["catalog_hash"] = _catalog_hash(catalog)
     return catalog
@@ -377,6 +379,58 @@ def _output_type(kind: str, name: str) -> str:
     if kind == "portfolios":
         return "target_weights"
     return "rule_result"
+
+
+def _apply_manifest_metadata(catalog: dict[str, Any], manifest: Mapping[str, Any]) -> None:
+    manifest_path = str(manifest.get("_manifest_path") or manifest.get("manifest_path") or "component_manifest.json")
+    bundle_hash = str(manifest.get("bundle_hash") or "")
+    for raw_component in manifest.get("components", []):
+        if not isinstance(raw_component, Mapping):
+            continue
+        kind = str(raw_component.get("kind") or "")
+        section = {
+            "Indicator": "indicators",
+            "Signal": "signals",
+            "PortfolioOptimizer": "portfolios",
+            "Rule": "rules",
+        }.get(kind)
+        name = raw_component.get("name")
+        if section is None or not isinstance(name, str) or not name:
+            continue
+        entries = catalog.get(section)
+        if not isinstance(entries, list):
+            continue
+        entry = next((item for item in entries if isinstance(item, dict) and item.get("name") == name), None)
+        if entry is None:
+            entry = {"name": name}
+            entries.append(entry)
+        entry.update(
+            {
+                "class": ".".join(
+                    part
+                    for part in [
+                        str(raw_component.get("module") or ""),
+                        str(raw_component.get("class") or ""),
+                    ]
+                    if part
+                ),
+                "module": raw_component.get("module", ""),
+                "source": "workspace_extension",
+                "source_type": "workspace_extension",
+                "manifest_path": manifest_path,
+                "bundle_hash": bundle_hash,
+                "output_domain": raw_component.get("output_domain", []),
+            }
+        )
+        if "parameters" in raw_component:
+            entry["params"] = raw_component["parameters"]
+        if "description" in raw_component:
+            entry["description"] = raw_component["description"]
+        if "formula" in raw_component:
+            entry["formula"] = raw_component["formula"]
+    for section in ("indicators", "signals", "portfolios", "rules"):
+        if isinstance(catalog.get(section), list):
+            catalog[section] = sorted(catalog[section], key=lambda item: str(item.get("name", "")))
 
 
 def _catalog_hash(catalog: Mapping[str, Any]) -> str:

@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import yaml
 
 
 def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
-    skill = Path("agent/skills/report-chart-builder.md")
+    skill = Path("agent/skills/build-report-charts/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "report-chart-builder" in text
+    assert "build-report-charts" in text
     assert "discuss chart requirements" in text
     assert "plotting Python" in text
     assert "report_assets/figures" in text
@@ -22,7 +21,7 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "trade_curve" in text
     assert "research_report.md" in text
     assert "research_report.html" in text
-    assert "research-report-writer" in text
+    assert "write-research-report" in text
     assert "oxq report write" not in text
     assert "report_evidence.md" not in text
     assert "Do not modify metrics" in text
@@ -48,7 +47,7 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
 
 
 def test_report_chart_builder_skill_requires_professional_chart_pack() -> None:
-    skill = Path("agent/skills/report-chart-builder.md")
+    skill = Path("agent/skills/build-report-charts/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
@@ -78,7 +77,7 @@ def test_report_chart_builder_skill_requires_professional_chart_pack() -> None:
 
 
 def test_report_chart_builder_skill_defines_trade_curve_requirements() -> None:
-    skill = Path("agent/skills/report-chart-builder.md")
+    skill = Path("agent/skills/build-report-charts/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
     matrix = text[text.index("## Chart Applicability Matrix"): text.index("## Red Lines")]
@@ -91,46 +90,27 @@ def test_report_chart_builder_skill_defines_trade_curve_requirements() -> None:
     assert "Rotation-strategy value: core/default" in matrix
 
 
-def test_opencode_quant_reporter_can_write_html_and_report_assets() -> None:
-    config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
-
-    write_permissions = config["agents"]["quant-reporter"]["permissions"]["write"]
-
-    assert "runs/*/research_report.md" in write_permissions
-    assert "runs/*/research_report.html" in write_permissions
-    assert "runs/*/report_assets/**" in write_permissions
-    assert "runs/*/report_evidence.md" not in write_permissions
-    assert "report_write" not in config["agents"]["quant-reporter"]["tools"]
+def test_opencode_target_specific_source_bundle_is_removed() -> None:
+    assert not Path("agent/opencode").exists()
 
 
-def test_opencode_bundle_references_single_source_skills() -> None:
-    config = json.loads(Path("agent/opencode/opencode.json").read_text(encoding="utf-8"))
-
-    assert config["skills"] == {"paths": ["agent/skills"]}
-    canonical_skills = sorted(Path("agent/skills").glob("*.md"))
+def test_skills_are_directory_canonical_sources() -> None:
+    canonical_skills = sorted(Path("agent/skills").glob("*/SKILL.md"))
     assert canonical_skills
     for canonical in canonical_skills:
-        skill_name = canonical.stem
-        adapter = canonical.with_suffix("") / "SKILL.md"
-        assert canonical.exists()
-        assert adapter.exists()
-        assert not adapter.is_symlink()
+        skill_name = canonical.parent.name
+        assert not canonical.is_symlink()
         canonical_meta = yaml.safe_load(canonical.read_text(encoding="utf-8").split("---", 2)[1])
-        adapter_text = adapter.read_text(encoding="utf-8")
-        adapter_meta = yaml.safe_load(adapter_text.split("---", 2)[1])
-        assert adapter_meta["name"] == canonical_meta["name"]
-        assert " ".join(adapter_meta["description"].split()) == " ".join(canonical_meta["description"].split())
-        assert f"`../{skill_name}.md`" in adapter_text
-        assert "must not copy full skill bodies" not in adapter_text
-    assert not Path("agent/opencode/skills").exists()
+        assert canonical_meta["name"] == skill_name
+        assert not Path(f"agent/skills/{skill_name}.md").exists()
 
 
 def test_research_report_writer_skill_requires_agent_authored_final_report() -> None:
-    skill = Path("agent/skills/research-report-writer.md")
+    skill = Path("agent/skills/write-research-report/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "research-report-writer" in text
+    assert "write-research-report" in text
     assert "research_report.md" in text
     assert "research_report.html" in text
     assert "render_markdown_html_report" in text
@@ -146,15 +126,15 @@ def test_research_report_writer_skill_requires_agent_authored_final_report() -> 
     assert "not a reason to bypass this skill" in text
     assert "write the report directly" in text
     assert "Chart Decision Gate" in text
-    assert "ask the user whether report charts should be created" in text
-    assert "If the user wants charts" in text
-    assert "report-chart-builder" in text
-    assert "If the user declines charts" in text
+    assert "Do not ask the user questions directly from this skill" in text
+    assert "report_writer_result.json" in text
+    assert "missing_chart_decision" in text
+    assert "build-report-charts" in text
     assert "Evidence is generated by the framework; the narrative is authored by the Agent" in text
 
 
 def test_research_report_writer_skill_requires_institutional_report_structure() -> None:
-    skill = Path("agent/skills/research-report-writer.md")
+    skill = Path("agent/skills/write-research-report/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
@@ -170,7 +150,7 @@ def test_research_report_writer_skill_requires_institutional_report_structure() 
 
 
 def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
-    skill = Path("agent/skills/open-xquant.md")
+    skill = Path("agent/skills/open-xquant/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
@@ -185,32 +165,58 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "Install And Upgrade Questions" in text
     assert "installed Agents must not depend on that file" in text
     assert "<runner> agent status" in text
-    assert "ask the user whether charts are needed" in text
-    assert "report-chart-builder` if the user wants figures" in text
     for leaf_skill in [
-        "strategy-builder",
-        "quant-research",
-        "spec-auditor",
-        "strategy-monitor",
-        "report-chart-builder",
-        "experiment-comparator",
-        "research-report-writer",
-        "research-report-reviewer",
-        "performance-reviewer",
-        "factor-evaluator",
-        "factor-screening",
-        "parameter-tuner",
-        "component-creator",
-        "live-trader",
+        "build-strategy-spec",
+        "audit-strategy-spec",
+        "audit-runtime-semantics",
+        "run-authorized-backtest",
+        "monitor-strategy-run",
+        "build-report-charts",
+        "compare-experiments",
+        "write-research-report",
+        "review-research-report",
+        "review-performance",
+        "evaluate-factor",
+        "screen-factors",
+        "tune-parameters",
+        "author-component",
+        "create-component",
+        "manage-live-trading",
     ]:
         assert leaf_skill in text
+    assert "Multi-Agent workflows use narrow leaf skills only" in text
+    assert "strategy-builder-standalone" not in text
+    assert "quant-research" not in text
+
+
+def test_component_author_skill_documents_workspace_extension_contract() -> None:
+    skill = Path("agent/skills/author-component/SKILL.md")
+    role = Path("agent/roles/oxq-component-author-worker.md")
+
+    text = skill.read_text(encoding="utf-8")
+    role_text = role.read_text(encoding="utf-8")
+
+    assert "name: author-component" in text
+    assert "component_request.json" in text
+    assert "custom_components/" in text
+    assert "component_manifest.json" in text
+    assert "result.json" in text
+    assert "oxq component-manifest hash" in text
+    assert "oxq component-manifest validate" in text
+    assert "--component-manifest component_manifest.json" in text
+    assert "Do not build or edit `strategy_spec.yaml`" in text
+    assert "Do not modify the installed SDK bundle" in text
+    assert "role_kind: component_author" in role_text
+    assert "author-component" in role_text
+    assert "forbidden_outputs" in role_text
+
 
 def test_spec_auditor_skill_documents_source_trace_gate() -> None:
-    skill = Path("agent/skills/spec-auditor.md")
+    skill = Path("agent/skills/audit-strategy-spec/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "name: spec-auditor" in text
+    assert "name: audit-strategy-spec" in text
     assert "confirmed" in text
     assert "default" in text
     assert "unconfirmed" in text
@@ -233,11 +239,11 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
 
 
 def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
-    skill = Path("agent/skills/experiment-comparator.md")
+    skill = Path("agent/skills/compare-experiments/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "name: experiment-comparator" in text
+    assert "name: compare-experiments" in text
     assert "comparisons/" in text
     assert ".open-xquant/workspace.yaml" in text
     assert "paths.comparisons_dir" in text
@@ -256,25 +262,25 @@ def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
 
 
 def test_open_xquant_router_resumes_writer_after_chart_builder_before_rendering() -> None:
-    text = Path("agent/skills/open-xquant.md").read_text(encoding="utf-8")
+    text = Path("agent/skills/open-xquant/SKILL.md").read_text(encoding="utf-8")
 
     start = text.index('- "Write the final report":')
     end = text.index('- "Review whether this can be traded":')
     sequence = text[start:end]
 
-    chart_step = sequence.index("`report-chart-builder` if the user wants figures")
-    resume_step = sequence.index("resume `research-report-writer`")
+    chart_step = sequence.index("`build-report-charts` when chart assets are required")
+    resume_step = sequence.index("resume `write-research-report`")
     render_step = sequence.index("render HTML")
 
     assert chart_step < resume_step < render_step
 
 
 def test_research_report_reviewer_skill_covers_semantic_report_qa() -> None:
-    skill = Path("agent/skills/research-report-reviewer.md")
+    skill = Path("agent/skills/review-research-report/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "research-report-reviewer" in text
+    assert "review-research-report" in text
     assert "decision_policy" in text
     assert "REJECT" in text
     assert "WATCHLIST" in text
@@ -289,83 +295,58 @@ def test_research_report_reviewer_skill_covers_semantic_report_qa() -> None:
     assert "do not rewrite" in text.lower()
 
 
-def test_quant_reporter_routes_final_report_through_writer_skill() -> None:
-    reporter = Path("agent/opencode/agents/quant-reporter.md").read_text(encoding="utf-8")
-    command = Path("agent/opencode/commands/quant-report.md").read_text(encoding="utf-8")
-
-    combined = reporter + "\n" + command
-
-    assert "research-report-writer" in combined
-    assert "research-report-reviewer" in combined
-    assert "render `research_report.html` again" in combined
-    assert "render_markdown_html_report" in combined
-    assert "oxq report asset add-batch" in combined
-    assert "Final report QA" in combined
-    assert "oxq report qa" in combined
-    assert "report_evidence.md" not in combined
-    assert "oxq report write" not in combined
+def test_opencode_legacy_agent_command_bundle_is_removed() -> None:
+    assert not Path("agent/opencode").exists()
+    assert not Path("agent/opencode/agents").exists()
+    assert not Path("agent/opencode/commands").exists()
 
 
-def test_opencode_quant_research_includes_final_report_qa_gate() -> None:
-    text = Path("agent/skills/quant-research.md").read_text(encoding="utf-8")
-
-    assert "Before final report writing, ask the user whether chart assets are needed" in text
-    assert "If the user wants charts" in text
-    assert "report-chart-builder" in text
-    assert "Final report QA" in text
-    assert "oxq report qa" in text
-    assert "research-report-reviewer" in text
-    assert "render `research_report.html`" in text
-    assert "Markdown/HTML image counts" in text
-    assert "configured end date" in text
-    assert "effective last trading day" in text
-    assert ".open-xquant/workspace.yaml" in text
-    assert "paths.final_dir" in text
-    assert "paths.experiment_registry" in text
+def test_end_to_end_strategy_skills_are_removed() -> None:
+    assert not Path("agent/skills/quant-research/SKILL.md").exists()
+    assert not Path("agent/skills/strategy-builder-standalone/SKILL.md").exists()
 
 
-def test_strategy_builder_includes_lifecycle_and_spec_auditor_gates() -> None:
-    text = Path("agent/skills/strategy-builder.md").read_text(encoding="utf-8")
+def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
+    text = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
-    assert "Experiment Lifecycle Check" in text
-    assert "research_report.md" in text
-    assert "research_bias_audit.json" in text
-    assert "robustness.json" in text
-    assert "Skip robustness sub-runs" in text
-    assert "_cost_x2" in text
-    assert "spec-auditor" in text
-    assert "runs/final" in text
-    assert ".open-xquant/workspace.yaml" in text
-    assert "paths.final_dir" in text
+    assert "audit-runtime-semantics" in text
+    assert "oxq strategy compile strategy_spec.yaml --out compile_preview" in text
+    assert "compiled_plan.json" in text
+    assert "runtime_audit.json" in text
+    assert "oxq runtime-audit validate runtime_audit.json" in text
+    assert "rebalance interval" in text
+    assert "runtime_semantics_pass" in text
+
+
+def test_strategy_builder_is_build_only_for_multi_agent_systems() -> None:
+    text = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+
+    assert "multi-Agent systems" in text
+    assert "Do not:" in text
+    assert "produce `spec_audit.json`" in text
+    assert "call audit skills" in text
+    assert "download market data" in text
+    assert "run `oxq strategy compile`" in text
+    assert "run `oxq backtest run`" in text
+    assert "attach provenance" in text
+    assert "experiment" in text
     assert "component_catalog.json" in text
-    assert "oxq registry export --out component_catalog.json" in text
     assert "Search `recipes` before composing custom indicator chains" in text
-    assert "sma_golden_cross" in text
-    assert "roc_timing" in text
-    assert "top_n_positive_momentum_rotation" in text
-    assert "CONVERSATION_HISTORY_RAW" in text
-    assert "spec_audit.json" in text
-    assert "oxq backtest attach-provenance" in text
-    assert "Do not edit `artifact_hashes.json` by hand" in text
-    assert "component-creator" in text
+    assert "validation.required_oos: false" in text
+    assert "builder_phase_result.json" in text
+    assert "needs_custom_component" in text
+    assert "Do not call component creation skills" in text
+    assert "strategy-builder-standalone" not in text
+    assert "audit-strategy-spec" not in text
 
 
-def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs() -> None:
-    quant_research = Path("agent/skills/quant-research.md").read_text(encoding="utf-8")
-    strategy_monitor = Path("agent/skills/strategy-monitor.md").read_text(encoding="utf-8")
+def test_strategy_monitor_is_post_run_and_uses_runtime_audit() -> None:
+    strategy_monitor = Path("agent/skills/monitor-strategy-run/SKILL.md").read_text(encoding="utf-8")
 
-    assert "Experiment Lifecycle Check" in quant_research
-    assert "Skip robustness sub-runs" in quant_research
-    assert "runs/final" in quant_research
-    assert "mark it as final" in quant_research
-    assert "paths.experiment_registry" in quant_research
-    assert "oxq registry export --out component_catalog.json" in quant_research
-    assert "oxq spec-audit validate spec_audit.json" in quant_research
-    assert "oxq backtest attach-provenance" in quant_research
-    assert "Do not edit `artifact_hashes.json` by hand" in quant_research
     assert "_cost_x2" in strategy_monitor
     assert "created sub-run directory" in strategy_monitor
     assert "spec_audit.json" in strategy_monitor
+    assert "runtime_audit.json" in strategy_monitor
     assert "component_catalog_hash.txt" in strategy_monitor
     assert "recipe_catalog_hash.txt" in strategy_monitor
     assert "conversation_hash.txt" in strategy_monitor
@@ -375,14 +356,16 @@ def test_quant_research_and_monitor_disclose_lifecycle_final_and_robustness_runs
 def test_agent_guide_is_install_only_and_points_to_router_skill() -> None:
     text = Path("docs/agent-guide.md").read_text(encoding="utf-8")
 
-    assert "skill 单一来源是 `agent/skills/*.md`" in text
-    assert "不要维护 `agent/opencode/skills/`" in text
-    assert "`skills.paths`" in text
+    assert "skill 单一来源是 `agent/skills/*/SKILL.md`" in text
+    assert "不要维护 `agent/opencode/`" in text
+    assert "OpenCode 专用 skills、agents 或 commands 副本" in text
     assert "open-xquant router skill" in text
     assert "current worktree runner" in text
     assert "preferred_runner" in text
     assert "`~/.config/open-xquant/agent-install.json`" in text
     assert "SDK bundle" in text
+    assert "`oxq-component-author-worker`" in text
+    assert "`agent_roles`" in text
     assert "用户任务路由" not in text
     assert "Spec 最小模板" not in text
     assert "CLI 速查" not in text
@@ -408,29 +391,23 @@ def test_readme_workflows_do_not_reference_removed_report_write_command() -> Non
     assert "oxq report write" not in text
 
 
-def test_strategy_builder_skill_prepares_artifacts_for_professional_reports() -> None:
-    skill = Path("agent/skills/strategy-builder.md")
+def test_backtest_runner_is_authorized_execution_only() -> None:
+    skill = Path("agent/skills/run-authorized-backtest/SKILL.md")
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "Report Artifact Readiness" in text
-    assert "metrics.json" in text
-    assert "equity_curve.csv" in text
-    assert "benchmark_curve.csv" in text
-    assert "trades.csv" in text
-    assert "positions.csv" in text
-    assert "orders.csv" in text
-    assert "target_weights.csv" in text
-    assert "robustness.json" in text
-    assert "cost_multiplier" in text
-    assert "parameter_perturbation" in text
-    assert "regime_analysis" in text
-    assert "professional report" in text
+    assert "backtest_authorization.json" in text
+    assert "--spec-audit spec_audit.json" in text
+    assert "--runtime-audit runtime_audit.json" in text
+    assert "runner_result.json" in text
+    assert "Do not edit `strategy_spec.yaml`" in text
+    assert "Do not edit `spec_audit.json`" in text
+    assert "Do not edit `runtime_audit.json`" in text
 
 
 def test_report_writer_and_reviewer_require_spec_audit_disclosure() -> None:
-    writer = Path("agent/skills/research-report-writer.md").read_text(encoding="utf-8")
-    reviewer = Path("agent/skills/research-report-reviewer.md").read_text(encoding="utf-8")
+    writer = Path("agent/skills/write-research-report/SKILL.md").read_text(encoding="utf-8")
+    reviewer = Path("agent/skills/review-research-report/SKILL.md").read_text(encoding="utf-8")
 
     assert "spec_audit.json" in writer
     assert "selected canonical recipes" in writer

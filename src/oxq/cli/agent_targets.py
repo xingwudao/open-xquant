@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from shutil import which
+from typing import Any
 
 import yaml
 
@@ -14,6 +15,7 @@ from oxq.cli.agent_manifest import expand_path, sha256_file
 
 CONCRETE_TARGETS = ("codex", "opencode", "claude-code", "cursor", "openclaw", "trae")
 SUPPORTED_TARGETS = CONCRETE_TARGETS + ("generic",)
+ROLE_TARGETS = ("codex", "opencode", "claude-code", "cursor")
 
 
 @dataclass(frozen=True)
@@ -22,6 +24,7 @@ class AgentTarget:
     skills_dir: Path | None
     instruction_file: Path | None = None
     config_file: Path | None = None
+    agents_dir: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,18 @@ class SkillSource:
     source_sha256: str
 
 
+@dataclass(frozen=True)
+class AgentRoleSource:
+    name: str
+    description: str
+    mode: str
+    path: Path
+    content: str
+    body: str
+    metadata: dict[str, Any]
+    source_sha256: str
+
+
 class SkillValidationError(ValueError):
     """Raised when a source skill cannot be installed for a target."""
 
@@ -45,7 +60,7 @@ def home_path(*parts: str) -> Path:
 
 def resolve_codex_target() -> AgentTarget:
     codex_home = expand_path(os.environ.get("CODEX_HOME", "~/.codex"))
-    return AgentTarget("codex", codex_home / "skills", codex_home / "AGENTS.md")
+    return AgentTarget("codex", codex_home / "skills", codex_home / "AGENTS.md", agents_dir=codex_home / "agents")
 
 
 def resolve_opencode_target() -> AgentTarget:
@@ -53,15 +68,21 @@ def resolve_opencode_target() -> AgentTarget:
         "opencode",
         home_path(".config", "opencode", "skills"),
         home_path(".config", "opencode", "AGENTS.md"),
+        agents_dir=home_path(".config", "opencode", "agents"),
     )
 
 
 def resolve_claude_code_target() -> AgentTarget:
-    return AgentTarget("claude-code", home_path(".claude", "skills"), home_path(".claude", "CLAUDE.md"))
+    return AgentTarget(
+        "claude-code",
+        home_path(".claude", "skills"),
+        home_path(".claude", "CLAUDE.md"),
+        agents_dir=home_path(".claude", "agents"),
+    )
 
 
 def resolve_cursor_target() -> AgentTarget:
-    return AgentTarget("cursor", home_path(".cursor", "skills"))
+    return AgentTarget("cursor", home_path(".cursor", "skills"), agents_dir=home_path(".cursor", "agents"))
 
 
 def resolve_openclaw_target() -> AgentTarget:
@@ -127,10 +148,18 @@ def discover_skills(source_root: Path) -> list[SkillSource]:
     skills_dir = source_root / "agent" / "skills"
     if not skills_dir.is_dir():
         raise FileNotFoundError(f"Missing skills directory: {skills_dir}")
-    skills = [_read_skill(path) for path in sorted(skills_dir.glob("*.md"))]
+    skills = [_read_skill(path) for path in sorted(skills_dir.glob("*/SKILL.md"))]
     if not skills:
-        raise FileNotFoundError(f"No skill markdown files found in {skills_dir}")
+        raise FileNotFoundError(f"No skill directories with SKILL.md found in {skills_dir}")
     return skills
+
+
+def discover_agent_roles(source_root: Path) -> list[AgentRoleSource]:
+    roles_dir = source_root / "agent" / "roles"
+    if not roles_dir.is_dir():
+        return []
+    roles = [_read_agent_role(path) for path in sorted(roles_dir.glob("*.md"))]
+    return roles
 
 
 def _read_skill(path: Path) -> SkillSource:
@@ -144,11 +173,41 @@ def _read_skill(path: Path) -> SkillSource:
         raise SkillValidationError(f"Skill {path} is missing name frontmatter")
     if not _is_safe_skill_name(name.strip()):
         raise SkillValidationError(f"invalid skill name: {name}")
+    if path.parent.name != name.strip():
+        raise SkillValidationError(f"Skill {path} name must match its directory: {path.parent.name}")
     if not isinstance(description, str) or not description.strip():
         raise SkillValidationError(f"Skill {path} is missing description frontmatter")
     return SkillSource(
         name=name.strip(),
         description=" ".join(description.split()),
+        path=path.resolve(),
+        content=content,
+        body=body,
+        metadata=metadata,
+        source_sha256=sha256_file(path),
+    )
+
+
+def _read_agent_role(path: Path) -> AgentRoleSource:
+    if path.is_symlink():
+        raise SkillValidationError(f"Refusing symlinked agent role file: {path}")
+    content = path.read_text(encoding="utf-8")
+    metadata, body = _split_frontmatter(content, path)
+    name = metadata.get("name")
+    description = metadata.get("description")
+    mode = metadata.get("mode", "subagent")
+    if not isinstance(name, str) or not name.strip():
+        raise SkillValidationError(f"Agent role {path} is missing name frontmatter")
+    if not _is_safe_skill_name(name.strip()):
+        raise SkillValidationError(f"invalid agent role name: {name}")
+    if not isinstance(description, str) or not description.strip():
+        raise SkillValidationError(f"Agent role {path} is missing description frontmatter")
+    if mode not in {"primary", "subagent"}:
+        raise SkillValidationError(f"Agent role {path} has invalid mode: {mode}")
+    return AgentRoleSource(
+        name=name.strip(),
+        description=" ".join(description.split()),
+        mode=mode,
         path=path.resolve(),
         content=content,
         body=body,
@@ -202,3 +261,50 @@ def render_skill_for_target(skill: SkillSource, target_id: str) -> str:
         rendered["metadata"] = metadata
     frontmatter = yaml.safe_dump(rendered, sort_keys=False, default_flow_style=False).strip()
     return f"---\n{frontmatter}\n---\n{skill.body}"
+
+
+def render_agent_role_for_target(role: AgentRoleSource, target_id: str) -> tuple[str, str]:
+    if target_id == "codex":
+        return f"{role.name}.toml", _render_codex_role(role)
+    if target_id == "opencode":
+        return f"{role.name}.md", _render_opencode_role(role)
+    if target_id == "claude-code":
+        return f"{role.name}.md", _render_markdown_role(role)
+    if target_id == "cursor":
+        return f"{role.name}.md", _render_markdown_role(role)
+    raise SkillValidationError(f"{target_id} does not support managed open-xquant agent roles")
+
+
+def _render_codex_role(role: AgentRoleSource) -> str:
+    import json
+
+    body = _role_body_with_header(role)
+    return (
+        f"name = {json.dumps(role.name)}\n"
+        f"description = {json.dumps(role.description)}\n"
+        f"developer_instructions = {json.dumps(body)}\n"
+    )
+
+
+def _render_opencode_role(role: AgentRoleSource) -> str:
+    rendered = {
+        "description": role.description,
+        "mode": role.mode,
+    }
+    if role.mode == "primary":
+        rendered["permission"] = {"edit": "deny", "bash": "deny"}
+    frontmatter = yaml.safe_dump(rendered, sort_keys=False, default_flow_style=False).strip()
+    return f"---\n{frontmatter}\n---\n{_role_body_with_header(role)}"
+
+
+def _render_markdown_role(role: AgentRoleSource) -> str:
+    rendered = {
+        "name": role.name,
+        "description": role.description,
+    }
+    frontmatter = yaml.safe_dump(rendered, sort_keys=False, default_flow_style=False).strip()
+    return f"---\n{frontmatter}\n---\n{_role_body_with_header(role)}"
+
+
+def _role_body_with_header(role: AgentRoleSource) -> str:
+    return f"# {role.name}\n\n{role.body.lstrip()}"

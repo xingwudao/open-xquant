@@ -12,9 +12,10 @@ from oxq.cli.main import main
 
 def _write_source(root: Path) -> None:
     skills = root / "agent" / "skills"
-    skills.mkdir(parents=True)
-    (skills / "strategy-builder.md").write_text(
-        "---\nname: strategy-builder\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
+    skill_dir = skills / "build-strategy-spec"
+    skill_dir.mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: build-strategy-spec\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
         encoding="utf-8",
     )
 
@@ -89,7 +90,7 @@ def test_agent_uninstall_removes_only_managed_files(monkeypatch, tmp_path) -> No
     result = CliRunner().invoke(main, ["agent", "uninstall", "--target", "opencode", "--yes"])
 
     assert result.exit_code == 0, result.output
-    assert not (home / ".config/opencode/skills/strategy-builder").exists()
+    assert not (home / ".config/opencode/skills/build-strategy-spec").exists()
     assert "open-xquant:begin" not in agents.read_text(encoding="utf-8")
     assert "user content" in agents.read_text(encoding="utf-8")
     assert data_dir.exists()
@@ -233,7 +234,7 @@ def test_agent_uninstall_purge_refuses_active_cached_runner_before_mutating_targ
     assert install.exit_code == 0, install.output
     bundle = home / ".config/open-xquant/sdk-bundles/bundle-test"
     runner_python = bundle / "runner/.venv/bin/python"
-    skill_dir = home / ".config/opencode/skills/strategy-builder"
+    skill_dir = home / ".config/opencode/skills/build-strategy-spec"
     manifest = home / ".config/open-xquant/agent-install.json"
     monkeypatch.setattr("oxq.cli.sdk_bundle.sys.executable", str(runner_python))
 

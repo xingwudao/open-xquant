@@ -971,9 +971,18 @@ def validate(spec: StrategySpec) -> ValidationResult:
     train_period_len = len(spec.validation.train_period)
     test_period_len = len(spec.validation.test_period)
     if not spec.validation.test_period or test_period_len < 2:
-        errors.append(
-            _err("fatal", "oos_missing", "validation.test_period is missing — no out-of-sample validation period")
-        )
+        if spec.validation.required_oos:
+            errors.append(
+                _err("fatal", "oos_missing", "validation.test_period is missing — no out-of-sample validation period")
+            )
+        else:
+            errors.append(
+                _err(
+                    "fatal",
+                    "backtest_period_missing",
+                    "validation.test_period must contain the full backtest period when required_oos=false",
+                )
+            )
     if spec.validation.train_period and train_period_len != 2:
         errors.append(
             _err("fatal", "validation_period_length", "validation.train_period must contain exactly two dates")

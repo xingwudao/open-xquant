@@ -79,9 +79,8 @@ open-xquant/
 │
 ├── agent/                          # Agent 层
 │   ├── skills/                     # Agent Skill 定义（markdown 工作流）
-│   ├── openclaw/                   # OpenClaw 集成
-│   │   └── bootstrap/              # Agent 启动文件（SOUL, AGENTS, TOOLS）
-│   └── opencode/                   # OpenCode 集成（agents, commands, skills）
+│   ├── roles/                      # Multi-agent role 模板
+│   └── opencode/                   # OpenCode 本地 skills.path 配置
 │
 ├── examples/                       # 示例
 │   ├── modules/                     # 模块 SDK 使用示例（可执行 Python 脚本）
@@ -468,7 +467,7 @@ baseline Sharpe，而应保留 fragile、warn 和 error 状态。
 
 程序负责生成 run artifacts、审计结果、稳健性结果、指标和图表资产
 manifest。最终 `research_report.md` 必须由 Agent 调用
-`research-report-writer` skill 写作，默认语言是中文；`research_report.html`
+`write-research-report` skill 写作，默认语言是中文；`research_report.html`
 从最终 Markdown 渲染，不重新生成报告叙事。
 
 ```text
@@ -526,8 +525,9 @@ oxq report asset list runs/<run_id>/
 ```
 oxq spec init "策略想法"
 oxq spec validate strategy_spec.yaml
+oxq spec-audit validate spec_audit.json
 oxq strategy compile strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --out runs/auto --json
+oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --out runs/auto --json
 oxq audit reproducibility runs/<run_id>/
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
@@ -643,39 +643,60 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 
 ### 13.1 Agent Skills（agent/skills/）
 
-每个 skill.md 描述一个完整的 Agent 工作流，指导 AI Agent 如何组合 tools 完成任务。
+每个 skill.md 描述一个可编排的阶段能力，避免把构建、审计、运行和报告混成一个端到端流程。
 
 | Skill | 说明 |
 |-------|------|
-| `strategy-builder` | 约束 → 目标 → 假设 → 数据 → 逐层构建 → 回测 |
-| `data-explorer` | 检查数据 → 下载行情/因子 → 质量检查 |
-| `parameter-tuner` | 参数优化 + 统计检验 |
-| `performance-reviewer` | 绩效分析 + 归因 |
-| `factor-evaluator` | 因子评估路由 |
-| `component-creator` | 组件创建路由 |
+| `build-strategy-spec` | 构建/编辑 SPEC，输出 builder phase result |
+| `author-component` | 创建 workspace-local custom components、测试、manifest 和 catalog |
+| `audit-strategy-spec` | 审核用户来源、默认值、组件 provenance 和 recipe canonicality |
+| `audit-runtime-semantics` | 编译 preview 并审核 SPEC 到 compiled_plan 的执行语义一致性 |
+| `run-authorized-backtest` | 读取授权 artifact，运行 gated backtest |
+| `monitor-strategy-run` | 跑后 reproducibility/research audit、robustness 和 experiment 记录 |
+| `explore-data` | 检查数据 → 下载行情/因子 → 质量检查 |
+| `tune-parameters` | 参数优化 + 统计检验 |
+| `review-performance` | 绩效分析 + 归因 |
+| `evaluate-factor` | 因子评估路由 |
+| `create-component` | 组件创建路由 |
 | ... | ... |
 
-### 13.2 OpenCode 集成（agent/opencode/）（新增）
+### 13.2 Agent Roles（agent/roles/）
 
-```
-agent/opencode/
-  AGENTS.md
-  opencode.json
-  agents/
-    quant-planner.md
-    quant-builder.md
-    quant-auditor.md
-    quant-reporter.md
-  commands/
-    quant-new.md
-    quant-backtest.md
-    quant-audit.md
-    quant-report.md
-  skills/
-    quant-research/SKILL.md
-```
+`agent/roles/*.md` 是 OpenXQuant multi-agent 预制角色的单一来源。
+安装器会把这些角色渲染成各 Agent 的官方格式：
 
-权限分离原则：Builder 和 Auditor 必须分离，审计阶段不允许修改策略，报告阶段不允许美化失败策略。
+- Codex: `${CODEX_HOME:-~/.codex}/agents/*.toml`
+- OpenCode: `~/.config/opencode/agents/*.md`
+- Claude Code: `~/.claude/agents/*.md`
+- Cursor: `~/.cursor/agents/*.md`
+
+当前预制角色：
+
+- `oxq-coordinator`: 面向用户的主控 Agent，只负责阶段路由和确认。
+- `oxq-strategy-builder-worker`: 构建和验证 `strategy_spec.yaml`。
+- `oxq-component-author-worker`: 创建 workspace-local custom components。
+- `oxq-spec-auditor-worker`: 审用户确认、字段来源和组件 provenance。
+- `oxq-runtime-auditor-worker`: 编译并审核 runtime semantics。
+- `oxq-runner-worker`: 授权后运行 backtest 和确定性跑后检查。
+- `oxq-report-writer-worker`: 写图表资产和研究报告。
+- `oxq-report-reviewer-worker`: 审核报告并输出 `report_review.json`。
+
+没有官方确认 subagent 角色目录的 target 只安装 skills，不安装这些角色。
+
+Workspace-local custom components 通过 `component_manifest.json` 加载，不修改
+installed SDK bundle。确定性命令可以使用 `--component-manifest` 临时注册
+extension 组件，并校验 `bundle_hash` 后再 validate、compile、export catalog
+或 run backtest。
+
+### 13.3 OpenCode 集成
+
+OpenCode 不再保留 `agent/opencode/` 源码包。OpenCode skills 由
+`agent/skills/<name>/SKILL.md` 单一来源安装到
+`~/.config/opencode/skills/`；agent roles 由 `agent/roles/*.md` 单一来源
+渲染到 `~/.config/opencode/agents/*.md`。
+
+源码工作区直读 OpenCode skills 只作为开发者本地配置，不作为仓库内
+target-specific 包维护。
 
 ---
 
@@ -722,8 +743,9 @@ agent/opencode/
 - `src/oxq/robustness/runner.py`
 - CLI: `oxq robustness run`, `oxq experiment add`
 
-### Phase 5: OpenCode 本地集成 ✅ 已完成
-- `agent/opencode/` 完整配置（AGENTS.md, opencode.json, 4 agents, 4 commands, quant-research skill）
+### Phase 5: OpenCode 安装集成 ✅ 已完成
+- 不再保留 `agent/opencode/` 源码包；OpenCode 通过安装器使用
+  `agent/skills/<name>/SKILL.md` 和 `agent/roles/*.md`
 
 ### 已完成
 - Phase 1 (原): 核心引擎 + SDK ✅
@@ -758,7 +780,8 @@ agent/opencode/
 ```bash
 oxq spec init "20日动量轮动" --out strategy_spec.yaml
 oxq spec validate strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --out runs/auto --json
+oxq spec-audit validate spec_audit.json
+oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --out runs/auto --json
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
 oxq experiment add runs/<run_id>/
