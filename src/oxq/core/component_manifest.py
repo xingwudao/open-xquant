@@ -72,12 +72,22 @@ def load_component_manifests_from_run(run_dir: str | Path, *, verify_hash: bool 
         manifest_path = item.get("manifest_path")
         if not isinstance(manifest_path, str) or not manifest_path:
             raise ValueError(f"component_manifests.json[{index}].manifest_path is required")
+        recorded_hash = item.get("bundle_hash")
+        if not isinstance(recorded_hash, str) or not recorded_hash:
+            raise ValueError(f"component_manifests.json[{index}].bundle_hash is required")
         resolved = Path(manifest_path)
         if not resolved.is_absolute():
             resolved = run_path / resolved
         if not resolved.exists():
             raise ValueError(f"recorded component manifest not found: {resolved}")
-        manifests.append(load_component_manifest(resolved, verify_hash=verify_hash))
+        loaded = load_component_manifest(resolved, verify_hash=verify_hash)
+        loaded_hash = loaded.get("bundle_hash")
+        if loaded_hash != recorded_hash:
+            raise ValueError(
+                "recorded component bundle hash mismatch: "
+                f"recorded={recorded_hash}, manifest={loaded_hash}, path={resolved}"
+            )
+        manifests.append(loaded)
     return manifests
 
 

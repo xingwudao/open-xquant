@@ -197,6 +197,8 @@ def test_agent_install_interactive_profile_can_choose_standalone(monkeypatch, tm
     manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
     assert manifest["agent_profile"] == "standalone-agent"
     assert manifest["targets"]["opencode"]["agent_profile"] == "standalone-agent"
+    instructions = (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
+    assert "For open-xquant workflows, prefer SubAgents by default" not in instructions
 
 
 def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_path) -> None:

@@ -42,6 +42,8 @@ also omit it, and omit `--component-manifest` only when no workspace-local
 custom components are authorized. The preview `compiled_plan.json` includes the
 resolved effective `data_dir`, so a preview made with different run inputs is
 not a valid runtime gate.
+When component manifests are used, record their authorized `bundle_hash` values
+in `runtime_audit.json` as `component_bundle_hashes`.
 
 Read `compile_preview/compiled_plan.json` and
 `compile_preview/spec_hash.txt`. The `spec_hash` in the compile preview must
@@ -81,6 +83,7 @@ Write `runtime_audit.json` before authorizing a formal backtest:
   "spec_hash": "sha256:<hash>",
   "spec_audit_hash": "sha256:<hash>",
   "compiled_plan_hash": "sha256:<hash>",
+  "component_bundle_hashes": ["sha256:<hash>"],
   "compiled_plan_path": "compile_preview/compiled_plan.json",
   "material_field_audits": [
     {

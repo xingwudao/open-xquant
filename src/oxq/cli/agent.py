@@ -425,14 +425,22 @@ def upgrade(
         return
 
     source_root = _upgrade_source(from_local, repo, git_ref)
-    selected_profile = agent_profile or _manifest_agent_profile(manifest) or _recommended_agent_profile(upgrade_ids)
-    skills = _filter_skills_for_profile(_discover_skills_or_raise(source_root), selected_profile)
-    agent_roles = _filter_agent_roles_for_profile(_discover_agent_roles_or_raise(source_root), selected_profile)
+    discovered_skills = _discover_skills_or_raise(source_root)
+    discovered_agent_roles = _discover_agent_roles_or_raise(source_root)
     sdk_bundle = build_sdk_bundle(source_root, config_dir(), dry_run=dry_run)
     updated: list[str] = []
+    target_profiles: dict[str, str] = {}
     for target_id in upgrade_ids:
         state = targets.get(target_id)
         assert isinstance(state, dict)
+        selected_profile = (
+            agent_profile
+            or _target_agent_profile(state)
+            or _manifest_agent_profile(manifest)
+            or _recommended_agent_profile([target_id])
+        )
+        skills = _filter_skills_for_profile(discovered_skills, selected_profile)
+        agent_roles = _filter_agent_roles_for_profile(discovered_agent_roles, selected_profile)
         target_obj = resolve_target(target_id)
         skipped = _upgrade_target(
             target_obj,
@@ -444,22 +452,26 @@ def upgrade(
             agent_profile=selected_profile,
         )
         state["agent_profile"] = selected_profile
+        target_profiles[target_id] = selected_profile
         updated.append(target_id)
         if skipped:
             click.echo(f"{target_id}: skipped modified managed files: {', '.join(skipped)}")
+    config_profile = agent_profile
+    display_profile = _upgrade_display_profile(agent_profile, target_profiles)
     if not dry_run:
         manifest["updated_at"] = _now()
         manifest["source"] = _source_metadata(source_root, "local" if from_local else "git")
-        manifest["agent_profile"] = selected_profile
+        if agent_profile is not None:
+            manifest["agent_profile"] = agent_profile
         _record_sdk_bundle(manifest, sdk_bundle)
         write_json_file(manifest_path(), manifest)
     _ensure_agent_config(
         dry_run=dry_run,
         installed_targets=updated,
         sdk_bundle=sdk_bundle,
-        agent_profile=selected_profile,
+        agent_profile=config_profile,
     )
-    click.echo(f"Upgrade complete ({selected_profile}): " + ", ".join(updated))
+    click.echo(f"Upgrade complete ({display_profile}): " + ", ".join(updated))
 
 
 def _select_targets(target: str | None, all_targets: bool) -> list[str]:
@@ -534,6 +546,29 @@ def _filter_agent_roles_for_profile(agent_roles: list[Any], profile: str) -> lis
 def _manifest_agent_profile(manifest: dict[str, Any]) -> str | None:
     value = manifest.get("agent_profile")
     return value if value in AGENT_PROFILES else None
+
+
+def _upgrade_display_profile(explicit_profile: str | None, target_profiles: dict[str, str]) -> str:
+    if explicit_profile is not None:
+        return explicit_profile
+    profiles = {profile for profile in target_profiles.values() if profile in AGENT_PROFILES}
+    if len(profiles) == 1:
+        return next(iter(profiles))
+    return "mixed profiles"
+
+
+def _target_agent_profile(state: dict[str, Any] | None) -> str | None:
+    if not isinstance(state, dict):
+        return None
+    value = state.get("agent_profile")
+    return value if value in AGENT_PROFILES else None
+
+
+def _instruction_block_for_target(target_id: str, agent_profile: str) -> str:
+    content = CLAUDE_AGENT_BLOCK if target_id == "claude-code" else GLOBAL_AGENT_BLOCK
+    if agent_profile == AGENT_PROFILE_MULTI:
+        return content
+    return content.replace(f"\n\n{SUBAGENT_POLICY_BLOCK}", "")
 
 
 def _render_skill_for_target_and_profile(skill: Any, target_id: str, agent_profile: str) -> str:
@@ -635,7 +670,7 @@ def _install_target(
         click.echo(f"{target.id}: skip agent roles; target has no supported multi-agent role directory")
     managed_blocks = []
     if target.instruction_file is not None:
-        content = CLAUDE_AGENT_BLOCK if target.id == "claude-code" else GLOBAL_AGENT_BLOCK
+        content = _instruction_block_for_target(target.id, agent_profile)
         if not dry_run:
             upsert_marker_block(target.instruction_file, "open-xquant", content)
         managed_blocks.append({"file": str(target.instruction_file.resolve()), "marker": "open-xquant"})
@@ -743,7 +778,7 @@ def _upgrade_target(
             }
         )
     if target.instruction_file is not None and not dry_run:
-        content = CLAUDE_AGENT_BLOCK if target.id == "claude-code" else GLOBAL_AGENT_BLOCK
+        content = _instruction_block_for_target(target.id, agent_profile)
         upsert_marker_block(target.instruction_file, "open-xquant", content)
     if target.id == "openclaw":
         if removed_names:

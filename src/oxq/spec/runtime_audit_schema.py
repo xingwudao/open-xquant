@@ -66,6 +66,15 @@ def validate_runtime_audit(payload: Any) -> dict[str, Any]:
         if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
             errors.append({"path": field, "message": "must be a sha256:<hex> hash"})
 
+    if "component_bundle_hashes" in payload:
+        hashes = payload["component_bundle_hashes"]
+        if not isinstance(hashes, list):
+            errors.append({"path": "component_bundle_hashes", "message": "must be a list"})
+        else:
+            for index, value in enumerate(hashes):
+                if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
+                    errors.append({"path": f"component_bundle_hashes[{index}]", "message": "must be a sha256:<hex> hash"})
+
     compiled_plan_path = payload.get("compiled_plan_path")
     if not isinstance(compiled_plan_path, str) or not compiled_plan_path:
         errors.append({"path": "compiled_plan_path", "message": "must be a non-empty string"})

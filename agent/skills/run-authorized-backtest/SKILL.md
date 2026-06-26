@@ -50,6 +50,9 @@ at least:
 If authorization is missing, not `authorized`, or hash fields do not match the
 referenced files, stop and write `runner_result.json` with `status: blocked`.
 Do not repair the inputs.
+When `component_manifests` is non-empty, `runtime_audit.json` must include the
+same `component_bundle_hashes`; the formal run gate rejects missing or stale
+bundle hashes.
 
 ## Run
 

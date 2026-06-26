@@ -714,6 +714,7 @@ def test_runtime_audit_validate_accepts_required_schema(tmp_path) -> None:
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
+        "component_bundle_hashes": ["sha256:" + "4" * 16],
         "compiled_plan_path": "compile_preview/compiled_plan.json",
         "material_field_audits": [
             {
@@ -757,6 +758,29 @@ def test_runtime_audit_validate_rejects_pass_with_false_runtime_gate(tmp_path) -
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert any(error["path"] == "runtime_semantics_pass" for error in payload["errors"])
+
+
+def test_runtime_audit_validate_rejects_invalid_component_bundle_hashes(tmp_path) -> None:
+    audit = {
+        "schema_version": 1,
+        "status": "pass",
+        "runtime_semantics_pass": True,
+        "spec_hash": "sha256:" + "1" * 16,
+        "spec_audit_hash": "sha256:" + "2" * 16,
+        "compiled_plan_hash": "sha256:" + "3" * 16,
+        "component_bundle_hashes": ["not-a-hash"],
+        "compiled_plan_path": "compile_preview/compiled_plan.json",
+        "material_field_audits": [],
+        "blocking_findings": [],
+    }
+    path = tmp_path / "runtime_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["runtime-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert any(error["path"] == "component_bundle_hashes[0]" for error in payload["errors"])
 
 
 def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
@@ -868,6 +892,52 @@ def test_backtest_attach_provenance_rejects_stale_runtime_audit_hashes(tmp_path)
 
     assert result.exit_code == 1
     assert "compiled_plan_hash mismatch" in result.output
+
+
+def test_backtest_attach_provenance_rejects_runtime_audit_component_bundle_mismatch(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    run_bundle_hash = "sha256:" + "1" * 64
+    _attach_component_bundle_artifacts(run_dir, run_bundle_hash)
+    catalog = build_component_catalog(
+        [
+            {
+                "_manifest_path": str(tmp_path / "run_component_manifest.json"),
+                "bundle_hash": run_bundle_hash,
+                "components": [
+                    {
+                        "name": "WorkspaceRunComponent",
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": "workspace_run_component",
+                        "class": "WorkspaceRunComponent",
+                    }
+                ],
+            }
+        ]
+    )
+    component_catalog = tmp_path / "component_catalog.json"
+    component_catalog.write_text(component_catalog_json(catalog), encoding="utf-8")
+    spec_audit = _write_pass_spec_audit(tmp_path, spec_hash, catalog["catalog_hash"])
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "component_bundle_hashes" in result.output
 
 
 def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_path) -> None:
@@ -1288,33 +1358,40 @@ def _write_pass_spec_audit(tmp_path: Path, spec_hash: str, catalog_hash: str) ->
     return path
 
 
-def _write_pass_runtime_audit(run_dir: Path, spec_audit: Path, *, blocking: bool = False) -> Path:
+def _write_pass_runtime_audit(
+    run_dir: Path,
+    spec_audit: Path,
+    *,
+    blocking: bool = False,
+    component_bundle_hashes: list[str] | None = None,
+) -> Path:
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     path = spec_audit.with_name("runtime_audit.json")
-    path.write_text(
-        json.dumps(
+    payload = {
+        "schema_version": 1,
+        "status": "pass",
+        "runtime_semantics_pass": True,
+        "spec_hash": spec_hash,
+        "spec_audit_hash": _hash_json_file(spec_audit),
+        "compiled_plan_hash": _hash_json_file(run_dir / "compiled_plan.json"),
+        "compiled_plan_path": str(run_dir / "compiled_plan.json"),
+        "material_field_audits": [
             {
-                "schema_version": 1,
-                "status": "pass",
-                "runtime_semantics_pass": True,
-                "spec_hash": spec_hash,
-                "spec_audit_hash": _hash_json_file(spec_audit),
-                "compiled_plan_hash": _hash_json_file(run_dir / "compiled_plan.json"),
-                "compiled_plan_path": str(run_dir / "compiled_plan.json"),
-                "material_field_audits": [
-                    {
-                        "field_path": "portfolio.rules.rebalance",
-                        "spec_value": {"type": "RebalanceFrequencyRule"},
-                        "runtime_path": "execution.rebalance",
-                        "runtime_value": {},
-                        "status": "mismatch" if blocking else "preserved",
-                        "evidence": ["test fixture"],
-                        "blocking": blocking,
-                    }
-                ],
-                "blocking_findings": [],
+                "field_path": "portfolio.rules.rebalance",
+                "spec_value": {"type": "RebalanceFrequencyRule"},
+                "runtime_path": "execution.rebalance",
+                "runtime_value": {},
+                "status": "mismatch" if blocking else "preserved",
+                "evidence": ["test fixture"],
+                "blocking": blocking,
             }
-        ),
+        ],
+        "blocking_findings": [],
+    }
+    if component_bundle_hashes is not None:
+        payload["component_bundle_hashes"] = component_bundle_hashes
+    path.write_text(
+        json.dumps(payload),
         encoding="utf-8",
     )
     return path

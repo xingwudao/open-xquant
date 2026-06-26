@@ -84,6 +84,7 @@ def _write_runtime_audit(
     spec_path: Path | None = None,
     spec_audit_path: Path | None = None,
     effective_data_dir: str | None = None,
+    component_bundle_hashes: list[str] | None = None,
 ) -> None:
     spec_audit_hash = "sha256:" + "4" * 16
     compiled_plan_hash = "sha256:" + "5" * 16
@@ -92,21 +93,21 @@ def _write_runtime_audit(
     if spec_path is not None:
         spec = StrategySpec.from_yaml(spec_path)
         compiled_plan_hash = _canonical_json_hash(compile_plan(spec, effective_data_dir=effective_data_dir))
+    payload = {
+        "schema_version": 1,
+        "status": "pass",
+        "runtime_semantics_pass": runtime_semantics_pass,
+        "spec_hash": spec_hash,
+        "spec_audit_hash": spec_audit_hash,
+        "compiled_plan_hash": compiled_plan_hash,
+        "compiled_plan_path": "compile_preview/compiled_plan.json",
+        "material_field_audits": [],
+        "blocking_findings": [],
+    }
+    if component_bundle_hashes is not None:
+        payload["component_bundle_hashes"] = component_bundle_hashes
     path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "status": "pass",
-                "runtime_semantics_pass": runtime_semantics_pass,
-                "spec_hash": spec_hash,
-                "spec_audit_hash": spec_audit_hash,
-                "compiled_plan_hash": compiled_plan_hash,
-                "compiled_plan_path": "compile_preview/compiled_plan.json",
-                "material_field_audits": [],
-                "blocking_findings": [],
-            },
-            indent=2,
-        ),
+        json.dumps(payload, indent=2),
         encoding="utf-8",
     )
 
@@ -204,6 +205,108 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     assert "component_manifest.json" in hashes
     assert "component_manifests.json" in hashes
     assert "component_bundle_hash.txt" in hashes
+
+
+def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    bundle_hash = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "runtime_audit_failed"
+    assert "component_bundle_hashes" in payload["errors"][0]["message"]
+
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+        component_bundle_hashes=[bundle_hash],
+    )
+    ok = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_ok"),
+            "--json",
+        ],
+    )
+
+    assert ok.exit_code == 0, ok.output
+
+
+def test_run_component_manifest_loader_rejects_recorded_bundle_hash_mismatch(tmp_path) -> None:
+    from oxq.core.component_manifest import load_component_manifests_from_run
+
+    manifest = _write_component_manifest(tmp_path)
+    bundle_hash = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps([{"manifest_path": str(manifest), "bundle_hash": "sha256:" + "0" * 64}]),
+        encoding="utf-8",
+    )
+
+    try:
+        load_component_manifests_from_run(run_dir)
+    except ValueError as exc:
+        assert "recorded component bundle hash mismatch" in str(exc)
+    else:
+        raise AssertionError("expected recorded component bundle hash mismatch")
 
 
 def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:

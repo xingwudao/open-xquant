@@ -393,6 +393,7 @@ def run(
                 pre_run_runtime_audit_path,
                 spec_audit_path=pre_run_audit_path,
                 effective_data_dir=_resolve_effective_data_dir(spec, data_dir),
+                component_bundle_hashes=_component_bundle_hashes(loaded_component_manifests),
             )
         except click.ClickException as e:
             if as_json:
@@ -530,6 +531,7 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, 
             spec_hash=run_spec_hash,
             spec_audit_path=Path(spec_audit),
             compiled_plan_path=run_path / "compiled_plan.json",
+            component_bundle_hashes=_run_component_bundle_hashes(run_path),
         )
 
     conversation_hash = _require_json_str(audit_payload, "conversation_hash")
@@ -672,6 +674,7 @@ def _require_pre_backtest_runtime_audit(
     *,
     spec_audit_path: Path | None,
     effective_data_dir: str | None,
+    component_bundle_hashes: set[str] | None = None,
 ) -> None:
     """Deterministically gate a formal backtest on a pre-run runtime audit."""
     from oxq.spec.compiler import compile_plan
@@ -698,6 +701,7 @@ def _require_pre_backtest_runtime_audit(
         spec_hash=spec_hash,
         spec_audit_path=spec_audit_path,
         compiled_plan_payload=compile_plan(spec, effective_data_dir=effective_data_dir),
+        component_bundle_hashes=component_bundle_hashes,
     )
 
 
@@ -708,6 +712,7 @@ def _require_runtime_audit_hashes(
     spec_audit_path: Path | None = None,
     compiled_plan_path: Path | None = None,
     compiled_plan_payload: object | None = None,
+    component_bundle_hashes: set[str] | None = None,
 ) -> None:
     audit_spec_hash = _require_json_str(audit_payload, "spec_hash")
     if audit_spec_hash != spec_hash:
@@ -738,6 +743,17 @@ def _require_runtime_audit_hashes(
             raise click.ClickException(
                 "runtime audit compiled_plan_hash mismatch: "
                 f"audit={audit_compiled_plan_hash}, expected={expected_compiled_plan_hash}"
+            )
+    expected_component_hashes = sorted(component_bundle_hashes or set())
+    if expected_component_hashes:
+        audit_hashes = audit_payload.get("component_bundle_hashes")
+        if not isinstance(audit_hashes, list) or not all(isinstance(item, str) for item in audit_hashes):
+            raise click.ClickException("runtime audit component_bundle_hashes must list authorized component bundle hashes")
+        normalized_audit_hashes = sorted(set(audit_hashes))
+        if normalized_audit_hashes != expected_component_hashes:
+            raise click.ClickException(
+                "runtime audit component_bundle_hashes mismatch: "
+                f"audit={normalized_audit_hashes}, expected={expected_component_hashes}"
             )
 
 
@@ -785,6 +801,15 @@ def _run_component_bundle_hashes(run_path: Path) -> set[str]:
     if bundle_hash_path.exists():
         digest = bundle_hash_path.read_text(encoding="utf-8").strip()
         if digest:
+            hashes.add(digest)
+    return hashes
+
+
+def _component_bundle_hashes(manifests: list[dict]) -> set[str]:
+    hashes: set[str] = set()
+    for manifest in manifests:
+        digest = manifest.get("bundle_hash")
+        if isinstance(digest, str) and digest:
             hashes.add(digest)
     return hashes
 

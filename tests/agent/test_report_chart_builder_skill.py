@@ -336,6 +336,7 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
     assert "runtime_audit.json" in text
     assert "oxq runtime-audit validate runtime_audit.json" in text
     assert "same `data_dir` and every `component_manifest` path" in text
+    assert "component_bundle_hashes" in text
     assert "rebalance interval" in text
     assert "runtime_semantics_pass" in text
 
@@ -424,6 +425,7 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "--component-manifest component_manifest.json" in text
     assert "Omit `--component-manifest` only when" in text
     assert "component_manifests.json" in text
+    assert "same `component_bundle_hashes`" in text
     assert "do not rerun the" in text
     assert "workspace-local custom components" in text
     assert "runner_result.json" in text

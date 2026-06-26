@@ -121,6 +121,65 @@ def test_agent_upgrade_skips_locally_modified_skill(monkeypatch, tmp_path) -> No
     assert "modified" in result.output
 
 
+def test_agent_upgrade_single_target_preserves_existing_target_profile(monkeypatch, tmp_path) -> None:
+    source_v1 = tmp_path / "source-v1"
+    source_v2 = tmp_path / "source-v2"
+    home = tmp_path / "home"
+    _write_source(source_v1, "old workflow")
+    _write_source(source_v2, "new workflow")
+    monkeypatch.setenv("HOME", str(home))
+
+    opencode_install = CliRunner().invoke(
+        main,
+        [
+            "agent",
+            "install",
+            "--target",
+            "opencode",
+            "--from-local",
+            str(source_v1),
+            "--profile",
+            "multi-agent",
+            "--yes",
+        ],
+    )
+    assert opencode_install.exit_code == 0, opencode_install.output
+    trae_install = CliRunner().invoke(
+        main,
+        [
+            "agent",
+            "install",
+            "--target",
+            "trae",
+            "--from-local",
+            str(source_v1),
+            "--profile",
+            "standalone-agent",
+            "--yes",
+        ],
+    )
+    assert trae_install.exit_code == 0, trae_install.output
+    manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
+    assert manifest["agent_profile"] == "standalone-agent"
+    assert manifest["targets"]["opencode"]["agent_profile"] == "multi-agent"
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "upgrade", "--target", "opencode", "--from-local", str(source_v2), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    upgraded_manifest = json.loads((home / ".config/open-xquant/agent-install.json").read_text(encoding="utf-8"))
+    assert upgraded_manifest["agent_profile"] == "standalone-agent"
+    assert upgraded_manifest["targets"]["opencode"]["agent_profile"] == "multi-agent"
+    agent_config = (home / ".config/open-xquant/agent.yaml").read_text(encoding="utf-8")
+    assert "agent_profile: standalone-agent" in agent_config
+    instructions = (home / ".config/opencode/AGENTS.md").read_text(encoding="utf-8")
+    assert "For open-xquant workflows, prefer SubAgents by default" in instructions
+    installed = home / ".config/opencode/skills/build-strategy-spec/SKILL.md"
+    assert "new workflow" in installed.read_text(encoding="utf-8")
+
+
 def test_agent_upgrade_missing_target_does_not_build_or_update_sdk_bundle(monkeypatch, tmp_path, fake_sdk_bundle) -> None:
     source_v1 = tmp_path / "source-v1"
     source_v2 = tmp_path / "source-v2"
