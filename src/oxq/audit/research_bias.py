@@ -34,9 +34,15 @@ def audit_research(run_dir: str | Path) -> dict:
     run_path = Path(run_dir)
     checks: list[dict] = []
     try:
-        from oxq.core.component_manifest import load_component_manifests_from_run
+        from oxq.core.component_manifest import validate_component_manifest_records_from_run
 
-        load_component_manifests_from_run(run_path)
+        for warning in validate_component_manifest_records_from_run(run_path):
+            checks.append(_finding(
+                "component_manifest_record",
+                "fail",
+                "warning",
+                f"run component manifest record could not be verified from archived artifacts: {warning}",
+            ))
     except Exception as exc:
         return {
             "status": "fail",
@@ -44,7 +50,7 @@ def audit_research(run_dir: str | Path) -> dict:
                 "id": "component_manifest_load",
                 "status": "fail",
                 "severity": "fatal",
-                "message": f"run component manifests could not be loaded: {exc}",
+                "message": f"run component manifest records are invalid: {exc}",
             }],
             "fatal_count": 1,
             "warning_count": 0,

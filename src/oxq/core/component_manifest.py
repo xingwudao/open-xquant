@@ -90,15 +90,7 @@ def load_component_manifests_from_run(run_dir: str | Path, *, verify_hash: bool 
     """Load component manifests recorded by a completed run, if any."""
 
     run_path = Path(run_dir)
-    summary_path = run_path / "component_manifests.json"
-    if not summary_path.exists():
-        return []
-    try:
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError) as exc:
-        raise ValueError(f"component_manifests.json is invalid: {exc}") from exc
-    if not isinstance(summary, list):
-        raise ValueError("component_manifests.json must be a list")
+    summary = _read_run_manifest_summary(run_path)
 
     manifests: list[dict[str, Any]] = []
     for index, item in enumerate(summary):
@@ -110,11 +102,7 @@ def load_component_manifests_from_run(run_dir: str | Path, *, verify_hash: bool 
         recorded_hash = item.get("bundle_hash")
         if not isinstance(recorded_hash, str) or not recorded_hash:
             raise ValueError(f"component_manifests.json[{index}].bundle_hash is required")
-        resolved = Path(manifest_path)
-        if not resolved.is_absolute():
-            resolved = run_path / resolved
-        if not resolved.exists():
-            raise ValueError(f"recorded component manifest not found: {resolved}")
+        resolved = _resolve_run_manifest_path(run_path, manifest_path, recorded_hash, len(summary))
         loaded = load_component_manifest(resolved, verify_hash=verify_hash)
         loaded_hash = loaded.get("bundle_hash")
         if loaded_hash != recorded_hash:
@@ -124,6 +112,68 @@ def load_component_manifests_from_run(run_dir: str | Path, *, verify_hash: bool 
             )
         manifests.append(loaded)
     return manifests
+
+
+def validate_component_manifest_records_from_run(run_dir: str | Path) -> list[str]:
+    """Validate run component manifest records without importing component code."""
+
+    run_path = Path(run_dir)
+    summary = _read_run_manifest_summary(run_path)
+    warnings: list[str] = []
+    for index, item in enumerate(summary):
+        if not isinstance(item, dict):
+            raise ValueError(f"component_manifests.json[{index}] must be an object")
+        manifest_path = item.get("manifest_path")
+        if not isinstance(manifest_path, str) or not manifest_path:
+            raise ValueError(f"component_manifests.json[{index}].manifest_path is required")
+        recorded_hash = item.get("bundle_hash")
+        if not isinstance(recorded_hash, str) or not recorded_hash:
+            raise ValueError(f"component_manifests.json[{index}].bundle_hash is required")
+        try:
+            resolved = _resolve_run_manifest_path(run_path, manifest_path, recorded_hash, len(summary))
+        except ValueError as exc:
+            warnings.append(str(exc))
+            continue
+        payload = _read_manifest(resolved)
+        loaded_hash = payload.get("bundle_hash")
+        if loaded_hash != recorded_hash:
+            raise ValueError(
+                "recorded component bundle hash mismatch: "
+                f"recorded={recorded_hash}, manifest={loaded_hash}, path={resolved}"
+            )
+    return warnings
+
+
+def _read_run_manifest_summary(run_path: Path) -> list[Any]:
+    summary_path = run_path / "component_manifests.json"
+    if not summary_path.exists():
+        return []
+    try:
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        raise ValueError(f"component_manifests.json is invalid: {exc}") from exc
+    if not isinstance(summary, list):
+        raise ValueError("component_manifests.json must be a list")
+    return summary
+
+
+def _resolve_run_manifest_path(run_path: Path, manifest_path: str, recorded_hash: str, summary_count: int) -> Path:
+    resolved = Path(manifest_path)
+    if not resolved.is_absolute():
+        resolved = run_path / resolved
+    if resolved.exists():
+        return resolved
+
+    archived = run_path / "component_manifest.json"
+    if summary_count == 1 and archived.exists():
+        try:
+            archived_payload = _read_manifest(archived)
+        except ValueError:
+            pass
+        else:
+            if archived_payload.get("bundle_hash") == recorded_hash:
+                return archived
+    raise ValueError(f"recorded component manifest not found: {resolved}")
 
 
 def compute_component_bundle_hash(path: str | Path) -> str:
@@ -140,13 +190,9 @@ def compute_component_bundle_hash(path: str | Path) -> str:
         _relative_path(manifest_path, manifest_path.parent),
         _stable_payload_hash(manifest_without_hash),
     )
-    pyproject = root / "pyproject.toml"
-    if pyproject.exists():
-        _add_hash_piece(pieces_by_path, _relative_path(pyproject, manifest_path.parent), _sha256_file(pyproject))
-    for source_file in sorted(root.rglob("*.py")):
-        if "__pycache__" in source_file.parts:
-            continue
-        _add_hash_piece(pieces_by_path, _relative_path(source_file, manifest_path.parent), _sha256_file(source_file))
+    for bundle_file in sorted(root.rglob("*")):
+        if _is_bundle_file(bundle_file):
+            _add_hash_piece(pieces_by_path, _relative_path(bundle_file, manifest_path.parent), _sha256_file(bundle_file))
     for component in _components(payload):
         source_paths = []
         if isinstance(component.get("source_path"), str):
@@ -166,6 +212,14 @@ def compute_component_bundle_hash(path: str | Path) -> str:
                         _add_hash_piece(pieces_by_path, _relative_path(test_file, manifest_path.parent), _sha256_file(test_file))
     pieces = sorted(pieces_by_path.values(), key=lambda item: item["path"])
     return _stable_payload_hash(sorted(pieces, key=lambda item: item["path"]))
+
+
+def _is_bundle_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    if any(part in {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache"} for part in path.parts):
+        return False
+    return path.suffix not in {".pyc", ".pyo"}
 
 
 def component_manifest_summary(path: str | Path) -> dict[str, Any]:

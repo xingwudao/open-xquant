@@ -413,6 +413,9 @@ def run(
 
     if not as_json:
         click.echo(f"Running backtest for '{spec.strategy_id}'...")
+        effective_data_dir = _resolve_effective_data_dir(spec, data_dir)
+        click.echo(f"  Effective data dir: {effective_data_dir}")
+        click.echo("  Note: effective data_dir is included in compiled_plan.json and its hash.")
     try:
         result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
     except Exception as e:

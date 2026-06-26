@@ -110,6 +110,25 @@ def test_component_manifest_loads_workspace_indicator_and_updates_catalog(tmp_pa
     assert custom["source"] == "workspace_extension"
     assert custom["bundle_hash"] == digest
     assert custom["manifest_path"] == str(manifest.resolve())
+    assert custom["manifest_parameters"] == {"value": 1.0}
+    assert custom["params"]["value"]["default"] == 1.0
+    assert custom["params"]["value"]["manifest_value"] == 1.0
+    assert custom["params"]["value"]["required"] is False
+
+
+def test_component_manifest_hash_includes_non_python_resources(tmp_path) -> None:
+    manifest = _write_custom_indicator_extension(tmp_path)
+    resource = tmp_path / "custom_components" / "resources" / "lookup.json"
+    resource.parent.mkdir(parents=True)
+    resource.write_text(json.dumps({"threshold": 1}), encoding="utf-8")
+
+    first = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
+    resource.write_text(json.dumps({"threshold": 2}), encoding="utf-8")
+    second = CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"])
+
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    assert json.loads(first.output)["component_bundle_hash"] != json.loads(second.output)["component_bundle_hash"]
 
 
 def test_component_manifest_validate_does_not_persist_workspace_component(tmp_path) -> None:

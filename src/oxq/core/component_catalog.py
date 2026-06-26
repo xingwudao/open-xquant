@@ -422,8 +422,8 @@ def _apply_manifest_metadata(catalog: dict[str, Any], manifest: Mapping[str, Any
                 "output_domain": raw_component.get("output_domain", []),
             }
         )
-        if "parameters" in raw_component:
-            entry["params"] = raw_component["parameters"]
+        if isinstance(raw_component.get("parameters"), Mapping):
+            _merge_manifest_parameters(entry, raw_component["parameters"])
         if "description" in raw_component:
             entry["description"] = raw_component["description"]
         if "formula" in raw_component:
@@ -431,6 +431,29 @@ def _apply_manifest_metadata(catalog: dict[str, Any], manifest: Mapping[str, Any
     for section in ("indicators", "signals", "portfolios", "rules"):
         if isinstance(catalog.get(section), list):
             catalog[section] = sorted(catalog[section], key=lambda item: str(item.get("name", "")))
+
+
+def _merge_manifest_parameters(entry: dict[str, Any], parameters: Mapping[str, Any]) -> None:
+    manifest_parameters = dict(parameters)
+    entry["manifest_parameters"] = manifest_parameters
+    existing = entry.get("params")
+    if not isinstance(existing, Mapping):
+        entry["params"] = {
+            name: {"default": value, "source": "manifest"}
+            for name, value in manifest_parameters.items()
+        }
+        return
+
+    merged: dict[str, Any] = dict(existing)
+    for name, value in manifest_parameters.items():
+        current = merged.get(name)
+        if isinstance(current, Mapping):
+            annotated = dict(current)
+            annotated["manifest_value"] = value
+            merged[name] = annotated
+        else:
+            merged[name] = {"default": value, "source": "manifest"}
+    entry["params"] = merged
 
 
 def _catalog_hash(catalog: Mapping[str, Any]) -> str:

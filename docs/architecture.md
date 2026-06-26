@@ -527,7 +527,8 @@ oxq spec init "策略想法"
 oxq spec validate strategy_spec.yaml
 oxq spec-audit validate spec_audit.json
 oxq strategy compile strategy_spec.yaml
-oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --out runs/auto --json
+oxq runtime-audit validate runtime_audit.json
+oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --out runs/auto --json
 oxq audit reproducibility runs/<run_id>/
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
@@ -782,7 +783,8 @@ target-specific 包维护。
 oxq spec init "20日动量轮动" --out strategy_spec.yaml
 oxq spec validate strategy_spec.yaml
 oxq spec-audit validate spec_audit.json
-oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --out runs/auto --json
+oxq runtime-audit validate runtime_audit.json
+oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --out runs/auto --json
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
 oxq experiment add runs/<run_id>/

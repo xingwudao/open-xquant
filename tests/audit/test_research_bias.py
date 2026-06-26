@@ -5,6 +5,7 @@ import json
 import yaml
 
 from oxq.audit.research_bias import audit_research
+from oxq.core.component_manifest import compute_component_bundle_hash
 from oxq.spec.schema import SignalRuleDef, StrategySpec
 
 
@@ -25,7 +26,7 @@ def test_research_audit_fails_when_metrics_json_is_missing(tmp_path) -> None:
     assert any(check["id"] == "metrics_json" and check["severity"] == "fatal" for check in result["checks"])
 
 
-def test_research_audit_fails_when_run_component_manifest_cannot_load(tmp_path) -> None:
+def test_research_audit_warns_when_run_component_manifest_checkout_is_missing(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="missing_component_manifest", hypothesis="custom component manifest is required")
     (tmp_path / "strategy_spec.yaml").write_text(
         yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
@@ -42,10 +43,50 @@ def test_research_audit_fails_when_run_component_manifest_cannot_load(tmp_path) 
 
     result = audit_research(tmp_path)
 
-    assert result["status"] == "fail"
-    assert result["fatal_count"] == 1
-    assert result["checks"][0]["id"] == "component_manifest_load"
-    assert "recorded component manifest not found" in result["checks"][0]["message"]
+    assert result["fatal_count"] == 0
+    manifest_check = next(check for check in result["checks"] if check["id"] == "component_manifest_record")
+    assert manifest_check["severity"] == "warning"
+    assert "recorded component manifest not found" in manifest_check["message"]
+
+
+def test_research_audit_accepts_archived_single_component_manifest(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="archived_component_manifest", hypothesis="archived manifest should audit")
+    (tmp_path / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "metrics.json").write_text(
+        json.dumps({"trade_count": 12, "max_drawdown": -0.1}),
+        encoding="utf-8",
+    )
+    (tmp_path / "custom_components").mkdir()
+    archived_manifest = tmp_path / "component_manifest.json"
+    archived_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": "custom_components",
+                "extension_root": "custom_components",
+                "bundle_hash": "",
+                "components": [],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    payload = json.loads(archived_manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = compute_component_bundle_hash(archived_manifest)
+    archived_manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    (tmp_path / "component_manifests.json").write_text(
+        json.dumps([{"manifest_path": "/deleted/component_manifest.json", "bundle_hash": payload["bundle_hash"]}]),
+        encoding="utf-8",
+    )
+
+    result = audit_research(tmp_path)
+
+    assert result["fatal_count"] == 0
+    assert not any(check["id"] == "component_manifest_record" for check in result["checks"])
 
 
 def test_research_audit_returns_fatal_when_spec_cannot_parse(tmp_path) -> None:

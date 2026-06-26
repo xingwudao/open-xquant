@@ -10,6 +10,7 @@ import copy
 import json
 import math
 import re
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, c
 from oxq.spec.schema import CostSection, StrategySpec
 
 _BENCHMARK_CURVE_FILES = ("benchmark_curve.csv", "benchmark_equity_curve.csv", "benchmark_prices.csv")
+_COMPONENT_PROVENANCE_FILES = ("component_manifest.json", "component_manifests.json", "component_bundle_hash.txt")
 
 
 def run_robustness(run_dir: str | Path) -> dict:
@@ -38,6 +40,13 @@ def run_robustness(run_dir: str | Path) -> dict:
     dict
         Robustness result with 'status', 'tests', and summary.
     """
+    from oxq.core.component_manifest import scoped_component_registries
+
+    with scoped_component_registries():
+        return _run_robustness_scoped(run_dir)
+
+
+def _run_robustness_scoped(run_dir: str | Path) -> dict:
     run_path = Path(run_dir)
     tests: list[dict] = []
     try:
@@ -73,6 +82,7 @@ def run_robustness(run_dir: str | Path) -> dict:
         cost_x2_dir = run_path.parent / f"{run_path.name}_cost_x2"
         cost_spec = _clone_spec_with_cost_multiplier(spec, 2.0)
         _, cost_run_dir = compile_run(cost_spec, out_dir=str(cost_x2_dir), data_dir=data_dir)
+        _copy_component_provenance(run_path, Path(cost_run_dir))
         perturbed_sharpe = _read_metric_sharpe(Path(cost_run_dir) / "metrics.json")
         if baseline_sharpe is None or perturbed_sharpe is None:
             tests.append({
@@ -297,6 +307,7 @@ def _run_parameter_perturbations(
                 perturbed_spec.strategy_id = f"{spec.strategy_id}_perturb_{target_slug}_{value_slug}"
                 out_dir = run_path.parent / f"{run_path.name}_perturb_{target_slug}_{value_slug}"
                 _, perturbed_run_dir = compile_run(perturbed_spec, out_dir=str(out_dir), data_dir=data_dir)
+                _copy_component_provenance(run_path, Path(perturbed_run_dir))
                 perturbed_sharpe = _read_metric_sharpe(Path(perturbed_run_dir) / "metrics.json")
                 results.append(_perturbation_result(target, value, baseline_sharpe, perturbed_sharpe, perturbed_run_dir))
             except Exception as exc:
@@ -329,6 +340,31 @@ def _run_parameter_perturbations(
         "results": results,
         "message": message,
     }
+
+
+def _copy_component_provenance(source_run: Path, child_run: Path) -> None:
+    copied: list[str] = []
+    for filename in _COMPONENT_PROVENANCE_FILES:
+        source = source_run / filename
+        if not source.exists():
+            continue
+        target = child_run / filename
+        shutil.copy2(source, target)
+        copied.append(filename)
+    if not copied:
+        return
+
+    hashes_path = child_run / "artifact_hashes.json"
+    hashes: dict[str, Any] = {}
+    if hashes_path.exists():
+        hashes, error = _read_json_object(hashes_path, "artifact_hashes.json")
+        if error is not None:
+            hashes = {}
+    for filename in copied:
+        path = child_run / filename
+        hashes[filename] = _hash_json_file(path) if path.suffix == ".json" else _hash_file(path)
+    hashes_path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    _append_run_digest(child_run, _hash_json_file(hashes_path))
 
 
 def _perturbation_result(
