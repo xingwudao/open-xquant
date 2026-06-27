@@ -119,6 +119,13 @@ def _flatten_effective_fields(value: object, prefix: str = "") -> list[tuple[str
             child_path = f"{prefix}.{key}" if prefix else str(key)
             fields.extend(_flatten_effective_fields(value[key], child_path))
         return fields
+    if isinstance(value, list):
+        if all(not isinstance(item, (dict, list)) for item in value):
+            return [(prefix, value)]
+        fields = []
+        for index, item in enumerate(value):
+            fields.extend(_flatten_effective_fields(item, f"{prefix}[{index}]"))
+        return fields
     return [(prefix, value)]
 
 

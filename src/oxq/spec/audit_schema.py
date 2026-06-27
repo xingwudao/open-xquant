@@ -215,8 +215,8 @@ def _validate_confirmed_effective_field_coverage(payload: dict[str, Any], spec: 
                 }
             )
             continue
-        confirmed_row = next((row for _, row in rows if row.get("status") == "confirmed"), None)
-        if confirmed_row is None:
+        confirmed_rows = [(index, row) for index, row in rows if row.get("status") == "confirmed"]
+        if not confirmed_rows:
             statuses = sorted({str(row.get("status")) for _, row in rows})
             errors.append(
                 {
@@ -225,37 +225,57 @@ def _validate_confirmed_effective_field_coverage(payload: dict[str, Any], spec: 
                 }
             )
             continue
-        if confirmed_row.get("blocking") is True:
+        non_confirmed_statuses = sorted({str(row.get("status")) for _, row in rows if row.get("status") != "confirmed"})
+        if non_confirmed_statuses:
             errors.append(
                 {
-                    "path": f"field_audits[{field_path}].blocking",
-                    "message": "confirmed effective spec field must not be blocking",
+                    "path": f"field_audits[{field_path}].status",
+                    "message": "effective spec field has conflicting non-confirmed audit rows; "
+                    f"got {non_confirmed_statuses}",
                 }
             )
-        if not _json_equivalent(confirmed_row.get("spec_value"), expected_value):
-            errors.append(
-                {
-                    "path": f"field_audits[{field_path}].spec_value",
-                    "message": "confirmed audit value does not match effective spec value",
-                }
-            )
-        evidence = confirmed_row.get("evidence")
-        if not isinstance(evidence, list) or not any(isinstance(item, str) and item.strip() for item in evidence):
-            errors.append(
-                {
-                    "path": f"field_audits[{field_path}].evidence",
-                    "message": "confirmed effective spec field requires non-empty user confirmation evidence",
-                }
-            )
-        elif not any(isinstance(item, str) and _POSITIVE_CONFIRMATION_RE.search(item) for item in evidence):
-            errors.append(
-                {
-                    "path": f"field_audits[{field_path}].evidence",
-                    "message": "confirmed effective spec field requires explicit positive user confirmation evidence",
-                }
-            )
+        for confirmed_index, confirmed_row in confirmed_rows:
+            _validate_confirmed_effective_field_row(errors, field_path, expected_value, confirmed_index, confirmed_row)
 
     return errors
+
+
+def _validate_confirmed_effective_field_row(
+    errors: list[dict[str, str]],
+    field_path: str,
+    expected_value: Any,
+    index: int,
+    confirmed_row: dict[str, Any],
+) -> None:
+    if confirmed_row.get("blocking") is True:
+        errors.append(
+            {
+                "path": f"field_audits[{index}].blocking",
+                "message": "confirmed effective spec field must not be blocking",
+            }
+        )
+    if not _json_equivalent(confirmed_row.get("spec_value"), expected_value):
+        errors.append(
+            {
+                "path": f"field_audits[{index}].spec_value",
+                "message": "confirmed audit value does not match effective spec value",
+            }
+        )
+    evidence = confirmed_row.get("evidence")
+    if not isinstance(evidence, list) or not any(isinstance(item, str) and item.strip() for item in evidence):
+        errors.append(
+            {
+                "path": f"field_audits[{index}].evidence",
+                "message": "confirmed effective spec field requires non-empty user confirmation evidence",
+            }
+        )
+    elif _evidence_denies_confirmation(evidence):
+        errors.append(
+            {
+                "path": f"field_audits[{index}].evidence",
+                "message": "confirmed effective spec field evidence denies user confirmation",
+            }
+        )
 
 
 def _flatten_effective_fields(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
@@ -266,6 +286,13 @@ def _flatten_effective_fields(value: Any, prefix: str = "") -> list[tuple[str, A
         for key in sorted(value):
             child_path = f"{prefix}.{key}" if prefix else str(key)
             fields.extend(_flatten_effective_fields(value[key], child_path))
+        return fields
+    if isinstance(value, list):
+        if all(not isinstance(item, (dict, list)) for item in value):
+            return [(prefix, value)]
+        fields = []
+        for index, item in enumerate(value):
+            fields.extend(_flatten_effective_fields(item, f"{prefix}[{index}]"))
         return fields
     return [(prefix, value)]
 
