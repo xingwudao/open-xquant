@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import yaml
@@ -589,6 +590,7 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
         ),
         encoding="utf-8",
     )
+    _write_report_artifact_hashes(run_dir)
 
     report = generate_report(run_dir, lang="en")
 
@@ -682,6 +684,7 @@ def test_chinese_report_localizes_runtime_disclosure(tmp_path) -> None:
         ),
         encoding="utf-8",
     )
+    _write_report_artifact_hashes(run_dir)
 
     report = generate_report(run_dir, lang="zh")
 
@@ -724,6 +727,7 @@ def test_report_does_not_claim_compiled_plan_source_when_plan_missing(tmp_path) 
         ),
         encoding="utf-8",
     )
+    _write_report_artifact_hashes(run_dir)
 
     report = generate_report(run_dir, lang="en")
 
@@ -788,6 +792,75 @@ def test_report_marks_runtime_disclosure_untrusted_when_runtime_hash_fails(tmp_p
     assert "- **runtime.fill_price_mode**: tampered" not in report
     assert "- **runtime.fee_rate**: 99.00%" not in report
     assert "- **data.effective_data_dir**: /tmp/tampered" not in report
+
+
+def test_report_does_not_display_compiled_plan_without_compiled_hash(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "compiled_plan.json").write_text(
+        json.dumps(
+            {
+                "execution": {"fill_price_mode": "next_open", "rebalance": {"interval_days": 10}},
+                "cost": {"fee_rate": 0.001, "slippage_rate": 0.002},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps({"symbols": ["SPY"], "effective_data_dir": "/tmp/oxq-data"}),
+        encoding="utf-8",
+    )
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    (run_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
+    (run_dir / "environment.json").write_text(
+        json.dumps({"open_xquant_version": "test", "spec_hash": spec.compute_hash()}),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text("date,equity\n2024-01-02,100000\n", encoding="utf-8")
+    (run_dir / "trades.csv").write_text("date,symbol,quantity,price\n", encoding="utf-8")
+    (run_dir / "artifact_hashes.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 0,
+                "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
+                "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
+                "trades.csv": _hash_file(run_dir / "trades.csv"),
+                "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "Runtime semantics artifacts did not pass hash verification" in report
+    assert "- **runtime.rebalance.interval_days**: 10" not in report
+
+
+def test_report_marks_runtime_disclosure_untrusted_when_run_digest_fails(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "compiled_plan.json").write_text(
+        json.dumps(
+            {
+                "execution": {"fill_price_mode": "next_open", "rebalance": {"interval_days": 10}},
+                "cost": {"fee_rate": 0.001, "slippage_rate": 0.002},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps({"symbols": ["SPY"], "effective_data_dir": "/tmp/oxq-data"}),
+        encoding="utf-8",
+    )
+    _write_report_artifact_hashes(run_dir)
+    (run_dir.parent / "run_digests.jsonl").write_text(
+        json.dumps({"run_id": run_dir.name, "artifact_hashes": "sha256:stale"}) + "\n",
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "Runtime semantics artifacts did not pass hash verification" in report
+    assert "- **runtime.rebalance.interval_days**: 10" not in report
 
 
 def test_report_summary_uses_effective_execution_fill_mode(tmp_path) -> None:
@@ -1112,3 +1185,24 @@ def _write_report_run(tmp_path):
         encoding="utf-8",
     )
     return run_dir
+
+
+def _write_report_artifact_hashes(run_dir: Path) -> None:
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    (run_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
+    (run_dir / "environment.json").write_text(
+        json.dumps({"open_xquant_version": "test", "spec_hash": spec.compute_hash()}),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text("date,equity\n2024-01-02,100000\n", encoding="utf-8")
+    (run_dir / "trades.csv").write_text("date,symbol,quantity,price\n", encoding="utf-8")
+    artifact_hashes = {
+        "schema_version": 0,
+        "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
+        "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
+        "trades.csv": _hash_file(run_dir / "trades.csv"),
+        "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
+    }
+    if (run_dir / "compiled_plan.json").exists():
+        artifact_hashes["compiled_plan.json"] = _hash_json_file(run_dir / "compiled_plan.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(artifact_hashes), encoding="utf-8")

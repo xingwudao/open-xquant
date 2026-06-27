@@ -518,8 +518,13 @@ def _hash_run_artifact_for_comparison(run_dir: Path, name: str) -> str:
         "execution_assumptions.json",
         "spec_audit.json",
         "runtime_audit.json",
+        "component_manifest.json",
+        "component_manifests.json",
     }:
-        return _hash_json_file(path)
+        try:
+            return _hash_json_file(path)
+        except json.JSONDecodeError as exc:
+            raise click.ClickException(f"{name} is not valid JSON: {path}: {exc.msg}") from exc
     return _hash_file(path)
 
 
@@ -543,7 +548,7 @@ def _require_run_artifact_hashes_current(run_dir: Path) -> None:
         "component_bundle_hash.txt",
     }
     for name in provenance_hashes:
-        if name in artifact_hashes:
+        if name in artifact_hashes or (run_dir / name).exists():
             required_hashes.add(name)
     for name in required_hashes:
         stored = artifact_hashes.get(name)
@@ -563,6 +568,30 @@ def _require_run_artifact_hashes_current(run_dir: Path) -> None:
         raise click.ClickException(
             f"spec_hash.txt mismatch for strategy_spec.yaml: stored={stored_spec_hash}, actual={actual_spec_hash}"
         )
+    _require_run_digest_current(run_dir)
+
+
+def _require_run_digest_current(run_dir: Path) -> None:
+    from oxq.spec.compiler import _hash_json_file
+
+    digest_path = run_dir.parent / "run_digests.jsonl"
+    if not digest_path.exists():
+        return
+    expected = None
+    try:
+        for line in digest_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            entry = json.loads(line)
+            if isinstance(entry, dict) and entry.get("run_id") == run_dir.name:
+                expected = entry.get("artifact_hashes")
+    except (json.JSONDecodeError, OSError) as exc:
+        raise click.ClickException(f"run_digests.jsonl is invalid: {digest_path}: {exc}") from exc
+    if not isinstance(expected, str) or not expected:
+        return
+    actual = _hash_json_file(run_dir / "artifact_hashes.json")
+    if actual != expected:
+        raise click.ClickException(f"run digest mismatch for artifact_hashes.json: stored={expected}, actual={actual}")
 
 
 def _run_comparability_signature(run_dir: Path) -> dict[str, object]:
@@ -1378,6 +1407,7 @@ def _attach_provenance_artifacts(
 ) -> None:
     from oxq.core.component_catalog import _catalog_hash, _stable_hash
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
+    from oxq.spec.runtime_audit_schema import validate_runtime_audit_file
 
     if component_catalog_path is None:
         raise click.ClickException("component_catalog.json is required for formal run provenance")
@@ -1390,9 +1420,15 @@ def _attach_provenance_artifacts(
 
     run_spec = StrategySpec.from_yaml(run_path / "strategy_spec.yaml")
     _require_pre_backtest_spec_audit(run_spec, spec_audit_path)
+    runtime_validation = validate_runtime_audit_file(runtime_audit_path)
+    if runtime_validation["status"] == "fail":
+        raise click.ClickException(f"invalid runtime audit: {runtime_validation['errors']}")
 
     audit_payload = json.loads(spec_audit_path.read_text(encoding="utf-8"))
     runtime_payload = json.loads(runtime_audit_path.read_text(encoding="utf-8"))
+    runtime_status = _require_json_str(runtime_payload, "status")
+    if runtime_status != "pass":
+        raise click.ClickException(f"runtime audit status must be pass before attaching provenance: {runtime_status}")
     catalog_payload = json.loads(component_catalog_path.read_text(encoding="utf-8"))
     run_spec_hash = (run_path / "spec_hash.txt").read_text(encoding="utf-8").strip()
     if run_spec.compute_hash() != run_spec_hash:
@@ -1471,6 +1507,8 @@ def _require_run_component_bundles_in_catalog(run_path: Path, catalog_payload: o
 
 
 def _run_component_bundle_hashes(run_path: Path) -> set[str]:
+    from oxq.core.component_manifest import compute_component_bundle_hash
+
     hashes: set[str] = set()
     summary_path = run_path / "component_manifests.json"
     if summary_path.exists():
@@ -1480,9 +1518,20 @@ def _run_component_bundle_hashes(run_path: Path) -> set[str]:
             raise click.ClickException(f"component_manifests.json is not valid JSON: {summary_path}: {exc.msg}") from exc
         if not isinstance(summary, list):
             raise click.ClickException("component_manifests.json must be a list")
-        for item in summary:
-            if isinstance(item, dict) and isinstance(item.get("bundle_hash"), str) and item["bundle_hash"]:
-                hashes.add(item["bundle_hash"])
+        for index, item in enumerate(summary):
+            if not isinstance(item, dict):
+                raise click.ClickException(f"component_manifests.json[{index}] must be an object")
+            recorded = item.get("bundle_hash")
+            if not isinstance(recorded, str) or not recorded:
+                raise click.ClickException(f"component_manifests.json[{index}].bundle_hash is required")
+            manifest_path = _resolve_run_component_manifest_path(run_path, item, len(summary))
+            if manifest_path is not None:
+                actual = _verified_component_bundle_hash(manifest_path, recorded)
+                if actual != recorded:
+                    raise click.ClickException(
+                        f"component bundle {index} hash mismatch: stored={recorded}, actual={actual}"
+                    )
+            hashes.add(recorded)
     manifest_path = run_path / "component_manifest.json"
     if manifest_path.exists():
         try:
@@ -1490,13 +1539,78 @@ def _run_component_bundle_hashes(run_path: Path) -> set[str]:
         except json.JSONDecodeError as exc:
             raise click.ClickException(f"component_manifest.json is not valid JSON: {manifest_path}: {exc.msg}") from exc
         if isinstance(manifest, dict) and isinstance(manifest.get("bundle_hash"), str) and manifest["bundle_hash"]:
-            hashes.add(manifest["bundle_hash"])
+            recorded = manifest["bundle_hash"]
+            try:
+                actual = compute_component_bundle_hash(manifest_path)
+            except ValueError as exc:
+                raise click.ClickException(f"component bundle could not be verified: {exc}") from exc
+            if actual != recorded:
+                raise click.ClickException(f"component bundle hash mismatch: stored={recorded}, actual={actual}")
+            hashes.add(recorded)
     bundle_hash_path = run_path / "component_bundle_hash.txt"
     if bundle_hash_path.exists():
         digest = bundle_hash_path.read_text(encoding="utf-8").strip()
         if digest:
+            if hashes and digest not in hashes:
+                raise click.ClickException(
+                    "component_bundle_hash.txt mismatch: "
+                    f"stored={digest}, verified_component_bundles={sorted(hashes)}"
+                )
             hashes.add(digest)
     return hashes
+
+
+def _resolve_run_component_manifest_path(run_path: Path, item: dict[str, object], summary_count: int) -> Path | None:
+    archived_path = item.get("archived_manifest_path")
+    if isinstance(archived_path, str) and archived_path:
+        return _safe_run_relative_component_manifest(run_path, archived_path)
+
+    legacy_manifest = run_path / "component_manifest.json"
+    if summary_count == 1 and legacy_manifest.exists():
+        return legacy_manifest
+
+    manifest_path = item.get("manifest_path")
+    if not isinstance(manifest_path, str) or not manifest_path:
+        return None
+    resolved = Path(manifest_path)
+    if not resolved.is_absolute():
+        resolved = run_path / resolved
+    return resolved if resolved.exists() else None
+
+
+def _safe_run_relative_component_manifest(run_path: Path, raw_path: str) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute() or ".." in path.parts:
+        raise click.ClickException(f"archived component manifest path is unsafe: {raw_path}")
+    candidate = run_path / path
+    if candidate.is_symlink():
+        raise click.ClickException(f"archived component manifest path must not be a symlink: {raw_path}")
+    resolved = candidate.resolve()
+    if not resolved.is_relative_to(run_path.resolve()):
+        raise click.ClickException(f"archived component manifest path escapes run directory: {raw_path}")
+    if not candidate.exists():
+        raise click.ClickException(f"archived component manifest not found: {candidate}")
+    return candidate
+
+
+def _verified_component_bundle_hash(manifest_path: Path, recorded: str) -> str:
+    from oxq.core.component_manifest import compute_component_bundle_hash
+
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"component manifest is not valid JSON: {manifest_path}: {exc.msg}") from exc
+    if not isinstance(manifest, dict):
+        raise click.ClickException(f"component manifest must be an object: {manifest_path}")
+    manifest_hash = manifest.get("bundle_hash")
+    if manifest_hash != recorded:
+        raise click.ClickException(
+            f"component bundle manifest hash mismatch: stored={recorded}, manifest={manifest_hash}"
+        )
+    try:
+        return compute_component_bundle_hash(manifest_path)
+    except ValueError as exc:
+        raise click.ClickException(f"component bundle could not be verified: {exc}") from exc
 
 
 def _component_bundle_hashes(manifests: list[dict]) -> set[str]:

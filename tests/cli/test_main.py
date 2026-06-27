@@ -1217,6 +1217,35 @@ def test_backtest_attach_provenance_rejects_blocking_runtime_audit(tmp_path) -> 
     assert "blocking material field row" in result.output
 
 
+def test_backtest_attach_provenance_rejects_runtime_audit_fail_status(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(tmp_path, spec_hash, catalog["catalog_hash"])
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    payload["status"] = "fail"
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "runtime audit status must be pass before attaching provenance" in result.output
+
+
 def test_backtest_attach_provenance_rejects_stale_runtime_audit_hashes(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()

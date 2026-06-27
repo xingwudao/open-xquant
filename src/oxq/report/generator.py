@@ -123,7 +123,11 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
         compiled_plan,
         data_manifest,
         lang,
-        artifacts_trusted=_runtime_artifacts_trusted(repro_audit),
+        artifacts_trusted=_runtime_artifacts_trusted(
+            repro_audit,
+            require_compiled_plan_hash=bool(compiled_plan),
+            require_data_manifest_hash=bool(data_manifest),
+        ),
     )
     if runtime_disclosure:
         lines.append("")
@@ -588,22 +592,35 @@ def _benchmark_artifact_trusted(repro_audit: dict) -> bool:
     return True
 
 
-def _runtime_artifacts_trusted(repro_audit: dict) -> bool:
+def _runtime_artifacts_trusted(
+    repro_audit: dict,
+    *,
+    require_compiled_plan_hash: bool = False,
+    require_data_manifest_hash: bool = False,
+) -> bool:
     checks = repro_audit.get("checks", [])
     if not isinstance(checks, list):
-        return True
+        return not (require_compiled_plan_hash or require_data_manifest_hash)
     runtime_guard_ids = {
         "artifact_hashes",
         "compiled_plan_hash",
         "data_manifest_hash",
+        "run_digest",
     }
+    passed_check_ids: set[str] = set()
     for check in checks:
         if not isinstance(check, dict):
             continue
         if check.get("id") not in runtime_guard_ids:
             continue
+        if check.get("status") == "pass":
+            passed_check_ids.add(str(check.get("id")))
         if check.get("severity") == "fatal" and check.get("status") == "fail":
             return False
+    if require_compiled_plan_hash and "compiled_plan_hash" not in passed_check_ids:
+        return False
+    if require_data_manifest_hash and "data_manifest_hash" not in passed_check_ids:
+        return False
     return True
 
 

@@ -11,7 +11,7 @@ from click import ClickException
 from click.testing import CliRunner
 
 from oxq.cli.main import main
-from oxq.spec.compiler import _hash_json_file, compile_plan
+from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, compile_plan
 from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 
 
@@ -54,6 +54,10 @@ def _write_spec_and_data(tmp_path, *, evaluation_window: str = "full"):
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     return spec_path, data_dir
+
+
+def _refresh_run_digest_for_test(run_dir: Path) -> None:
+    _append_run_digest(run_dir, _hash_json_file(run_dir / "artifact_hashes.json"))
 
 
 def _write_spec_audit(path: Path, spec_hash: str, catalog_hash: str | None = None) -> None:
@@ -812,6 +816,17 @@ def _write_component_manifest(tmp_path: Path) -> Path:
     )
 
 
+def _write_hashed_component_manifest(tmp_path: Path) -> tuple[Path, str]:
+    manifest = _write_component_manifest(tmp_path)
+    digest = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = digest
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest, digest
+
+
 def _write_named_component_manifest(tmp_path: Path, *, root_name: str, manifest_name: str, class_name: str) -> Path:
     root = tmp_path / root_name
     source_dir = root / "oxq_components" / "indicators"
@@ -1514,6 +1529,7 @@ def test_backtest_compare_runs_rejects_stale_provenance_hashes(tmp_path) -> None
     artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
     artifact_hashes["spec_audit.json"] = _hash_json_file(spec_audit_path)
     artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
+    _refresh_run_digest_for_test(second_run)
     spec_audit_path.write_text(json.dumps({"status": "fail"}), encoding="utf-8")
 
     result = runner.invoke(
@@ -1531,6 +1547,119 @@ def test_backtest_compare_runs_rejects_stale_provenance_hashes(tmp_path) -> None
     payload = json.loads(result.output)
     assert payload["errors"][0]["check"] == "run_artifacts_invalid"
     assert "artifact hash mismatch for spec_audit.json" in payload["errors"][0]["message"]
+
+
+def test_backtest_compare_runs_rejects_recomputed_artifact_hashes_with_stale_run_digest(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    compiled_plan_path = second_run / "compiled_plan.json"
+    compiled_plan = json.loads(compiled_plan_path.read_text(encoding="utf-8"))
+    compiled_plan["runtime_rules"] = [{"type": "recomputed-after-run"}]
+    compiled_plan_path.write_text(json.dumps(compiled_plan, indent=2), encoding="utf-8")
+    artifact_hashes_path = second_run / "artifact_hashes.json"
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    artifact_hashes["compiled_plan.json"] = _hash_json_file(compiled_plan_path)
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "run digest mismatch for artifact_hashes.json" in payload["errors"][0]["message"]
+
+
+def test_backtest_compare_runs_rejects_present_provenance_without_artifact_hash(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    (second_run / "spec_audit.json").write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "missing required hash for comparison artifact: spec_audit.json" in payload["errors"][0]["message"]
 
 
 def test_backtest_compare_runs_rejects_stale_spec_hash_text(tmp_path) -> None:
@@ -1620,7 +1749,13 @@ def test_backtest_compare_runs_rejects_corrupt_component_manifest_artifacts(tmp_
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
     second_run = Path(json.loads(second.output)["run_dir"])
-    (second_run / "component_manifest.json").write_text("{not-json", encoding="utf-8")
+    manifest_path = second_run / "component_manifest.json"
+    manifest_path.write_text("{not-json", encoding="utf-8")
+    artifact_hashes_path = second_run / "artifact_hashes.json"
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    artifact_hashes["component_manifest.json"] = _hash_file(manifest_path)
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
+    _refresh_run_digest_for_test(second_run)
 
     result = runner.invoke(
         main,
@@ -1639,6 +1774,74 @@ def test_backtest_compare_runs_rejects_corrupt_component_manifest_artifacts(tmp_
     assert payload["comparable"] is False
     assert payload["errors"][0]["check"] == "run_artifacts_invalid"
     assert "component_manifest.json is not valid JSON" in payload["errors"][0]["message"]
+
+
+def test_backtest_compare_runs_recomputes_archived_component_bundle_hashes(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest, _digest = _write_hashed_component_manifest(tmp_path)
+    spec = StrategySpec.from_yaml(spec_path)
+    spec.signal.indicators = {
+        "roc_1": IndicatorDef(type="WorkspaceBacktestIndicator", params={"value": 1.0})
+    }
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    archived_source = next(
+        second_run.glob(
+            "component_extensions/*/custom_components/oxq_components/indicators/workspace_backtest_indicator.py"
+        )
+    )
+    archived_source.write_text(archived_source.read_text(encoding="utf-8") + "\n# changed after run\n", encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "component bundle" in payload["errors"][0]["message"]
 
 
 def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None:
@@ -1683,6 +1886,7 @@ def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None
     artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
     artifact_hashes["compiled_plan.json"] = _hash_json_file(compiled_plan_path)
     artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
+    _refresh_run_digest_for_test(second_run)
 
     compare = runner.invoke(
         main,
@@ -1754,6 +1958,8 @@ def test_backtest_compare_runs_blocks_audit_hash_differences(tmp_path) -> None:
     second_hashes["runtime_audit.json"] = _hash_json_file(second_runtime_audit_path)
     first_hashes_path.write_text(json.dumps(first_hashes, indent=2), encoding="utf-8")
     second_hashes_path.write_text(json.dumps(second_hashes, indent=2), encoding="utf-8")
+    _refresh_run_digest_for_test(first_run)
+    _refresh_run_digest_for_test(second_run)
 
     compare = runner.invoke(main, ["backtest", "compare-runs", str(first_run), str(second_run), "--json"])
 
@@ -1800,8 +2006,20 @@ def test_backtest_compare_runs_blocks_component_catalog_hash_differences(tmp_pat
     assert second.exit_code == 0, second.output
     first_run = Path(json.loads(first.output)["run_dir"])
     second_run = Path(json.loads(second.output)["run_dir"])
-    (first_run / "component_catalog_hash.txt").write_text("sha256:catalog-a\n", encoding="utf-8")
-    (second_run / "component_catalog_hash.txt").write_text("sha256:catalog-b\n", encoding="utf-8")
+    first_catalog_hash = first_run / "component_catalog_hash.txt"
+    second_catalog_hash = second_run / "component_catalog_hash.txt"
+    first_catalog_hash.write_text("sha256:catalog-a\n", encoding="utf-8")
+    second_catalog_hash.write_text("sha256:catalog-b\n", encoding="utf-8")
+    first_hashes_path = first_run / "artifact_hashes.json"
+    second_hashes_path = second_run / "artifact_hashes.json"
+    first_hashes = json.loads(first_hashes_path.read_text(encoding="utf-8"))
+    second_hashes = json.loads(second_hashes_path.read_text(encoding="utf-8"))
+    first_hashes["component_catalog_hash.txt"] = _hash_file(first_catalog_hash)
+    second_hashes["component_catalog_hash.txt"] = _hash_file(second_catalog_hash)
+    first_hashes_path.write_text(json.dumps(first_hashes, indent=2), encoding="utf-8")
+    second_hashes_path.write_text(json.dumps(second_hashes, indent=2), encoding="utf-8")
+    _refresh_run_digest_for_test(first_run)
+    _refresh_run_digest_for_test(second_run)
 
     compare = runner.invoke(main, ["backtest", "compare-runs", str(first_run), str(second_run), "--json"])
 
