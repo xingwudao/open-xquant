@@ -52,7 +52,13 @@ _HISTORICAL_NEGATIVE_PREFIX_RE = re.compile(
 )
 
 
-def validate_spec_audit_file(path: str | Path) -> dict[str, Any]:
+def validate_spec_audit_file(
+    path: str | Path,
+    *,
+    spec_path: str | Path | None = None,
+    spec: Any | None = None,
+    require_confirmed_coverage: bool = False,
+) -> dict[str, Any]:
     """Validate a spec_audit.json file and return deterministic findings."""
     audit_path = Path(path)
     try:
@@ -61,10 +67,22 @@ def validate_spec_audit_file(path: str | Path) -> dict[str, Any]:
         return _result("fail", [{"path": "$", "message": f"invalid JSON: {exc}"}])
     except OSError as exc:
         return _result("fail", [{"path": "$", "message": str(exc)}])
-    return validate_spec_audit(payload)
+    if spec is None and spec_path is not None:
+        try:
+            from oxq.spec.schema import StrategySpec
+
+            spec = StrategySpec.from_yaml(spec_path)
+        except Exception as exc:
+            return _result("fail", [{"path": "spec", "message": f"invalid strategy spec: {exc}"}])
+    return validate_spec_audit(payload, spec=spec, require_confirmed_coverage=require_confirmed_coverage)
 
 
-def validate_spec_audit(payload: Any) -> dict[str, Any]:
+def validate_spec_audit(
+    payload: Any,
+    *,
+    spec: Any | None = None,
+    require_confirmed_coverage: bool = False,
+) -> dict[str, Any]:
     """Validate a parsed spec audit payload."""
     errors: list[dict[str, str]] = []
     if not isinstance(payload, dict):
@@ -155,7 +173,112 @@ def validate_spec_audit(payload: Any) -> dict[str, Any]:
             elif "message" not in item or not isinstance(item["message"], str):
                 errors.append({"path": f"{field}[{index}].message", "message": "must be a string"})
 
+    if require_confirmed_coverage:
+        if spec is None:
+            errors.append(
+                {
+                    "path": "spec",
+                    "message": "strict confirmed coverage requires a strategy spec",
+                }
+            )
+        else:
+            errors.extend(_validate_confirmed_effective_field_coverage(payload, spec))
+
     return _result("fail" if errors else "pass", errors)
+
+
+def _validate_confirmed_effective_field_coverage(payload: dict[str, Any], spec: Any) -> list[dict[str, str]]:
+    """Require every effective StrategySpec field to have a confirmed audit row."""
+    errors: list[dict[str, str]] = []
+    try:
+        effective_spec = spec.to_effective_dict()
+    except AttributeError:
+        effective_spec = spec
+    effective_fields = dict(_flatten_effective_fields(effective_spec))
+    field_rows = payload.get("field_audits")
+    if not isinstance(field_rows, list):
+        return errors
+
+    rows_by_path: dict[str, list[tuple[int, dict[str, Any]]]] = {}
+    for index, item in enumerate(field_rows):
+        if not isinstance(item, dict) or not isinstance(item.get("field_path"), str):
+            continue
+        rows_by_path.setdefault(item["field_path"], []).append((index, item))
+
+    for field_path, expected_value in effective_fields.items():
+        rows = rows_by_path.get(field_path, [])
+        if not rows:
+            errors.append(
+                {
+                    "path": f"field_audits[{field_path}]",
+                    "message": "missing confirmed audit row for effective spec field",
+                }
+            )
+            continue
+        confirmed_row = next((row for _, row in rows if row.get("status") == "confirmed"), None)
+        if confirmed_row is None:
+            statuses = sorted({str(row.get("status")) for _, row in rows})
+            errors.append(
+                {
+                    "path": f"field_audits[{field_path}].status",
+                    "message": f"effective spec field must be confirmed before formal backtest; got {statuses}",
+                }
+            )
+            continue
+        if confirmed_row.get("blocking") is True:
+            errors.append(
+                {
+                    "path": f"field_audits[{field_path}].blocking",
+                    "message": "confirmed effective spec field must not be blocking",
+                }
+            )
+        if not _json_equivalent(confirmed_row.get("spec_value"), expected_value):
+            errors.append(
+                {
+                    "path": f"field_audits[{field_path}].spec_value",
+                    "message": "confirmed audit value does not match effective spec value",
+                }
+            )
+        evidence = confirmed_row.get("evidence")
+        if not isinstance(evidence, list) or not any(isinstance(item, str) and item.strip() for item in evidence):
+            errors.append(
+                {
+                    "path": f"field_audits[{field_path}].evidence",
+                    "message": "confirmed effective spec field requires non-empty user confirmation evidence",
+                }
+            )
+        elif not any(isinstance(item, str) and _POSITIVE_CONFIRMATION_RE.search(item) for item in evidence):
+            errors.append(
+                {
+                    "path": f"field_audits[{field_path}].evidence",
+                    "message": "confirmed effective spec field requires explicit positive user confirmation evidence",
+                }
+            )
+
+    return errors
+
+
+def _flatten_effective_fields(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        if not value and prefix:
+            return [(prefix, {})]
+        fields: list[tuple[str, Any]] = []
+        for key in sorted(value):
+            child_path = f"{prefix}.{key}" if prefix else str(key)
+            fields.extend(_flatten_effective_fields(value[key], child_path))
+        return fields
+    return [(prefix, value)]
+
+
+def _json_equivalent(left: Any, right: Any) -> bool:
+    return _canonical_json_value(left) == _canonical_json_value(right)
+
+
+def _canonical_json_value(value: Any) -> Any:
+    try:
+        return json.loads(json.dumps(value, sort_keys=True, default=str))
+    except TypeError:
+        return str(value)
 
 
 def _require_str(item: dict[str, Any], prefix: str, field: str, errors: list[dict[str, str]]) -> None:

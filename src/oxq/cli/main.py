@@ -1055,7 +1055,14 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, 
         ]
         raise click.ClickException(f"run reproducibility must pass before attaching provenance: {failing}")
 
-    audit_validation = validate_spec_audit_file(spec_audit)
+    run_spec_path = run_path / "strategy_spec.yaml"
+    if not run_spec_path.exists():
+        raise click.ClickException(f"missing strategy_spec.yaml in run directory: {run_dir}")
+    audit_validation = validate_spec_audit_file(
+        spec_audit,
+        spec_path=run_spec_path,
+        require_confirmed_coverage=True,
+    )
     if audit_validation["status"] == "fail":
         raise click.ClickException(f"invalid spec audit: {audit_validation['errors']}")
 
@@ -1212,7 +1219,11 @@ def _require_pre_backtest_spec_audit(spec: StrategySpec, spec_audit_path: Path) 
     """Deterministically gate a formal backtest on a pre-run spec audit."""
     from oxq.spec.audit_schema import validate_spec_audit_file
 
-    audit_validation = validate_spec_audit_file(spec_audit_path)
+    audit_validation = validate_spec_audit_file(
+        spec_audit_path,
+        spec=spec,
+        require_confirmed_coverage=True,
+    )
     if audit_validation["status"] == "fail":
         raise click.ClickException(f"invalid spec audit: {audit_validation['errors']}")
 
@@ -1807,12 +1818,27 @@ def spec_audit():
 
 @spec_audit.command(name="validate")
 @click.argument("audit_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--spec",
+    "spec_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="strategy_spec.yaml for strict effective field confirmation coverage.",
+)
+@click.option(
+    "--strict-confirmed",
+    is_flag=True,
+    help="Require every effective strategy spec field to have a confirmed audit row.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
-def spec_audit_validate(audit_file: str, as_json: bool):
+def spec_audit_validate(audit_file: str, spec_path: str | None, strict_confirmed: bool, as_json: bool):
     """Validate spec_audit.json schema without semantic language judgment."""
     from oxq.spec.audit_schema import validate_spec_audit_file
 
-    result = validate_spec_audit_file(audit_file)
+    result = validate_spec_audit_file(
+        audit_file,
+        spec_path=spec_path,
+        require_confirmed_coverage=strict_confirmed,
+    )
     if as_json:
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     else:

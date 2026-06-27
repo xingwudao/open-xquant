@@ -60,10 +60,19 @@ def _refresh_run_digest_for_test(run_dir: Path) -> None:
     _append_run_digest(run_dir, _hash_json_file(run_dir / "artifact_hashes.json"))
 
 
-def _write_spec_audit(path: Path, spec_hash: str, catalog_hash: str | None = None) -> None:
+def _write_spec_audit(
+    path: Path,
+    spec_hash: str,
+    catalog_hash: str | None = None,
+    *,
+    spec_path: Path | None = None,
+) -> None:
     if catalog_hash is None:
         catalog_path = path.with_name("component_catalog.json")
         catalog_hash = _write_component_catalog(catalog_path)
+    if spec_path is None:
+        sibling_spec_path = path.with_name("strategy_spec.yaml")
+        spec_path = sibling_spec_path if sibling_spec_path.exists() else None
     path.write_text(
         json.dumps(
             {
@@ -74,7 +83,7 @@ def _write_spec_audit(path: Path, spec_hash: str, catalog_hash: str | None = Non
                 "conversation_hash": "sha256:" + "2" * 16,
                 "catalog_hash": catalog_hash,
                 "recipe_matches": [],
-                "field_audits": [],
+                "field_audits": _confirmed_field_audits(spec_path) if spec_path is not None else [],
                 "component_audits": [],
                 "missing_user_requirements": [],
                 "agent_added_fields": [],
@@ -85,6 +94,32 @@ def _write_spec_audit(path: Path, spec_hash: str, catalog_hash: str | None = Non
         ),
         encoding="utf-8",
     )
+
+
+def _confirmed_field_audits(spec_path: Path) -> list[dict]:
+    spec = StrategySpec.from_yaml(spec_path)
+    return [
+        {
+            "field_path": field_path,
+            "spec_value": value,
+            "status": "confirmed",
+            "evidence": [f"user confirmed {field_path} = {json.dumps(value, sort_keys=True, default=str)}"],
+            "blocking": False,
+        }
+        for field_path, value in _flatten_effective_fields(spec.to_effective_dict())
+    ]
+
+
+def _flatten_effective_fields(value: object, prefix: str = "") -> list[tuple[str, object]]:
+    if isinstance(value, dict):
+        if not value and prefix:
+            return [(prefix, {})]
+        fields: list[tuple[str, object]] = []
+        for key in sorted(value):
+            child_path = f"{prefix}.{key}" if prefix else str(key)
+            fields.extend(_flatten_effective_fields(value[key], child_path))
+        return fields
+    return [(prefix, value)]
 
 
 def _write_component_catalog(path: Path, component_manifests: list[dict] | None = None) -> str:
@@ -972,6 +1007,47 @@ def test_backtest_run_json_rejects_missing_runtime_audit_for_formal_spec_audit(t
     assert payload["artifacts"] == {}
     assert payload["errors"][0]["check"] == "runtime_audit_missing"
     assert "runtime_audit.json is required" in payload["errors"][0]["message"]
+
+
+def test_backtest_run_json_rejects_spec_audit_missing_effective_field_confirmations(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash, spec_path=None)
+    payload = json.loads(audit_path.read_text(encoding="utf-8"))
+    payload["field_audits"] = []
+    audit_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    response = json.loads(result.output)
+    assert response["errors"][0]["check"] == "spec_audit_failed"
+    assert "missing confirmed audit row for effective spec field" in response["errors"][0]["message"]
 
 
 def test_backtest_run_json_rejects_runtime_audit_without_spec_audit(tmp_path) -> None:
