@@ -101,7 +101,7 @@ class Engine:
         self._strategy = strategy
         self._broker = broker
         self._tracer = tracer
-        self._rules: list[Rule] = rules or []
+        self._rules: list[Rule] = list(rules) if rules is not None else list(getattr(strategy, "rules", []))
         self._lot_size = lot_size
         self._cash_annual_return = cash_annual_return
         reset_optimizer = getattr(strategy.portfolio, "reset", None)

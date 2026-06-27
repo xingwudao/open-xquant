@@ -199,3 +199,37 @@ def test_strategy_legacy_universe_adapter():
         portfolio=FakeOptimizer(),
     )
     assert s.universe is universe
+
+
+def test_strategy_legacy_positional_constructor_preserves_universe_shape():
+    from oxq.core.strategy import Strategy
+    from oxq.universe.static import StaticUniverse
+
+    class FakeOptimizer:
+        name = "fake"
+
+        def optimize(self, signals, indicators):
+            return {"CASH": 1.0}
+
+    universe = StaticUniverse(("AAPL",))
+    optimizer = FakeOptimizer()
+
+    s = Strategy(
+        "legacy",
+        universe,
+        {},
+        optimizer,
+        "old positional hypothesis",
+        {"total_return": {"min": 0.05}},
+        ["SPY"],
+    )
+
+    assert s.name == "legacy"
+    assert s.universe is universe
+    assert s.signals == {}
+    assert s.portfolio is optimizer
+    assert s.rules == []
+    assert s.hypothesis == "old positional hypothesis"
+    assert s.objectives == {"total_return": {"min": 0.05}}
+    assert s.benchmarks == ["SPY"]
+    assert "universe" not in s.__dataclass_fields__

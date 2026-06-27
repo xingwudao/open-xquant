@@ -81,6 +81,11 @@ def _load() -> None:
             data = pickle.load(f)  # noqa: S301
         _strategies.update(data.get("strategies", {}))
         _strategy_universes.update(data.get("strategy_universes", {}))
+        for name, strategy in _strategies.items():
+            if name not in _strategy_universes:
+                legacy_universe = _legacy_strategy_universe(strategy)
+                if legacy_universe is not None:
+                    _strategy_universes[name] = legacy_universe
         _run_results.update(data.get("run_results", {}))
         _paramsets.update(data.get("paramsets", {}))
         _search_results.update(data.get("search_results", {}))
@@ -92,6 +97,19 @@ def _load() -> None:
         _audit_records.update(data.get("audit_records", {}))
     except Exception:
         logger.warning("Failed to load session state", exc_info=True)
+
+
+def _legacy_strategy_universe(strategy: object) -> UniverseProvider | None:
+    try:
+        universe = getattr(strategy, "_legacy_universe", None)
+    except Exception:
+        universe = None
+    if universe is None:
+        try:
+            universe = vars(strategy).get("universe")
+        except TypeError:
+            universe = None
+    return universe if universe is not None and callable(getattr(universe, "get_universe", None)) else None
 
 
 def clear() -> None:

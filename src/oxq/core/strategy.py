@@ -9,6 +9,10 @@ from oxq.core.types import PortfolioOptimizer, Rule, Signal
 from oxq.universe.base import UniverseProvider
 
 
+def _looks_like_universe_provider(value: object) -> bool:
+    return value is not None and callable(getattr(value, "get_universe", None))
+
+
 @dataclass(init=False)
 class Strategy:
     """Reusable strategy logic independent of the tradable universe.
@@ -34,15 +38,32 @@ class Strategy:
     def __init__(
         self,
         name: str,
-        signals: dict[str, tuple[Signal, dict[str, Any]]] | None = None,
+        signals: dict[str, tuple[Signal, dict[str, Any]]] | UniverseProvider | None = None,
         portfolio: PortfolioOptimizer | None = None,
-        rules: list[Rule] | None = None,
-        *,
+        rules: list[Rule] | PortfolioOptimizer | None = None,
+        *legacy_args: Any,
         hypothesis: str = "",
         objectives: dict[str, dict[str, float]] | None = None,
         benchmarks: list[str] | None = None,
         universe: UniverseProvider | None = None,
     ) -> None:
+        if _looks_like_universe_provider(signals):
+            universe = signals
+            signals = portfolio if isinstance(portfolio, dict) else None
+            portfolio = rules if rules is not None and not isinstance(rules, list) else None
+            rules = None
+            if legacy_args:
+                hypothesis = legacy_args[0]
+            if len(legacy_args) > 1:
+                objectives = legacy_args[1]
+            if len(legacy_args) > 2:
+                benchmarks = legacy_args[2]
+            if len(legacy_args) > 3:
+                msg = "too many positional arguments for legacy Strategy constructor"
+                raise TypeError(msg)
+        elif legacy_args:
+            msg = "unexpected positional arguments for Strategy constructor"
+            raise TypeError(msg)
         self.name = name
         self.signals = signals or {}
         if portfolio is None:

@@ -40,6 +40,12 @@ def _isolate_parent_run_digest(tmp_path):
     lock.unlink(missing_ok=True)
 
 
+def test_spec_package_exports_compile_universe() -> None:
+    from oxq.spec import compile_universe as exported_compile_universe
+
+    assert exported_compile_universe is compile_universe
+
+
 def test_artifact_spec_hash_matches_serialized_spec(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="hash_test", hypothesis="hash artifacts are reproducible")
     spec.execution.initial_cash = 100_000
@@ -2872,6 +2878,23 @@ def test_compile_strategy_excludes_universe_from_strategy_body() -> None:
 
     assert getattr(strategy, "_legacy_universe", None) is None
     assert tuple(universe.symbols) == ("SPY", "QQQ")
+
+
+def test_compile_strategy_populates_runtime_rules_from_portfolio_rules() -> None:
+    spec = StrategySpec.template(
+        strategy_id="strategy_rules",
+        hypothesis="strategy runtime rules should be reusable with the strategy body",
+    )
+    spec.portfolio.rules["rebalance"] = PortfolioRuleDef(
+        type="RebalanceFrequencyRule",
+        params={"interval_days": 3},
+    )
+
+    strategy = compile_strategy(spec)
+
+    assert len(strategy.rules) == 1
+    assert strategy.rules[0].name == "RebalanceFrequencyRule"
+    assert strategy.rules[0].interval_days == 3
 
 
 def test_roc_timing_signal_to_position_compiles_and_writes_target_weights(tmp_path) -> None:

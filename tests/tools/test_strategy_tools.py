@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import pickle
+
 import pytest
 
 from oxq.core.registry import list_indicators, list_rules
+from oxq.core.strategy import Strategy
 from oxq.tools import session
 from oxq.tools.strategy import (
     indicator_describe,
@@ -182,6 +185,26 @@ def test_strategy_set_universe_sets_run_default_not_strategy_body() -> None:
     inspect = strategy_inspect("s1")
     assert inspect["universe"] == ["AAPL", "MSFT"]
     assert inspect["universe_binding"] == "run_default"
+
+
+def test_session_load_migrates_legacy_strategy_universe(tmp_path, monkeypatch) -> None:
+    from oxq.portfolio.optimizers import EqualWeightOptimizer
+    from oxq.universe.static import StaticUniverse
+
+    universe = StaticUniverse(("AAPL", "MSFT"))
+    strategy = Strategy(name="legacy", signals={}, portfolio=EqualWeightOptimizer())
+    strategy.__dict__["universe"] = universe
+    strategy.__dict__.pop("_legacy_universe", None)
+
+    session_file = tmp_path / "legacy_session.pkl"
+    with open(session_file, "wb") as f:
+        pickle.dump({"strategies": {"legacy": strategy}}, f)
+
+    monkeypatch.setattr(session, "_SESSION_FILE", session_file)
+    session._load()
+
+    assert "legacy" in session._strategies
+    assert tuple(session._strategy_universes["legacy"].symbols) == ("AAPL", "MSFT")
 
 
 # ---------------------------------------------------------------------------

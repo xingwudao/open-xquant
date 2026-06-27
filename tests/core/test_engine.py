@@ -118,6 +118,33 @@ def test_engine_run_accepts_universe_separate_from_strategy() -> None:
     assert set(result.mktdata) == {"MSFT"}
 
 
+def test_engine_run_uses_strategy_rules_by_default() -> None:
+    data = _make_trending_data()
+    calls: list[tuple[str, pd.Timestamp]] = []
+
+    class RecordingRule:
+        name = "RecordingRule"
+
+        def evaluate(self, symbol, row, portfolio, prices=None):
+            calls.append((symbol, row.name))
+            return RuleResult()
+
+    strategy = _make_strategy()
+    strategy.rules = [RecordingRule()]
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-01",
+        end="2024-12-31",
+    )
+
+    assert len(result.equity_curve) == 120
+    assert calls
+    assert calls[0][0] == "AAPL"
+
+
 def test_engine_with_stop_loss_rule() -> None:
     """Post-trade rule triggers sells when stop loss condition met."""
     from oxq.rules.exit import ExitRule

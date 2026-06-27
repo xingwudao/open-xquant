@@ -241,6 +241,7 @@ def compile_strategy(spec: StrategySpec) -> Strategy:
         benchmarks=spec.benchmark.symbols,
         signals=signals,
         portfolio=optimizer,
+        rules=_build_runtime_rules(spec),
     )
 
 
@@ -249,6 +250,25 @@ def compile_universe(spec: StrategySpec) -> StaticUniverse:
     if spec.universe.type != "static":
         raise ValueError(f"Unsupported universe.type '{spec.universe.type}'. Only 'static' is available.")
     return StaticUniverse(tuple(spec.universe.symbols))
+
+
+def _build_runtime_rules(spec: StrategySpec) -> list[Any]:
+    """Build runtime Rule instances declared or implied by a StrategySpec."""
+    rules: list[Any] = []
+    interval_days, _rebalance_source = _effective_rebalance(spec)
+    if interval_days > 1:
+        rules.append(RebalanceFrequencyRule(interval_days=interval_days))
+
+    # Auto-add ExitRule for Crossover signals so positions close on reverse cross.
+    for _sig_name, sig_def in spec.signal.rules.items():
+        if sig_def.type == "Crossover":
+            fast = sig_def.params.get("fast", "")
+            slow = sig_def.params.get("slow", "")
+            if fast and slow:
+                from oxq.rules.exit import ExitRule
+
+                rules.append(ExitRule(fast=fast, slow=slow))
+    return rules
 
 
 def compile_run(
@@ -298,22 +318,6 @@ def compile_run(
     start = train[0] if train else (test[0] if test else "2018-01-01")
     end = test[1] if test else (train[1] if train else "2025-12-31")
 
-    # Build rules from spec
-    rules: list = []
-    interval_days, _rebalance_source = _effective_rebalance(spec)
-    if interval_days > 1:
-        rules.append(RebalanceFrequencyRule(interval_days=interval_days))
-
-    # Auto-add ExitRule for Crossover signals so positions close on reverse cross.
-    for _sig_name, sig_def in spec.signal.rules.items():
-        if sig_def.type == "Crossover":
-            fast = sig_def.params.get("fast", "")
-            slow = sig_def.params.get("slow", "")
-            if fast and slow:
-                from oxq.rules.exit import ExitRule
-
-                rules.append(ExitRule(fast=fast, slow=slow))
-
     # Run engine
     engine = Engine()
     result = engine.run(
@@ -326,7 +330,6 @@ def compile_run(
         universe=universe,
         lot_size=_effective_lot_size(spec),
         cash_annual_return=spec.execution.cash_annual_return,
-        rules=rules,
         data_start=spec.data.min_start_date or None,
     )
 
