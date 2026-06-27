@@ -2,13 +2,11 @@
 
 from decimal import Decimal
 
-import numpy as np
 import pandas as pd
 import pytest
 
-from oxq.core.engine import Engine
 from oxq.core.strategy import Strategy
-from oxq.core.types import Portfolio
+from oxq.core.types import Portfolio, RuleResult
 from oxq.indicators.sma import SMA
 from oxq.optimize.paramset import ParameterSet
 from oxq.optimize.search import (
@@ -25,7 +23,6 @@ from oxq.portfolio.optimizers import EqualWeightOptimizer
 from oxq.signals.crossover import Crossover
 from oxq.trade.sim_broker import SimBroker
 from oxq.universe.static import StaticUniverse
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -343,6 +340,47 @@ def test_grid_search_runs_all_combos() -> None:
     assert len(result.all_results) == 1
     assert result.metric == "sharpe_ratio"
     assert result.metric_direction == "maximize"
+
+
+def test_grid_search_uses_strategy_rules_when_no_explicit_rules() -> None:
+    class AlwaysTrueSignal:
+        name = "AlwaysTrue"
+
+        def compute(self, mktdata, **params):
+            return pd.Series(True, index=mktdata.index)
+
+    class HoldAllRule:
+        name = "HoldAllRule"
+
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def evaluate(self, symbol, row, portfolio, prices=None):
+            self.calls += 1
+            return RuleResult(hold=True, reason="hold all")
+
+    data = _make_trending_data(n=120)
+    market = FakeMarketDataProvider(data)
+    strategy = Strategy(
+        name="rule_strategy",
+        universe=StaticUniverse(("AAPL",)),
+        signals={"always": (AlwaysTrueSignal(), {})},
+        portfolio=EqualWeightOptimizer(),
+        rules=[HoldAllRule()],
+    )
+
+    result = GridSearch(ParameterSet("test")).run(
+        strategy=strategy,
+        market=market,
+        broker_factory=SimBroker,
+        start="2024-01-01",
+        end="2024-01-31",
+        metric="total_return",
+    )
+
+    assert len(result.all_results) == 1
+    assert result.all_results[0].run_result.trades == []
+    assert strategy.rules[0].calls == 0
 
 
 def test_grid_search_custom_metric() -> None:

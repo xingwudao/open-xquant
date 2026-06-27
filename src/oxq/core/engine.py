@@ -7,6 +7,7 @@ and live trading.  The difference is which providers you plug in.
 
 from __future__ import annotations
 
+import copy
 import logging
 import time as _time
 from decimal import Decimal
@@ -23,6 +24,10 @@ from oxq.trade.order_generator import generate_orders
 from oxq.universe.base import UniverseProvider
 
 logger = logging.getLogger(__name__)
+
+
+def _clone_rules(rules: list[Rule] | None) -> list[Rule]:
+    return copy.deepcopy(list(rules or []))
 
 
 class Engine:
@@ -101,7 +106,7 @@ class Engine:
         self._strategy = strategy
         self._broker = broker
         self._tracer = tracer
-        self._rules: list[Rule] = list(rules) if rules is not None else list(getattr(strategy, "rules", []))
+        self._rules: list[Rule] = _clone_rules(rules if rules is not None else getattr(strategy, "rules", []))
         self._lot_size = lot_size
         self._cash_annual_return = cash_annual_return
         reset_optimizer = getattr(strategy.portfolio, "reset", None)

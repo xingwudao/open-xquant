@@ -82,6 +82,7 @@ def _load() -> None:
         _strategies.update(data.get("strategies", {}))
         _strategy_universes.update(data.get("strategy_universes", {}))
         for name, strategy in _strategies.items():
+            _migrate_legacy_strategy_rules(strategy)
             if name not in _strategy_universes:
                 legacy_universe = _legacy_strategy_universe(strategy)
                 if legacy_universe is not None:
@@ -97,6 +98,17 @@ def _load() -> None:
         _audit_records.update(data.get("audit_records", {}))
     except Exception:
         logger.warning("Failed to load session state", exc_info=True)
+
+
+def _migrate_legacy_strategy_rules(strategy: object) -> None:
+    try:
+        vars_dict = vars(strategy)
+    except TypeError:
+        return
+    if "rules" in vars_dict:
+        return
+    pending_rules = vars_dict.get("_pending_rules", [])
+    setattr(strategy, "rules", list(pending_rules or []))
 
 
 def _legacy_strategy_universe(strategy: object) -> UniverseProvider | None:

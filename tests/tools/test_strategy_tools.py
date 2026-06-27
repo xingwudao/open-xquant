@@ -187,6 +187,20 @@ def test_strategy_set_universe_sets_run_default_not_strategy_body() -> None:
     assert inspect["universe_binding"] == "run_default"
 
 
+def test_strategy_create_clears_existing_run_default_universe() -> None:
+    from oxq.tools.strategy import strategy_set_universe
+
+    strategy_create(name="s1", hypothesis="old", objectives={"r": {"min": 0.0}})
+    strategy_set_universe(strategy="s1", type="static", symbols=["AAPL"])
+
+    result = strategy_create(name="s1", hypothesis="new", objectives={"r": {"min": 0.0}})
+
+    assert "error" not in result
+    assert "s1" not in session._strategy_universes
+    inspect = strategy_inspect("s1")
+    assert inspect["universe_binding"] == "none"
+
+
 def test_session_load_migrates_legacy_strategy_universe(tmp_path, monkeypatch) -> None:
     from oxq.portfolio.optimizers import EqualWeightOptimizer
     from oxq.universe.static import StaticUniverse
@@ -205,6 +219,26 @@ def test_session_load_migrates_legacy_strategy_universe(tmp_path, monkeypatch) -
 
     assert "legacy" in session._strategies
     assert tuple(session._strategy_universes["legacy"].symbols) == ("AAPL", "MSFT")
+
+
+def test_session_load_migrates_legacy_pending_rules(tmp_path, monkeypatch) -> None:
+    from oxq.portfolio.optimizers import EqualWeightOptimizer
+    from oxq.rules.constraint import RebalanceFrequencyRule
+
+    strategy = Strategy(name="legacy", signals={}, portfolio=EqualWeightOptimizer())
+    strategy.__dict__["_pending_rules"] = [RebalanceFrequencyRule(interval_days=5)]
+    strategy.__dict__.pop("rules", None)
+
+    session_file = tmp_path / "legacy_rules_session.pkl"
+    with open(session_file, "wb") as f:
+        pickle.dump({"strategies": {"legacy": strategy}}, f)
+
+    monkeypatch.setattr(session, "_SESSION_FILE", session_file)
+    session._load()
+
+    assert len(session._strategies["legacy"].rules) == 1
+    assert session._strategies["legacy"].rules[0].name == "RebalanceFrequencyRule"
+    assert session._strategies["legacy"].rules[0].interval_days == 5
 
 
 # ---------------------------------------------------------------------------

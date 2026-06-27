@@ -120,19 +120,22 @@ def test_engine_run_accepts_universe_separate_from_strategy() -> None:
 
 def test_engine_run_uses_strategy_rules_by_default() -> None:
     data = _make_trending_data()
-    calls: list[tuple[str, pd.Timestamp]] = []
 
     class RecordingRule:
         name = "RecordingRule"
 
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, pd.Timestamp]] = []
+
         def evaluate(self, symbol, row, portfolio, prices=None):
-            calls.append((symbol, row.name))
+            self.calls.append((symbol, row.name))
             return RuleResult()
 
     strategy = _make_strategy()
     strategy.rules = [RecordingRule()]
+    engine = Engine()
 
-    result = Engine().run(
+    result = engine.run(
         strategy,
         market=FakeMarketDataProvider(data),
         broker=SimBroker(),
@@ -141,8 +144,10 @@ def test_engine_run_uses_strategy_rules_by_default() -> None:
     )
 
     assert len(result.equity_curve) == 120
-    assert calls
-    assert calls[0][0] == "AAPL"
+    assert strategy.rules[0].calls == []
+    assert engine._rules[0] is not strategy.rules[0]
+    assert engine._rules[0].calls
+    assert engine._rules[0].calls[0][0] == "AAPL"
 
 
 def test_engine_with_stop_loss_rule() -> None:

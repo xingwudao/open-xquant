@@ -138,6 +138,10 @@ def _apply_params(
             known_names.add(ind_name)
     if portfolio_name:
         known_names.add(portfolio_name)
+    for rule in strategy.rules:
+        rule_name = getattr(rule, "name", None)
+        if rule_name:
+            known_names.add(rule_name)
 
     for comp in params:
         if comp not in known_names:
@@ -153,7 +157,7 @@ def _apply_params(
         name=strategy.name,
         signals=new_signals,
         portfolio=new_portfolio,
-        rules=list(strategy.rules),
+        rules=_apply_rule_params(strategy.rules, params),
         hypothesis=strategy.hypothesis,
         objectives=dict(strategy.objectives),
         benchmarks=list(strategy.benchmarks),
@@ -345,7 +349,7 @@ class GridSearch:
             broker = broker_factory()
 
             # Deep-copy rules per trial so stateful rules reset
-            trial_rules = _apply_rule_params(rules or [], combo) if rules else []
+            trial_rules = _apply_rule_params(rules, combo) if rules is not None else None
 
             run_result = engine.run(
                 modified_strategy,

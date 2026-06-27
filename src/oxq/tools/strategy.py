@@ -102,6 +102,7 @@ def strategy_create(
         rules=[],
     )
     session._strategies[name] = strategy
+    session._strategy_universes.pop(name, None)
     session._save()
     return {
         "name": name,
