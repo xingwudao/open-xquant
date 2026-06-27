@@ -42,7 +42,8 @@ validated run exists, trace from the start of the current conversation.
 Classify material fields as:
 
 - `confirmed`: the user explicitly gave the value or an equivalent meaning.
-- `default`: the value matches a documented build-strategy-spec template default.
+- `default`: the value matches a documented build-strategy-spec template default
+  that is proposed but not yet confirmed.
 - `unconfirmed`: the value is not a template default and no user source exists.
 - `agent_added`: the Agent introduced the value by inference, convention, or a
   workflow preference that the user did not explicitly approve.
@@ -52,6 +53,12 @@ did not confirm, or that the Agent inferred the value. If the evidence says
 "用户未指定", "未确认", "Agent 将", "Agent inferred", or equivalent wording, the
 status must be `agent_added` or `unconfirmed`, and the field must block the
 backtest unless it is a documented template default accepted by the user.
+
+`default` is not a passing final status. A default may appear while the audit is
+blocked and asking grouped confirmation questions, but every effective SPEC
+field must become `confirmed` before `spec_audit.json` can pass. This includes
+fields omitted from YAML but injected by OpenXQuant defaults, such as execution,
+cost, cash, validation, metrics, empty dictionaries, and empty lists.
 
 Material fields include:
 
@@ -147,10 +154,11 @@ Examples:
 
 ## Gate
 
-Any `unconfirmed` field or blocking component provenance issue blocks backtest.
-Any `agent_added` material field blocks backtest unless it is documented as an
-accepted default with user approval. Train/test splits and required OOS settings
-are material and must not pass silently.
+Any `default`, `unconfirmed`, or `agent_added` effective field blocks formal
+backtest until the user confirms the grouped assumption or provides a
+replacement value. Any blocking component provenance issue blocks backtest.
+Train/test splits and required OOS settings are material and must not pass
+silently.
 Always group related fields instead of asking one question per YAML key:
 
 - data warmup and local data coverage
@@ -164,6 +172,66 @@ Always group related fields instead of asking one question per YAML key:
 Ask the user to either confirm the group or provide replacement values. After
 any change, re-run `oxq spec validate strategy_spec.yaml` and repeat this
 auditor gate.
+
+## Default Confirmation Checklist
+
+When default fields are the only remaining blockers, do not ask one question
+per field. Present one compact confirmation checklist grouped by assumption
+area. Use a Markdown table only when the Agent surface supports it cleanly;
+otherwise use short grouped bullets with the same columns.
+
+Each checklist row must include:
+
+- group
+- field path
+- value
+- why this value exists
+- runtime or research impact
+
+Use these default groups when applicable:
+
+- `validation`: full-period backtest, `required_oos`, train/test windows
+- `execution`: trade time, fill price, rebalance default, lot size
+- `cost`: fee rate, minimum fee, slippage
+- `cash`: initial cash and cash return
+- `metrics`: risk-free rate, annualization days, evaluation window
+- `data`: provider, data directory, adjustment, warmup policy
+- `empty policy`: empty dictionaries or lists that disable optional behavior
+
+Ask one grouped question after the checklist, such as:
+
+```text
+Please confirm whether you accept all default assumptions in this checklist.
+You can also reject or override any row by field path.
+```
+
+If the user confirms the whole checklist or a group, convert every covered
+field to `confirmed` in `field_audits`. The same batch confirmation may be used
+as evidence for multiple rows, for example:
+
+```json
+{
+  "field_path": "execution.fill_price_mode",
+  "spec_value": "next_open",
+  "status": "confirmed",
+  "evidence": [
+    "User confirmed the Default Confirmation Checklist execution group."
+  ],
+  "blocking": false
+}
+```
+
+Do not mark fields outside the confirmed checklist or confirmed group as
+`confirmed`. If the user rejects or edits any row, update `strategy_spec.yaml`,
+rerun deterministic validation, then repeat the audit.
+
+Before emitting a final passing audit, validate effective field coverage:
+
+```bash
+uv run oxq spec-audit validate spec_audit.json --spec strategy_spec.yaml --strict-confirmed
+```
+
+Do not report `status: pass` unless this command passes.
 
 ## `spec_audit.json`
 
@@ -216,7 +284,7 @@ Compute `conversation_hash` from the exact raw conversation input supplied to
 this skill. After writing `spec_audit.json`, run:
 
 ```bash
-uv run oxq spec-audit validate spec_audit.json
+uv run oxq spec-audit validate spec_audit.json --spec strategy_spec.yaml --strict-confirmed
 ```
 
 Schema validation only proves the artifact shape. It does not prove the
@@ -231,13 +299,14 @@ skill's boundary.
 Report a compact summary:
 
 - confirmed fields
-- default fields that will be used
+- default fields awaiting checklist confirmation
 - unconfirmed fields that block progress
 - selected catalog components and recipes
 - component provenance issues, including catalog hash mismatch, missing
   components, non-canonical recipe decomposition, or missing user-requested
   semantics
 - path to `spec_audit.json`
+- Default Confirmation Checklist when defaults need user approval
 - blocking confirmation questions
 
 Do not run or approve a backtest while blocking fields remain. After this skill

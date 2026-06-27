@@ -53,7 +53,9 @@ directories for another open-xquant checkout.
 
 ## Stable Spec Defaults
 
-Use current stable CLI behavior first:
+Use current stable CLI behavior first as proposed defaults. Record each default
+in build notes so the spec auditor can ask for grouped user confirmation before
+any formal backtest:
 
 - `universe.type: static`
 - `data.provider: local`
@@ -139,9 +141,10 @@ Initialize when no spec exists:
 uv run oxq spec init "<strategy idea>" --out strategy_spec.yaml
 ```
 
-Edit `strategy_spec.yaml` so it contains only user-confirmed values or
-documented defaults. Keep safe next-session execution semantics unless the user
-explicitly asks for another supported execution model.
+Edit `strategy_spec.yaml` so it contains user-confirmed values and explicit
+documented defaults. Defaults are only proposals at this phase; the downstream
+spec auditor must confirm every effective field, including parser/runtime
+defaults injected by OpenXQuant, before formal backtest.
 
 For categorical custom signals, declare output domain as rule metadata:
 
