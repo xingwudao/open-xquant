@@ -65,6 +65,10 @@ Use the `open-xquant` router skill.
   main thread.
 - Builder writes `strategy_spec.yaml`, `component_catalog.json`,
   `spec_build_notes.md`, and `builder_phase_result.json`.
+- Data inspector checks required symbols, coverage, provider readiness, and
+  local parquet quality, then writes `data_inspection_result.json`. Run this
+  before spec audit when data coverage or warmup policy can affect the SPEC,
+  and before runtime audit when the final data directory changes.
 - Spec auditor reads those artifacts plus raw conversation context and writes
   `spec_audit.json` and `audit_notes.md`.
 - Runtime auditor reads the authorized spec/audit artifacts, compiles a preview,
@@ -88,6 +92,8 @@ Use the `open-xquant` router skill.
 ## Worker Routing
 
 - SPEC construction or editing: `oxq-strategy-builder-worker`.
+- Data availability, provider readiness, and parquet quality checks:
+  `oxq-data-inspection-worker`.
 - Workspace-local custom component authoring: `oxq-component-author-worker`.
 - User/source/component provenance audit: `oxq-spec-auditor-worker`.
 - SPEC-to-runtime compile consistency: `oxq-runtime-auditor-worker`.

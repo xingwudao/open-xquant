@@ -62,6 +62,7 @@ Run the formal backtest with both pre-run gates:
 uv run oxq backtest run strategy_spec.yaml \
   --spec-audit spec_audit.json \
   --runtime-audit runtime_audit.json \
+  --component-catalog component_catalog.json \
   --component-manifest component_manifest.json \
   --data-dir data \
   --out runs/auto \
@@ -72,16 +73,11 @@ Omit `--component-manifest` only when the authorization explicitly contains no
 workspace-local custom component manifests. Pass one `--component-manifest`
 option for each authorized manifest path.
 
-After a successful run, attach provenance when `component_catalog.json` is
-available:
-
-```bash
-uv run oxq backtest attach-provenance runs/<run_id> \
-  --spec-audit spec_audit.json \
-  --runtime-audit runtime_audit.json \
-  --component-catalog component_catalog.json \
-  --json
-```
+The formal run command attaches `spec_audit.json`, `runtime_audit.json`,
+`conversation_hash.txt`, `component_catalog_hash.txt`, and
+`recipe_catalog_hash.txt` into the run directory after rechecking the final
+`strategy_spec.yaml` and `compiled_plan.json`. Use
+`oxq backtest attach-provenance` only for legacy runs that predate this gate.
 
 Then run deterministic post-run checks that do not mutate the spec, audits, or
 report:

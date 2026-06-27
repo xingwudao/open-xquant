@@ -59,6 +59,7 @@ Material fields include:
 - `validation.required_oos`
 - symbols and benchmark
 - execution timing and fill price fields
+- data warmup policy and `data.min_start_date`
 - initial cash and cash return
 - fee rate and slippage rate
 - risk-free rate and metrics profile
@@ -75,6 +76,18 @@ validation, `validation.required_oos: false` with that full range in
 `validation.test_period` is a valid full-interval backtest representation. Do
 not force `required_oos: true`, and do not require a train/test split unless
 the user confirms it.
+
+Audit data warmup as a material field. If the spec uses indicators, signals,
+rules, or recipes with lookback periods, verify whether the user or builder
+notes confirmed one of these policies:
+
+- pre-window data is loaded through `data.min_start_date`
+- the first lookback window may remain NaN/cash until enough bars exist
+- no warmup is required because the strategy has no lookback dependency
+
+Block the audit when lookback behavior exists but `data.min_start_date` or an
+explicit no-warmup policy is missing. This is material because it can change
+early-period exposure and make runs incomparable.
 
 For each material field, record source evidence:
 
@@ -140,6 +153,7 @@ accepted default with user approval. Train/test splits and required OOS settings
 are material and must not pass silently.
 Always group related fields instead of asking one question per YAML key:
 
+- data warmup and local data coverage
 - execution assumptions
 - cost assumptions
 - train/test split

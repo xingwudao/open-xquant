@@ -96,6 +96,8 @@ uv run oxq agent install --target trae --profile standalone-agent --yes
 - `oxq-coordinator`: 面向用户的主控 Agent，只路由阶段和管理确认。
 - `oxq-strategy-builder-worker`: 使用 `build-strategy-spec`，只构建和验证
   `strategy_spec.yaml`。
+- `oxq-data-inspection-worker`: 使用 `explore-data`，只检查数据可用性、
+  provider readiness、parquet 质量和覆盖区间。
 - `oxq-component-author-worker`: 使用 `author-component`，只创建
   workspace-local Indicator、Signal、PortfolioOptimizer components、测试、
   manifest 和 catalog；workspace-local Rule 默认阻塞。
@@ -302,7 +304,8 @@ uv run oxq strategy compile strategy_spec.yaml \
 uv run oxq backtest run strategy_spec.yaml \
   --component-manifest component_manifest.json \
   --spec-audit spec_audit.json \
-  --runtime-audit runtime_audit.json
+  --runtime-audit runtime_audit.json \
+  --component-catalog component_catalog.json
 ```
 
 `component_manifest.json` 的 `bundle_hash` 覆盖 manifest 内容

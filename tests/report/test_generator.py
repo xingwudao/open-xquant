@@ -559,10 +559,46 @@ def test_report_includes_execution_assumptions_when_artifact_exists(tmp_path) ->
         ),
         encoding="utf-8",
     )
+    (run_dir / "compiled_plan.json").write_text(
+        json.dumps(
+            {
+                "execution": {
+                    "fill_price_mode": "next_open",
+                    "rebalance": {"interval_days": 10},
+                },
+                "cost": {
+                    "fee_rate": 0.001,
+                    "slippage_rate": 0.002,
+                },
+                "data": {
+                    "effective_data_dir": "/tmp/oxq-data",
+                    "min_start_date": "2023-12-01",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps(
+            {
+                "warmup_policy": "preload_from_min_start_date",
+                "min_start_date": "2023-12-01",
+                "effective_data_dir": "/tmp/oxq-data",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     report = generate_report(run_dir, lang="en")
 
     assert "### Execution Assumptions" in report
+    assert "### Runtime Artifact Disclosure" in report
+    assert "`compiled_plan.json`" in report
+    assert "- **runtime.rebalance.interval_days**: 10" in report
+    assert "- **runtime.fee_rate**: 0.10%" in report
+    assert "- **runtime.slippage_rate**: 0.20%" in report
+    assert "- **data.warmup_policy**: preload_from_min_start_date" in report
+    assert "- **data.min_start_date**: 2023-12-01" in report
     assert "- **order_timing**: next_session_open" in report
     assert "- **price_bar**: next_session" in report
     assert "- **price_type**: open" in report

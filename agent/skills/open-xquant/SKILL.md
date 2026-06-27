@@ -164,8 +164,8 @@ Supported target role roots for `multi-agent` profile:
 - Cursor: `~/.cursor/agents/*.md`
 
 Prebuilt roles are `oxq-coordinator`, `oxq-strategy-builder-worker`,
-`oxq-component-author-worker`, `oxq-spec-auditor-worker`,
-`oxq-runtime-auditor-worker`, `oxq-runner-worker`,
+`oxq-data-inspection-worker`, `oxq-component-author-worker`,
+`oxq-spec-auditor-worker`, `oxq-runtime-auditor-worker`, `oxq-runner-worker`,
 `oxq-report-writer-worker`, and
 `oxq-report-reviewer-worker`.
 
@@ -176,7 +176,8 @@ under `open-xquant/`.
 ## Common Sequences
 
 - "Build and test this idea":
-  `build-strategy-spec` -> `audit-strategy-spec` -> `audit-runtime-semantics` ->
+  `build-strategy-spec` -> `explore-data` when data availability is unknown ->
+  `audit-strategy-spec` -> `audit-runtime-semantics` ->
   `run-authorized-backtest` -> `monitor-strategy-run` ->
   `build-report-charts` when chart assets are required ->
   `write-research-report` ->

@@ -56,7 +56,10 @@ def _write_spec_and_data(tmp_path, *, evaluation_window: str = "full"):
     return spec_path, data_dir
 
 
-def _write_spec_audit(path: Path, spec_hash: str) -> None:
+def _write_spec_audit(path: Path, spec_hash: str, catalog_hash: str | None = None) -> None:
+    if catalog_hash is None:
+        catalog_path = path.with_name("component_catalog.json")
+        catalog_hash = _write_component_catalog(catalog_path)
     path.write_text(
         json.dumps(
             {
@@ -65,7 +68,7 @@ def _write_spec_audit(path: Path, spec_hash: str) -> None:
                 "spec_provenance_pass": True,
                 "spec_hash": spec_hash,
                 "conversation_hash": "sha256:" + "2" * 16,
-                "catalog_hash": "sha256:" + "3" * 16,
+                "catalog_hash": catalog_hash,
                 "recipe_matches": [],
                 "field_audits": [],
                 "component_audits": [],
@@ -78,6 +81,14 @@ def _write_spec_audit(path: Path, spec_hash: str) -> None:
         ),
         encoding="utf-8",
     )
+
+
+def _write_component_catalog(path: Path, component_manifests: list[dict] | None = None) -> str:
+    from oxq.core.component_catalog import build_component_catalog, component_catalog_json
+
+    catalog = build_component_catalog(component_manifests or [])
+    path.write_text(component_catalog_json(catalog), encoding="utf-8")
+    return str(catalog["catalog_hash"])
 
 
 def _write_runtime_audit(
@@ -135,6 +146,7 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -172,6 +184,30 @@ def test_backtest_run_json_outputs_artifact_paths(tmp_path) -> None:
     assert payload["artifacts"]["artifact_hashes_json"].endswith("artifact_hashes.json")
 
 
+def test_backtest_run_json_requires_audits_by_default(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["errors"][0]["check"] == "spec_audit_missing"
+    assert "formal backtest requires audited gate artifacts" in payload["errors"][0]["message"]
+
+
 def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     from oxq.core.component_manifest import load_component_manifest, load_component_manifests_from_run, scoped_component_registries
     from oxq.core.registry import list_indicators
@@ -202,6 +238,7 @@ def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -263,6 +300,7 @@ def test_run_component_manifest_loader_prefers_archived_legacy_manifest(tmp_path
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -314,6 +352,7 @@ def test_backtest_run_archives_external_manifest_test_files(tmp_path) -> None:
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -405,6 +444,7 @@ def test_backtest_run_archives_multiple_component_manifests(tmp_path) -> None:
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -451,6 +491,7 @@ def test_run_component_manifest_loader_rejects_missing_recorded_archive(tmp_path
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -486,6 +527,7 @@ def test_backtest_run_rejects_archiving_extension_into_itself(tmp_path) -> None:
             str(data_dir),
             "--out",
             str(tmp_path / "custom_components" / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -540,7 +582,10 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
     spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
     audit_path = tmp_path / "spec_audit.json"
     runtime_audit_path = tmp_path / "runtime_audit.json"
-    _write_spec_audit(audit_path, spec_hash)
+    manifest_for_catalog = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_for_catalog["_manifest_path"] = str(manifest.resolve())
+    catalog_hash = _write_component_catalog(tmp_path / "component_catalog.json", [manifest_for_catalog])
+    _write_spec_audit(audit_path, spec_hash, catalog_hash=catalog_hash)
     _write_runtime_audit(
         runtime_audit_path,
         spec_hash,
@@ -565,6 +610,7 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -648,6 +694,7 @@ def test_backtest_run_json_reports_validation_failure(tmp_path) -> None:
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -768,6 +815,7 @@ def test_backtest_run_json_reports_runtime_failure(tmp_path) -> None:
             str(missing_data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -801,6 +849,7 @@ def test_backtest_run_json_rejects_missing_runtime_audit_for_formal_spec_audit(t
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -906,7 +955,14 @@ def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
     )
 
     assert result.exit_code == 0, result.output
-    assert json.loads(result.output)["status"] == "pass"
+    payload = json.loads(result.output)
+    assert payload["status"] == "pass"
+    run_dir = Path(payload["run_dir"])
+    assert (run_dir / "spec_audit.json").exists()
+    assert (run_dir / "runtime_audit.json").exists()
+    artifact_hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert "spec_audit.json" in artifact_hashes
+    assert "runtime_audit.json" in artifact_hashes
 
 
 def test_backtest_run_json_hashes_runtime_audit_with_resolved_data_dir(monkeypatch, tmp_path) -> None:
@@ -995,6 +1051,7 @@ def test_backtest_run_json_uses_artifact_metrics_for_oos_window(tmp_path) -> Non
             str(data_dir),
             "--out",
             str(tmp_path / "runs"),
+            "--allow-unaudited",
             "--json",
         ],
     )
@@ -1004,3 +1061,58 @@ def test_backtest_run_json_uses_artifact_metrics_for_oos_window(tmp_path) -> Non
     artifact_metrics = json.loads(Path(payload["artifacts"]["metrics_json"]).read_text(encoding="utf-8"))
     assert payload["metrics"] == artifact_metrics
     assert payload["metrics"]["metric_assumptions"]["evaluation_window"] == "oos"
+
+
+def test_backtest_compare_runs_blocks_different_cost_assumptions(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+
+    spec = StrategySpec.from_yaml(spec_path)
+    spec.cost.slippage_rate = 0.005
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert second.exit_code == 0, second.output
+
+    compare = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            json.loads(second.output)["run_dir"],
+            "--json",
+        ],
+    )
+
+    assert compare.exit_code == 1
+    payload = json.loads(compare.output)
+    assert payload["comparable"] is False
+    assert any(item["field"] == "cost" for item in payload["differences"])

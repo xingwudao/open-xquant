@@ -294,6 +294,11 @@ class StrategySpec:
         raw = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError(f"Invalid spec file: {path} — expected YAML dict")
+        return cls.from_dict(raw)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> StrategySpec:
+        """Load a StrategySpec from a parsed mapping."""
         return cls(
             schema_version=raw.get("schema_version", "0.1"),
             strategy_id=raw.get("strategy_id", ""),

@@ -70,6 +70,8 @@ Use current stable CLI behavior first:
   supported metrics profile
 - positive `cost.fee_rate`
 - positive `cost.slippage_rate`
+- explicit data warmup policy through `data.min_start_date` when indicators or
+  rules need lookback data before the evaluated interval
 - `portfolio.type: EqualWeight` only for boolean signal filters
 - `ROC` + `ROCTiming` + `SignalToPosition` for single-symbol timing strategies
   that need explicit `BUY` / `SELL` / `HOLD` and HOLD-maintains-position
@@ -79,6 +81,17 @@ If the user supplies one complete backtest period and does not ask for an
 IS/OOS split, encode the full period as `validation.test_period` with
 `validation.required_oos: false`. Do not split the full period into train/test
 or set `required_oos: true` unless the user confirms that validation plan.
+
+For lookback indicators, define data warmup deliberately:
+
+- If the user wants a true full-interval evaluation from the first test date,
+  set `data.min_start_date` earlier than the evaluation start so the largest
+  lookback has enough prior bars.
+- If no pre-window data is available or the user accepts first-window warmup
+  NaNs/cash behavior, leave `data.min_start_date` empty only after recording
+  that policy in `spec_build_notes.md`.
+- Do not silently let two otherwise identical specs differ only because one
+  Agent fetched warmup history and another did not.
 
 ## Component Catalog Gate
 
@@ -186,6 +199,11 @@ Write `builder_phase_result.json` after validation:
   },
   "selected_components": [],
   "selected_recipes": [],
+  "data_warmup_policy": {
+    "status": "confirmed | default | blocked",
+    "min_start_date": "",
+    "reason": ""
+  },
   "needs_custom_component": [],
   "next_required_phase": "audit | component_authoring"
 }

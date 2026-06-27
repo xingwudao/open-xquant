@@ -199,10 +199,24 @@ def test_coordinator_role_documents_subagent_workflow() -> None:
     assert "open-xquant SubAgent workflow" in text
     assert "Prefer SubAgents by default" in text
     assert "Builder writes `strategy_spec.yaml`" in text
+    assert "Data inspector checks required symbols" in text
+    assert "oxq-data-inspection-worker" in text
     assert "Spec auditor reads those artifacts" in text
     assert "Runtime auditor reads the authorized spec/audit artifacts" in text
     assert "Runner reads `backtest_authorization.json`" in text
     assert "Main agent only coordinates" in text
+
+
+def test_data_inspection_worker_is_narrow_role() -> None:
+    role = Path("agent/roles/oxq-data-inspection-worker.md")
+    text = role.read_text(encoding="utf-8")
+
+    assert "role_kind: data_inspection" in text
+    assert "explore-data" in text
+    assert "data_inspection_result.json" in text
+    assert "data_availability_report.md" in text
+    assert "Do not edit `strategy_spec.yaml`" in text
+    assert "Do not run formal backtests" in text
 
 
 def test_component_author_skill_documents_workspace_extension_contract() -> None:
@@ -247,6 +261,9 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
     assert "group related fields" in text
     assert "CONVERSATION_HISTORY_RAW" in text
     assert "Do not hardcode `conversation.json` as a required path" in text
+    assert "data.min_start_date" in text
+    assert "data warmup" in text
+    assert "Block the audit when lookback behavior exists" in text
     assert "field_path" in text
     assert "agent_added" in text
     assert "spec_audit.json" in text
@@ -356,6 +373,8 @@ def test_strategy_builder_is_build_only_for_multi_agent_systems() -> None:
     assert "component_catalog.json" in text
     assert "Search `recipes` before composing custom indicator chains" in text
     assert "validation.required_oos: false" in text
+    assert "data.min_start_date" in text
+    assert "data_warmup_policy" in text
     assert "builder_phase_result.json" in text
     assert "needs_custom_component" in text
     assert "Do not call component creation skills" in text
@@ -422,10 +441,12 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "backtest_authorization.json" in text
     assert "--spec-audit spec_audit.json" in text
     assert "--runtime-audit runtime_audit.json" in text
+    assert "--component-catalog component_catalog.json" in text
     assert "--component-manifest component_manifest.json" in text
     assert "Omit `--component-manifest` only when" in text
     assert "component_manifests.json" in text
     assert "same `component_bundle_hashes`" in text
+    assert "formal run command attaches `spec_audit.json`" in text
     assert "do not rerun the" in text
     assert "workspace-local custom components" in text
     assert "runner_result.json" in text
@@ -448,6 +469,9 @@ def test_report_writer_and_reviewer_require_spec_audit_disclosure() -> None:
     assert "spec_audit.json" in writer
     assert "selected canonical recipes" in writer
     assert "component provenance" in writer
+    assert "data_manifest.json" in writer
+    assert "oxq backtest compare-runs" in writer
+    assert "data warmup" in writer
     assert "Do not omit blocking or unresolved `spec_audit.json` findings" in writer
     assert "spec_audit.json" in reviewer
     assert "unconfirmed defaults" in reviewer

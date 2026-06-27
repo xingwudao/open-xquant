@@ -245,6 +245,7 @@ def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_
     assert roles == {
         "oxq-coordinator",
         "oxq-component-author-worker",
+        "oxq-data-inspection-worker",
         "oxq-strategy-builder-worker",
         "oxq-spec-auditor-worker",
         "oxq-runtime-auditor-worker",
@@ -436,6 +437,7 @@ def test_agent_install_real_source_writes_codex_agent_roles(monkeypatch, tmp_pat
     coordinator_payload = tomllib.loads(coordinator.read_text(encoding="utf-8"))
     assert coordinator_payload["name"] == "oxq-coordinator"
     assert "oxq-strategy-builder-worker" in coordinator_payload["developer_instructions"]
+    assert "oxq-data-inspection-worker" in coordinator_payload["developer_instructions"]
     assert "open-xquant SubAgent workflow" in coordinator_payload["developer_instructions"]
     assert "Main agent only coordinates" in coordinator_payload["developer_instructions"]
     runner_payload = tomllib.loads(runner.read_text(encoding="utf-8"))

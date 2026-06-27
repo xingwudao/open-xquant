@@ -41,6 +41,8 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     metrics = json.loads((run_path / "metrics.json").read_text(encoding="utf-8"))
     facts = build_report_facts(RunArtifacts.load(run_path))
     execution_assumptions = _load_execution_assumptions(run_path)
+    compiled_plan = _load_json_object(run_path / "compiled_plan.json") or {}
+    data_manifest = _load_json_object(run_path / "data_manifest.json") or {}
     repro_audit = audit_reproducibility(run_dir)
     robustness_result = _load_verified_robustness_result(run_path, repro_audit)
     bias_audit = audit_research(run_dir)
@@ -117,6 +119,12 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
         lines.append(f"### {subheadings['execution_assumptions']}")
         lines.append("")
         lines.extend(_format_execution_assumption_lines(execution_assumptions))
+    runtime_disclosure = _format_runtime_disclosure_lines(compiled_plan, data_manifest)
+    if runtime_disclosure:
+        lines.append("")
+        lines.append("### Runtime Artifact Disclosure")
+        lines.append("")
+        lines.extend(runtime_disclosure)
     lines.append("")
 
     # 5. Backtest Metrics
@@ -1025,6 +1033,35 @@ def _format_execution_assumption_lines(assumptions: dict) -> list[str]:
         lines.append(f"- **rebalance.frequency**: {_format_assumption_value(rebalance.get('frequency'))}")
         lines.append(f"- **rebalance.interval_days**: {_format_assumption_value(rebalance.get('interval_days'))}")
         lines.append(f"- **rebalance.source**: {_format_assumption_value(rebalance.get('source'))}")
+    return lines
+
+
+def _format_runtime_disclosure_lines(compiled_plan: dict, data_manifest: dict) -> list[str]:
+    if not compiled_plan and not data_manifest:
+        return []
+    execution = compiled_plan.get("execution")
+    cost = compiled_plan.get("cost")
+    data = compiled_plan.get("data")
+    lines = [
+        "- Reported execution semantics are taken from `compiled_plan.json`, not inferred only from `strategy_spec.yaml`.",
+    ]
+    if isinstance(execution, dict):
+        rebalance = execution.get("rebalance")
+        lines.append(f"- **runtime.fill_price_mode**: {_format_assumption_value(execution.get('fill_price_mode'))}")
+        if isinstance(rebalance, dict):
+            lines.append(f"- **runtime.rebalance.interval_days**: {_format_assumption_value(rebalance.get('interval_days'))}")
+    if isinstance(cost, dict):
+        lines.append(f"- **runtime.fee_rate**: {_format_percent(cost.get('fee_rate'))}")
+        lines.append(f"- **runtime.slippage_rate**: {_format_percent(cost.get('slippage_rate'))}")
+    data_source = data if isinstance(data, dict) else data_manifest
+    if isinstance(data_source, dict):
+        min_start = data_source.get("min_start_date") or data_manifest.get("min_start_date")
+        effective_dir = data_source.get("effective_data_dir") or data_manifest.get("effective_data_dir")
+        warmup_policy = data_manifest.get("warmup_policy") or ("preload_from_min_start_date" if min_start else "none_declared")
+        lines.append(f"- **data.warmup_policy**: {_format_assumption_value(warmup_policy)}")
+        lines.append(f"- **data.min_start_date**: {_format_assumption_value(min_start)}")
+        lines.append(f"- **data.effective_data_dir**: {_format_assumption_value(effective_dir)}")
+    lines.append("- Different execution, cost, or data warmup settings can make return comparisons non-comparable.")
     return lines
 
 

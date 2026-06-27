@@ -385,6 +385,10 @@ def _write_artifacts(
     manifest_end = str(spec.validation.test_period[1]) if spec.validation.test_period else ""
     if not manifest_end and spec.validation.train_period:
         manifest_end = str(spec.validation.train_period[1])
+    analysis_start = spec.validation.train_period[0] if spec.validation.train_period else (spec.validation.test_period[0] if spec.validation.test_period else "")
+    warmup_policy = "none_declared"
+    if spec.data.min_start_date:
+        warmup_policy = "preload_from_min_start_date"
     missing_ratio = _compute_missing_ratio(
         result.mktdata,
         spec.data.required_columns,
@@ -409,6 +413,12 @@ def _write_artifacts(
         "columns": spec.data.required_columns,
         "calendar": spec.market.calendar,
         "price_adjustment": spec.data.price_adjustment,
+        "data_dir": effective_data_dir or spec.data.data_dir,
+        "spec_data_dir": spec.data.data_dir,
+        "effective_data_dir": effective_data_dir or spec.data.data_dir,
+        "min_start_date": spec.data.min_start_date,
+        "analysis_start": analysis_start,
+        "warmup_policy": warmup_policy,
         "start": manifest_start,
         "end": manifest_end,
         "missing_ratio": missing_ratio,

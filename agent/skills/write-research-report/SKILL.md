@@ -49,6 +49,8 @@ Read:
 - `spec_audit.json`
 - `metrics.json`
 - `execution_assumptions.json`
+- `compiled_plan.json`
+- `data_manifest.json`
 - reproducibility audit output
 - research-bias audit output
 - `robustness.json` when present
@@ -135,6 +137,12 @@ Write `research_report.md` with:
      runtime execution semantics. Do not describe rebalance frequency,
      execution timing, fees, slippage, validation split, or runtime rules from
      the raw YAML alone.
+   - Disclose data warmup policy from `data_manifest.json` and
+     `compiled_plan.json`, including `data.min_start_date`, effective data
+     directory, and whether early exposure may be affected by missing warmup.
+   - State that different execution, cost, validation, or data warmup settings
+     can make performance comparisons non-comparable unless
+     `oxq backtest compare-runs` passes.
 
 4. Chart narrative.
    - Embed registered figures using their manifest paths.
@@ -196,6 +204,8 @@ report narrative from templates.
 - Do not omit blocking or unresolved `spec_audit.json` findings.
 - Do not claim that a material execution rule ran unless `compiled_plan.json`
   or a runtime artifact shows it was preserved.
+- Do not compare returns across runs unless their execution, cost, validation,
+  data warmup, and compiled runtime assumptions are comparable.
 - Do not promote a run with fatal audit findings, failed reproducibility,
   fragile robustness, or no usable OOS evidence.
 - Do not call the strategy investable; describe research evidence and limits.

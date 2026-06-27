@@ -528,7 +528,7 @@ oxq spec validate strategy_spec.yaml
 oxq spec-audit validate spec_audit.json
 oxq strategy compile strategy_spec.yaml
 oxq runtime-audit validate runtime_audit.json
-oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --out runs/auto --json
+oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --component-catalog component_catalog.json --out runs/auto --json
 oxq audit reproducibility runs/<run_id>/
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
@@ -675,6 +675,8 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 
 - `oxq-coordinator`: 面向用户的主控 Agent，只负责阶段路由和确认。
 - `oxq-strategy-builder-worker`: 构建和验证 `strategy_spec.yaml`。
+- `oxq-data-inspection-worker`: 检查数据可用性、provider readiness、
+  parquet 质量和覆盖区间。
 - `oxq-component-author-worker`: 创建 workspace-local Indicator、Signal、
   PortfolioOptimizer custom components；workspace-local Rule 默认阻塞。
 - `oxq-spec-auditor-worker`: 审用户确认、字段来源和组件 provenance。
@@ -784,7 +786,7 @@ oxq spec init "20日动量轮动" --out strategy_spec.yaml
 oxq spec validate strategy_spec.yaml
 oxq spec-audit validate spec_audit.json
 oxq runtime-audit validate runtime_audit.json
-oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --out runs/auto --json
+oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --component-catalog component_catalog.json --out runs/auto --json
 oxq audit research runs/<run_id>/
 oxq robustness run runs/<run_id>/
 oxq experiment add runs/<run_id>/
