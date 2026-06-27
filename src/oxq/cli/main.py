@@ -694,7 +694,7 @@ def compare_runs(left_run_dir: str, right_run_dir: str, as_json: bool):
             click.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
         else:
             click.echo(f"Status: {payload['status'].upper()}")
-            click.echo(f"Comparable: false")
+            click.echo("Comparable: false")
             click.echo(f"  [fatal] {exc.message}")
         raise SystemExit(1)
     differences = _compare_run_signatures(left, right)
