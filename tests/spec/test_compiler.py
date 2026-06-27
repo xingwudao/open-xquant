@@ -529,6 +529,9 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert "def define_rules() -> list[dict]:" in strategy_py
     assert "def simulate_trading_flow() -> list[dict]:" in strategy_py
     assert "def build_strategy():" in strategy_py
+    assert "Audit data appendix" in strategy_py
+    assert strategy_py.index("def define_universe() -> dict:") < strategy_py.index("STRATEGY_SPEC =")
+    assert strategy_py.index("def simulate_trading_flow() -> list[dict]:") < strategy_py.index("COMPILED_PLAN =")
     module_spec = importlib.util.spec_from_file_location("generated_strategy_review", run_dir / "strategy.py")
     assert module_spec is not None
     assert module_spec.loader is not None

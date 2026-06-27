@@ -832,21 +832,9 @@ def _build_strategy_py_artifact(
         "from copy import deepcopy",
         "from pathlib import Path",
         "",
-        f"STRATEGY_SPEC_HASH = {spec_hash!r}",
-        f"COMPILED_PLAN_HASH = {compiled_plan_hash!r}",
-        "",
-        f"STRATEGY_SPEC = {_format_python_literal(spec_dict)}",
-        "",
-        f"COMPILED_PLAN = {_format_python_literal(compiled_plan)}",
-        "",
-        f"STRATEGY_FLOW = {_format_python_literal(flow)}",
-        "",
     ]
-    for name, value in sections.items():
-        lines.extend([f"{name} = {_format_python_literal(value)}", ""])
     lines.extend(
         [
-            "",
             "def define_universe() -> dict:",
             '    """Return the run universe used to evaluate this strategy."""',
             "    # The universe is deliberately modeled as a run input.",
@@ -958,8 +946,27 @@ def _build_strategy_py_artifact(
             '        spec_path = run_dir / "strategy_spec.yaml"',
             "        return compile_strategy(StrategySpec.from_yaml(spec_path))",
             "",
+            "",
+            "# -----------------------------------------------------------------------------",
+            "# Audit data appendix",
+            "# -----------------------------------------------------------------------------",
+            "# The constants below are intentionally kept as top-level assignments so the",
+            "# reproducibility audit can parse them without executing this file. They are",
+            "# placed after the process functions so human readers see strategy flow first.",
+            "",
+            f"STRATEGY_SPEC_HASH = {spec_hash!r}",
+            f"COMPILED_PLAN_HASH = {compiled_plan_hash!r}",
+            "",
+            f"STRATEGY_SPEC = {_format_python_literal(spec_dict)}",
+            "",
+            f"COMPILED_PLAN = {_format_python_literal(compiled_plan)}",
+            "",
+            f"STRATEGY_FLOW = {_format_python_literal(flow)}",
+            "",
         ]
     )
+    for name, value in sections.items():
+        lines.extend([f"{name} = {_format_python_literal(value)}", ""])
     return "\n".join(lines)
 
 
