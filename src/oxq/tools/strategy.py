@@ -65,6 +65,12 @@ def _build_required_indicators(
     return result
 
 
+def _universe_symbols(universe: object | None) -> list[str]:
+    if universe is None or not hasattr(universe, "symbols"):
+        return []
+    return list(getattr(universe, "symbols"))
+
+
 # ---------------------------------------------------------------------------
 # Tools
 # ---------------------------------------------------------------------------
@@ -91,9 +97,9 @@ def strategy_create(
         hypothesis=hypothesis,
         objectives=objectives,
         benchmarks=benchmarks or [],
-        universe=StaticUniverse(()),
         signals={},
         portfolio=EqualWeightOptimizer(),
+        rules=[],
     )
     session._strategies[name] = strategy
     session._save()
@@ -205,11 +211,7 @@ def strategy_add_rule(
             return {"error": built}
         rule.required_indicators = built
 
-    # Rules are stored externally; they are passed to Engine.run() at runtime.
-    # Store them in a _pending_rules list on the strategy for tool convenience.
-    if not hasattr(strat, "_pending_rules"):
-        strat._pending_rules = []
-    strat._pending_rules.append(rule)
+    strat.rules.append(rule)
 
     session._save()
     return {
@@ -230,7 +232,7 @@ def strategy_inspect(strategy: str) -> dict[str, Any]:
     if strat is None:
         return {"error": f"Strategy '{strategy}' not found"}
 
-    pending_rules = getattr(strat, "_pending_rules", [])
+    pending_rules = getattr(strat, "rules", getattr(strat, "_pending_rules", []))
 
     # Collect indicators from all components
     def _fmt_indicators(obj: object) -> dict[str, Any]:
@@ -284,7 +286,16 @@ def strategy_inspect(strategy: str) -> dict[str, Any]:
         "hypothesis": strat.hypothesis,
         "objectives": strat.objectives,
         "benchmarks": strat.benchmarks,
-        "universe": list(strat.universe.symbols) if hasattr(strat.universe, "symbols") else [],
+        "universe": _universe_symbols(
+            session._strategy_universes.get(strategy, getattr(strat, "_legacy_universe", None))
+        ),
+        "universe_binding": (
+            "run_default"
+            if strategy in session._strategy_universes
+            else "legacy_strategy"
+            if getattr(strat, "_legacy_universe", None) is not None
+            else "none"
+        ),
         "signals": signals_info,
         "portfolio": portfolio_info,
         "rules": rules_info,
@@ -458,7 +469,7 @@ def strategy_set_universe(
     filters: list[dict[str, Any]] | None = None,
     name: str = "",
 ) -> dict[str, Any]:
-    """Bind a universe to an existing strategy."""
+    """Set a default run universe for an existing strategy."""
     from oxq.universe import Filter, FilterUniverse
 
     strat = session._strategies.get(strategy)
@@ -468,7 +479,7 @@ def strategy_set_universe(
     if type == "static":
         if not symbols:
             return {"error": "type='static' requires 'symbols' list."}
-        strat.universe = StaticUniverse(symbols=tuple(symbols), name=name)
+        session._strategy_universes[strategy] = StaticUniverse(symbols=tuple(symbols), name=name)
         session._save()
         return {
             "strategy": strategy,
@@ -484,7 +495,7 @@ def strategy_set_universe(
         filter_objs = tuple(
             Filter(column=f["column"], op=f["op"], value=f["value"]) for f in filters
         )
-        strat.universe = FilterUniverse(
+        session._strategy_universes[strategy] = FilterUniverse(
             base=tuple(symbols), filters=filter_objs, mktdata={}, name=name,
         )
         session._save()

@@ -52,11 +52,13 @@ def engine_run(
     if fill_price_mode in next_session_fill_modes and not market_calendar:
         return {"error": f"market_calendar is required when fill_price_mode='{fill_price_mode}'"}
 
-    # Use symbols param as override; otherwise use strategy's universe
-    if symbols:
-        strat.universe = StaticUniverse(tuple(symbols))
-    elif not hasattr(strat.universe, "symbols") or not strat.universe.symbols:
-        return {"error": "Strategy has no universe set. Use strategy_set_universe first, or pass symbols parameter."}
+    # Use symbols as a per-run universe override; otherwise use the session's
+    # default run universe. Do not mutate the reusable Strategy object.
+    run_universe = StaticUniverse(tuple(symbols)) if symbols else session._strategy_universes.get(strategy)
+    if run_universe is None:
+        run_universe = getattr(strat, "_legacy_universe", None)
+    if run_universe is None or not getattr(run_universe, "symbols", ()):
+        return {"error": "No universe set for this run. Use strategy_set_universe first, or pass symbols parameter."}
 
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     provider_calendar = market_calendar if fill_price_mode in next_session_fill_modes else None
@@ -86,7 +88,7 @@ def engine_run(
     broker = SimBroker(**broker_kwargs)
 
     # Collect pending rules from strategy
-    rules = getattr(strat, "_pending_rules", []) or []
+    rules = getattr(strat, "rules", getattr(strat, "_pending_rules", [])) or []
 
     try:
         result = Engine().run(
@@ -98,6 +100,7 @@ def engine_run(
             initial_cash=initial_cash,
             run_through=run_through,
             rules=rules,
+            universe=run_universe,
             lot_size=lot_size,
             cash_annual_return=cash_annual_return,
             data_start=data_start,

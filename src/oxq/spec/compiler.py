@@ -235,19 +235,20 @@ def compile_strategy(spec: StrategySpec) -> Strategy:
         else:
             optimizer.required_indicators = required
 
-    # Build universe
-    if spec.universe.type != "static":
-        raise ValueError(f"Unsupported universe.type '{spec.universe.type}'. Only 'static' is available.")
-    universe = StaticUniverse(tuple(spec.universe.symbols))
-
     return Strategy(
         name=spec.strategy_id,
         hypothesis=spec.research.hypothesis,
         benchmarks=spec.benchmark.symbols,
-        universe=universe,
         signals=signals,
         portfolio=optimizer,
     )
+
+
+def compile_universe(spec: StrategySpec) -> StaticUniverse:
+    """Compile the run universe from a StrategySpec."""
+    if spec.universe.type != "static":
+        raise ValueError(f"Unsupported universe.type '{spec.universe.type}'. Only 'static' is available.")
+    return StaticUniverse(tuple(spec.universe.symbols))
 
 
 def compile_run(
@@ -268,6 +269,7 @@ def compile_run(
         messages = "; ".join(error["message"] for error in validation.errors)
         raise ValueError(f"Spec validation failed: {messages}")
     strategy = compile_strategy(spec)
+    universe = compile_universe(spec)
 
     # Data provider — use spec.data.data_dir as fallback
     _data_dir = data_dir or (spec.data.data_dir or None)
@@ -321,6 +323,7 @@ def compile_run(
         start=start,
         end=end,
         initial_cash=spec.execution.initial_cash,
+        universe=universe,
         lot_size=_effective_lot_size(spec),
         cash_annual_return=spec.execution.cash_annual_return,
         rules=rules,
@@ -385,7 +388,11 @@ def _write_artifacts(
     manifest_end = str(spec.validation.test_period[1]) if spec.validation.test_period else ""
     if not manifest_end and spec.validation.train_period:
         manifest_end = str(spec.validation.train_period[1])
-    analysis_start = spec.validation.train_period[0] if spec.validation.train_period else (spec.validation.test_period[0] if spec.validation.test_period else "")
+    analysis_start = ""
+    if spec.validation.train_period:
+        analysis_start = spec.validation.train_period[0]
+    elif spec.validation.test_period:
+        analysis_start = spec.validation.test_period[0]
     warmup_policy = "none_declared"
     if spec.data.min_start_date:
         warmup_policy = "preload_from_min_start_date"
@@ -597,6 +604,7 @@ def _build_compiled_plan(
 ) -> dict[str, Any]:
     """Build a deterministic trace of how the spec maps to runtime objects."""
     strategy = strategy or compile_strategy(spec)
+    universe = compile_universe(spec)
     semantics = derive_execution_semantics(spec.execution)
     rebalance_interval, rebalance_source = _effective_rebalance(spec)
     assumptions = metric_assumptions(spec.metrics)
@@ -627,8 +635,8 @@ def _build_compiled_plan(
         },
         "universe": {
             "type": spec.universe.type,
-            "runtime_class": _class_ref(type(strategy.universe)),
-            "symbols": list(getattr(strategy.universe, "symbols", spec.universe.symbols)),
+            "runtime_class": _class_ref(type(universe)),
+            "symbols": list(getattr(universe, "symbols", spec.universe.symbols)),
             "point_in_time": spec.universe.point_in_time,
             "survivorship_bias_policy": spec.universe.survivorship_bias_policy,
         },
@@ -743,6 +751,44 @@ def _build_strategy_py_artifact(
     compiled_plan_hash: str,
 ) -> str:
     spec_dict = spec.to_dict()
+    indicator_names = list(spec_dict.get("signal", {}).get("indicators", {}).keys())
+    signal_names = list(spec_dict.get("signal", {}).get("rules", {}).keys())
+    terminal_signals = compiled_plan.get("signals", {}).get("terminal_signals", [])
+    runtime_rules = compiled_plan.get("runtime_rules", [])
+    flow = [
+        {
+            "phase": "universe",
+            "description": "Resolve the tradable pool for this run. The universe is a run input, not the strategy body.",
+            "artifact": "UNIVERSE",
+        },
+        {
+            "phase": "indicator",
+            "description": "Load market data, then calculate indicators declared under SIGNAL['indicators'].",
+            "indicator_names": indicator_names,
+        },
+        {
+            "phase": "signal",
+            "description": "Evaluate signal rules from indicator outputs and produce terminal signal columns.",
+            "signal_names": signal_names,
+            "terminal_signals": terminal_signals,
+        },
+        {
+            "phase": "portfolio",
+            "description": "Convert terminal signals or scores into target weights using the configured portfolio optimizer.",
+            "portfolio_type": spec_dict.get("portfolio", {}).get("type", ""),
+        },
+        {
+            "phase": "rule",
+            "description": "Apply runtime rules such as rebalance frequency or risk constraints before orders are generated.",
+            "runtime_rules": runtime_rules,
+        },
+        {
+            "phase": "trade_simulation",
+            "description": "Simulate order generation, fills, costs, cash, positions, equity, and result artifacts.",
+            "execution": compiled_plan.get("execution", {}),
+            "cost": compiled_plan.get("cost", {}),
+        },
+    ]
     sections = {
         "RESEARCH": spec_dict.get("research", {}),
         "MARKET": spec_dict.get("market", {}),
@@ -765,9 +811,20 @@ def _build_strategy_py_artifact(
         "Canonical source: strategy_spec.yaml",
         "Machine audit trace: compiled_plan.json",
         "",
-        "This file is generated from the compiled in-memory Strategy object",
-        "and the canonical StrategySpec. Review it as a Python view of the",
-        "strategy, but edit strategy_spec.yaml instead of editing this file.",
+        "This file is a human-readable Python projection of the strategy flow.",
+        "It is not the backtest entrypoint. The formal runtime still reads",
+        "strategy_spec.yaml and records execution semantics in compiled_plan.json.",
+        "",
+        "Read the functions below from top to bottom:",
+        "1. define_universe()",
+        "2. define_indicators()",
+        "3. define_signals()",
+        "4. define_portfolio()",
+        "5. define_rules()",
+        "6. define_execution()",
+        "7. simulate_trading_flow()",
+        "",
+        "Edit strategy_spec.yaml, not this generated review artifact.",
         '"""',
         "",
         "from __future__ import annotations",
@@ -782,22 +839,114 @@ def _build_strategy_py_artifact(
         "",
         f"COMPILED_PLAN = {_format_python_literal(compiled_plan)}",
         "",
+        f"STRATEGY_FLOW = {_format_python_literal(flow)}",
+        "",
     ]
     for name, value in sections.items():
         lines.extend([f"{name} = {_format_python_literal(value)}", ""])
     lines.extend(
         [
             "",
+            "def define_universe() -> dict:",
+            '    """Return the run universe used to evaluate this strategy."""',
+            "    # The universe is deliberately modeled as a run input.",
+            "    # Running the same signal, portfolio, and rule logic on another",
+            "    # universe produces another portfolio without changing the strategy.",
+            "    universe = deepcopy(UNIVERSE)",
+            "    universe_symbols = universe.get('symbols', [])",
+            "    universe['review_note'] = (",
+            "        f\"This run evaluates {len(universe_symbols)} symbols; \"",
+            "        'change the run universe to test the same strategy elsewhere.'",
+            "    )",
+            "    return universe",
+            "",
+            "",
+            "def define_indicators() -> dict:",
+            '    """Return indicator definitions used by the signal layer."""',
+            "    # Indicators transform market data into numeric series.",
+            "    # They should be causal: every timestamp may only use information",
+            "    # available at or before that timestamp.",
+            "    signal = deepcopy(SIGNAL)",
+            "    return signal.get('indicators', {})",
+            "",
+            "",
+            "def define_signals() -> dict:",
+            '    """Return signal rules and terminal signal outputs."""',
+            "    # Signal rules consume indicator outputs and create boolean,",
+            "    # categorical, or score-like columns that the portfolio layer reads.",
+            "    signal = deepcopy(SIGNAL)",
+            "    return {",
+            "        'rules': signal.get('rules', {}),",
+            "        'terminal_signals': deepcopy(COMPILED_PLAN.get('signals', {}).get('terminal_signals', [])),",
+            "    }",
+            "",
+            "",
+            "def define_portfolio() -> dict:",
+            '    """Return how signals or scores become target weights."""',
+            "    # The portfolio layer is the allocation policy. Examples include",
+            "    # equal weight, TopN ranking, signal-filtered allocation, or custom",
+            "    # optimizers. It does not choose the run universe by itself.",
+            "    return {",
+            "        'spec': deepcopy(PORTFOLIO),",
+            "        'compiled': deepcopy(COMPILED_PLAN.get('portfolio', {})),",
+            "    }",
+            "",
+            "",
+            "def define_rules() -> list[dict]:",
+            '    """Return runtime rules applied around portfolio construction."""',
+            "    # Rules constrain when or how trades happen. A rebalance rule, for",
+            "    # example, must be visible here and in COMPILED_PLAN['runtime_rules']",
+            "    # before the run can honestly claim it was executed.",
+            "    return deepcopy(COMPILED_PLAN.get('runtime_rules', []))",
+            "",
+            "",
+            "def define_execution() -> dict:",
+            '    """Return execution, cost, benchmark, and validation assumptions."""',
+            "    # Execution settings describe how target weights become simulated",
+            "    # orders and fills. These assumptions materially affect performance.",
+            "    return {",
+            "        'execution': deepcopy(EXECUTION),",
+            "        'compiled_execution': deepcopy(COMPILED_PLAN.get('execution', {})),",
+            "        'cost': deepcopy(COST),",
+            "        'benchmark': deepcopy(BENCHMARK),",
+            "        'validation': deepcopy(VALIDATION),",
+            "        'metrics': deepcopy(METRICS),",
+            "    }",
+            "",
+            "",
+            "def simulate_trading_flow() -> list[dict]:",
+            '    """Return the review sequence for the simulated trading process."""',
+            "    # This is a process map for human review, not a replacement for",
+            "    # oxq backtest run. The formal engine still uses strategy_spec.yaml",
+            "    # plus compiled_plan.json as its audited runtime contract.",
+            "    return deepcopy(STRATEGY_FLOW)",
+            "",
+            "",
             "def describe() -> dict:",
+            '    """Return all review material embedded in this generated file."""',
             "    return {",
             '        "strategy_spec_hash": STRATEGY_SPEC_HASH,',
             '        "compiled_plan_hash": COMPILED_PLAN_HASH,',
             '        "strategy_spec": deepcopy(STRATEGY_SPEC),',
             '        "compiled_plan": deepcopy(COMPILED_PLAN),',
+            '        "strategy_flow": simulate_trading_flow(),',
+            '        "universe": define_universe(),',
+            '        "indicators": define_indicators(),',
+            '        "signals": define_signals(),',
+            '        "portfolio": define_portfolio(),',
+            '        "rules": define_rules(),',
+            '        "execution": define_execution(),',
             "    }",
             "",
             "",
             "def build_strategy():",
+            '    """Build the runtime Strategy object for compatibility checks.',
+            "",
+            "    The human review path above intentionally shows the process without",
+            "    making this file the formal backtest entrypoint. This helper remains",
+            "    for import-based smoke tests and old integrations that expect a",
+            "    Strategy object.",
+            '    """',
             "    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries",
             "    from oxq.spec.compiler import compile_strategy",
             "    from oxq.spec.schema import StrategySpec",

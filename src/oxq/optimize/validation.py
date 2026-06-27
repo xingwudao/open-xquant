@@ -22,6 +22,7 @@ from oxq.optimize.search import (
     _resolve_direction,
 )
 from oxq.portfolio.analytics import RunResult
+from oxq.universe.base import UniverseProvider
 
 logger = logging.getLogger(__name__)
 
@@ -304,6 +305,7 @@ class TimeSeriesCV:
         metric: str | Callable[[RunResult], float] = "sharpe_ratio",
         metric_direction: str | None = None,
         initial_cash: float = 100_000.0,
+        universe: UniverseProvider | None = None,
     ) -> CVResult:
         """Run cross-validation.
 
@@ -369,6 +371,7 @@ class TimeSeriesCV:
                     metric=metric,
                     metric_direction=metric_direction,
                     initial_cash=initial_cash,
+                    universe=universe,
                 )
                 best_params = search_result.best.params
                 is_metric = search_result.best.metric_value
@@ -384,6 +387,7 @@ class TimeSeriesCV:
                 start=split.test_start,
                 end=split.test_end,
                 initial_cash=initial_cash,
+                universe=universe,
             )
 
             oos_metric = _extract_metric(oos_result, metric)

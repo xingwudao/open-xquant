@@ -124,7 +124,7 @@ def paramset_create(
             portfolio_name = getattr(strat.portfolio, "name", None)
             if portfolio_name:
                 known.add(portfolio_name)
-            for rule in getattr(strat, "_pending_rules", []):
+            for rule in getattr(strat, "rules", getattr(strat, "_pending_rules", [])):
                 rule_name = getattr(rule, "name", None)
                 if rule_name:
                     known.add(rule_name)
@@ -242,17 +242,18 @@ def grid_search(
     if ps is None:
         return {"error": f"ParameterSet '{paramset}' not found"}
 
-    if symbols:
-        strat.universe = StaticUniverse(tuple(symbols))
-    elif not hasattr(strat.universe, "symbols") or not strat.universe.symbols:
-        return {"error": "Strategy has no universe set. Use strategy_set_universe first, or pass symbols parameter."}
+    run_universe = StaticUniverse(tuple(symbols)) if symbols else session._strategy_universes.get(strategy)
+    if run_universe is None:
+        run_universe = getattr(strat, "_legacy_universe", None)
+    if run_universe is None or not getattr(run_universe, "symbols", ()):
+        return {"error": "No universe set for this run. Use strategy_set_universe first, or pass symbols parameter."}
 
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     market = LocalMarketDataProvider(path)
     factory = _broker_factory(fee_rate, fee_min, slippage_rate)
 
     # Collect pending rules from strategy
-    rules = getattr(strat, "_pending_rules", []) or []
+    rules = getattr(strat, "rules", getattr(strat, "_pending_rules", [])) or []
 
     try:
         result = GridSearch(ps).run(
@@ -265,6 +266,7 @@ def grid_search(
             metric_direction=metric_direction,
             initial_cash=initial_cash,
             rules=rules,
+            universe=run_universe,
             lot_size=lot_size,
             cash_annual_return=cash_annual_return,
             data_start=data_start,
@@ -331,7 +333,7 @@ def walk_forward(
     if ps is None:
         return {"error": f"ParameterSet '{paramset}' not found"}
 
-    strat.universe = StaticUniverse(tuple(symbols))
+    run_universe = StaticUniverse(tuple(symbols))
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     market = LocalMarketDataProvider(path)
     factory = _broker_factory(fee_rate, fee_min, slippage_rate)
@@ -347,6 +349,7 @@ def walk_forward(
             metric=metric,
             metric_direction=metric_direction,
             initial_cash=initial_cash,
+            universe=run_universe,
         )
     except Exception as e:
         return {"error": str(e)}
@@ -417,7 +420,7 @@ def cross_validate(
         if ps is None:
             return {"error": f"ParameterSet '{paramset}' not found"}
 
-    strat.universe = StaticUniverse(tuple(symbols))
+    run_universe = StaticUniverse(tuple(symbols))
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     market = LocalMarketDataProvider(path)
     factory = _broker_factory(fee_rate, fee_min, slippage_rate)
@@ -434,6 +437,7 @@ def cross_validate(
             metric=metric,
             metric_direction=metric_direction,
             initial_cash=initial_cash,
+            universe=run_universe,
         )
     except Exception as e:
         return {"error": str(e)}

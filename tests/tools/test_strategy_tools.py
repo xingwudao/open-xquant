@@ -39,6 +39,7 @@ def test_strategy_create() -> None:
     assert result["objectives"] == {"total_return": {"min": 0.05}}
     assert result["benchmarks"] == ["SPY"]
     assert "test" in session._strategies
+    assert getattr(session._strategies["test"], "_legacy_universe", None) is None
 
 
 def test_strategy_create_missing_hypothesis() -> None:
@@ -157,6 +158,7 @@ def test_strategy_inspect() -> None:
 
     result = strategy_inspect("s1")
     assert result["name"] == "s1"
+    assert result["universe_binding"] == "none"
     assert "cross" in result["signals"]
     assert "indicators" in result["signals"]["cross"]
     assert "sma_10" in result["signals"]["cross"]["indicators"]
@@ -166,6 +168,20 @@ def test_strategy_inspect() -> None:
 def test_strategy_inspect_not_found() -> None:
     result = strategy_inspect("missing")
     assert "error" in result
+
+
+def test_strategy_set_universe_sets_run_default_not_strategy_body() -> None:
+    from oxq.tools.strategy import strategy_set_universe
+
+    strategy_create(name="s1", hypothesis="h", objectives={"r": {"min": 0.0}})
+    result = strategy_set_universe(strategy="s1", type="static", symbols=["AAPL", "MSFT"])
+
+    assert "error" not in result
+    assert getattr(session._strategies["s1"], "_legacy_universe", None) is None
+    assert tuple(session._strategy_universes["s1"].symbols) == ("AAPL", "MSFT")
+    inspect = strategy_inspect("s1")
+    assert inspect["universe"] == ["AAPL", "MSFT"]
+    assert inspect["universe_binding"] == "run_default"
 
 
 # ---------------------------------------------------------------------------

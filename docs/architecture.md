@@ -13,7 +13,10 @@ open-xquant = 量化研究内核，负责约束、计算、审计和产物标准
 
 核心工作流：**spec → validate → compile → backtest → audit → robustness → report**
 
-底层是严谨的量化金融引擎，经 Indicator → Universe → Signal → Portfolio → Rule → Broker 管道生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义 + 声明式 Strategy Spec**。
+底层是严谨的量化金融引擎，经 Universe → Indicator → Signal → Portfolio → Rule → Broker
+管道生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义 + 声明式 Strategy Spec**。
+在 SDK 层，`Strategy` 表达可复用的策略逻辑，不包含 Universe；Universe 是运行时输入，
+同一策略可以在不同 Universe 上运行并得到不同组合。
 
 **两种使用角色与入口**：
 
@@ -153,7 +156,6 @@ strategy = Strategy(
         "max_drawdown": {"max": -0.25, "target": -0.15},
     },
     benchmarks=["SPY"],
-    universe=StaticUniverse(("AAPL",)),
     signals={
         "golden_cross": (crossover, {"fast": "sma_fast", "slow": "sma_slow"}),
     },
@@ -162,6 +164,7 @@ strategy = Strategy(
 
 engine = Engine()
 result = engine.run(strategy,
+    universe=StaticUniverse(("AAPL",)),
     market=LocalMarketDataProvider(),
     broker=sim_broker,
     rules=[ExitRule(fast="sma_fast", slow="sma_slow"),
@@ -401,12 +404,14 @@ P0 校验规则：
 1. **Direct Runtime Mode**：直接从 spec 构造 Strategy 对象并运行（MVP 优先）
 2. **Compiled Plan Artifact**：写出 `compiled_plan.json`，记录 spec 到运行时对象、
    执行语义和自动规则的确定性映射，并纳入 `artifact_hashes.json`
-3. **Human Strategy Projection**：写出 `strategy.py`，以 Python 语法展示完整
-   spec、compiled plan 和可构造策略入口，供用户 review
+3. **Human Strategy Projection**：写出 `strategy.py`，以 Python 语法展示从
+   Universe、Indicators、Signals、Portfolio、Rules 到模拟交易流程的可读投影，
+   供用户 review
 
 `strategy_spec.yaml` 仍是策略本体。`strategy.py` 是生成产物，不作为回测执行入口；
-复现性审计会静态解析其中的 `STRATEGY_SPEC` 和 `COMPILED_PLAN`，确认它们与
-`strategy_spec.yaml`、`compiled_plan.json` 一致。
+复现性审计会静态解析其中的 `STRATEGY_SPEC`、`COMPILED_PLAN` 和 hash anchor，
+确认它们与 `strategy_spec.yaml`、`compiled_plan.json` 一致。`strategy.py` 可以
+包含面向人类的流程函数和详细注释，但这些函数不能替代正式 runtime。
 
 ---
 

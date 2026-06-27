@@ -99,6 +99,25 @@ def test_engine_full_pipeline() -> None:
     assert "sma_10_x_sma_50" in df.columns
 
 
+def test_engine_run_accepts_universe_separate_from_strategy() -> None:
+    data = _make_trending_data()
+    data["MSFT"] = data["AAPL"].copy()
+    market = FakeMarketDataProvider(data)
+    strategy = _make_strategy()
+    strategy._legacy_universe = None
+
+    result = Engine().run(
+        strategy,
+        market=market,
+        broker=SimBroker(),
+        start="2024-01-01",
+        end="2024-12-31",
+        universe=StaticUniverse(("MSFT",)),
+    )
+
+    assert set(result.mktdata) == {"MSFT"}
+
+
 def test_engine_with_stop_loss_rule() -> None:
     """Post-trade rule triggers sells when stop loss condition met."""
     from oxq.rules.exit import ExitRule

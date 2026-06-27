@@ -5,16 +5,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from oxq.core.types import PortfolioOptimizer, Signal
+from oxq.core.types import PortfolioOptimizer, Rule, Signal
 from oxq.universe.base import UniverseProvider
 
 
-@dataclass
+@dataclass(init=False)
 class Strategy:
-    """A complete strategy definition.
+    """Reusable strategy logic independent of the tradable universe.
 
-    Composes Universe, Signal, and PortfolioOptimizer into a declarative
-    pipeline that produces target portfolios.
+    Composes Signal, PortfolioOptimizer, and Rule components into a declarative
+    pipeline that can be run against different universes. The same strategy
+    logic applied to different symbol pools produces different portfolios.
 
     Strategy is purely functional: given the same market data, it always
     produces the same target portfolio. State and side effects live in
@@ -22,10 +23,62 @@ class Strategy:
     """
 
     name: str
-    universe: UniverseProvider
     signals: dict[str, tuple[Signal, dict[str, Any]]]
     portfolio: PortfolioOptimizer
+    rules: list[Rule]
     # Architecture metadata
     hypothesis: str = ""
     objectives: dict[str, dict[str, float]] = field(default_factory=dict)
     benchmarks: list[str] = field(default_factory=list)
+
+    def __init__(
+        self,
+        name: str,
+        signals: dict[str, tuple[Signal, dict[str, Any]]] | None = None,
+        portfolio: PortfolioOptimizer | None = None,
+        rules: list[Rule] | None = None,
+        *,
+        hypothesis: str = "",
+        objectives: dict[str, dict[str, float]] | None = None,
+        benchmarks: list[str] | None = None,
+        universe: UniverseProvider | None = None,
+    ) -> None:
+        self.name = name
+        self.signals = signals or {}
+        if portfolio is None:
+            msg = "Strategy requires a portfolio optimizer"
+            raise TypeError(msg)
+        self.portfolio = portfolio
+        self.rules = list(rules or [])
+        self.hypothesis = hypothesis
+        self.objectives = objectives or {}
+        self.benchmarks = list(benchmarks or [])
+        # Backward-compatibility only. New SDK code should pass a universe to
+        # Engine.run/setup or store a run default outside the Strategy object.
+        self._legacy_universe = universe
+
+    @property
+    def universe(self) -> UniverseProvider:
+        """Legacy universe accessor.
+
+        New code should pass ``universe=...`` to ``Engine.run``. This property
+        keeps older SDK code working during the migration.
+        """
+        if self._legacy_universe is None:
+            msg = "Strategy has no universe; pass universe=... when running it"
+            raise AttributeError(msg)
+        return self._legacy_universe
+
+    @universe.setter
+    def universe(self, value: UniverseProvider) -> None:
+        """Legacy universe setter for older tool/session code."""
+        self._legacy_universe = value
+
+    @property
+    def _pending_rules(self) -> list[Rule]:
+        """Compatibility alias for older tool code."""
+        return self.rules
+
+    @_pending_rules.setter
+    def _pending_rules(self, value: list[Rule]) -> None:
+        self.rules = list(value)

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 from datetime import date
 from decimal import Decimal
@@ -16,7 +17,15 @@ from oxq.core.engine import Engine
 from oxq.core.types import Fill, Order, Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.portfolio.orderbook import ManagedOrder
-from oxq.spec.compiler import _build_metrics, _build_optimizer, _write_artifacts, compile_plan, compile_run, compile_strategy
+from oxq.spec.compiler import (
+    _build_metrics,
+    _build_optimizer,
+    _write_artifacts,
+    compile_plan,
+    compile_run,
+    compile_strategy,
+    compile_universe,
+)
 from oxq.spec.schema import IndicatorDef, PortfolioRuleDef, SignalRuleDef, StrategySpec
 
 
@@ -512,7 +521,30 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert "STRATEGY_SPEC =" in strategy_py
     assert "'fill_price_mode': ''" in strategy_py
     assert "COMPILED_PLAN =" in strategy_py
+    assert "STRATEGY_FLOW =" in strategy_py
+    assert "def define_universe() -> dict:" in strategy_py
+    assert "def define_indicators() -> dict:" in strategy_py
+    assert "def define_signals() -> dict:" in strategy_py
+    assert "def define_portfolio() -> dict:" in strategy_py
+    assert "def define_rules() -> list[dict]:" in strategy_py
+    assert "def simulate_trading_flow() -> list[dict]:" in strategy_py
     assert "def build_strategy():" in strategy_py
+    module_spec = importlib.util.spec_from_file_location("generated_strategy_review", run_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    description = module.describe()
+    assert [step["phase"] for step in description["strategy_flow"]] == [
+        "universe",
+        "indicator",
+        "signal",
+        "portfolio",
+        "rule",
+        "trade_simulation",
+    ]
+    assert description["universe"]["review_note"].startswith("This run evaluates")
+    assert description["indicators"]["roc_1"]["type"] == "ROC"
     assert hashes["schema_version"] == 5
     assert "compiled_plan.json" in hashes
     assert "strategy.py" in hashes
@@ -2820,12 +2852,23 @@ def test_signal_filtered_equal_weight_keeps_latched_event_symbol_without_current
     assert optimizer.optimize({}, {}) == {"SPY": 1.0}
 
 
-def test_compile_strategy_rejects_unsupported_universe_type() -> None:
+def test_compile_universe_rejects_unsupported_universe_type() -> None:
     spec = StrategySpec.template(strategy_id="unsupported_universe", hypothesis="unsupported universes fail clearly")
     spec.universe.type = "filter"
 
     with pytest.raises(ValueError, match="Unsupported universe.type 'filter'"):
-        compile_strategy(spec)
+        compile_universe(spec)
+
+
+def test_compile_strategy_excludes_universe_from_strategy_body() -> None:
+    spec = StrategySpec.template(strategy_id="strategy_without_universe", hypothesis="strategy logic is reusable")
+    spec.universe.symbols = ["SPY", "QQQ"]
+
+    strategy = compile_strategy(spec)
+    universe = compile_universe(spec)
+
+    assert getattr(strategy, "_legacy_universe", None) is None
+    assert tuple(universe.symbols) == ("SPY", "QQQ")
 
 
 def test_roc_timing_signal_to_position_compiles_and_writes_target_weights(tmp_path) -> None:

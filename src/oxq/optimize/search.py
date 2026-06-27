@@ -16,6 +16,7 @@ from oxq.core.types import Broker
 from oxq.data.providers import MarketDataProvider
 from oxq.optimize.paramset import ParameterSet
 from oxq.portfolio.analytics import RunResult
+from oxq.universe.base import UniverseProvider
 
 logger = logging.getLogger(__name__)
 
@@ -150,12 +151,13 @@ def _apply_params(
 
     return Strategy(
         name=strategy.name,
-        universe=strategy.universe,
         signals=new_signals,
         portfolio=new_portfolio,
+        rules=list(strategy.rules),
         hypothesis=strategy.hypothesis,
         objectives=dict(strategy.objectives),
         benchmarks=list(strategy.benchmarks),
+        universe=getattr(strategy, "_legacy_universe", None),
     )
 
 
@@ -292,6 +294,7 @@ class GridSearch:
         metric_direction: str | None = None,
         initial_cash: float = 100_000.0,
         rules: list[Any] | None = None,
+        universe: UniverseProvider | None = None,
         lot_size: int = 1,
         cash_annual_return: float = 0.0,
         data_start: str | None = None,
@@ -352,6 +355,7 @@ class GridSearch:
                 end=end,
                 initial_cash=initial_cash,
                 rules=trial_rules,
+                universe=universe,
                 lot_size=lot_size,
                 cash_annual_return=cash_annual_return,
                 data_start=data_start,

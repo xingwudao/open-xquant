@@ -104,6 +104,21 @@ def test_engine_run(sample_data_dir) -> None:
     assert result["equity_curve_length"] == 120
 
 
+def test_engine_run_symbols_override_does_not_mutate_strategy(sample_data_dir) -> None:
+    _build_full_strategy()
+    result = engine_run(
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
+        data_dir=str(sample_data_dir),
+    )
+
+    assert "error" not in result
+    assert getattr(session._strategies["sma_cross"], "_legacy_universe", None) is None
+    assert "sma_cross" not in session._strategy_universes
+
+
 def test_engine_run_missing_strategy() -> None:
     result = engine_run(
         strategy="nonexistent", symbols=["AAPL"],
