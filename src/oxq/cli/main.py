@@ -481,7 +481,27 @@ def _load_run_text(run_dir: Path, name: str) -> str:
     return path.read_text(encoding="utf-8").strip() if path.exists() else ""
 
 
+def _require_comparable_run_artifacts(run_dir: Path) -> None:
+    required = {
+        "strategy_spec.yaml",
+        "spec_hash.txt",
+        "compiled_plan.json",
+        "data_manifest.json",
+        "execution_assumptions.json",
+        "metrics.json",
+        "artifact_hashes.json",
+    }
+    missing = sorted(name for name in required if not (run_dir / name).exists())
+    if missing:
+        raise click.ClickException(f"run directory is missing required comparison artifacts: {missing}")
+    for name in ("compiled_plan.json", "data_manifest.json", "execution_assumptions.json", "metrics.json", "artifact_hashes.json"):
+        payload = _load_run_json(run_dir, name)
+        if not payload:
+            raise click.ClickException(f"run comparison artifact must be a JSON object: {run_dir / name}")
+
+
 def _run_comparability_signature(run_dir: Path) -> dict[str, object]:
+    _require_comparable_run_artifacts(run_dir)
     compiled_plan = _load_run_json(run_dir, "compiled_plan.json")
     data_manifest = _load_run_json(run_dir, "data_manifest.json")
     execution_assumptions = _load_run_json(run_dir, "execution_assumptions.json")
@@ -493,6 +513,7 @@ def _run_comparability_signature(run_dir: Path) -> dict[str, object]:
         "spec_audit_hash": artifact_hashes.get("spec_audit.json", ""),
         "runtime_audit_hash": artifact_hashes.get("runtime_audit.json", ""),
         "compiled_plan_hash": artifact_hashes.get("compiled_plan.json", ""),
+        "component_bundle_hashes": sorted(_run_component_bundle_hashes(run_dir)),
         "data": {
             "provider": data_manifest.get("provider", ""),
             "symbols": data_manifest.get("symbols", []),
@@ -520,6 +541,7 @@ def _compare_run_signatures(left: dict[str, object], right: dict[str, object]) -
         ("component_catalog_hash", "component_catalog_hash"),
         ("recipe_catalog_hash", "recipe_catalog_hash"),
         ("compiled_plan_hash", "compiled_plan_hash"),
+        ("component_bundle_hashes", "component_bundle_hashes"),
         ("data", "data"),
         ("execution", "execution"),
         ("cost", "cost"),
@@ -537,7 +559,7 @@ def _compare_run_signatures(left: dict[str, object], right: dict[str, object]) -
                     "field": label,
                     "left": left_value,
                     "right": right_value,
-                    "severity": "blocking" if label in {"spec_hash", "data", "execution", "cost", "validation"} else "warning",
+                    "severity": "blocking",
                 }
             )
     return differences
@@ -551,8 +573,25 @@ def compare_runs(left_run_dir: str, right_run_dir: str, as_json: bool):
     """Check whether two run directories are comparable before judging returns."""
     left_path = Path(left_run_dir)
     right_path = Path(right_run_dir)
-    left = _run_comparability_signature(left_path)
-    right = _run_comparability_signature(right_path)
+    try:
+        left = _run_comparability_signature(left_path)
+        right = _run_comparability_signature(right_path)
+    except click.ClickException as exc:
+        payload = {
+            "status": "fail",
+            "comparable": False,
+            "left_run_dir": str(left_path),
+            "right_run_dir": str(right_path),
+            "differences": [],
+            "errors": [{"severity": "fatal", "check": "run_artifacts_missing", "message": exc.message}],
+        }
+        if as_json:
+            click.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
+        else:
+            click.echo(f"Status: {payload['status'].upper()}")
+            click.echo(f"Comparable: false")
+            click.echo(f"  [fatal] {exc.message}")
+        raise SystemExit(1)
     differences = _compare_run_signatures(left, right)
     comparable = not any(item.get("severity") == "blocking" for item in differences)
     payload = {
@@ -650,12 +689,20 @@ def run(
             raise SystemExit(1)
         raise
 
-    pre_run_audit_path = Path(spec_audit) if spec_audit is not None else _default_spec_audit_path(spec_path)
+    pre_run_audit_path = (
+        Path(spec_audit)
+        if spec_audit is not None
+        else (None if allow_unaudited else _default_spec_audit_path(spec_path))
+    )
     pre_run_runtime_audit_path = (
-        Path(runtime_audit) if runtime_audit is not None else _default_runtime_audit_path(spec_path)
+        Path(runtime_audit)
+        if runtime_audit is not None
+        else (None if allow_unaudited else _default_runtime_audit_path(spec_path))
     )
     pre_run_component_catalog_path = (
-        Path(component_catalog) if component_catalog is not None else _default_component_catalog_path(spec_path)
+        Path(component_catalog)
+        if component_catalog is not None
+        else (None if allow_unaudited and pre_run_audit_path is None else _default_component_catalog_path(spec_path))
     )
     if pre_run_runtime_audit_path is not None and pre_run_audit_path is None:
         message = "spec_audit.json is required when a runtime audit gates a formal backtest"
@@ -704,6 +751,18 @@ def run(
             raise SystemExit(1)
         raise click.ClickException(message)
     component_bundle_hashes = _component_bundle_hashes(component_manifest_payloads)
+    if pre_run_component_catalog_path is not None and pre_run_audit_path is not None:
+        try:
+            _require_component_catalog_before_import(
+                pre_run_component_catalog_path,
+                spec_audit_path=pre_run_audit_path,
+                component_bundle_hashes=component_bundle_hashes,
+            )
+        except click.ClickException as e:
+            if as_json:
+                click.echo(json.dumps(_backtest_json_failure("component_catalog_failed", e.message), indent=2))
+                raise SystemExit(1)
+            raise
     if pre_run_runtime_audit_path is not None:
         try:
             _require_component_bundles_authorized_before_import(
@@ -1135,6 +1194,42 @@ def _require_component_bundles_authorized_before_import(
         spec_audit_path=spec_audit_path,
         component_bundle_hashes=component_bundle_hashes,
     )
+
+
+def _require_component_catalog_before_import(
+    component_catalog_path: Path,
+    *,
+    spec_audit_path: Path,
+    component_bundle_hashes: set[str],
+) -> None:
+    from oxq.core.component_catalog import _catalog_hash, _stable_hash
+
+    catalog_payload = json.loads(component_catalog_path.read_text(encoding="utf-8"))
+    if not isinstance(catalog_payload, dict):
+        raise click.ClickException("component catalog must be an object")
+    catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
+    computed_catalog_hash = _catalog_hash(catalog_payload)
+    if computed_catalog_hash != catalog_hash:
+        raise click.ClickException(f"component catalog hash mismatch: stored={catalog_hash}, actual={computed_catalog_hash}")
+    recipe_catalog_hash = _require_json_str(catalog_payload, "recipe_catalog_hash")
+    computed_recipe_catalog_hash = _stable_hash(catalog_payload.get("recipes", []))
+    if computed_recipe_catalog_hash != recipe_catalog_hash:
+        raise click.ClickException(
+            f"recipe catalog hash mismatch: stored={recipe_catalog_hash}, actual={computed_recipe_catalog_hash}"
+        )
+
+    audit_payload = json.loads(spec_audit_path.read_text(encoding="utf-8"))
+    audit_catalog_hash = _require_json_str(audit_payload, "catalog_hash")
+    if audit_catalog_hash != catalog_hash:
+        raise click.ClickException(f"catalog hash mismatch: audit={audit_catalog_hash}, catalog={catalog_hash}")
+
+    catalog_hashes = _catalog_component_bundle_hashes(catalog_payload)
+    missing = set(component_bundle_hashes).difference(catalog_hashes)
+    if missing:
+        raise click.ClickException(
+            "component bundle hash mismatch between authorized manifests and component catalog: "
+            f"missing={sorted(missing)}, manifest={sorted(component_bundle_hashes)}, catalog={sorted(catalog_hashes)}"
+        )
 
 
 def _require_runtime_audit_hashes(

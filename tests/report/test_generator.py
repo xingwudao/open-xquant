@@ -659,6 +659,38 @@ def test_chinese_report_localizes_professional_metric_sections(tmp_path) -> None
     assert "| Metric | Value |" not in report
 
 
+def test_chinese_report_localizes_runtime_disclosure(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "compiled_plan.json").write_text(
+        json.dumps(
+            {
+                "execution": {"fill_price_mode": "next_open", "rebalance": {"interval_days": 10}},
+                "cost": {"fee_rate": 0.001, "slippage_rate": 0.002},
+                "data": {"effective_data_dir": "/tmp/oxq-data", "min_start_date": "2023-12-01"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps(
+            {
+                "warmup_policy": "preload_from_min_start_date",
+                "min_start_date": "2023-12-01",
+                "effective_data_dir": "/tmp/oxq-data",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="zh")
+
+    assert "### 运行产物披露" in report
+    assert "已报告的运行执行语义来自 `compiled_plan.json`" in report
+    assert "不同执行、成本或数据预热设置会导致收益结果不可直接比较" in report
+    assert "### Runtime Artifact Disclosure" not in report
+    assert "Reported execution semantics are taken" not in report
+
+
 def test_report_generation_does_not_fail_without_execution_assumptions(tmp_path) -> None:
     run_dir = _write_report_run(tmp_path)
 
@@ -677,6 +709,26 @@ def test_report_generation_ignores_malformed_execution_assumptions(tmp_path) -> 
     assert "# Research Report: report_execution_assumptions" in report
     assert "## 5. Backtest Metrics" in report
     assert "### Execution Assumptions" not in report
+
+
+def test_report_does_not_claim_compiled_plan_source_when_plan_missing(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps(
+            {
+                "warmup_policy": "none_declared",
+                "min_start_date": "",
+                "effective_data_dir": "/tmp/oxq-data",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "### Runtime Artifact Disclosure" in report
+    assert "`compiled_plan.json` is missing or unreadable" in report
+    assert "Reported execution semantics are taken from `compiled_plan.json`" not in report
 
 
 def test_report_summary_uses_effective_execution_fill_mode(tmp_path) -> None:

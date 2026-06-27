@@ -119,10 +119,10 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
         lines.append(f"### {subheadings['execution_assumptions']}")
         lines.append("")
         lines.extend(_format_execution_assumption_lines(execution_assumptions))
-    runtime_disclosure = _format_runtime_disclosure_lines(compiled_plan, data_manifest)
+    runtime_disclosure = _format_runtime_disclosure_lines(compiled_plan, data_manifest, lang)
     if runtime_disclosure:
         lines.append("")
-        lines.append("### Runtime Artifact Disclosure")
+        lines.append(f"### {subheadings['runtime_disclosure']}")
         lines.append("")
         lines.extend(runtime_disclosure)
     lines.append("")
@@ -1036,15 +1036,14 @@ def _format_execution_assumption_lines(assumptions: dict) -> list[str]:
     return lines
 
 
-def _format_runtime_disclosure_lines(compiled_plan: dict, data_manifest: dict) -> list[str]:
+def _format_runtime_disclosure_lines(compiled_plan: dict, data_manifest: dict, lang: str) -> list[str]:
     if not compiled_plan and not data_manifest:
         return []
+    labels = messages(lang)["runtime_disclosure"]
     execution = compiled_plan.get("execution")
     cost = compiled_plan.get("cost")
     data = compiled_plan.get("data")
-    lines = [
-        "- Reported execution semantics are taken from `compiled_plan.json`, not inferred only from `strategy_spec.yaml`.",
-    ]
+    lines = [labels["compiled_plan_source"] if compiled_plan else labels["compiled_plan_missing"]]
     if isinstance(execution, dict):
         rebalance = execution.get("rebalance")
         lines.append(f"- **runtime.fill_price_mode**: {_format_assumption_value(execution.get('fill_price_mode'))}")
@@ -1061,7 +1060,7 @@ def _format_runtime_disclosure_lines(compiled_plan: dict, data_manifest: dict) -
         lines.append(f"- **data.warmup_policy**: {_format_assumption_value(warmup_policy)}")
         lines.append(f"- **data.min_start_date**: {_format_assumption_value(min_start)}")
         lines.append(f"- **data.effective_data_dir**: {_format_assumption_value(effective_dir)}")
-    lines.append("- Different execution, cost, or data warmup settings can make return comparisons non-comparable.")
+    lines.append(labels["non_comparable"])
     return lines
 
 

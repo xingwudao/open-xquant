@@ -208,6 +208,34 @@ def test_backtest_run_json_requires_audits_by_default(tmp_path) -> None:
     assert "formal backtest requires audited gate artifacts" in payload["errors"][0]["message"]
 
 
+def test_backtest_run_allow_unaudited_ignores_stale_sibling_audits(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    (tmp_path / "spec_audit.json").write_text(
+        json.dumps({"schema_version": 3, "status": "pass", "spec_hash": "sha256:stale"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "runtime_audit.json").write_text("{not-json", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "pass"
+
+
 def test_backtest_run_records_component_manifest_artifacts(tmp_path) -> None:
     from oxq.core.component_manifest import load_component_manifest, load_component_manifests_from_run, scoped_component_registries
     from oxq.core.registry import list_indicators
@@ -651,6 +679,73 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
 
     assert ok.exit_code == 0, ok.output
     assert marker.read_text(encoding="utf-8") == "imported"
+
+
+def test_backtest_run_rejects_component_catalog_bundle_mismatch_before_import(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    manifest = _write_component_manifest(tmp_path)
+    marker = tmp_path / "component_imported.txt"
+    source = tmp_path / "custom_components" / "oxq_components" / "indicators" / "workspace_backtest_indicator.py"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "import pandas as pd",
+            "\n".join(
+                [
+                    "import pandas as pd",
+                    "from pathlib import Path",
+                    f"Path({str(marker)!r}).write_text('imported', encoding='utf-8')",
+                ]
+            ),
+        ),
+        encoding="utf-8",
+    )
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["components"][0]["source_hash"] = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    bundle_hash = json.loads(CliRunner().invoke(main, ["component-manifest", "hash", str(manifest), "--json"]).output)[
+        "component_bundle_hash"
+    ]
+    manifest_payload = json.loads(manifest.read_text(encoding="utf-8"))
+    manifest_payload["bundle_hash"] = bundle_hash
+    manifest.write_text(json.dumps(manifest_payload, indent=2, sort_keys=True), encoding="utf-8")
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+        component_bundle_hashes=[bundle_hash],
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--component-manifest",
+            str(manifest),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "component_catalog_failed"
+    assert "component bundle hash mismatch" in payload["errors"][0]["message"]
+    assert not marker.exists()
 
 
 def test_run_component_manifest_loader_rejects_recorded_bundle_hash_mismatch(tmp_path) -> None:
@@ -1116,3 +1211,120 @@ def test_backtest_compare_runs_blocks_different_cost_assumptions(tmp_path) -> No
     payload = json.loads(compare.output)
     assert payload["comparable"] is False
     assert any(item["field"] == "cost" for item in payload["differences"])
+
+
+def test_backtest_compare_runs_rejects_incomplete_run_dirs(tmp_path) -> None:
+    left = tmp_path / "left"
+    right = tmp_path / "right"
+    left.mkdir()
+    right.mkdir()
+
+    result = CliRunner().invoke(main, ["backtest", "compare-runs", str(left), str(right), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["comparable"] is False
+    assert payload["errors"][0]["check"] == "run_artifacts_missing"
+
+
+def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    artifact_hashes_path = second_run / "artifact_hashes.json"
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    artifact_hashes["compiled_plan.json"] = "sha256:changed-runtime-plan"
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
+
+    compare = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert compare.exit_code == 1
+    payload = json.loads(compare.output)
+    assert payload["comparable"] is False
+    assert any(item["field"] == "compiled_plan_hash" for item in payload["differences"])
+
+
+def test_backtest_compare_runs_blocks_component_catalog_hash_differences(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    first_run = Path(json.loads(first.output)["run_dir"])
+    second_run = Path(json.loads(second.output)["run_dir"])
+    (first_run / "component_catalog_hash.txt").write_text("sha256:catalog-a\n", encoding="utf-8")
+    (second_run / "component_catalog_hash.txt").write_text("sha256:catalog-b\n", encoding="utf-8")
+
+    compare = runner.invoke(main, ["backtest", "compare-runs", str(first_run), str(second_run), "--json"])
+
+    assert compare.exit_code == 1
+    payload = json.loads(compare.output)
+    assert payload["comparable"] is False
+    assert any(item["field"] == "component_catalog_hash" for item in payload["differences"])
