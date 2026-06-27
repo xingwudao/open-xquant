@@ -501,6 +501,44 @@ def _require_comparable_run_artifacts(run_dir: Path) -> None:
         payload = _load_run_json(run_dir, name)
         if not payload:
             raise click.ClickException(f"run comparison artifact must be a JSON object: {run_dir / name}")
+    _require_run_artifact_hashes_current(run_dir)
+
+
+def _hash_run_artifact_for_comparison(run_dir: Path, name: str) -> str:
+    from oxq.spec.compiler import _hash_file, _hash_json_file
+
+    path = run_dir / name
+    if name == "strategy_spec.yaml":
+        return _hash_file(path)
+    if name == "metrics.json":
+        return _hash_json_file(path, exclude_keys={"run_id"})
+    if name in {
+        "compiled_plan.json",
+        "data_manifest.json",
+        "execution_assumptions.json",
+        "spec_audit.json",
+        "runtime_audit.json",
+    }:
+        return _hash_json_file(path)
+    return _hash_file(path)
+
+
+def _require_run_artifact_hashes_current(run_dir: Path) -> None:
+    artifact_hashes = _load_run_json(run_dir, "artifact_hashes.json")
+    required_hashes = [
+        "strategy_spec.yaml",
+        "compiled_plan.json",
+        "data_manifest.json",
+        "execution_assumptions.json",
+        "metrics.json",
+    ]
+    for name in required_hashes:
+        stored = artifact_hashes.get(name)
+        if not isinstance(stored, str) or not stored:
+            raise click.ClickException(f"artifact_hashes.json missing required hash for comparison artifact: {name}")
+        actual = _hash_run_artifact_for_comparison(run_dir, name)
+        if stored != actual:
+            raise click.ClickException(f"artifact hash mismatch for {name}: stored={stored}, actual={actual}")
 
 
 def _run_comparability_signature(run_dir: Path) -> dict[str, object]:
@@ -513,9 +551,17 @@ def _run_comparability_signature(run_dir: Path) -> dict[str, object]:
         "spec_hash": _load_run_text(run_dir, "spec_hash.txt"),
         "component_catalog_hash": _load_run_text(run_dir, "component_catalog_hash.txt"),
         "recipe_catalog_hash": _load_run_text(run_dir, "recipe_catalog_hash.txt"),
-        "spec_audit_hash": artifact_hashes.get("spec_audit.json", ""),
-        "runtime_audit_hash": artifact_hashes.get("runtime_audit.json", ""),
-        "compiled_plan_hash": artifact_hashes.get("compiled_plan.json", ""),
+        "spec_audit_hash": (
+            _hash_run_artifact_for_comparison(run_dir, "spec_audit.json")
+            if (run_dir / "spec_audit.json").exists()
+            else artifact_hashes.get("spec_audit.json", "")
+        ),
+        "runtime_audit_hash": (
+            _hash_run_artifact_for_comparison(run_dir, "runtime_audit.json")
+            if (run_dir / "runtime_audit.json").exists()
+            else artifact_hashes.get("runtime_audit.json", "")
+        ),
+        "compiled_plan_hash": _hash_run_artifact_for_comparison(run_dir, "compiled_plan.json"),
         "component_bundle_hashes": sorted(_run_component_bundle_hashes(run_dir)),
         "data": {
             "provider": data_manifest.get("provider", ""),
@@ -1211,7 +1257,10 @@ def _require_component_catalog_before_import(
 ) -> None:
     from oxq.core.component_catalog import _catalog_hash, _stable_hash
 
-    catalog_payload = json.loads(component_catalog_path.read_text(encoding="utf-8"))
+    try:
+        catalog_payload = json.loads(component_catalog_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"component catalog is not valid JSON: {component_catalog_path}: {exc.msg}") from exc
     if not isinstance(catalog_payload, dict):
         raise click.ClickException("component catalog must be an object")
     catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
@@ -1401,7 +1450,10 @@ def _run_component_bundle_hashes(run_path: Path) -> set[str]:
     hashes: set[str] = set()
     summary_path = run_path / "component_manifests.json"
     if summary_path.exists():
-        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        try:
+            summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise click.ClickException(f"component_manifests.json is not valid JSON: {summary_path}: {exc.msg}") from exc
         if not isinstance(summary, list):
             raise click.ClickException("component_manifests.json must be a list")
         for item in summary:
@@ -1409,7 +1461,10 @@ def _run_component_bundle_hashes(run_path: Path) -> set[str]:
                 hashes.add(item["bundle_hash"])
     manifest_path = run_path / "component_manifest.json"
     if manifest_path.exists():
-        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise click.ClickException(f"component_manifest.json is not valid JSON: {manifest_path}: {exc.msg}") from exc
         if isinstance(manifest, dict) and isinstance(manifest.get("bundle_hash"), str) and manifest["bundle_hash"]:
             hashes.add(manifest["bundle_hash"])
     bundle_hash_path = run_path / "component_bundle_hash.txt"

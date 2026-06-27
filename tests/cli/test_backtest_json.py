@@ -1029,6 +1029,99 @@ def test_backtest_run_allow_unaudited_rejects_explicit_audits_without_catalog(tm
     assert not (tmp_path / "runs").exists()
 
 
+def test_backtest_run_json_wraps_bad_component_catalog(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec = StrategySpec.from_yaml(spec_path)
+    spec_hash = spec.compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    catalog_path = tmp_path / "component_catalog.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+    catalog_path.write_text("{not-json", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--component-catalog",
+            str(catalog_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["errors"][0]["check"] == "component_catalog_failed"
+    assert "not valid JSON" in payload["errors"][0]["message"]
+
+
+def test_backtest_run_preserves_explicit_default_fill_price_mode_hash(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    raw = yaml.safe_load(spec_path.read_text(encoding="utf-8"))
+    raw["execution"] = {
+        **raw.get("execution", {}),
+        "order_timing": "next_session_open",
+        "price_bar": "next_session",
+        "price_type": "open",
+        "fill_price_mode": "next_open",
+    }
+    spec_path.write_text(yaml.dump(raw, sort_keys=False), encoding="utf-8")
+    spec = StrategySpec.from_yaml(spec_path)
+    spec_hash = spec.compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    run_dir = Path(json.loads(result.output)["run_dir"])
+    assert (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip() == spec_hash
+    run_spec = yaml.safe_load((run_dir / "strategy_spec.yaml").read_text(encoding="utf-8"))
+    assert run_spec["execution"]["fill_price_mode"] == "next_open"
+
+
 def test_backtest_run_json_auto_rejects_sibling_failed_runtime_audit(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
@@ -1323,6 +1416,119 @@ def test_backtest_compare_runs_rejects_corrupt_required_json_artifacts(tmp_path)
     assert payload["errors"][0]["check"] == "run_artifacts_invalid"
 
 
+def test_backtest_compare_runs_rejects_stale_artifact_hashes(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    compiled_plan_path = second_run / "compiled_plan.json"
+    compiled_plan = json.loads(compiled_plan_path.read_text(encoding="utf-8"))
+    compiled_plan["runtime_rules"] = [{"type": "changed-after-run"}]
+    compiled_plan_path.write_text(json.dumps(compiled_plan, indent=2), encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["comparable"] is False
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "artifact hash mismatch for compiled_plan.json" in payload["errors"][0]["message"]
+
+
+def test_backtest_compare_runs_rejects_corrupt_component_manifest_artifacts(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    (second_run / "component_manifest.json").write_text("{not-json", encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["comparable"] is False
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "component_manifest.json is not valid JSON" in payload["errors"][0]["message"]
+
+
 def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     runner = CliRunner()
@@ -1357,9 +1563,13 @@ def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
     second_run = Path(json.loads(second.output)["run_dir"])
+    compiled_plan_path = second_run / "compiled_plan.json"
+    compiled_plan = json.loads(compiled_plan_path.read_text(encoding="utf-8"))
+    compiled_plan["runtime_rules"] = [{"type": "valid-runtime-change"}]
+    compiled_plan_path.write_text(json.dumps(compiled_plan, indent=2), encoding="utf-8")
     artifact_hashes_path = second_run / "artifact_hashes.json"
     artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
-    artifact_hashes["compiled_plan.json"] = "sha256:changed-runtime-plan"
+    artifact_hashes["compiled_plan.json"] = _hash_json_file(compiled_plan_path)
     artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
 
     compare = runner.invoke(

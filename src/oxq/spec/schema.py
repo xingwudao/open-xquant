@@ -671,11 +671,21 @@ def _dataclass_to_dict(obj: Any) -> Any:
                     (isinstance(obj, ExecutionSection) and f.name == "rebalance" and getattr(value, "_interval_days_explicit", False))
                     or (isinstance(obj, RebalanceDef) and f.name == "interval_days" and obj._interval_days_explicit)
                 )
-                if f.default is not MISSING and value == f.default and not preserve_explicit_rebalance:
+                preserve_explicit_fill_price_mode = (
+                    isinstance(obj, ExecutionSection)
+                    and f.name == "fill_price_mode"
+                    and obj._fill_price_mode_explicit
+                )
+                if (
+                    f.default is not MISSING
+                    and value == f.default
+                    and not preserve_explicit_rebalance
+                    and not preserve_explicit_fill_price_mode
+                ):
                     continue
                 if f.default_factory is not MISSING:
                     try:
-                        if value == f.default_factory() and not preserve_explicit_rebalance:
+                        if value == f.default_factory() and not preserve_explicit_rebalance and not preserve_explicit_fill_price_mode:
                             continue
                     except TypeError:
                         pass
