@@ -988,6 +988,47 @@ def test_backtest_run_json_rejects_runtime_audit_without_spec_audit(tmp_path) ->
     assert "spec_audit.json is required" in payload["errors"][0]["message"]
 
 
+def test_backtest_run_allow_unaudited_rejects_explicit_audits_without_catalog(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec = StrategySpec.from_yaml(spec_path)
+    spec_hash = _canonical_json_hash(spec.to_dict())
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash)
+    (tmp_path / "component_catalog.json").unlink()
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "component_catalog_missing"
+    assert not (tmp_path / "runs").exists()
+
+
 def test_backtest_run_json_auto_rejects_sibling_failed_runtime_audit(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
@@ -1228,6 +1269,60 @@ def test_backtest_compare_runs_rejects_incomplete_run_dirs(tmp_path) -> None:
     assert payload["errors"][0]["check"] == "run_artifacts_missing"
 
 
+def test_backtest_compare_runs_rejects_corrupt_required_json_artifacts(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    (second_run / "compiled_plan.json").write_text("{not-json", encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert payload["comparable"] is False
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+
+
 def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     runner = CliRunner()
@@ -1282,6 +1377,62 @@ def test_backtest_compare_runs_blocks_runtime_hash_differences(tmp_path) -> None
     payload = json.loads(compare.output)
     assert payload["comparable"] is False
     assert any(item["field"] == "compiled_plan_hash" for item in payload["differences"])
+
+
+def test_backtest_compare_runs_blocks_audit_hash_differences(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    first_run = Path(json.loads(first.output)["run_dir"])
+    second_run = Path(json.loads(second.output)["run_dir"])
+    first_hashes_path = first_run / "artifact_hashes.json"
+    second_hashes_path = second_run / "artifact_hashes.json"
+    first_hashes = json.loads(first_hashes_path.read_text(encoding="utf-8"))
+    second_hashes = json.loads(second_hashes_path.read_text(encoding="utf-8"))
+    first_hashes["spec_audit.json"] = "sha256:spec-audit-a"
+    first_hashes["runtime_audit.json"] = "sha256:runtime-audit-a"
+    second_hashes["spec_audit.json"] = "sha256:spec-audit-b"
+    second_hashes["runtime_audit.json"] = "sha256:runtime-audit-b"
+    first_hashes_path.write_text(json.dumps(first_hashes, indent=2), encoding="utf-8")
+    second_hashes_path.write_text(json.dumps(second_hashes, indent=2), encoding="utf-8")
+
+    compare = runner.invoke(main, ["backtest", "compare-runs", str(first_run), str(second_run), "--json"])
+
+    assert compare.exit_code == 1
+    payload = json.loads(compare.output)
+    assert payload["comparable"] is False
+    fields = {item["field"] for item in payload["differences"]}
+    assert "spec_audit_hash" in fields
+    assert "runtime_audit_hash" in fields
 
 
 def test_backtest_compare_runs_blocks_component_catalog_hash_differences(tmp_path) -> None:

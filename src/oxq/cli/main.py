@@ -472,7 +472,10 @@ def _load_run_json(run_dir: Path, name: str) -> dict:
     path = run_dir / name
     if not path.exists():
         return {}
-    value = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(f"run comparison artifact is not valid JSON: {path}: {exc.msg}") from exc
     return value if isinstance(value, dict) else {}
 
 
@@ -540,6 +543,8 @@ def _compare_run_signatures(left: dict[str, object], right: dict[str, object]) -
         ("spec_hash", "spec_hash"),
         ("component_catalog_hash", "component_catalog_hash"),
         ("recipe_catalog_hash", "recipe_catalog_hash"),
+        ("spec_audit_hash", "spec_audit_hash"),
+        ("runtime_audit_hash", "runtime_audit_hash"),
         ("compiled_plan_hash", "compiled_plan_hash"),
         ("component_bundle_hashes", "component_bundle_hashes"),
         ("data", "data"),
@@ -577,13 +582,14 @@ def compare_runs(left_run_dir: str, right_run_dir: str, as_json: bool):
         left = _run_comparability_signature(left_path)
         right = _run_comparability_signature(right_path)
     except click.ClickException as exc:
+        check = "run_artifacts_missing" if "missing required comparison artifacts" in exc.message else "run_artifacts_invalid"
         payload = {
             "status": "fail",
             "comparable": False,
             "left_run_dir": str(left_path),
             "right_run_dir": str(right_path),
             "differences": [],
-            "errors": [{"severity": "fatal", "check": "run_artifacts_missing", "message": exc.message}],
+            "errors": [{"severity": "fatal", "check": check, "message": exc.message}],
         }
         if as_json:
             click.echo(json.dumps(payload, indent=2, sort_keys=True, default=str))
@@ -710,7 +716,14 @@ def run(
             click.echo(json.dumps(_backtest_json_failure("spec_audit_missing", message), indent=2))
             raise SystemExit(1)
         raise click.ClickException(message)
-    if not allow_unaudited:
+    if pre_run_audit_path is not None and pre_run_runtime_audit_path is None:
+        message = "runtime_audit.json is required when a spec audit gates a formal backtest"
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("runtime_audit_missing", message), indent=2))
+            raise SystemExit(1)
+        raise click.ClickException(message)
+    formal_gated_run = pre_run_audit_path is not None or pre_run_runtime_audit_path is not None
+    if not allow_unaudited or formal_gated_run:
         missing_gates = []
         if pre_run_audit_path is None:
             missing_gates.append("spec_audit.json")
@@ -744,12 +757,6 @@ def run(
                 )
                 raise SystemExit(1)
             raise
-    if pre_run_audit_path is not None and pre_run_runtime_audit_path is None:
-        message = "runtime_audit.json is required when a spec audit gates a formal backtest"
-        if as_json:
-            click.echo(json.dumps(_backtest_json_failure("runtime_audit_missing", message), indent=2))
-            raise SystemExit(1)
-        raise click.ClickException(message)
     component_bundle_hashes = _component_bundle_hashes(component_manifest_payloads)
     if pre_run_component_catalog_path is not None and pre_run_audit_path is not None:
         try:

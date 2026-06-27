@@ -214,7 +214,7 @@ print(f"""
 {'='*60}
 CLI + Agent pipeline:
   oxq spec validate {spec_path}
-  oxq backtest run {spec_path} --out {OUT_DIR}/runs/auto --json
+  oxq backtest run {spec_path} --out {OUT_DIR}/runs/auto --allow-unaudited --json
   oxq audit research {run_dir}/
   oxq robustness run {run_dir}/
   /quant-report {run_dir}/

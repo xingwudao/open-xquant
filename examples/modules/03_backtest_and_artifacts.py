@@ -86,6 +86,6 @@ print(f"""
 {'='*60}
 CLI equivalents:
   oxq strategy compile {SPEC_FILE}
-  oxq backtest run {SPEC_FILE} --out runs/auto --json
+  oxq backtest run {SPEC_FILE} --out runs/auto --allow-unaudited --json
 {'='*60}
 """)
