@@ -15,6 +15,7 @@ from oxq.report.generator import (
     _format_validation_classification_lines,
     generate_report,
 )
+from oxq.spec.compiler import _hash_file, _hash_json_file
 from oxq.spec.schema import StrategySpec
 
 
@@ -729,6 +730,64 @@ def test_report_does_not_claim_compiled_plan_source_when_plan_missing(tmp_path) 
     assert "### Runtime Artifact Disclosure" in report
     assert "`compiled_plan.json` is missing or unreadable" in report
     assert "Reported execution semantics are taken from `compiled_plan.json`" not in report
+
+
+def test_report_marks_runtime_disclosure_untrusted_when_runtime_hash_fails(tmp_path) -> None:
+    run_dir = _write_report_run(tmp_path)
+    (run_dir / "compiled_plan.json").write_text(
+        json.dumps(
+            {
+                "execution": {"fill_price_mode": "tampered", "rebalance": {"interval_days": 1}},
+                "cost": {"fee_rate": 0.99, "slippage_rate": 0.99},
+                "data": {"effective_data_dir": "/tmp/tampered", "min_start_date": "2020-01-01"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps(
+            {
+                "warmup_policy": "preload_from_min_start_date",
+                "min_start_date": "2020-01-01",
+                "effective_data_dir": "/tmp/tampered",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "artifact_hashes.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 0,
+                "compiled_plan.json": "sha256:stale-compiled-plan",
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    (run_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
+    (run_dir / "environment.json").write_text(
+        json.dumps({"open_xquant_version": "test", "spec_hash": spec.compute_hash()}),
+        encoding="utf-8",
+    )
+    (run_dir / "equity_curve.csv").write_text("date,equity\n2024-01-02,100000\n", encoding="utf-8")
+    (run_dir / "trades.csv").write_text("date,symbol,quantity,price\n", encoding="utf-8")
+    artifact_hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    artifact_hashes.update(
+        {
+            "data_manifest.json": _hash_json_file(run_dir / "data_manifest.json"),
+            "equity_curve.csv": _hash_file(run_dir / "equity_curve.csv"),
+            "trades.csv": _hash_file(run_dir / "trades.csv"),
+            "metrics.json": _hash_json_file(run_dir / "metrics.json", exclude_keys={"run_id"}),
+        }
+    )
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(artifact_hashes), encoding="utf-8")
+
+    report = generate_report(run_dir, lang="en")
+
+    assert "Runtime semantics artifacts did not pass hash verification" in report
+    assert "- **runtime.fill_price_mode**: tampered" not in report
+    assert "- **runtime.fee_rate**: 99.00%" not in report
+    assert "- **data.effective_data_dir**: /tmp/tampered" not in report
 
 
 def test_report_summary_uses_effective_execution_fill_mode(tmp_path) -> None:

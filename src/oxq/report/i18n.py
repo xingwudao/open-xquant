@@ -43,6 +43,7 @@ _MESSAGES: dict[str, dict[str, Any]] = {
         "runtime_disclosure": {
             "compiled_plan_source": "- 已报告的运行执行语义来自 `compiled_plan.json`，不是只从 `strategy_spec.yaml` 推断。",
             "compiled_plan_missing": "- `compiled_plan.json` 缺失或不可读取；本节只披露可用的运行数据产物，不能证明执行语义。",
+            "runtime_artifacts_untrusted": "- 运行执行语义产物未通过 hash 校验；本节不展示 `compiled_plan.json` 或 `data_manifest.json` 中的运行字段。",
             "non_comparable": "- 不同执行、成本或数据预热设置会导致收益结果不可直接比较。",
         },
         "decision_sections": {
@@ -180,6 +181,7 @@ _MESSAGES: dict[str, dict[str, Any]] = {
         "runtime_disclosure": {
             "compiled_plan_source": "- Reported execution semantics are taken from `compiled_plan.json`, not inferred only from `strategy_spec.yaml`.",
             "compiled_plan_missing": "- `compiled_plan.json` is missing or unreadable; this section discloses available runtime data artifacts only and does not prove execution semantics.",
+            "runtime_artifacts_untrusted": "- Runtime semantics artifacts did not pass hash verification; this section does not present fields from `compiled_plan.json` or `data_manifest.json`.",
             "non_comparable": "- Different execution, cost, or data warmup settings can make return comparisons non-comparable.",
         },
         "decision_sections": {

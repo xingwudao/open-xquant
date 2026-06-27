@@ -525,20 +525,44 @@ def _hash_run_artifact_for_comparison(run_dir: Path, name: str) -> str:
 
 def _require_run_artifact_hashes_current(run_dir: Path) -> None:
     artifact_hashes = _load_run_json(run_dir, "artifact_hashes.json")
-    required_hashes = [
+    required_hashes = {
         "strategy_spec.yaml",
         "compiled_plan.json",
         "data_manifest.json",
         "execution_assumptions.json",
         "metrics.json",
-    ]
+    }
+    provenance_hashes = {
+        "spec_audit.json",
+        "runtime_audit.json",
+        "conversation_hash.txt",
+        "component_catalog_hash.txt",
+        "recipe_catalog_hash.txt",
+        "component_manifest.json",
+        "component_manifests.json",
+        "component_bundle_hash.txt",
+    }
+    for name in provenance_hashes:
+        if name in artifact_hashes:
+            required_hashes.add(name)
     for name in required_hashes:
         stored = artifact_hashes.get(name)
         if not isinstance(stored, str) or not stored:
             raise click.ClickException(f"artifact_hashes.json missing required hash for comparison artifact: {name}")
+        if not (run_dir / name).exists():
+            raise click.ClickException(f"artifact_hashes.json references missing comparison artifact: {name}")
         actual = _hash_run_artifact_for_comparison(run_dir, name)
         if stored != actual:
             raise click.ClickException(f"artifact hash mismatch for {name}: stored={stored}, actual={actual}")
+    try:
+        actual_spec_hash = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml").compute_hash()
+    except Exception as exc:
+        raise click.ClickException(f"strategy_spec.yaml cannot be parsed for comparison: {exc}") from exc
+    stored_spec_hash = _load_run_text(run_dir, "spec_hash.txt")
+    if stored_spec_hash != actual_spec_hash:
+        raise click.ClickException(
+            f"spec_hash.txt mismatch for strategy_spec.yaml: stored={stored_spec_hash}, actual={actual_spec_hash}"
+        )
 
 
 def _run_comparability_signature(run_dir: Path) -> dict[str, object]:

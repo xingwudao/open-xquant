@@ -1474,6 +1474,118 @@ def test_backtest_compare_runs_rejects_stale_artifact_hashes(tmp_path) -> None:
     assert "artifact hash mismatch for compiled_plan.json" in payload["errors"][0]["message"]
 
 
+def test_backtest_compare_runs_rejects_stale_provenance_hashes(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    spec_audit_path = second_run / "spec_audit.json"
+    spec_audit_path.write_text(json.dumps({"status": "pass"}), encoding="utf-8")
+    artifact_hashes_path = second_run / "artifact_hashes.json"
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    artifact_hashes["spec_audit.json"] = _hash_json_file(spec_audit_path)
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2), encoding="utf-8")
+    spec_audit_path.write_text(json.dumps({"status": "fail"}), encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "artifact hash mismatch for spec_audit.json" in payload["errors"][0]["message"]
+
+
+def test_backtest_compare_runs_rejects_stale_spec_hash_text(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    runner = CliRunner()
+    first = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_a"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    second = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs_b"),
+            "--allow-unaudited",
+            "--json",
+        ],
+    )
+    assert first.exit_code == 0, first.output
+    assert second.exit_code == 0, second.output
+    second_run = Path(json.loads(second.output)["run_dir"])
+    (second_run / "spec_hash.txt").write_text("sha256:stale-spec-hash\n", encoding="utf-8")
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "compare-runs",
+            json.loads(first.output)["run_dir"],
+            str(second_run),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "run_artifacts_invalid"
+    assert "spec_hash.txt mismatch" in payload["errors"][0]["message"]
+
+
 def test_backtest_compare_runs_rejects_corrupt_component_manifest_artifacts(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     runner = CliRunner()
@@ -1624,14 +1736,22 @@ def test_backtest_compare_runs_blocks_audit_hash_differences(tmp_path) -> None:
     assert second.exit_code == 0, second.output
     first_run = Path(json.loads(first.output)["run_dir"])
     second_run = Path(json.loads(second.output)["run_dir"])
+    first_spec_audit_path = first_run / "spec_audit.json"
+    first_runtime_audit_path = first_run / "runtime_audit.json"
+    second_spec_audit_path = second_run / "spec_audit.json"
+    second_runtime_audit_path = second_run / "runtime_audit.json"
+    first_spec_audit_path.write_text(json.dumps({"status": "pass", "run": "a"}), encoding="utf-8")
+    first_runtime_audit_path.write_text(json.dumps({"status": "pass", "run": "a"}), encoding="utf-8")
+    second_spec_audit_path.write_text(json.dumps({"status": "pass", "run": "b"}), encoding="utf-8")
+    second_runtime_audit_path.write_text(json.dumps({"status": "pass", "run": "b"}), encoding="utf-8")
     first_hashes_path = first_run / "artifact_hashes.json"
     second_hashes_path = second_run / "artifact_hashes.json"
     first_hashes = json.loads(first_hashes_path.read_text(encoding="utf-8"))
     second_hashes = json.loads(second_hashes_path.read_text(encoding="utf-8"))
-    first_hashes["spec_audit.json"] = "sha256:spec-audit-a"
-    first_hashes["runtime_audit.json"] = "sha256:runtime-audit-a"
-    second_hashes["spec_audit.json"] = "sha256:spec-audit-b"
-    second_hashes["runtime_audit.json"] = "sha256:runtime-audit-b"
+    first_hashes["spec_audit.json"] = _hash_json_file(first_spec_audit_path)
+    first_hashes["runtime_audit.json"] = _hash_json_file(first_runtime_audit_path)
+    second_hashes["spec_audit.json"] = _hash_json_file(second_spec_audit_path)
+    second_hashes["runtime_audit.json"] = _hash_json_file(second_runtime_audit_path)
     first_hashes_path.write_text(json.dumps(first_hashes, indent=2), encoding="utf-8")
     second_hashes_path.write_text(json.dumps(second_hashes, indent=2), encoding="utf-8")
 

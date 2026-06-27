@@ -119,7 +119,12 @@ def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
         lines.append(f"### {subheadings['execution_assumptions']}")
         lines.append("")
         lines.extend(_format_execution_assumption_lines(execution_assumptions))
-    runtime_disclosure = _format_runtime_disclosure_lines(compiled_plan, data_manifest, lang)
+    runtime_disclosure = _format_runtime_disclosure_lines(
+        compiled_plan,
+        data_manifest,
+        lang,
+        artifacts_trusted=_runtime_artifacts_trusted(repro_audit),
+    )
     if runtime_disclosure:
         lines.append("")
         lines.append(f"### {subheadings['runtime_disclosure']}")
@@ -583,6 +588,25 @@ def _benchmark_artifact_trusted(repro_audit: dict) -> bool:
     return True
 
 
+def _runtime_artifacts_trusted(repro_audit: dict) -> bool:
+    checks = repro_audit.get("checks", [])
+    if not isinstance(checks, list):
+        return True
+    runtime_guard_ids = {
+        "artifact_hashes",
+        "compiled_plan_hash",
+        "data_manifest_hash",
+    }
+    for check in checks:
+        if not isinstance(check, dict):
+            continue
+        if check.get("id") not in runtime_guard_ids:
+            continue
+        if check.get("severity") == "fatal" and check.get("status") == "fail":
+            return False
+    return True
+
+
 def _has_actionable_robustness_warning(robustness_result: dict | None) -> bool:
     if not robustness_result or robustness_result.get("status") != "warn":
         return False
@@ -1036,10 +1060,18 @@ def _format_execution_assumption_lines(assumptions: dict) -> list[str]:
     return lines
 
 
-def _format_runtime_disclosure_lines(compiled_plan: dict, data_manifest: dict, lang: str) -> list[str]:
+def _format_runtime_disclosure_lines(
+    compiled_plan: dict,
+    data_manifest: dict,
+    lang: str,
+    *,
+    artifacts_trusted: bool = True,
+) -> list[str]:
     if not compiled_plan and not data_manifest:
         return []
     labels = messages(lang)["runtime_disclosure"]
+    if not artifacts_trusted:
+        return [labels["runtime_artifacts_untrusted"], labels["non_comparable"]]
     execution = compiled_plan.get("execution")
     cost = compiled_plan.get("cost")
     data = compiled_plan.get("data")
