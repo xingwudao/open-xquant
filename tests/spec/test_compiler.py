@@ -604,6 +604,110 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert audit_reproducibility(run_dir)["status"] == "pass"
 
 
+def test_strategy_py_rejects_stale_compiled_plan_before_main(tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="stale_plan_guard", hypothesis="strategy.py should reject stale plans")
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_artifacts(spec, result, run_dir, Engine())
+    mutated = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    mutated.execution.initial_cash = 123456.0
+    (run_dir / "strategy_spec.yaml").write_text(
+        compiler.yaml.dump(mutated.to_dict(), sort_keys=False, allow_unicode=True),
+        encoding="utf-8",
+    )
+    module_spec = importlib.util.spec_from_file_location("generated_strategy_stale_plan", run_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="compiled_plan.json spec_hash mismatch"):
+        module.main(dry_run=True)
+
+
+def test_strategy_py_prints_artifact_metric_values(capsys, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="artifact_metrics", hypothesis="strategy.py prints audited metrics")
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_artifacts(spec, result, run_dir, Engine())
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics.update(
+        {
+            "total_return": 0.1234,
+            "annualized_return": 0.2345,
+            "sharpe_ratio": 1.987,
+            "max_drawdown": -0.0567,
+            "trade_count": 7,
+        }
+    )
+    (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location("generated_strategy_metrics", run_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    class ExplodingResult:
+        trades = [object()]
+
+        def total_return(self):
+            raise AssertionError("print_metrics must read metrics.json")
+
+        def annualized_return(self):
+            raise AssertionError("print_metrics must read metrics.json")
+
+        def sharpe_ratio(self):
+            raise AssertionError("print_metrics must read metrics.json")
+
+        def max_drawdown(self):
+            raise AssertionError("print_metrics must read metrics.json")
+
+    module.print_metrics(ExplodingResult())
+
+    output = capsys.readouterr().out
+    assert "Total Return:     12.34%" in output
+    assert "Annualized Ret:   23.45%" in output
+    assert "Sharpe Ratio:     1.99" in output
+    assert "Max Drawdown:     -5.67%" in output
+    assert "Trades:           7" in output
+
+
 def test_strategy_py_loads_date_values_from_strategy_spec(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compiled_plan_dates", hypothesis="date values should be literal-safe")
     spec.research.created_at = date(2024, 1, 2)  # type: ignore[assignment]

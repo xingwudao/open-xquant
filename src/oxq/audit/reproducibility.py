@@ -51,10 +51,11 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         }
 
     # Verify spec hash consistency — use the same canonical hash from StrategySpec
+    parsed_spec = None
     try:
         from oxq.spec.schema import StrategySpec
-        parsed = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml"))
-        spec_hash_actual = parsed.compute_hash()
+        parsed_spec = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml"))
+        spec_hash_actual = parsed_spec.compute_hash()
     except Exception:
         spec_yaml = (run_path / "strategy_spec.yaml").read_text(encoding="utf-8")
         spec_hash_actual = f"sha256:{hashlib.sha256(spec_yaml.encode()).hexdigest()[:16]}"
@@ -272,7 +273,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                 checks.append(_check(check_id, False, "fatal", f"{fname} is corrupted or unreadable"))
         checks.extend(_check_component_bundle_hashes(run_path))
         if artifact_schema_version >= 4 or "compiled_plan.json" in expected_hashes:
-            checks.append(_check_compiled_plan_consistency(run_path, spec_hash_actual))
+            checks.append(_check_compiled_plan_consistency(run_path, spec_hash_actual, parsed_spec))
 
     hash_guard_failed = any(
         c["id"] in {"artifact_hashes", "environment_hash", "data_manifest_hash"}
@@ -438,7 +439,7 @@ def _is_safe_artifact_name(artifact_name: str) -> bool:
     return bool(artifact_name) and not path.is_absolute() and ".." not in path.parts
 
 
-def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str) -> dict:
+def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str, spec: object | None = None) -> dict:
     compiled_plan_path = run_path / "compiled_plan.json"
     if not compiled_plan_path.exists():
         return _check("compiled_plan_consistency", False, "fatal", "compiled_plan.json is missing")
@@ -457,7 +458,64 @@ def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str) -> d
             "compiled_plan.json spec_hash mismatch: "
             f"stored={compiled_plan.get('spec_hash')}, actual={spec_hash_actual}",
         )
-    return _check("compiled_plan_consistency", True, "fatal", "compiled_plan.json spec_hash matches strategy_spec.yaml")
+    if spec is None:
+        return _check("compiled_plan_consistency", True, "fatal", "compiled_plan.json spec_hash matches strategy_spec.yaml")
+    try:
+        from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
+        from oxq.spec.compiler import _build_compiled_plan
+
+        data = compiled_plan.get("data", {})
+        effective_data_dir = data.get("effective_data_dir") if isinstance(data, dict) else None
+        with scoped_component_registries():
+            load_component_manifests_from_run(run_path)
+            expected_plan = _build_compiled_plan(spec, effective_data_dir=effective_data_dir or None)
+    except Exception as exc:
+        return _check(
+            "compiled_plan_consistency",
+            False,
+            "fatal",
+            f"compiled_plan.json consistency check failed while rebuilding plan: {exc}",
+        )
+    actual_material = _compiled_plan_material_sections(compiled_plan)
+    expected_material = _compiled_plan_material_sections(expected_plan)
+    if actual_material != expected_material:
+        differing = sorted(
+            key for key in set(actual_material) | set(expected_material) if actual_material.get(key) != expected_material.get(key)
+        )
+        return _check(
+            "compiled_plan_consistency",
+            False,
+            "fatal",
+            "compiled_plan.json material fields differ from strategy_spec.yaml: "
+            + ", ".join(differing),
+        )
+    return _check(
+        "compiled_plan_consistency",
+        True,
+        "fatal",
+        "compiled_plan.json material fields match strategy_spec.yaml",
+    )
+
+
+def _compiled_plan_material_sections(plan: dict) -> dict:
+    material_keys = {
+        "schema_version",
+        "compilation_mode",
+        "spec_hash",
+        "strategy",
+        "market",
+        "universe",
+        "data",
+        "signals",
+        "portfolio",
+        "execution",
+        "cost",
+        "runtime_rules",
+        "benchmark",
+        "validation",
+        "metrics",
+    }
+    return {key: plan.get(key) for key in sorted(material_keys)}
 
 
 def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
