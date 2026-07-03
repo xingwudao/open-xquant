@@ -304,28 +304,24 @@ def test_reproducibility_audit_rejects_compiled_plan_spec_hash_conflict(tmp_path
     audit = audit_reproducibility(run_dir)
 
     assert audit["status"] == "fail"
-    consistency = next(check for check in audit["checks"] if check["id"] == "strategy_py_consistency")
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
     assert "compiled_plan.json spec_hash mismatch" in consistency["message"]
 
 
-def test_reproducibility_audit_rejects_strategy_py_spec_conflict(tmp_path) -> None:
+def test_reproducibility_audit_allows_strategy_py_without_embedded_audit_data(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     strategy_py_path = run_dir / "strategy.py"
     strategy_py = strategy_py_path.read_text(encoding="utf-8")
-    strategy_py_path.write_text(
-        strategy_py.replace("'strategy_id': 'audit_execution_assumptions'", "'strategy_id': 'tampered'"),
-        encoding="utf-8",
-    )
-    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
-    hashes["strategy.py"] = _hash_file(strategy_py_path)
-    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes), encoding="utf-8")
+
+    assert "STRATEGY_SPEC =" not in strategy_py
+    assert "COMPILED_PLAN =" not in strategy_py
+    assert "STRATEGY_SPEC_HASH" not in strategy_py
+    assert "COMPILED_PLAN_HASH" not in strategy_py
     (run_dir.parent / "run_digests.jsonl").unlink()
 
     audit = audit_reproducibility(run_dir)
 
-    assert audit["status"] == "fail"
-    consistency = next(check for check in audit["checks"] if check["id"] == "strategy_py_consistency")
-    assert "STRATEGY_SPEC conflicts" in consistency["message"]
+    assert audit["status"] == "pass"
 
 
 def test_reproducibility_audit_allows_schema_4_without_strategy_py(tmp_path) -> None:

@@ -524,34 +524,78 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert plan["data"]["data_dir"] == str(data_dir)
     assert plan["data"]["effective_data_dir"] == str(data_dir)
     assert plan["data"]["spec_data_dir"] == ""
-    assert "STRATEGY_SPEC =" in strategy_py
-    assert "'fill_price_mode': ''" in strategy_py
-    assert "COMPILED_PLAN =" in strategy_py
-    assert "STRATEGY_FLOW =" in strategy_py
-    assert "def define_universe() -> dict:" in strategy_py
+    assert "STRATEGY_SPEC =" not in strategy_py
+    assert "COMPILED_PLAN =" not in strategy_py
+    assert "STRATEGY_SPEC_HASH" not in strategy_py
+    assert "COMPILED_PLAN_HASH" not in strategy_py
+    assert "STRATEGY_ID =" not in strategy_py
+    assert "STRATEGY_NAME =" not in strategy_py
+    assert "STRATEGY_FLOW =" not in strategy_py
+    assert "RESEARCH =" not in strategy_py
+    assert "MARKET =" not in strategy_py
+    assert "UNIVERSE =" not in strategy_py
+    assert "DATA =" not in strategy_py
+    assert "SIGNAL =" not in strategy_py
+    assert "PORTFOLIO =" not in strategy_py
+    assert "EXECUTION =" not in strategy_py
+    assert "COST =" not in strategy_py
+    assert "BENCHMARK =" not in strategy_py
+    assert "VALIDATION =" not in strategy_py
+    assert "METRICS =" not in strategy_py
+    assert "ROBUSTNESS =" not in strategy_py
+    assert "DECISION_POLICY =" not in strategy_py
+    assert "INDICATORS =" not in strategy_py
+    assert "SIGNALS =" not in strategy_py
+    assert "RUNTIME_" not in strategy_py
+    assert "Runtime sections used to show" not in strategy_py
+    assert "def load_strategy_spec() -> StrategySpec:" in strategy_py
+    assert "def load_compiled_plan() -> dict[str, Any]:" in strategy_py
+    assert "def define_strategy() -> StrategySpec:" in strategy_py
+    assert "def define_universe(spec: StrategySpec):" in strategy_py
+    assert "def prepare_data(spec: StrategySpec) -> LocalMarketDataProvider:" in strategy_py
     assert "def define_indicators() -> dict:" in strategy_py
     assert "def define_signals() -> dict:" in strategy_py
     assert "def define_portfolio() -> dict:" in strategy_py
     assert "def define_rules() -> list[dict]:" in strategy_py
+    assert "def define_broker() -> SimBroker:" in strategy_py
+    assert "def run_backtest(" in strategy_py
+    assert "def print_metrics(result: RunResult) -> None:" in strategy_py
+    assert "def main(dry_run: bool = False)" in strategy_py
     assert "def simulate_trading_flow() -> list[dict]:" in strategy_py
-    assert "def build_strategy():" in strategy_py
-    assert "Audit data appendix" in strategy_py
-    assert strategy_py.index("def define_universe() -> dict:") < strategy_py.index("STRATEGY_SPEC =")
-    assert strategy_py.index("def simulate_trading_flow() -> list[dict]:") < strategy_py.index("COMPILED_PLAN =")
+    assert "def build_strategy(spec: StrategySpec | None = None):" in strategy_py
+    assert "if __name__ == \"__main__\":" in strategy_py
+    assert "Audit data appendix" not in strategy_py
+    assert strategy_py.index("def load_strategy_spec() -> StrategySpec:") < strategy_py.index(
+        "def define_strategy() -> StrategySpec:"
+    )
+    assert strategy_py.index("def load_compiled_plan() -> dict[str, Any]:") < strategy_py.index(
+        "def prepare_data(spec: StrategySpec) -> LocalMarketDataProvider:"
+    )
     module_spec = importlib.util.spec_from_file_location("generated_strategy_review", run_dir / "strategy.py")
     assert module_spec is not None
     assert module_spec.loader is not None
     module = importlib.util.module_from_spec(module_spec)
     module_spec.loader.exec_module(module)
     description = module.describe()
+    assert description["strategy"]["strategy_id"] == "compiled_plan"
     assert [step["phase"] for step in description["strategy_flow"]] == [
+        "strategy",
         "universe",
+        "data",
         "indicator",
         "signal",
         "portfolio",
         "rule",
+        "broker",
         "trade_simulation",
+        "metrics",
     ]
+    script_plan = module.main(dry_run=True)
+    assert script_plan["status"] == "dry_run"
+    assert script_plan["strategy"]["strategy_id"] == "compiled_plan"
+    assert script_plan["data"]["provider"] == "local"
+    assert script_plan["broker"]["fill_price_mode"] == "next_open"
+    assert script_plan["metrics"]["profile"] == "open_xquant_default"
     assert description["universe"]["review_note"].startswith("This run evaluates")
     assert description["indicators"]["roc_1"]["type"] == "ROC"
     assert hashes["schema_version"] == 5
@@ -560,7 +604,7 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert audit_reproducibility(run_dir)["status"] == "pass"
 
 
-def test_strategy_py_serializes_date_values_as_literals(tmp_path) -> None:
+def test_strategy_py_loads_date_values_from_strategy_spec(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compiled_plan_dates", hypothesis="date values should be literal-safe")
     spec.research.created_at = date(2024, 1, 2)  # type: ignore[assignment]
     dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
@@ -591,7 +635,15 @@ def test_strategy_py_serializes_date_values_as_literals(tmp_path) -> None:
 
     strategy_py = (run_dir / "strategy.py").read_text(encoding="utf-8")
     assert "datetime.date" not in strategy_py
-    assert "'created_at': '2024-01-02'" in strategy_py
+    assert "'created_at': '2024-01-02'" not in strategy_py
+    assert "def load_strategy_spec() -> StrategySpec:" in strategy_py
+    module_spec = importlib.util.spec_from_file_location("generated_strategy_dates", run_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    loaded_spec = module.define_strategy()
+    assert loaded_spec.to_dict()["research"]["created_at"] == "2024-01-02"
     assert audit_reproducibility(run_dir)["status"] == "pass"
 
 

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import hashlib
 import json
 from pathlib import Path
@@ -272,8 +271,8 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
             except (json.JSONDecodeError, OSError):
                 checks.append(_check(check_id, False, "fatal", f"{fname} is corrupted or unreadable"))
         checks.extend(_check_component_bundle_hashes(run_path))
-        if artifact_schema_version >= 5 or "strategy.py" in expected_hashes:
-            checks.append(_check_strategy_py_consistency(run_path, spec_hash_actual))
+        if artifact_schema_version >= 4 or "compiled_plan.json" in expected_hashes:
+            checks.append(_check_compiled_plan_consistency(run_path, spec_hash_actual))
 
     hash_guard_failed = any(
         c["id"] in {"artifact_hashes", "environment_hash", "data_manifest_hash"}
@@ -439,74 +438,26 @@ def _is_safe_artifact_name(artifact_name: str) -> bool:
     return bool(artifact_name) and not path.is_absolute() and ".." not in path.parts
 
 
-def _check_strategy_py_consistency(run_path: Path, spec_hash_actual: str) -> dict:
-    strategy_path = run_path / "strategy.py"
+def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str) -> dict:
     compiled_plan_path = run_path / "compiled_plan.json"
-    if not strategy_path.exists():
-        return _check("strategy_py_consistency", False, "fatal", "strategy.py is missing")
     if not compiled_plan_path.exists():
-        return _check("strategy_py_consistency", False, "fatal", "compiled_plan.json is missing")
+        return _check("compiled_plan_consistency", False, "fatal", "compiled_plan.json is missing")
 
     try:
-        assignments = _read_strategy_py_assignments(strategy_path)
-        from oxq.spec.schema import StrategySpec
-
-        expected_spec = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml")).to_dict()
-        expected_plan = json.loads(compiled_plan_path.read_text(encoding="utf-8"))
-        compiled_plan_hash = _hash_json_file(compiled_plan_path)
+        compiled_plan = json.loads(compiled_plan_path.read_text(encoding="utf-8"))
     except Exception as exc:
-        return _check("strategy_py_consistency", False, "fatal", f"strategy.py consistency check failed: {exc}")
-
-    required_names = {"STRATEGY_SPEC_HASH", "COMPILED_PLAN_HASH", "STRATEGY_SPEC", "COMPILED_PLAN"}
-    missing = sorted(required_names.difference(assignments))
-    if missing:
-        return _check("strategy_py_consistency", False, "fatal", f"strategy.py missing assignments: {missing}")
-    if assignments["STRATEGY_SPEC_HASH"] != spec_hash_actual:
+        return _check("compiled_plan_consistency", False, "fatal", f"compiled_plan.json consistency check failed: {exc}")
+    if not isinstance(compiled_plan, dict):
+        return _check("compiled_plan_consistency", False, "fatal", "compiled_plan.json must be an object")
+    if compiled_plan.get("spec_hash") != spec_hash_actual:
         return _check(
-            "strategy_py_consistency",
-            False,
-            "fatal",
-            f"strategy.py STRATEGY_SPEC_HASH mismatch: stored={assignments['STRATEGY_SPEC_HASH']}, actual={spec_hash_actual}",
-        )
-    if assignments["COMPILED_PLAN_HASH"] != compiled_plan_hash:
-        return _check(
-            "strategy_py_consistency",
-            False,
-            "fatal",
-            "strategy.py COMPILED_PLAN_HASH mismatch: "
-            f"stored={assignments['COMPILED_PLAN_HASH']}, actual={compiled_plan_hash}",
-        )
-    if expected_plan.get("spec_hash") != spec_hash_actual:
-        return _check(
-            "strategy_py_consistency",
+            "compiled_plan_consistency",
             False,
             "fatal",
             "compiled_plan.json spec_hash mismatch: "
-            f"stored={expected_plan.get('spec_hash')}, actual={spec_hash_actual}",
+            f"stored={compiled_plan.get('spec_hash')}, actual={spec_hash_actual}",
         )
-    if assignments["STRATEGY_SPEC"] != expected_spec:
-        return _check("strategy_py_consistency", False, "fatal", "strategy.py STRATEGY_SPEC conflicts with strategy_spec.yaml")
-    if assignments["COMPILED_PLAN"] != expected_plan:
-        return _check("strategy_py_consistency", False, "fatal", "strategy.py COMPILED_PLAN conflicts with compiled_plan.json")
-    return _check("strategy_py_consistency", True, "fatal", "strategy.py matches strategy_spec.yaml and compiled_plan.json")
-
-
-def _read_strategy_py_assignments(path: Path) -> dict[str, object]:
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    values: dict[str, object] = {}
-    wanted = {"STRATEGY_SPEC_HASH", "COMPILED_PLAN_HASH", "STRATEGY_SPEC", "COMPILED_PLAN"}
-    for node in tree.body:
-        target_name = ""
-        value_node: ast.expr | None = None
-        if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
-            target_name = node.targets[0].id
-            value_node = node.value
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            target_name = node.target.id
-            value_node = node.value
-        if target_name in wanted and value_node is not None:
-            values[target_name] = ast.literal_eval(value_node)
-    return values
+    return _check("compiled_plan_consistency", True, "fatal", "compiled_plan.json spec_hash matches strategy_spec.yaml")
 
 
 def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
