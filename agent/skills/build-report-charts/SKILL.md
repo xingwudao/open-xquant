@@ -30,8 +30,8 @@ handing the final narrative to `write-research-report`.
    - List the recommended chart set sorted by rotation-strategy value and data
      availability.
    - If the user does not give a chart list, propose the Default Professional
-     Chart Pack with trade curve as the first/default recommendation, then ask
-     whether to build the full pack, a smaller subset, or a custom set.
+     Chart Pack in the Canonical Report Chart Order, then ask whether to build
+     the full pack, a smaller subset, or a custom set.
    - Ask the user to confirm the batch before generating charts.
    - Explain when a useful or requested chart cannot be produced from available
      data.
@@ -42,11 +42,16 @@ handing the final narrative to `write-research-report`.
    - Write figure outputs under `report_assets/figures`.
    - Keep plotting deterministic and local; do not download new data unless the
      user explicitly asks.
-   - Prefer `seaborn` for professional chart styling, statistical plots,
-     palettes, and grid treatment when it is installed. If `seaborn` is not
-     installed, fall back to direct `matplotlib` plotting without failing the
-     chart task.
-   - Use a small deterministic plotting import block in generated scripts:
+   - Require `seaborn` for the default OpenXQuant report chart style. The
+     project `chart` extra includes `seaborn>=0.13`; if import fails, treat it
+     as an environment problem and fix the chart environment or block with a
+     clear message; do not silently downgrade to arbitrary Matplotlib defaults.
+   - In a source worktree, run plotting scripts with
+     `uv run --extra chart python runs/<run_id>/report_assets/scripts/<script>.py`
+     so the `chart` extra is active. In an installed SDK bundle, verify
+     `import seaborn` works in the runner environment before plotting.
+   - Use the OpenXQuant Report Chart Style below in every generated script
+     before plotting any figure.
 
 ```python
 import matplotlib
@@ -54,19 +59,70 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-try:
-    import seaborn as sns
-except ImportError:
-    sns = None
+import seaborn as sns
 
-if sns is not None:
-    sns.set_theme(style="whitegrid", context="talk")
-else:
-    plt.style.use("seaborn-v0_8-whitegrid" if "seaborn-v0_8-whitegrid" in plt.style.available else "default")
+OXQ_REPORT_STYLE = {
+    "figure.figsize": (12, 6.75),
+    "figure.dpi": 160,
+    "savefig.dpi": 180,
+    "axes.facecolor": "#FFFFFF",
+    "figure.facecolor": "#FFFFFF",
+    "axes.edgecolor": "#D8DEE9",
+    "axes.grid": True,
+    "grid.color": "#E6EAF0",
+    "grid.linewidth": 0.8,
+    "axes.spines.top": False,
+    "axes.spines.right": False,
+    "axes.titleweight": "semibold",
+    "axes.titlesize": 15,
+    "axes.labelsize": 11,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 10,
+    "legend.frameon": False,
+    "lines.linewidth": 2.2,
+    "lines.markersize": 5,
+    "font.family": "sans-serif",
+    "font.sans-serif": [
+        "PingFang SC",
+        "Noto Sans CJK SC",
+        "Microsoft YaHei",
+        "SimHei",
+        "Arial Unicode MS",
+        "DejaVu Sans",
+    ],
+    "axes.unicode_minus": False,
+}
+
+OXQ_PALETTE = [
+    "#2563EB",  # strategy / primary
+    "#6B7280",  # benchmark / neutral
+    "#0891B2",  # exposure
+    "#D97706",  # cost / stress
+    "#7C3AED",  # secondary factor
+    "#374151",  # text-adjacent series
+]
+
+sns.set_theme(style="whitegrid", context="notebook", palette=OXQ_PALETTE, rc=OXQ_REPORT_STYLE)
+plt.rcParams.update(OXQ_REPORT_STYLE)
+
+def market_return_colors(market_region: str) -> tuple[str, str]:
+    """Return positive and negative colors for bar/heatmap returns."""
+    if market_region == "cn":
+        return "#D62728", "#2CA02C"  # red-up / green-down
+    return "#059669", "#DC2626"
 ```
 
-   - Prefer English chart labels. Use local-language labels only when the final
-     rendered image is already known to be readable in the current environment.
+   - Set figure text language from the report language. Default to Chinese
+     labels when the report language is Chinese; use the font fallback above and
+     inspect the final PNG for readable CJK text. If CJK rendering is unavailable
+     after environment repair, use concise English labels and keep Chinese
+     captions in the report.
+   - For a custom chart requested by the user, keep the same `OXQ_REPORT_STYLE`,
+     palette, figure size, title weight, grid, source-artifact caption, and
+     registration rules unless the user explicitly asks for a different style.
+   - For return bars and heatmaps, use `market.region == cn` to select
+     red-up / green-down colors; use green-up / red-down outside China.
 
 4. Register generated assets.
 
@@ -90,22 +146,12 @@ manifest write:
 ```json
 [
   {
-    "id": "trade_curve",
-    "file_path": "runs/<run_id>/report_assets/figures/trade_curve.png",
-    "title": "Trade curve",
-    "caption": "Generated from equity_curve.csv and trades.csv; markers show fills, not intraday paths.",
-    "section": "results",
-    "order": 10,
-    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
-    "source_artifacts": ["equity_curve.csv", "trades.csv"]
-  },
-  {
     "id": "equity_curve",
     "file_path": "runs/<run_id>/report_assets/figures/equity_curve.png",
     "title": "Equity curve vs benchmark",
     "caption": "Generated from equity_curve.csv and benchmark_curve.csv.",
     "section": "results",
-    "order": 20,
+    "order": 10,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv", "benchmark_curve.csv"]
   },
@@ -115,9 +161,19 @@ manifest write:
     "title": "Drawdown curve",
     "caption": "Generated from equity_curve.csv.",
     "section": "risk",
-    "order": 30,
+    "order": 20,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv"]
+  },
+  {
+    "id": "trade_curve",
+    "file_path": "runs/<run_id>/report_assets/figures/trade_curve.png",
+    "title": "Trade curve",
+    "caption": "Generated from equity_curve.csv and trades.csv; markers show fills.",
+    "section": "results",
+    "order": 30,
+    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_artifacts": ["equity_curve.csv", "trades.csv"]
   }
 ]
 ```
@@ -133,8 +189,9 @@ After registration, verify every generated figure:
 - The path is under `report_assets/figures`.
 - The figure is present in `report_assets/manifest.json`.
 - The manifest hash matches the current file.
-- Charts default to English labels unless the rendered image proves the chosen
-  local-language labels are readable.
+- Chart labels follow the report language when the rendered image proves the
+  font output is readable; otherwise use concise English labels with local
+  language captions.
 - The chart is not blank or visually empty.
 - The caption names the source artifact and the interpretation limit.
 
@@ -167,13 +224,37 @@ HTML from that final Markdown. The expected outputs are:
 - Cost impact summary.
 - IS/OOS metric comparison.
 
+## Canonical Report Chart Order
+
+Use this order for the final report unless the user explicitly requests a
+different order or a chart's source artifact is unavailable:
+
+1. `equity_curve`: performance versus benchmark.
+2. `drawdown`: depth, duration, and recovery behavior.
+3. `trade_curve`: buy/sell fills over the equity curve.
+4. `position_exposure`: allocation, concentration, and cash exposure.
+5. `monthly_returns`: return distribution and clustering by month.
+6. `cost_sensitivity`: realistic fee/slippage stress when available.
+7. `is_oos_comparison`: in-sample/out-of-sample evidence when available.
+8. `parameter_perturbation`: parameter stability when available.
+9. `regime_analysis`: market-regime behavior when available.
+10. `trade_pnl_distribution`: dependence on outlier trades when available.
+
+Keep the manifest `order` values aligned with this sequence. If the user asks
+for a custom chart, place it after the closest related canonical chart unless
+the user gives a specific location.
+
 ## Default Professional Chart Pack
 
 Use this pack when the user wants a professional report but does not specify
-charts. The trade curve is the default choice because it connects portfolio
-performance to the recorded buy/sell history. Skip any chart whose source
-artifact is unavailable, and say why.
+charts. Use this order unless the user explicitly requests a different order.
+Skip any chart whose source artifact is unavailable, and say why.
 
+- equity curve vs benchmark: source artifact `equity_curve.csv` and
+  `benchmark_curve.csv`; use a message title that states whether the strategy
+  outperformed, tracked, or lagged the benchmark.
+- drawdown: source artifact `equity_curve.csv`; show depth and recovery
+  behavior, not just the maximum drawdown number.
 - trade curve: source artifacts `equity_curve.csv` and non-empty `trades.csv`;
   optional source artifacts `orders.csv`, `target_weights.csv`, and
   `benchmark_curve.csv`; show the portfolio equity curve with buy/sell markers
@@ -186,24 +267,21 @@ artifact is unavailable, and say why.
   equity inflections. The caption must name the fill/order artifacts and state
   that markers represent recorded fills, not intraday execution paths unless
   such data is available.
-- equity curve vs benchmark: source artifact `equity_curve.csv` and
-  `benchmark_curve.csv`; use a message title that states whether the strategy
-  outperformed, tracked, or lagged the benchmark.
-- drawdown: source artifact `equity_curve.csv`; show depth and recovery
-  behavior, not just the maximum drawdown number.
+- position exposure: source artifact `positions.csv` or `target_weights.csv`;
+  show concentration, cash exposure, and large allocation shifts.
 - monthly return heatmap or monthly return bars: source artifact
   `equity_curve.csv`; show positive/negative month distribution and clustering.
+- cost sensitivity: source artifact `robustness.json`; show the effect of
+  `cost_multiplier` scenarios when present. Do not treat `2x` of zero or
+  near-zero costs as real cost robustness; add a realistic fee/slippage scenario
+  when the artifacts support it, or state that the chart is not informative.
 - IS/OOS comparison: source artifact `metrics.json` and facts API values; show
   whether out-of-sample evidence supports the in-sample thesis.
-- cost sensitivity: source artifact `robustness.json`; show the effect of
-  `cost_multiplier` scenarios when present.
 - parameter perturbation: source artifact `robustness.json`; show whether
   nearby parameters preserve or destroy the thesis when
   `parameter_perturbation` exists.
 - regime analysis: source artifact `robustness.json`; show performance by
   market regime when `regime_analysis` is available.
-- position exposure: source artifact `positions.csv` or `target_weights.csv`;
-  show concentration, cash exposure, and large allocation shifts.
 - trade PnL distribution: source artifact `trades.csv`; show whether results
   depend on a few outliers when closed-trade PnL is available.
 

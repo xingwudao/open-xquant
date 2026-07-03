@@ -15,6 +15,7 @@ inputs:
   - runtime_audit.json
   - robustness outputs
   - chart decision
+  - report_language
 outputs:
   - report_assets/**
   - research_report.md
@@ -60,6 +61,8 @@ drafting.
 
 - Read only gated run artifacts, audit artifacts, robustness outputs, and chart
   decisions supplied by the coordinator.
+- Resolve `report_language`; default to `中文` when the coordinator or user did
+  not explicitly request another language.
 - Generate professional chart assets when requested or required.
 - Write `research_report.md` and `research_report.html`.
 - Disclose audit warnings, unconfirmed defaults, recipe choices, runtime audit
@@ -72,6 +75,7 @@ drafting.
 - `runtime_audit.json`
 - Robustness outputs when available.
 - Chart decision from the coordinator.
+- `report_language`, defaulting to `中文`.
 
 ## Outputs
 
@@ -95,5 +99,5 @@ next phase is `oxq-report-reviewer-worker`.
 
 ## Result
 
-Return the report paths, chart assets used, source run directory, audit
-disclosures, and any blocked writing decision.
+Return the report paths, chart assets used, `language`, source run directory,
+audit disclosures, and any blocked writing decision.

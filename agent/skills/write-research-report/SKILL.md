@@ -30,7 +30,7 @@ Before drafting the final report, inspect `report_assets/manifest.json` if it
 exists and inspect the invoking task inputs for an explicit chart decision.
 
 - If the task explicitly requests charts and registered chart assets are
-  missing or stale, stop report writing and write `report_writer_result.json`
+  missing or stale, stop report writing and write `writer_result.json`
   with `status: blocked`, `next_required_phase: chart_building`, and
   `next_skill: build-report-charts`.
 - If the task explicitly says no charts are needed, continue and state in the
@@ -38,8 +38,24 @@ exists and inspect the invoking task inputs for an explicit chart decision.
 - If registered chart assets already exist and the task does not request a
   refresh, continue with the registered assets.
 - If the chart decision is missing, do not ask the user directly from this
-  skill. Write `report_writer_result.json` with `status: blocked` and
+  skill. Write `writer_result.json` with `status: blocked` and
   `blocking_reason: missing_chart_decision`.
+
+## Language Parameter Gate
+
+Before drafting, set a `report_language` parameter from the user request,
+coordinator input, or report task metadata.
+
+- If the user does not explicitly request another language, set
+  `report_language` to `中文`.
+- Write the entire report in `report_language`, including headings, executive
+  decision text, evidence interpretation, risks, captions, and next actions.
+- Do not switch the whole report to English because artifact keys, chart labels,
+  or prior reports are in English.
+- Pass the same language to chart generation and HTML rendering. For Chinese
+  reports, render with `render_markdown_html_report(markdown, lang="zh")`.
+- Record the resolved value in `writer_result.json` as `"language": "中文"` when
+  the default is used.
 
 ## Inputs
 
@@ -85,7 +101,8 @@ The report must make the decision easy to audit:
 5. Separate strengths from blocking risks.
 6. Explain what must happen before capital allocation.
 
-Default language is Chinese unless the user asks otherwise.
+Default language is controlled by `report_language`; the fallback value is
+`中文`.
 
 ## Institutional Report Standard
 
@@ -216,16 +233,17 @@ report narrative from templates.
 - Do not bypass this skill after recognizing it applies, even when all data is
   already in context.
 - Do not ask the user questions directly from this skill. When required inputs
-  are missing, write `report_writer_result.json` with `status: blocked` for the
+  are missing, write `writer_result.json` with `status: blocked` for the
   upstream orchestrator.
 
 ## Phase Result
 
-Write `report_writer_result.json` after this phase:
+Write `writer_result.json` after this phase:
 
 ```json
 {
   "status": "pass | blocked | fail",
+  "language": "中文",
   "report_markdown": "research_report.md",
   "report_html": "research_report.html",
   "blocking_reason": "",

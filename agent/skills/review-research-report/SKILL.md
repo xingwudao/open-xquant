@@ -36,6 +36,7 @@ Read:
 - the deterministic `oxq report qa` output
 - optional/advisory numeric QA output when available, especially any
   `numeric_claim_unverified` warnings
+- `writer_result.json` when present, especially the resolved `language`
 
 Do not rewrite metrics, audits, robustness output, backtest artifacts, Markdown,
 or HTML. This skill reviews the report and writes `report_review.json`; it does
@@ -81,13 +82,23 @@ the upstream writer phase.
      audit status, and robustness interpretation.
    - Claims like "OOS 优于 IS 表明没有过拟合", "方向正确", "风险可控", or
      "适合 paper trading" require explicit artifact-backed reasoning.
+   - Confirm the report language matches `writer_result.json.language`. If no
+     explicit user language was requested, the report must be Chinese and must
+     not unexpectedly switch to an all-English report.
 
 5. Chart review.
    - Inspect registered figures when they support key conclusions.
    - Check that charts are not blank, nearly blank, unreadable, mislabeled, or
      purely decorative.
-   - Prefer English chart labels unless the final rendered figure already
-     proves local-language labels are readable.
+   - Check that figure order follows the Canonical Report Chart Order from
+     `build-report-charts` unless the user explicitly requested a different
+     sequence.
+   - Check that chart style is consistent across figures: same light report
+     background, grid treatment, typography scale, palette family, and
+     source-artifact caption discipline.
+   - Check that local-language chart labels are readable when the report
+     language is local-language; concise English figure labels are acceptable
+     only when CJK font rendering is unavailable and captions remain local.
    - Captions must identify source artifacts and avoid unsupported conclusions.
 
 6. Markdown/HTML semantic consistency.
