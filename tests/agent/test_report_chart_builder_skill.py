@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import yaml
@@ -118,6 +119,26 @@ def test_report_chart_builder_skill_uses_canonical_report_chart_order() -> None:
     ]
     positions = [order.index(chart_id) for chart_id in expected_order]
     assert positions == sorted(positions)
+
+
+def test_report_chart_builder_skill_batch_example_sorts_in_canonical_order() -> None:
+    skill = Path("agent/skills/build-report-charts/SKILL.md")
+
+    text = skill.read_text(encoding="utf-8")
+    batch_json = text.split("```json", 1)[1].split("```", 1)[0]
+    assets = json.loads(batch_json)
+    canonical_core = ["equity_curve", "drawdown", "trade_curve"]
+    core_assets = [asset for asset in assets if asset["id"] in canonical_core]
+
+    assert [asset["id"] for asset in core_assets] == canonical_core
+    sorted_ids = [
+        asset["id"]
+        for asset in sorted(
+            core_assets,
+            key=lambda asset: (asset["section"], asset["order"], asset["id"]),
+        )
+    ]
+    assert sorted_ids == canonical_core
 
 
 def test_report_chart_builder_skill_defines_trade_curve_requirements() -> None:

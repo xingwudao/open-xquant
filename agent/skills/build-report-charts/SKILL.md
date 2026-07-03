@@ -160,7 +160,7 @@ manifest write:
     "file_path": "runs/<run_id>/report_assets/figures/drawdown.png",
     "title": "Drawdown curve",
     "caption": "Generated from equity_curve.csv.",
-    "section": "risk",
+    "section": "results",
     "order": 20,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv"]
@@ -242,7 +242,10 @@ different order or a chart's source artifact is unavailable:
 
 Keep the manifest `order` values aligned with this sequence. If the user asks
 for a custom chart, place it after the closest related canonical chart unless
-the user gives a specific location.
+the user gives a specific location. When documenting or registering a canonical
+sequence that relies on these global `order` values, keep those figures in the
+same manifest `section` because report assets sort by `section`, `order`, then
+`id`.
 
 ## Default Professional Chart Pack
 
