@@ -334,6 +334,73 @@ def test_reproducibility_audit_rejects_compiled_plan_material_drift(tmp_path) ->
     assert "compiled_plan.json material fields differ" in consistency["message"]
 
 
+def test_reproducibility_audit_rejects_compiled_plan_data_path_drift(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    plan_path = run_dir / "compiled_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["data"]["data_dir"] = str(tmp_path / "tampered_data")
+    plan["data"]["effective_data_dir"] = str(tmp_path / "tampered_data")
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    plan_hash = _hash_json_file(plan_path)
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["compiled_plan.json"] = plan_hash
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
+    assert "compiled_plan.json material fields differ" in consistency["message"]
+    assert "data" in consistency["message"]
+
+
+def test_reproducibility_audit_rejects_unparsable_spec_for_compiled_plan(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    spec_path = run_dir / "strategy_spec.yaml"
+    spec_path.write_text("strategy_id: [unterminated\n", encoding="utf-8")
+    raw_hash = f"sha256:{hashlib.sha256(spec_path.read_bytes()).hexdigest()[:16]}"
+    (run_dir / "spec_hash.txt").write_text(raw_hash + "\n", encoding="utf-8")
+    env_path = run_dir / "environment.json"
+    env = json.loads(env_path.read_text(encoding="utf-8"))
+    env["spec_hash"] = raw_hash
+    env_path.write_text(json.dumps(env, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    plan_path = run_dir / "compiled_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["spec_hash"] = raw_hash
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["strategy_spec.yaml"] = _hash_file(spec_path)
+    hashes["environment.json"] = _hash_json_file(env_path, exclude_keys={"run_timestamp"})
+    hashes["compiled_plan.json"] = _hash_json_file(plan_path)
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
+    assert "strategy_spec.yaml could not be parsed" in consistency["message"]
+
+
+def test_reproducibility_audit_does_not_load_component_code_for_plan_consistency(monkeypatch, tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    (run_dir / "component_manifests.json").write_text("[]\n", encoding="utf-8")
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    def fail_if_loaded(*_args, **_kwargs):
+        raise AssertionError("reproducibility audit must not import component code")
+
+    monkeypatch.setattr("oxq.core.component_manifest.load_component_manifests_from_run", fail_if_loaded)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
+
+
 def test_reproducibility_audit_allows_strategy_py_without_embedded_audit_data(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     strategy_py_path = run_dir / "strategy.py"

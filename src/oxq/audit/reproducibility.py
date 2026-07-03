@@ -273,7 +273,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                 checks.append(_check(check_id, False, "fatal", f"{fname} is corrupted or unreadable"))
         checks.extend(_check_component_bundle_hashes(run_path))
         if artifact_schema_version >= 4 or "compiled_plan.json" in expected_hashes:
-            checks.append(_check_compiled_plan_consistency(run_path, spec_hash_actual, parsed_spec))
+            checks.append(_check_compiled_plan_consistency(run_path, spec_hash_actual, parsed_spec, env, manifest))
 
     hash_guard_failed = any(
         c["id"] in {"artifact_hashes", "environment_hash", "data_manifest_hash"}
@@ -439,7 +439,13 @@ def _is_safe_artifact_name(artifact_name: str) -> bool:
     return bool(artifact_name) and not path.is_absolute() and ".." not in path.parts
 
 
-def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str, spec: object | None = None) -> dict:
+def _check_compiled_plan_consistency(
+    run_path: Path,
+    spec_hash_actual: str,
+    spec: object | None = None,
+    env: dict | None = None,
+    manifest: dict | None = None,
+) -> dict:
     compiled_plan_path = run_path / "compiled_plan.json"
     if not compiled_plan_path.exists():
         return _check("compiled_plan_consistency", False, "fatal", "compiled_plan.json is missing")
@@ -459,16 +465,19 @@ def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str, spec
             f"stored={compiled_plan.get('spec_hash')}, actual={spec_hash_actual}",
         )
     if spec is None:
-        return _check("compiled_plan_consistency", True, "fatal", "compiled_plan.json spec_hash matches strategy_spec.yaml")
+        return _check(
+            "compiled_plan_consistency",
+            False,
+            "fatal",
+            "strategy_spec.yaml could not be parsed; compiled_plan.json cannot be rebuilt",
+        )
     try:
-        from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries
-        from oxq.spec.compiler import _build_compiled_plan
+        from oxq.spec.compiler import _build_compiled_plan, _compiled_plan_material_differences
 
-        data = compiled_plan.get("data", {})
-        effective_data_dir = data.get("effective_data_dir") if isinstance(data, dict) else None
-        with scoped_component_registries():
-            load_component_manifests_from_run(run_path)
-            expected_plan = _build_compiled_plan(spec, effective_data_dir=effective_data_dir or None)
+        expected_plan = _build_compiled_plan(
+            spec,
+            effective_data_dir=_trusted_effective_data_dir(env or {}, manifest or {}),
+        )
     except Exception as exc:
         return _check(
             "compiled_plan_consistency",
@@ -476,12 +485,8 @@ def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str, spec
             "fatal",
             f"compiled_plan.json consistency check failed while rebuilding plan: {exc}",
         )
-    actual_material = _compiled_plan_material_sections(compiled_plan)
-    expected_material = _compiled_plan_material_sections(expected_plan)
-    if actual_material != expected_material:
-        differing = sorted(
-            key for key in set(actual_material) | set(expected_material) if actual_material.get(key) != expected_material.get(key)
-        )
+    differing = _compiled_plan_material_differences(compiled_plan, expected_plan)
+    if differing:
         return _check(
             "compiled_plan_consistency",
             False,
@@ -497,25 +502,15 @@ def _check_compiled_plan_consistency(run_path: Path, spec_hash_actual: str, spec
     )
 
 
-def _compiled_plan_material_sections(plan: dict) -> dict:
-    material_keys = {
-        "schema_version",
-        "compilation_mode",
-        "spec_hash",
-        "strategy",
-        "market",
-        "universe",
-        "data",
-        "signals",
-        "portfolio",
-        "execution",
-        "cost",
-        "runtime_rules",
-        "benchmark",
-        "validation",
-        "metrics",
-    }
-    return {key: plan.get(key) for key in sorted(material_keys)}
+def _trusted_effective_data_dir(env: dict, manifest: dict) -> str | None:
+    data_dir = env.get("data_dir")
+    if isinstance(data_dir, str) and data_dir:
+        return data_dir
+    for key in ("effective_data_dir", "data_dir"):
+        data_dir = manifest.get(key)
+        if isinstance(data_dir, str) and data_dir:
+            return data_dir
+    return None
 
 
 def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:

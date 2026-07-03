@@ -735,6 +735,35 @@ def _build_compiled_plan(
     }
 
 
+_COMPILED_PLAN_MATERIAL_KEYS = {
+    "schema_version",
+    "compilation_mode",
+    "spec_hash",
+    "strategy",
+    "market",
+    "universe",
+    "data",
+    "signals",
+    "portfolio",
+    "execution",
+    "cost",
+    "runtime_rules",
+    "benchmark",
+    "validation",
+    "metrics",
+}
+
+
+def _compiled_plan_material_sections(plan: dict[str, Any]) -> dict[str, Any]:
+    return {key: plan.get(key) for key in sorted(_COMPILED_PLAN_MATERIAL_KEYS)}
+
+
+def _compiled_plan_material_differences(actual_plan: dict[str, Any], expected_plan: dict[str, Any]) -> list[str]:
+    actual = _compiled_plan_material_sections(actual_plan)
+    expected = _compiled_plan_material_sections(expected_plan)
+    return sorted(key for key in set(actual) | set(expected) if actual.get(key) != expected.get(key))
+
+
 def compile_plan(spec: StrategySpec, *, effective_data_dir: str | None = None) -> dict[str, Any]:
     """Return the deterministic compiled runtime plan for a strategy spec."""
     from oxq.spec.validator import validate
@@ -788,7 +817,12 @@ def _build_strategy_py_artifact(
         "from oxq.core.engine import Engine",
         "from oxq.data.market import LocalMarketDataProvider",
         "from oxq.portfolio.analytics import RunResult",
-        "from oxq.spec.compiler import compile_strategy, compile_universe",
+        "from oxq.spec.compiler import (",
+        "    _build_compiled_plan,",
+        "    _compiled_plan_material_differences,",
+        "    compile_strategy,",
+        "    compile_universe,",
+        ")",
         "from oxq.spec.schema import StrategySpec",
         "from oxq.trade.fees import PercentageFee",
         "from oxq.trade.sim_broker import FillPriceMode, SimBroker",
@@ -811,6 +845,32 @@ def _build_strategy_py_artifact(
         "    return json.loads(path.read_text(encoding='utf-8'))",
         "",
         "",
+        "def load_environment() -> dict[str, Any]:",
+        '    """Load environment metadata recorded with the run."""',
+        '    path = Path(__file__).parent / "environment.json"',
+        "    return json.loads(path.read_text(encoding='utf-8'))",
+        "",
+        "",
+        "def load_data_manifest() -> dict[str, Any]:",
+        '    """Load data provenance metadata recorded with the run."""',
+        '    path = Path(__file__).parent / "data_manifest.json"',
+        "    return json.loads(path.read_text(encoding='utf-8'))",
+        "",
+        "",
+        "def trusted_effective_data_dir() -> str | None:",
+        '    """Resolve the data path from run metadata, not compiled_plan.json."""',
+        "    environment = load_environment()",
+        "    data_dir = environment.get('data_dir')",
+        "    if isinstance(data_dir, str) and data_dir:",
+        "        return data_dir",
+        "    manifest = load_data_manifest()",
+        "    for key in ('effective_data_dir', 'data_dir'):",
+        "        data_dir = manifest.get(key)",
+        "        if isinstance(data_dir, str) and data_dir:",
+        "            return data_dir",
+        "    return None",
+        "",
+        "",
         "def validate_compiled_plan_hash(spec: StrategySpec, plan: dict[str, Any] | None = None) -> None:",
         '    """Ensure strategy_spec.yaml still matches compiled_plan.json."""',
         "    compiled_plan = plan if plan is not None else load_compiled_plan()",
@@ -821,6 +881,19 @@ def _build_strategy_py_artifact(
         "            'compiled_plan.json spec_hash mismatch: '",
         "            f'stored={stored_hash}, actual={actual_hash}. '",
         "            'Regenerate the run artifacts from the current strategy_spec.yaml.'",
+        "        )",
+        "    from oxq.core.component_manifest import load_component_manifests_from_run, scoped_component_registries",
+        "",
+        "    run_dir = Path(__file__).parent",
+        "    with scoped_component_registries():",
+        '        if (run_dir / "component_manifests.json").exists():',
+        "            load_component_manifests_from_run(run_dir)",
+        "        expected_plan = _build_compiled_plan(spec, effective_data_dir=trusted_effective_data_dir())",
+        "    differences = _compiled_plan_material_differences(compiled_plan, expected_plan)",
+        "    if differences:",
+        "        raise ValueError(",
+        "            'compiled_plan.json material fields differ from strategy_spec.yaml: '",
+        "            + ', '.join(differences)",
         "        )",
         "",
         "",

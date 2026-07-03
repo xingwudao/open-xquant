@@ -643,6 +643,46 @@ def test_strategy_py_rejects_stale_compiled_plan_before_main(tmp_path) -> None:
         module.main(dry_run=True)
 
 
+def test_strategy_py_rejects_materially_tampered_compiled_plan(tmp_path) -> None:
+    spec = StrategySpec.template(
+        strategy_id="material_plan_guard",
+        hypothesis="strategy.py should reject materially tampered plans",
+    )
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0)],
+        mktdata={
+            "SPY": pd.DataFrame(
+                {
+                    "open": [1.0, 1.0],
+                    "high": [1.0, 1.0],
+                    "low": [1.0, 1.0],
+                    "close": [1.0, 1.0],
+                    "volume": [1, 1],
+                },
+                index=dates,
+            )
+        },
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_artifacts(spec, result, run_dir, Engine())
+    plan_path = run_dir / "compiled_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["execution"]["fill_price_mode"] = "close"
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    module_spec = importlib.util.spec_from_file_location("generated_strategy_material_plan", run_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+
+    with pytest.raises(ValueError, match="compiled_plan.json material fields differ"):
+        module.main(dry_run=True)
+
+
 def test_strategy_py_prints_artifact_metric_values(capsys, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="artifact_metrics", hypothesis="strategy.py prints audited metrics")
     dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
