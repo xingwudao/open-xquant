@@ -121,8 +121,10 @@ def market_return_colors(market_region: str) -> tuple[str, str]:
    - For a custom chart requested by the user, keep the same `OXQ_REPORT_STYLE`,
      palette, figure size, title weight, grid, source-artifact caption, and
      registration rules unless the user explicitly asks for a different style.
-   - For return bars and heatmaps, use `market.region == cn` to select
-     red-up / green-down colors; use green-up / red-down outside China.
+   - For return bars and heatmaps, resolve a string region such as
+     `market_region = market.get("region") or spec.market.region`, then use
+     `market_region == "cn"` to select red-up / green-down colors; use
+     green-up / red-down outside China.
 
 4. Register generated assets.
 
@@ -141,15 +143,17 @@ oxq report asset add runs/<run_id>/ runs/<run_id>/report_assets/figures/<figure>
 
 When one plotting script regenerates multiple already-registered figures, use a
 batch JSON file and `asset add-batch` so all replaced asset hashes update in one
-manifest write:
+manifest write. The manifest `title` and `caption` values must be written in
+the resolved `report_language`; the default example below uses Chinese because
+the default report language is `中文`:
 
 ```json
 [
   {
     "id": "equity_curve",
     "file_path": "runs/<run_id>/report_assets/figures/equity_curve.png",
-    "title": "Equity curve vs benchmark",
-    "caption": "Generated from equity_curve.csv and benchmark_curve.csv.",
+    "title": "策略净值与基准对比",
+    "caption": "来自 equity_curve.csv 和 benchmark_curve.csv；用于比较策略与基准净值走势。",
     "section": "results",
     "order": 10,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
@@ -158,8 +162,8 @@ manifest write:
   {
     "id": "drawdown",
     "file_path": "runs/<run_id>/report_assets/figures/drawdown.png",
-    "title": "Drawdown curve",
-    "caption": "Generated from equity_curve.csv.",
+    "title": "回撤曲线",
+    "caption": "来自 equity_curve.csv；展示回撤深度与恢复过程。",
     "section": "results",
     "order": 20,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
@@ -168,8 +172,8 @@ manifest write:
   {
     "id": "trade_curve",
     "file_path": "runs/<run_id>/report_assets/figures/trade_curve.png",
-    "title": "Trade curve",
-    "caption": "Generated from equity_curve.csv and trades.csv; markers show fills.",
+    "title": "交易曲线",
+    "caption": "来自 equity_curve.csv 和 trades.csv；标记展示成交记录，不代表日内路径。",
     "section": "results",
     "order": 30,
     "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",

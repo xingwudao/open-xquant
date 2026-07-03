@@ -52,8 +52,8 @@ coordinator input, or report task metadata.
   decision text, evidence interpretation, risks, captions, and next actions.
 - Do not switch the whole report to English because artifact keys, chart labels,
   or prior reports are in English.
-- Pass the same language to chart generation and HTML rendering. For Chinese
-  reports, render with `render_markdown_html_report(markdown, lang="zh")`.
+- Pass the same language to chart generation and HTML rendering. Derive the
+  renderer `lang` from `report_language` instead of hardcoding one locale.
 - Record the resolved value in `writer_result.json` as `"language": "中文"` when
   the default is used.
 
@@ -204,8 +204,19 @@ from pathlib import Path
 from oxq.report.html import render_markdown_html_report
 
 run_dir = Path("runs/<run_id>")
+report_language = "中文"  # Use the resolved report_language value from this phase.
+
+def language_to_html_lang(language: str) -> str:
+    normalized = language.strip().lower()
+    if normalized in {"中文", "chinese", "zh", "zh-cn"}:
+        return "zh"
+    if normalized in {"english", "en", "en-us"}:
+        return "en"
+    return "zh"
+
 markdown = (run_dir / "research_report.md").read_text(encoding="utf-8")
-html = render_markdown_html_report(markdown, lang="zh")
+html_lang = language_to_html_lang(report_language)
+html = render_markdown_html_report(markdown, lang=html_lang)
 (run_dir / "research_report.html").write_text(html, encoding="utf-8")
 PY
 ```

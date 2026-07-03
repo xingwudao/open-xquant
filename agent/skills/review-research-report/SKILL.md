@@ -36,7 +36,7 @@ Read:
 - the deterministic `oxq report qa` output
 - optional/advisory numeric QA output when available, especially any
   `numeric_claim_unverified` warnings
-- `writer_result.json` when present, especially the resolved `language`
+- `writer_result.json`, especially the resolved `language`
 
 Do not rewrite metrics, audits, robustness output, backtest artifacts, Markdown,
 or HTML. This skill reviews the report and writes `report_review.json`; it does

@@ -14,6 +14,7 @@ inputs:
   - gated run artifacts
   - spec_audit.json
   - runtime_audit.json
+  - writer_result.json
   - chart assets
 outputs:
   - report_review.json
@@ -62,6 +63,7 @@ Use the `review-research-report` skill.
 - Gated run artifacts.
 - `spec_audit.json`
 - `runtime_audit.json`
+- `writer_result.json`
 - Chart assets and chart registry when available.
 
 ## Outputs
