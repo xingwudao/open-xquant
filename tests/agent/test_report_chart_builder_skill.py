@@ -237,6 +237,41 @@ def test_research_report_writer_skill_defines_default_language_parameter() -> No
     assert "Do not switch the whole report to English" in text
 
 
+def test_research_report_writer_skill_resolves_language_before_chart_gate() -> None:
+    skill = Path("agent/skills/write-research-report/SKILL.md")
+
+    text = skill.read_text(encoding="utf-8")
+
+    assert text.index("## Language Parameter Gate") < text.index("## Chart Decision Gate")
+    chart_gate = text[text.index("## Chart Decision Gate"): text.index("## Inputs")]
+    assert "`language`: `report_language`" in chart_gate
+    assert "blocked" in chart_gate
+
+
+def test_research_report_writer_skill_preserves_canonical_decision_tokens() -> None:
+    skill = Path("agent/skills/write-research-report/SKILL.md")
+
+    text = skill.read_text(encoding="utf-8")
+
+    language_gate = text[text.index("## Language Parameter Gate"): text.index("## Inputs")]
+    assert "Do not localize the canonical executive decision token" in language_gate
+    assert "REJECT" in language_gate
+    assert "NO EVIDENCE" in language_gate
+    assert "WATCHLIST" in language_gate
+    assert "PAPER TRADING CANDIDATE" in language_gate
+
+
+def test_research_report_writer_skill_preserves_unknown_html_language_codes() -> None:
+    skill = Path("agent/skills/write-research-report/SKILL.md")
+
+    text = skill.read_text(encoding="utf-8")
+
+    html_output = text[text.index("## HTML Output"): text.index("## Red Lines")]
+    assert "Do not fall back to `zh` for an explicitly requested non-Chinese language" in html_output
+    assert "return normalized" in html_output
+    assert 'return "und"' in html_output
+
+
 def test_research_report_writer_skill_requires_institutional_report_structure() -> None:
     skill = Path("agent/skills/write-research-report/SKILL.md")
 
