@@ -472,11 +472,15 @@ def _check_compiled_plan_consistency(
             "strategy_spec.yaml could not be parsed; compiled_plan.json cannot be rebuilt",
         )
     try:
-        from oxq.spec.compiler import _build_compiled_plan, _compiled_plan_material_differences
+        from oxq.spec.compiler import (
+            _build_compiled_plan_from_spec_metadata,
+            _compiled_plan_material_differences,
+        )
 
-        expected_plan = _build_compiled_plan(
+        expected_plan = _build_compiled_plan_from_spec_metadata(
             spec,
             effective_data_dir=_trusted_effective_data_dir(env or {}, manifest or {}),
+            component_manifests=_read_component_manifests_for_plan(run_path),
         )
     except Exception as exc:
         return _check(
@@ -500,6 +504,28 @@ def _check_compiled_plan_consistency(
         "fatal",
         "compiled_plan.json material fields match strategy_spec.yaml",
     )
+
+
+def _read_component_manifests_for_plan(run_path: Path) -> list[dict]:
+    summary_path = run_path / "component_manifests.json"
+    if not summary_path.exists():
+        return []
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(summary, list):
+        raise ValueError("component_manifests.json must be a list")
+    manifests: list[dict] = []
+    for index, item in enumerate(summary):
+        if not isinstance(item, dict):
+            raise ValueError(f"component_manifests.json[{index}] must be an object")
+        recorded = item.get("bundle_hash")
+        if not isinstance(recorded, str) or not recorded:
+            raise ValueError(f"component_manifests.json[{index}].bundle_hash is required")
+        manifest_path = _resolve_component_manifest_for_audit(run_path, item, recorded, len(summary))
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError(f"component manifest must be an object: {manifest_path}")
+        manifests.append(payload)
+    return manifests
 
 
 def _trusted_effective_data_dir(env: dict, manifest: dict) -> str | None:

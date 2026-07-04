@@ -735,6 +735,199 @@ def _build_compiled_plan(
     }
 
 
+def _build_compiled_plan_from_spec_metadata(
+    spec: StrategySpec,
+    *,
+    effective_data_dir: str | None = None,
+    component_manifests: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a material plan without instantiating or importing components."""
+    semantics = derive_execution_semantics(spec.execution)
+    rebalance_interval, rebalance_source = _effective_rebalance(spec)
+    assumptions = metric_assumptions(spec.metrics)
+    signal_types = {name: rule.type for name, rule in sorted(spec.signal.rules.items())}
+    terminal_signals: list[str] = []
+    portfolio_runtime_type = spec.portfolio.type
+    portfolio_class = _component_class_ref("PortfolioOptimizer", spec.portfolio.type, component_manifests)
+    if spec.portfolio.type == "EqualWeight" and spec.signal.rules:
+        terminal_signals = _terminal_signal_names(spec)
+        signal_types = {name: _effective_signal_type(spec, name) for name in sorted(spec.signal.rules)}
+        portfolio_runtime_type = "SignalFilteredEqualWeight"
+        portfolio_class = _class_ref(_SignalFilteredEqualWeightOptimizer)
+
+    return {
+        "schema_version": 1,
+        "compilation_mode": "direct_runtime",
+        "spec_hash": spec.compute_hash(),
+        "strategy": {
+            "strategy_id": spec.strategy_id,
+            "runtime_name": spec.strategy_id,
+            "display_name": spec.name,
+            "hypothesis": spec.research.hypothesis,
+        },
+        "market": {
+            "asset_class": spec.market.asset_class,
+            "region": spec.market.region,
+            "currency": spec.market.currency,
+            "calendar": spec.market.calendar,
+            "runtime_calendar": normalize_exchange_calendar(spec.market.calendar),
+        },
+        "universe": {
+            "type": spec.universe.type,
+            "runtime_class": _class_ref(StaticUniverse),
+            "symbols": list(spec.universe.symbols),
+            "point_in_time": spec.universe.point_in_time,
+            "survivorship_bias_policy": spec.universe.survivorship_bias_policy,
+        },
+        "data": {
+            "provider": spec.data.provider,
+            "data_dir": effective_data_dir or spec.data.data_dir,
+            "spec_data_dir": spec.data.data_dir,
+            "effective_data_dir": effective_data_dir or spec.data.data_dir,
+            "price_adjustment": spec.data.price_adjustment,
+            "required_columns": list(spec.data.required_columns),
+            "min_start_date": spec.data.min_start_date,
+        },
+        "signals": {
+            "signal_time": spec.signal.signal_time,
+            "indicators": {
+                name: {
+                    "type": definition.type,
+                    "class": _component_class_ref("Indicator", definition.type, component_manifests),
+                    "params": dict(definition.params),
+                }
+                for name, definition in sorted(spec.signal.indicators.items())
+            },
+            "rules": {
+                name: {
+                    "type": definition.type,
+                    "effective_type": signal_types.get(name, definition.type),
+                    "class": _component_class_ref("Signal", definition.type, component_manifests),
+                    "params": dict(definition.params),
+                    "output_domain": list(definition.output_domain),
+                }
+                for name, definition in sorted(spec.signal.rules.items())
+            },
+            "terminal_signals": terminal_signals,
+            "event_signal_types": sorted(_EVENT_SIGNAL_TYPES),
+        },
+        "portfolio": {
+            "type": spec.portfolio.type,
+            "runtime_type": portfolio_runtime_type,
+            "class": portfolio_class,
+            "params": dict(spec.portfolio.params),
+            "rules": {
+                name: {
+                    "type": definition.type,
+                    "params": dict(definition.params),
+                }
+                for name, definition in sorted(spec.portfolio.rules.items())
+            },
+        },
+        "execution": {
+            "trade_time": spec.execution.trade_time,
+            "order_timing": semantics.order_timing,
+            "price_bar": semantics.price_bar,
+            "price_type": semantics.price_type,
+            "fill_price_mode": semantics.fill_price_mode,
+            "compatibility_source": semantics.compatibility_source,
+            "initial_cash": spec.execution.initial_cash,
+            "cash_annual_return": spec.execution.cash_annual_return,
+            "lot_size": spec.execution.lot_size,
+            "effective_lot_size": _effective_lot_size(spec),
+            "lot_size_config": {
+                "default": spec.execution.lot_size_config.default,
+                "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
+            },
+            "rebalance": {
+                "frequency": spec.execution.rebalance.frequency,
+                "interval_days": rebalance_interval,
+                "source": rebalance_source,
+            },
+        },
+        "cost": {
+            "fee_model": "PercentageFee",
+            "fee_rate": spec.cost.fee_rate,
+            "fee_min": spec.cost.fee_min,
+            "slippage_model": "PercentageSlippage",
+            "slippage_rate": spec.cost.slippage_rate,
+        },
+        "runtime_rules": _build_compiled_runtime_rules(spec),
+        "benchmark": {
+            "symbols": list(spec.benchmark.symbols),
+        },
+        "validation": {
+            "train_period": list(spec.validation.train_period),
+            "test_period": list(spec.validation.test_period),
+            "required_oos": spec.validation.required_oos,
+        },
+        "metrics": {
+            "profile": spec.metrics.profile,
+            "risk_free_rate": assumptions["risk_free_rate"],
+            "return_type": assumptions["return_type"],
+            "annualization_days": assumptions["annualization_days"],
+            "calmar_denominator": assumptions["calmar_denominator"],
+            "evaluation_window": assumptions["evaluation_window"],
+        },
+    }
+
+
+def _component_class_ref(
+    kind: str,
+    name: str,
+    component_manifests: list[dict[str, Any]] | None = None,
+) -> str:
+    builtin = _builtin_component_class(kind, name)
+    if builtin is not None:
+        return _class_ref(builtin)
+    manifest_ref = _manifest_component_class_ref(component_manifests or [], kind, name)
+    if manifest_ref is not None:
+        return manifest_ref
+    if kind == "Indicator":
+        return _class_ref(_resolve_indicator(name))
+    if kind == "Signal":
+        return _class_ref(_resolve_signal(name))
+    if kind == "PortfolioOptimizer":
+        return _class_ref(_resolve_portfolio_optimizer(name))
+    raise ValueError(f"Unknown component kind: {kind}")
+
+
+def _builtin_component_class(kind: str, name: str) -> type | None:
+    if kind == "Indicator":
+        return _INDICATOR_REGISTRY.get(name)
+    if kind == "Signal":
+        return _SIGNAL_REGISTRY.get(name)
+    if kind == "PortfolioOptimizer":
+        return _PORTFOLIO_OPTIMIZER_REGISTRY.get(name)
+    return None
+
+
+def _manifest_component_class_ref(component_manifests: list[dict[str, Any]], kind: str, name: str) -> str | None:
+    for manifest_index, manifest in enumerate(component_manifests):
+        components = manifest.get("components", [])
+        if not isinstance(components, list):
+            raise ValueError(f"component_manifests[{manifest_index}].components must be a list")
+        for component_index, component in enumerate(components):
+            if not isinstance(component, dict):
+                raise ValueError(
+                    f"component_manifests[{manifest_index}].components[{component_index}] must be an object"
+                )
+            if component.get("kind") != kind or component.get("name") != name:
+                continue
+            module_name = component.get("module")
+            class_name = component.get("class")
+            if not isinstance(module_name, str) or not module_name:
+                raise ValueError(
+                    f"component_manifests[{manifest_index}].components[{component_index}].module is required"
+                )
+            if not isinstance(class_name, str) or not class_name:
+                raise ValueError(
+                    f"component_manifests[{manifest_index}].components[{component_index}].class is required"
+                )
+            return f"{module_name}.{class_name}"
+    return None
+
+
 _COMPILED_PLAN_MATERIAL_KEYS = {
     "schema_version",
     "compilation_mode",

@@ -401,6 +401,24 @@ def test_reproducibility_audit_does_not_load_component_code_for_plan_consistency
     assert audit["status"] == "pass"
 
 
+def test_reproducibility_audit_rebuilds_custom_component_plan_from_manifest_metadata(monkeypatch, tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    _rewrite_run_with_archived_indicator_spec(run_dir)
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    def fail_if_loaded(*_args, **_kwargs):
+        raise AssertionError("reproducibility audit must not import component code")
+
+    monkeypatch.setattr("oxq.core.component_manifest.load_component_manifests_from_run", fail_if_loaded)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
+    assert any(check["id"] == "component_bundle_hash" and check["status"] == "pass" for check in audit["checks"])
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
+    assert consistency["status"] == "pass"
+
+
 def test_reproducibility_audit_allows_strategy_py_without_embedded_audit_data(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     strategy_py_path = run_dir / "strategy.py"
@@ -844,6 +862,85 @@ def _write_component_manifest_bundle(base: Path, *, value: str) -> tuple[Path, s
     payload["bundle_hash"] = bundle_hash
     manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return manifest, bundle_hash
+
+
+def _rewrite_run_with_archived_indicator_spec(run_dir: Path) -> None:
+    from oxq.spec.schema import IndicatorDef
+
+    archive_base = run_dir / "component_extensions" / "00_custom_components"
+    _manifest, bundle_hash = _write_component_manifest_bundle(archive_base, value="1.0")
+    (run_dir / "component_manifests.json").write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": "/deleted/component_manifest.json",
+                    "archived_manifest_path": "component_extensions/00_custom_components/component_manifest.json",
+                    "archived_extension_root": "component_extensions/00_custom_components/custom_components",
+                    "bundle_hash": bundle_hash,
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    spec.signal.indicators = {
+        "archived_score": IndicatorDef(type="ArchivedIndicator", params={})
+    }
+    spec.signal.rules = {}
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "archived_score", "n": 1}
+    spec.portfolio.rules = {}
+    spec_hash = spec.compute_hash()
+    (run_dir / "strategy_spec.yaml").write_text(
+        json.dumps(spec.to_dict(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    (run_dir / "spec_hash.txt").write_text(spec_hash + "\n", encoding="utf-8")
+
+    env_path = run_dir / "environment.json"
+    env = json.loads(env_path.read_text(encoding="utf-8"))
+    env["spec_hash"] = spec_hash
+    env_path.write_text(json.dumps(env, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+    plan_path = run_dir / "compiled_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["spec_hash"] = spec_hash
+    plan["signals"]["indicators"] = {
+        "archived_score": {
+            "type": "ArchivedIndicator",
+            "class": "oxq_components.indicators.archived_indicator.ArchivedIndicator",
+            "params": {},
+        }
+    }
+    plan["signals"]["rules"] = {}
+    plan["signals"]["terminal_signals"] = []
+    plan["portfolio"] = {
+        "type": "TopNRanking",
+        "runtime_type": "TopNRanking",
+        "class": "oxq.portfolio.optimizers.TopNRankingOptimizer",
+        "params": {"score_col": "archived_score", "n": 1},
+        "rules": {},
+    }
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    plan_hash = _hash_json_file(plan_path)
+
+    strategy_py_path = run_dir / "strategy.py"
+    strategy_py_path.write_text(
+        _build_strategy_py_artifact(spec, plan, spec_hash, plan_hash),
+        encoding="utf-8",
+    )
+
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    hashes["strategy_spec.yaml"] = _hash_file(run_dir / "strategy_spec.yaml")
+    hashes["environment.json"] = _hash_json_file(env_path, exclude_keys={"run_timestamp"})
+    hashes["compiled_plan.json"] = plan_hash
+    hashes["strategy.py"] = _hash_file(strategy_py_path)
+    hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
+    (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
 
 
 def _write_minimal_run(tmp_path):
