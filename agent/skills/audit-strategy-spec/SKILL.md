@@ -193,6 +193,7 @@ Use these next-phase labels in findings:
 - `next_required_phase: brainstorm`
 - `next_required_phase: build`
 - `next_required_phase: data_inspection`
+- `next_required_phase: user_spec_confirmation`
 - `next_required_phase: runtime_audit`
 
 ## OpenXQuant Version Provenance
@@ -597,6 +598,7 @@ become confirmed. Then update or write `spec_audit.json` with:
 - `spec_provenance_pass: true`
 - `audit_conclusion: all_pass`
 - `user_confirmation_status: confirmed`
+- `confirmation_event` referencing the durable confirmation log event
 - `next_required_phase: runtime_audit`
 
 If the user does not confirm the full table, the audit remains blocked and no
@@ -679,7 +681,7 @@ this skill, not from a deterministic CLI. Use the existing schema version:
 
 ```json
 {
-  "schema_version": 3,
+  "schema_version": 4,
   "status": "pass | block | fail",
   "spec_provenance_pass": true,
   "audit_conclusion": "all_pass | blocked | fail",
@@ -691,7 +693,7 @@ this skill, not from a deterministic CLI. Use the existing schema version:
   "strategy_idea_audit": "versions/<version_id>/02_idea_audit/strategy_idea_audit.json",
   "strategy_idea_brief_hash": "sha256:<hash>",
   "strategy_idea_audit_hash": "sha256:<hash>",
-  "next_required_phase": "runtime_audit",
+  "next_required_phase": "user_spec_confirmation | runtime_audit | build | brainstorm | data_inspection",
   "recipe_matches": [
     {
       "recipe": "volatility_adjusted_momentum",
@@ -738,6 +740,16 @@ this skill, not from a deterministic CLI. Use the existing schema version:
     "hash": "sha256:<markdown file hash>",
     "hash_type": "sha256"
   },
+  "confirmation_event": {
+    "path": "conversations/<conversation_id>/confirmations.jsonl",
+    "event_id": "<stable confirmation event id>",
+    "line_number": 1,
+    "event_hash": "sha256:<confirmation jsonl line hash>",
+    "artifact_path": "versions/<version_id>/06_spec_audit/spec_confirmation_table.md",
+    "artifact_hash": "sha256:<markdown file hash>",
+    "spec_audit_path": "versions/<version_id>/06_spec_audit/spec_audit.json",
+    "spec_audit_hash": "sha256:<pre-confirmation spec_audit hash>"
+  },
   "blocking_findings": [{"message": "...", "question": "..."}]
 }
 ```
@@ -748,6 +760,15 @@ no audit blockers and the workflow is at `audit_conclusion: all_pass`,
 `user_confirmation_status: confirmed`. For `audit_conclusion: blocked`, omit
 `spec_confirmation_table` or set it to `null`; do not write a placeholder table
 to satisfy schema.
+
+`confirmation_event` is conditional separately. It is required only when
+`user_confirmation_status: confirmed` or `status: pass`. It must point to the
+line in `conversations/<conversation_id>/confirmations.jsonl` where the user
+confirmed the full SPEC table. The JSONL line and audit reference must both
+include the same `event_id`, `artifact_path`, `artifact_hash`,
+`spec_audit_path`, and `spec_audit_hash`. `spec_audit_hash` is the
+pre-confirmation `spec_audit.json` hash. Pending all-pass audits must not
+invent a confirmation event.
 
 `field_audits` are also conditional in a different way: they describe only
 effective StrategySpec fields from `StrategySpec.from_yaml(...).to_effective_dict()`.

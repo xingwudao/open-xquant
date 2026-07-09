@@ -275,6 +275,19 @@ def test_validate_rejects_bad_suspension_policy() -> None:
     assert any(error["check"] == "data_filter_invalid" for error in result.errors)
 
 
+def test_validate_rejects_non_integer_new_listed_days_without_crashing() -> None:
+    spec = StrategySpec.template(
+        strategy_id="bad_new_listed_type",
+        hypothesis="validator should return structured errors for invalid filter types",
+    )
+    spec.data.filters.exclude_new_listed_days = "30"  # type: ignore[assignment]
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "data_filter_invalid" for error in result.errors)
+
+
 def test_from_yaml_rejects_scalar_universe_symbols(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(

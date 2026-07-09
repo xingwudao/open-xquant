@@ -59,6 +59,11 @@ Use the `run-authorized-backtest` skill.
 
 - Read `backtest_authorization.json` before running any command.
 - Verify referenced hashes for the spec, spec audit, and runtime audit.
+- Block unless the referenced `spec_audit.json` has `status: pass`,
+  `audit_conclusion: all_pass`, `user_confirmation_status: confirmed`, and a
+  valid `confirmation_event` with `path`, `event_id`, `line_number`,
+  `event_hash`, `artifact_path`, `artifact_hash`, `spec_audit_path`, and
+  `spec_audit_hash`.
 - When recomputing JSON hashes, call `_hash_json_file(Path(...))`; do not pass
   strings.
 - Use the authorized

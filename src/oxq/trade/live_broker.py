@@ -152,6 +152,15 @@ class LiveBroker:
             canceled.append(managed)
         return canceled
 
+    def cancel_market_order(self, managed: ManagedOrder, reason: str = "canceled") -> ManagedOrder | None:
+        """Cancel one open market order via Alpaca."""
+        if managed.status != "open" or managed.order.order_type != "market":
+            return None
+        self._client.cancel_order(managed.id)
+        managed.status = "canceled"
+        managed.status_reason = reason
+        return managed
+
     def cap_pending_sells(self, symbol: str, max_shares: int) -> None:
         """Cap pending sell orders to at most *max_shares*.
 

@@ -129,9 +129,11 @@ def initialize_workspace(
 
     workspace_config = workspace_config or {}
     migrated_manifests = _migrate_hidden_root_manifest_files(cwd, workspace_config)
-    if _normalize_root_manifest_paths(workspace_config):
+    normalized_config = _normalize_root_manifest_paths(workspace_config)
+    normalized_config = _normalize_default_output_dir(cwd, workspace_config) or normalized_config
+    if normalized_config:
         write_yaml_file(workspace_file, workspace_config)
-        click.echo(f"Workspace manifest paths normalized in {workspace_file}")
+        click.echo(f"Workspace config normalized in {workspace_file}")
     elif migrated_manifests:
         click.echo("Workspace root manifests migrated from .open-xquant/")
     if not minimal:
@@ -145,7 +147,7 @@ def initialize_workspace(
     if not minimal and comparison_registry is not None and not comparison_registry.exists():
         write_text_file(comparison_registry, "")
     _create_default_governance_manifests(cwd, workspace_config)
-    upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
+    upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", _workspace_block(cwd, workspace_config))
     if _installed_agent_profile() == AGENT_PROFILE_STANDALONE:
         remove_marker_block(cwd / "AGENTS.md", "open-xquant-subagents")
     else:
@@ -199,7 +201,7 @@ def _create_configured_workspace_dirs(cwd: Path, workspace: dict[str, object]) -
         "final_dir",
         "comparisons_dir",
     ):
-        if key == "runs_dir" and _uses_version_local_backtest_output(workspace):
+        if key == "runs_dir" and _uses_version_local_backtest_output(cwd, workspace):
             continue
         path = _configured_path(cwd, workspace, key)
         if path is not None:
@@ -210,7 +212,7 @@ def _create_configured_workspace_dirs(cwd: Path, workspace: dict[str, object]) -
         (cwd / "conversations").mkdir(exist_ok=True)
         (cwd / "components").mkdir(exist_ok=True)
         (cwd / "governance").mkdir(exist_ok=True)
-        if not _uses_version_local_backtest_output(workspace):
+        if not _uses_version_local_backtest_output(cwd, workspace):
             (cwd / "runs").mkdir(exist_ok=True)
         (cwd / "final").mkdir(exist_ok=True)
         (cwd / "comparisons").mkdir(exist_ok=True)
@@ -237,6 +239,7 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
     else:
         version_id = "v001"
     version_dir = (_configured_path(cwd, workspace, "versions_dir") or (cwd / "versions")) / version_id
+    version_dir_display = _display_workspace_path(cwd, version_dir)
     _create_version_phase_dirs(version_dir)
 
     workflow_path = _configured_root_manifest_path(cwd, workspace, "workflow_manifest", "workflow_manifest.json")
@@ -301,8 +304,26 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
             json.dumps(lineage_payload, indent=2, ensure_ascii=False) + "\n",
         )
 
+    expected_phase_paths = {
+        phase: f"{version_dir_display}/{phase}" for phase in VERSION_PHASE_DIRS
+    }
     version_manifest = version_dir / "version_manifest.json"
-    if not version_manifest.exists():
+    if version_manifest.exists():
+        version_manifest_payload = _read_json_object(version_manifest)
+        repaired_manifest = {
+            **version_manifest_payload,
+            "schema_version": version_manifest_payload.get("schema_version", 1),
+            "version_id": version_id,
+            "strategy_family_id": version_manifest_payload.get("strategy_family_id", name),
+            "active_phase": active_phase,
+            "phase_paths": expected_phase_paths,
+        }
+        if version_manifest_payload != repaired_manifest:
+            write_text_file(
+                version_manifest,
+                json.dumps(repaired_manifest, indent=2, ensure_ascii=False) + "\n",
+            )
+    else:
         write_text_file(
             version_manifest,
             json.dumps(
@@ -315,9 +336,7 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
                     "status": "active",
                     "active_phase": active_phase,
                     "source_conversation": "",
-                    "phase_paths": {
-                        phase: f"versions/{version_id}/{phase}" for phase in VERSION_PHASE_DIRS
-                    },
+                    "phase_paths": expected_phase_paths,
                 },
                 indent=2,
                 ensure_ascii=False,
@@ -352,7 +371,36 @@ def _configured_path(cwd: Path, workspace: dict[str, object], key: str) -> Path 
     value = paths.get(key)
     if not isinstance(value, str) or not value:
         return None
-    return cwd / value
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        raise click.ClickException(f"workspace paths.{key} must be a safe relative path")
+    resolved_cwd = cwd.resolve()
+    candidate = cwd / path
+    try:
+        candidate.resolve(strict=False).relative_to(resolved_cwd)
+    except ValueError as exc:
+        raise click.ClickException(f"workspace paths.{key} must stay within the workspace") from exc
+    return candidate
+
+
+def _display_workspace_path(cwd: Path, path: Path) -> str:
+    try:
+        return path.relative_to(cwd).as_posix()
+    except ValueError:
+        return path.as_posix()
+
+
+def _workspace_versions_dir_display(cwd: Path, workspace: dict[str, object]) -> str:
+    return _display_workspace_path(cwd, _configured_path(cwd, workspace, "versions_dir") or (cwd / "versions"))
+
+
+def _workspace_backtest_output_template(cwd: Path, workspace: dict[str, object]) -> str:
+    return f"{_workspace_versions_dir_display(cwd, workspace)}/{{active_version}}/09_backtests"
+
+
+def _workspace_block(cwd: Path, workspace: dict[str, object]) -> str:
+    version_root = _workspace_versions_dir_display(cwd, workspace)
+    return WORKSPACE_BLOCK.replace("versions/v001", f"{version_root}/v001")
 
 
 def _configured_root_manifest_path(cwd: Path, workspace: dict[str, object], key: str, filename: str) -> Path:
@@ -385,6 +433,24 @@ def _normalize_root_manifest_paths(workspace: dict[str, object]) -> bool:
             paths[key] = filename
             changed = True
     return changed
+
+
+def _normalize_default_output_dir(cwd: Path, workspace: dict[str, object]) -> bool:
+    if not _is_version_governed_workspace(workspace):
+        return False
+    workflow = workspace.get("workflow")
+    if not isinstance(workflow, dict):
+        workflow = {}
+        workspace["workflow"] = workflow
+    expected = _workspace_backtest_output_template(cwd, workspace)
+    configured = workflow.get("default_output_dir")
+    if configured == "versions/{active_version}/09_backtests" and configured != expected:
+        workflow["default_output_dir"] = expected
+        return True
+    if not isinstance(configured, str) or not configured:
+        workflow["default_output_dir"] = expected
+        return True
+    return False
 
 
 def _migrate_hidden_root_manifest_files(cwd: Path, workspace: dict[str, object]) -> bool:
@@ -440,14 +506,13 @@ def _is_version_governed_workspace(workspace: dict[str, object]) -> bool:
     return isinstance(paths, dict) and "versions_dir" in paths
 
 
-def _uses_version_local_backtest_output(workspace: dict[str, object]) -> bool:
+def _uses_version_local_backtest_output(cwd: Path, workspace: dict[str, object]) -> bool:
     workflow = workspace.get("workflow")
     if not isinstance(workflow, dict):
         return False
-    return (
-        workflow.get("layout") == "version_governed"
-        and workflow.get("default_output_dir") == "versions/{active_version}/09_backtests"
-    )
+    return workflow.get("layout") == "version_governed" and workflow.get(
+        "default_output_dir"
+    ) == _workspace_backtest_output_template(cwd, workspace)
 
 
 def _create_version_phase_dirs(version_dir: Path) -> None:

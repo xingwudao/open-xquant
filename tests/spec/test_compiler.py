@@ -1950,6 +1950,21 @@ def test_compile_plan_records_indicator_lag_and_tradability_policy() -> None:
     assert plan["data"]["filters"]["suspension_policy"] == "hold_existing"
 
 
+def test_compile_plan_records_effective_suspension_policy_for_exclude_suspended() -> None:
+    spec = StrategySpec.template(
+        strategy_id="effective_suspension_policy",
+        hypothesis="compiled plan should show runtime suspension behavior",
+    )
+    spec.data.required_columns.append("is_suspended")
+    spec.data.filters.exclude_suspended = True
+
+    plan = compile_plan(spec)
+
+    assert spec.data.filters.suspension_policy == "none"
+    assert plan["data"]["filters"]["exclude_suspended"] is True
+    assert plan["data"]["filters"]["suspension_policy"] == "hold_existing"
+
+
 def test_compile_run_applies_indicator_lag_bars(tmp_path) -> None:
     spec = StrategySpec.template(
         strategy_id="runtime_indicator_lag",

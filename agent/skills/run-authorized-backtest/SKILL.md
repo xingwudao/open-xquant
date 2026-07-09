@@ -83,18 +83,41 @@ Do not repair the inputs.
 The top-level fields above are required. A file that only records nested
 diagnostic hashes such as `canonical_hashes.strategy_spec.yaml` is not
 authorized, even if those hashes are correct.
+Before running, read the referenced `spec_audit.json` and block unless it has
+`status: pass`, `audit_conclusion: all_pass`,
+`user_confirmation_status: confirmed`, and a valid `confirmation_event`
+reference. The `confirmation_event` must include `path`, `event_id`,
+`line_number`, `event_hash`, `artifact_path`, `artifact_hash`,
+`spec_audit_path`, and `spec_audit_hash`; the referenced JSONL line must bind
+the same full SPEC table and pre-confirmation `spec_audit.json` hash. A
+pending all-pass audit is not authorized for a formal run.
 When recomputing JSON hashes for authorization checks or diagnostics, pass
 `Path` objects to `_hash_json_file`; do not pass strings.
 When `component_manifests` is non-empty, `runtime_audit.json` must include the
 same `component_bundle_hashes`; the formal run gate rejects missing or stale
 bundle hashes.
 
+## Runner Resolution
+
+In a research workspace, do not assume `uv run oxq` is installed locally.
+Before running the formal backtest command:
+
+1. Read `~/.config/open-xquant/agent.yaml`.
+2. Prefer `preferred_runner_argv` when the shell tool accepts argv; otherwise
+   use `preferred_runner` in place of `uv run oxq` or bare `oxq`.
+3. If it is missing or fails, read `~/.config/open-xquant/agent-install.json`,
+   take `sdk_bundle.runner.argv` or `sdk_bundle.runner.oxq`, and use that
+   cached runner.
+
+Keep the shell in the user's research directory. Do not search unrelated home
+directories for another open-xquant checkout.
+
 ## Run
 
 Run the formal backtest with both pre-run gates:
 
 ```bash
-uv run oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \
+<resolved_runner> backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \
   --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json \
   --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json \
   --component-catalog versions/<version_id>/04_spec_build/component_catalog.json \

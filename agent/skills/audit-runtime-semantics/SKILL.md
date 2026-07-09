@@ -66,17 +66,39 @@ true:
 - `spec_provenance_pass: true`
 - `audit_conclusion: all_pass`
 - `user_confirmation_status: confirmed`
+- `confirmation_event` exists, points to
+  `conversations/<conversation_id>/confirmations.jsonl`, records the full
+  SPEC table path/hash, and records `spec_audit_path` plus `spec_audit_hash`
+  for the pre-confirmation `spec_audit.json`. The JSONL line must match the
+  audit reference for `path`, `event_id`, `line_number`, `event_hash`,
+  `artifact_path`, `artifact_hash`, `spec_audit_path`, and
+  `spec_audit_hash`.
 
 An `audit_conclusion: all_pass` audit with
 `user_confirmation_status: pending` is still blocked. Do not treat it as
 authorization for runtime audit, compile preview, or backtest work.
+
+## Runner Resolution
+
+In a research workspace, do not assume `uv run oxq` is installed locally.
+Before running deterministic validation or compile commands:
+
+1. Read `~/.config/open-xquant/agent.yaml`.
+2. Prefer `preferred_runner_argv` when the shell tool accepts argv; otherwise
+   use `preferred_runner` in place of `uv run oxq` or bare `oxq`.
+3. If it is missing or fails, read `~/.config/open-xquant/agent-install.json`,
+   take `sdk_bundle.runner.argv` or `sdk_bundle.runner.oxq`, and use that
+   cached runner.
+
+Keep the shell in the user's research directory. Do not search unrelated home
+directories for another open-xquant checkout.
 
 ## Compile Preview
 
 If no current compile preview exists for the current `spec_hash`, run:
 
 ```bash
-uv run oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \
+<resolved_runner> strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \
   --data-dir data \
   --component-manifest components/bundles/<bundle_id>/component_manifest.json \
   --out versions/<version_id>/07_compile_preview
@@ -210,7 +232,7 @@ Do not import non-existent helpers from `oxq.core.hashing`.
 After writing `runtime_audit.json`, run:
 
 ```bash
-uv run oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+<resolved_runner> runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
 ```
 
 Schema validation only proves artifact shape. The comparison still belongs to

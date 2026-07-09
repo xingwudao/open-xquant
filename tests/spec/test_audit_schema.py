@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import hashlib
 import json
+from pathlib import Path
 from typing import Any
 
 from oxq.core.component_catalog import _catalog_hash
@@ -10,7 +12,7 @@ from oxq.spec.schema import StrategySpec
 
 def _payload(field_audits: list[dict[str, Any]]) -> dict[str, Any]:
     return {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "pass",
         "audit_conclusion": "all_pass",
         "user_confirmation_status": "confirmed",
@@ -18,6 +20,16 @@ def _payload(field_audits: list[dict[str, Any]]) -> dict[str, Any]:
             "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
             "hash": "sha256:" + "4" * 16,
             "hash_type": "sha256",
+        },
+        "confirmation_event": {
+            "path": "conversations/demo/confirmations.jsonl",
+            "event_id": "spec-confirmation-1",
+            "line_number": 1,
+            "event_hash": "sha256:" + "7" * 16,
+            "artifact_path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "artifact_hash": "sha256:" + "4" * 16,
+            "spec_audit_path": "versions/v001/06_spec_audit/spec_audit.json",
+            "spec_audit_hash": "sha256:" + "8" * 16,
         },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
@@ -47,6 +59,49 @@ def _confirmed(path: str, value: Any, evidence: str | None = None) -> dict[str, 
         "evidence": [evidence or f"User: {path} = {json.dumps(value, sort_keys=True, default=str)}"],
         "blocking": False,
     }
+
+
+def _write_confirmation_event_line(
+    path: Path,
+    *,
+    artifact_path: str,
+    artifact_hash: str,
+    event_artifact_hash: str | None = None,
+    spec_audit_path: str = "spec_audit.json",
+    spec_audit_hash: str = "sha256:" + "8" * 16,
+) -> dict[str, Any]:
+    event = {
+        "timestamp": "2026-07-07T08:00:00Z",
+        "phase": "spec_confirmation",
+        "field_scope": "full_spec_table",
+        "event_id": "spec-confirmation-1",
+        "user_text": "确认",
+        "artifact_path": artifact_path,
+        "artifact_hash": event_artifact_hash or artifact_hash,
+        "spec_audit_path": spec_audit_path,
+        "spec_audit_hash": spec_audit_hash,
+    }
+    line = json.dumps(event, sort_keys=True, ensure_ascii=False)
+    path.write_text(line + "\n", encoding="utf-8")
+    return {
+        "path": str(path),
+        "event_id": event["event_id"],
+        "line_number": 1,
+        "event_hash": f"sha256:{hashlib.sha256(line.encode('utf-8')).hexdigest()}",
+        "artifact_path": artifact_path,
+        "artifact_hash": artifact_hash,
+        "spec_audit_path": spec_audit_path,
+        "spec_audit_hash": spec_audit_hash,
+    }
+
+
+def _pre_confirmation_spec_audit_hash(payload: dict[str, Any]) -> str:
+    candidate = json.loads(json.dumps(payload))
+    candidate.pop("confirmation_event", None)
+    candidate["status"] = "block"
+    candidate["user_confirmation_status"] = "pending"
+    canonical = json.dumps(candidate, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
 
 def test_strict_confirmed_coverage_accepts_direct_user_evidence() -> None:
@@ -80,6 +135,90 @@ def test_pass_audit_rejects_non_empty_blocking_findings() -> None:
 
     assert result["status"] == "fail"
     assert any(error["path"] == "blocking_findings" for error in result["errors"])
+
+
+def test_pass_audit_requires_confirmation_event_reference() -> None:
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload.pop("confirmation_event")
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "confirmation_event" for error in result["errors"])
+
+
+def test_pass_audit_rejects_blocking_field_audit_row() -> None:
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["field_audits"][0]["blocking"] = True
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "field_audits[0].blocking" for error in result["errors"])
+
+
+def test_pass_audit_rejects_unresolved_field_audit_status() -> None:
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["field_audits"][0]["status"] = "contradiction"
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "field_audits[0].status" for error in result["errors"])
+
+
+def test_pass_audit_rejects_blocking_component_audit_row() -> None:
+    payload = _payload([])
+    payload["component_audits"] = [
+        {
+            "component_path": "portfolio.type",
+            "component_type": "PortfolioOptimizer",
+            "status": "catalog",
+            "evidence": ["component found"],
+            "blocking": True,
+        }
+    ]
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "component_audits[0].blocking" for error in result["errors"])
+
+
+def test_pass_audit_rejects_missing_component_audit_row() -> None:
+    payload = _payload([])
+    payload["component_audits"] = [
+        {
+            "component_path": "portfolio.type",
+            "component_type": "PortfolioOptimizer",
+            "status": "missing",
+            "evidence": ["component not found"],
+            "blocking": False,
+        }
+    ]
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "component_audits[0].status" for error in result["errors"])
+
+
+def test_pass_audit_rejects_non_canonical_component_audit_row() -> None:
+    payload = _payload([])
+    payload["component_audits"] = [
+        {
+            "component_path": "portfolio.type",
+            "component_type": "PortfolioOptimizer",
+            "status": "non_canonical",
+            "evidence": ["component exists but is not canonical for this mapping"],
+            "blocking": False,
+        }
+    ]
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "component_audits[0].status" for error in result["errors"])
 
 
 def test_pass_audit_rejects_unresolved_exception_lists() -> None:
@@ -332,6 +471,108 @@ def test_strict_spec_audit_file_rejects_stale_confirmation_table_hash(tmp_path) 
 
     assert result["status"] == "fail"
     assert any(error["path"] == "spec_confirmation_table.hash" for error in result["errors"])
+
+
+def test_strict_spec_audit_file_accepts_bound_confirmation_event(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text("| Field | Confirmed Value |\n| --- | --- |\n", encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "pass"
+    assert result["errors"] == []
+
+
+def test_strict_spec_audit_file_rejects_confirmation_event_line_mismatch(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text("| Field | Confirmed Value |\n| --- | --- |\n", encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        event_artifact_hash="sha256:" + "a" * 16,
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "confirmation_event.artifact_hash" for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_reused_confirmation_event_from_other_audit(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text("| Field | Confirmed Value |\n| --- | --- |\n", encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_path="other/spec_audit.json",
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "confirmation_event.spec_audit_path" for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_fake_pre_confirmation_audit_hash(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text("| Field | Confirmed Value |\n| --- | --- |\n", encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_hash="sha256:" + "a" * 16,
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "confirmation_event.spec_audit_hash" for error in result["errors"])
 
 
 def test_spec_audit_requires_idea_and_mapping_contract_fields() -> None:

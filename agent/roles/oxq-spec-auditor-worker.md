@@ -163,7 +163,10 @@ Do not hand off to `oxq-runtime-auditor-worker` while
 `user_confirmation_status` is pending. The next phase is
 `oxq-runtime-auditor-worker` only after the coordinator records explicit user
 confirmation and `spec_audit.json` has `status: pass`,
-`audit_conclusion: all_pass`, and `user_confirmation_status: confirmed`. If
+`audit_conclusion: all_pass`, `user_confirmation_status: confirmed`, and a
+`confirmation_event` reference with `path`, `event_id`, `line_number`,
+`event_hash`, `artifact_path`, `artifact_hash`, `spec_audit_path`, and
+`spec_audit_hash`. If
 the audited idea gate blocks, return to `oxq-strategy-brainstorm-worker`. If
 the SPEC mistranslates the audited idea, return to
 `oxq-strategy-builder-worker`.

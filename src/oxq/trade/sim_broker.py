@@ -330,6 +330,14 @@ class SimBroker:
             canceled.append(managed)
         return canceled
 
+    def cancel_market_order(self, managed: ManagedOrder, reason: str = "canceled") -> ManagedOrder | None:
+        """Cancel one open market order."""
+        if managed.status != "open" or managed.order.order_type != "market":
+            return None
+        managed.status = "canceled"
+        managed.status_reason = reason
+        return managed
+
     def estimate_market_buy_cost(self, symbol: str, price: Decimal, shares: int, currency: str = "CNY") -> Decimal:
         """Estimate total cash required for a market BUY, including costs."""
         order = Order(symbol=symbol, side="BUY", shares=shares, currency=currency)

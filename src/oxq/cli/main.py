@@ -88,24 +88,21 @@ def init(description: str, out: str | None, market_preset: str):
 
 
 def _default_spec_init_output_path() -> Path:
-    version = _active_workspace_version()
-    if version:
-        return Path("versions") / version / "04_spec_build" / "strategy_spec.yaml"
+    active_state = _active_workspace_state()
+    if active_state is not None:
+        version, versions_dir = active_state
+        return versions_dir / version / "04_spec_build" / "strategy_spec.yaml"
     return Path("strategy_spec.yaml")
 
 
-def _active_workspace_version() -> str:
+def _active_workspace_state() -> tuple[str, Path] | None:
     workspace_file = Path(".open-xquant") / "workspace.yaml"
     if not workspace_file.exists():
-        return ""
-    try:
-        workspace = yaml.safe_load(workspace_file.read_text(encoding="utf-8")) or {}
-    except (OSError, yaml.YAMLError):
-        return ""
-    if not isinstance(workspace, dict):
-        return ""
+        return None
+    workspace = _read_workspace_config(workspace_file)
     if not _is_version_governed_workspace(workspace):
-        return ""
+        return None
+    versions_dir = _workspace_versions_dir(workspace)
     paths = workspace.get("paths")
     current_manifest = "current.json"
     if isinstance(paths, dict) and isinstance(paths.get("current_manifest"), str):
@@ -141,7 +138,7 @@ def _active_workspace_version() -> str:
         )
     version = payload.get("active_version")
     if isinstance(version, str) and _WORKSPACE_VERSION_RE.fullmatch(version):
-        return version
+        return version, versions_dir
     raise click.ClickException(
         "version-governed workspace requires a safe current.json active_version; "
         "run `oxq research init` to repair manifests"
@@ -1218,6 +1215,7 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str, compone
         spec_audit,
         spec_path=run_spec_path,
         require_confirmed_coverage=True,
+        verify_confirmation_table=True,
     )
     if audit_validation["status"] == "fail":
         raise click.ClickException(f"invalid spec audit: {audit_validation['errors']}")
@@ -1399,6 +1397,7 @@ def _require_pre_backtest_spec_audit(spec: StrategySpec, spec_audit_path: Path) 
         spec_audit_path,
         spec=spec,
         require_confirmed_coverage=True,
+        verify_confirmation_table=True,
     )
     if audit_validation["status"] == "fail":
         raise click.ClickException(f"invalid spec audit: {audit_validation['errors']}")
@@ -2023,8 +2022,11 @@ def _resolve_backtest_output_dir(out: str | None) -> str:
         return "runs/auto"
     workflow = workspace.get("workflow")
     configured = workflow.get("default_output_dir") if isinstance(workflow, dict) else None
-    if not isinstance(configured, str) and _is_version_governed_workspace(workspace):
-        configured = "versions/{active_version}/09_backtests"
+    governed_default = _workspace_default_backtest_output_template(workspace) if _is_version_governed_workspace(workspace) else ""
+    if isinstance(configured, str) and configured == "versions/{active_version}/09_backtests":
+        configured = governed_default
+    if not isinstance(configured, str) and governed_default:
+        configured = governed_default
     if not isinstance(configured, str) or not configured:
         return "runs/auto"
     if "{active_version}" not in configured:
@@ -2059,6 +2061,21 @@ def _workspace_active_version(workspace: dict) -> str:
     return active_version
 
 
+def _workspace_versions_dir(workspace: dict) -> Path:
+    paths = workspace.get("paths")
+    raw_value = "versions"
+    if isinstance(paths, dict) and isinstance(paths.get("versions_dir"), str):
+        raw_value = paths["versions_dir"]
+    path = Path(raw_value)
+    if not raw_value or path.is_absolute() or ".." in path.parts:
+        raise click.ClickException("workspace paths.versions_dir must be a safe relative path")
+    return path
+
+
+def _workspace_default_backtest_output_template(workspace: dict) -> str:
+    return f"{_workspace_versions_dir(workspace).as_posix()}/{{active_version}}/09_backtests"
+
+
 def _workspace_root_manifest_path(paths: dict, key: str, filename: str) -> Path:
     raw_value = paths.get(key) or filename
     if not isinstance(raw_value, str) or not raw_value:
@@ -2074,9 +2091,15 @@ def _read_workspace_config(path: Path) -> dict:
         return {}
     try:
         payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except Exception:
+    except OSError as exc:
+        raise click.ClickException(f"workspace config is invalid: {path}: {exc}") from exc
+    except yaml.YAMLError as exc:
+        raise click.ClickException(f"workspace config is invalid: {path}: {exc}") from exc
+    if payload is None:
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        raise click.ClickException(f"workspace config must be a YAML object: {path}")
+    return payload
 
 
 def _read_json_object(path: Path) -> dict:

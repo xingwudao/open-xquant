@@ -754,9 +754,17 @@ def _data_filters_dict(spec: StrategySpec) -> dict[str, Any]:
         "exclude_new_listed_days": filters.exclude_new_listed_days,
         "limit_up_policy": filters.limit_up_policy,
         "limit_down_policy": filters.limit_down_policy,
-        "suspension_policy": filters.suspension_policy,
+        "suspension_policy": _effective_suspension_policy(filters),
         "lookahead_policy": filters.lookahead_policy,
     }
+
+
+def _effective_suspension_policy(filters: Any) -> str:
+    if filters.suspension_policy != "none":
+        return filters.suspension_policy
+    if filters.exclude_suspended:
+        return "hold_existing"
+    return "none"
 
 
 def _portfolio_constraints_dict(spec: StrategySpec) -> dict[str, Any]:

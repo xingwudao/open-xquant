@@ -692,10 +692,15 @@ def _validate_portfolio_constraints(spec: StrategySpec) -> list[dict]:
 def _validate_data_filters(spec: StrategySpec, required_columns: set[str]) -> list[dict]:
     errors: list[dict] = []
     filters = spec.data.filters
+    exclude_new_listed_enabled = (
+        isinstance(filters.exclude_new_listed_days, int)
+        and not isinstance(filters.exclude_new_listed_days, bool)
+        and filters.exclude_new_listed_days > 0
+    )
     required_by_filter = {
         "exclude_st": ("is_st", filters.exclude_st),
         "exclude_suspended": ("is_suspended", filters.exclude_suspended),
-        "exclude_new_listed_days": ("listed_days", filters.exclude_new_listed_days > 0),
+        "exclude_new_listed_days": ("listed_days", exclude_new_listed_enabled),
         "limit_up_policy": ("is_limit_up", filters.limit_up_policy != "none"),
         "limit_down_policy": ("is_limit_down", filters.limit_down_policy != "none"),
     }

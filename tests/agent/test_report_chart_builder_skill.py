@@ -387,6 +387,8 @@ def test_coordinator_role_documents_subagent_workflow() -> None:
     phase_order = text[text.index("## Strategy Phase Order"): text.index("If `oxq-strategy-idea-auditor-worker` blocks")]
     assert phase_order.index("`oxq-strategy-builder-worker`") < phase_order.index("`oxq-data-inspection-worker`")
     assert phase_order.index("`oxq-data-inspection-worker`") < phase_order.index("`oxq-spec-auditor-worker`")
+    assert phase_order.index("`oxq-spec-auditor-worker`") < phase_order.index("`user_spec_confirmation`")
+    assert phase_order.index("`user_spec_confirmation`") < phase_order.index("`oxq-runtime-auditor-worker`")
     assert "Runtime auditor reads the authorized spec/audit artifacts" in text
     assert "Runner reads `backtest_authorization.json`" in text
     assert "Do not\n  delegate this file to a generic worker" in text
@@ -743,6 +745,12 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "the audit remains blocked" in spec_skill
     assert "`user_confirmation_status: confirmed`" in spec_skill
     assert "Only after the user explicitly confirms the full Markdown table" in spec_skill
+    assert "`confirmation_event` referencing the durable confirmation log event" in spec_skill
+    assert '"confirmation_event": {' in spec_skill
+    assert "pre_confirmation_spec_audit_hash" not in spec_skill
+    assert '"spec_audit_path": "versions/<version_id>/06_spec_audit/spec_audit.json"' in spec_skill
+    assert '"spec_audit_hash": "sha256:<pre-confirmation spec_audit hash>"' in spec_skill
+    assert "Pending all-pass audits must not\ninvent a confirmation event" in spec_skill
     assert "complete `strategy.py` source" in spec_skill
     assert "`blocking_findings` must\nbe an empty list" in spec_skill
     assert "Do not keep resolved historical blockers" in spec_skill
@@ -772,10 +780,19 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert '"Effective StrategySpec default value"' in spec_role
     assert "Use actual user confirmation evidence" in spec_role
     assert "Do not hand off to `oxq-runtime-auditor-worker`" in spec_role
+    assert "`confirmation_event` reference with `path`, `event_id`, `line_number`" in spec_role
     assert "relay the full Markdown Spec table to the user" in coordinator_role
+    assert "`user_spec_confirmation`" in coordinator_role
     assert "`user_confirmation_status: confirmed`" in coordinator_role
+    assert "`confirmation_event` reference" in coordinator_role
+    for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
+        assert field in coordinator_role
     assert "Do not start `oxq-runtime-auditor-worker`" in coordinator_role
     assert "confirmed `spec_audit.json`" in runtime_skill
+    assert "`confirmation_event` exists" in runtime_skill
+    assert "`spec_audit_path` plus `spec_audit_hash`" in runtime_skill
+    for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
+        assert field in runtime_skill
     assert "print the complete `strategy.py` source" in runtime_skill
     assert "confirmed `spec_audit.json`" in runtime_role
 
@@ -929,11 +946,12 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
     text = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
     assert "audit-runtime-semantics" in text
-    assert "oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \\" in text
+    assert "<resolved_runner> strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \\" in text
     assert "--data-dir data" in text
     assert "compiled_plan.json" in text
     assert "runtime_audit.json" in text
-    assert "oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json" in text
+    assert "<resolved_runner> runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json" in text
+    assert "Runner Resolution" in text
     assert "same `data_dir` and every `component_manifest` path" in text
     assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
     assert "--component-manifest versions/<version_id>/03_component_authoring/component_manifest.json" not in text
@@ -1281,8 +1299,14 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "--runtime-audit runtime_audit.json" in text
     assert "--component-catalog component_catalog.json" in text
     assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
+    assert "<resolved_runner> backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \\" in text
+    assert "Runner Resolution" in text
     assert "Omit `--component-manifest` only when" in text
     assert "same `component_bundle_hashes`" in text
+    assert "`user_confirmation_status: confirmed`" in text
+    assert "valid `confirmation_event`" in text
+    for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
+        assert field in text
     assert "top-level fields above are required" in text.lower()
     assert "only records nested\ndiagnostic hashes" in text
     assert "must not run `oxq registry export`" in text.lower()
@@ -1300,6 +1324,8 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "Do not run reproducibility" in text
 
     role = Path("agent/roles/oxq-runner-worker.md").read_text(encoding="utf-8")
+    assert "`user_confirmation_status: confirmed`" in role
+    assert "valid `confirmation_event` with `path`, `event_id`, `line_number`" in role
     assert "Do not run\n  `oxq registry export`" in role
     assert "`08_runtime_audit`, `09_backtests`, or any root-level path" in role
     assert "_hash_json_file(Path(...))" in role

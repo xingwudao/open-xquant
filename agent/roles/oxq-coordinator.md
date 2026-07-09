@@ -77,6 +77,9 @@ Before routing any worker, read `current.json` and verify `active_version`.
 Root-level phase artifacts are layout pollution. Workers must write phase
 outputs under `versions/<version_id>/...` and must not use bare root paths as
 formal outputs.
+The coordinator treats `current.json` as read-only state. When `active_phase`,
+`active_version`, or `active_run` must change, route that governance update to
+`oxq-version-manager-worker`.
 
 `.open-xquant/workspace.yaml` is configuration only. `current.json`,
 `lineage.json`, and `experiments.jsonl` live at the workspace root. Do not probe
@@ -143,13 +146,15 @@ handoff.
   `spec_audit.json`, `audit_notes.md`, and `spec_confirmation_table.md` under
   `versions/<version_id>/06_spec_audit/`.
 - If spec audit returns `audit_conclusion: all_pass` with
-  `user_confirmation_status: pending`, relay the full Markdown Spec table to the user
-  and ask for explicit confirmation. Do not start `oxq-runtime-auditor-worker`
+  `user_confirmation_status: pending`, set the next phase to
+  `user_spec_confirmation`, relay the full Markdown Spec table to the user, and
+  ask for explicit confirmation. Do not start `oxq-runtime-auditor-worker`
   until the user confirms, the coordinator appends a confirmation event to
   `conversations/<conversation_id>/confirmations.jsonl`, and
-  `spec_audit.json` records `user_confirmation_status: confirmed`. The event
-  must include `artifact_path`, `artifact_hash`, `spec_audit_path`, and
-  `spec_audit_hash`.
+  `spec_audit.json` records `user_confirmation_status: confirmed` plus a
+  `confirmation_event` reference. The event reference must include `path`,
+  `event_id`, `line_number`, `event_hash`, `artifact_path`, `artifact_hash`,
+  `spec_audit_path`, and `spec_audit_hash`.
 - Runtime auditor reads the authorized spec/audit artifacts, compiles a preview,
   and writes `compiled_plan.json` and `runtime_audit.json` under
   `versions/<version_id>/07_compile_preview/` and
@@ -231,11 +236,12 @@ For a new strategy workflow, keep this order:
 5. `oxq-data-inspection-worker` when builder/data assumptions require it;
    record a skip reason when the workflow does not need data inspection.
 6. `oxq-spec-auditor-worker`
-7. `oxq-runtime-auditor-worker`
-8. `oxq-runner-worker`
-9. `oxq-monitor-worker`
-10. `oxq-report-writer-worker`
-11. `oxq-report-reviewer-worker`
+7. `user_spec_confirmation`
+8. `oxq-runtime-auditor-worker`
+9. `oxq-runner-worker`
+10. `oxq-monitor-worker`
+11. `oxq-report-writer-worker`
+12. `oxq-report-reviewer-worker`
 
 If `oxq-strategy-idea-auditor-worker` blocks, return to
 `oxq-strategy-brainstorm-worker`. If `oxq-spec-auditor-worker` finds the

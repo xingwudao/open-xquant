@@ -257,6 +257,7 @@ conversations/<conversation_id>/
 
 ```json
 {
+  "event_id": "spec-confirmation-1",
   "timestamp": "2026-07-07T08:00:00Z",
   "phase": "spec_confirmation",
   "field_scope": "full_spec_table",
@@ -389,7 +390,10 @@ confirmation gate。
 - 检查 root 是否有被误写的 phase artifact。
 - 检查 phase artifact 是否写在正确目录。
 - 检查 hash 类型和引用路径是否一致。
-- 检查 `spec_confirmation_table.md` 是否存在。
+- 仅当 `spec_audit.json` 处于 `audit_conclusion: all_pass`、
+  `user_confirmation_status: pending` 或
+  `user_confirmation_status: confirmed` 时，检查
+  `spec_confirmation_table.md` 是否存在；blocked audit 不要求占位表。
 - 检查 root 是否存在 phase artifact 污染，包括
   `strategy_idea_brief.json`、`strategy_idea_audit.json`、
   `data_inspection_result.json`、`data_availability_report.md`、
@@ -570,12 +574,17 @@ SPEC 初稿完成：
 SPEC audit all pass 但未确认：
 
 - Coordinator 向用户展示完整 `spec_confirmation_table.md`。
+- Workflow 进入 `next_required_phase: user_spec_confirmation`。
 - 不允许 runtime audit。
 
 用户确认完整 SPEC 表：
 
+- Coordinator 追加 durable event 到
+  `conversations/<conversation_id>/confirmations.jsonl`，记录 `event_id`、
+  table path/hash、`spec_audit_path`、pre-confirmation
+  `spec_audit_hash`、event line 和 event hash。
 - 更新同一个 `spec_audit.json`，设置
-  `user_confirmation_status: confirmed`。
+  `user_confirmation_status: confirmed`，并写入 `confirmation_event` 引用。
 - 使用 `audit-runtime-semantics`。
 
 runtime audit pass：
@@ -782,8 +791,10 @@ paths:
 
 每个角色有唯一写入边界：
 
-- Coordinator：`current.json`、handoff、用户确认请求。
-- Version Manager：`lineage.json`、`version_manifest.json`、`phase_state.json`。
+- Coordinator：handoff、用户确认请求、`confirmations.jsonl`、
+  `backtest_authorization.json`。
+- Version Manager：`current.json`、`lineage.json`、`version_manifest.json`、
+  `phase_state.json`。
 - Brainstorm：`01_brainstorm/`。
 - Idea Auditor：`02_idea_audit/`。
 - Component Author：`03_component_authoring/` 或 `components/bundles/`。
@@ -829,8 +840,11 @@ paths:
 `audit-strategy-spec`
 - 写单个 `spec_audit.json`，用 `audit_conclusion` 和
   `user_confirmation_status` 区分 all pass 与 confirmed。
-- 必须落盘 `spec_confirmation_table.md`。
-- JSON 中登记的 table path 必须存在。
+- 仅当审计达到 `audit_conclusion: all_pass`、
+  `user_confirmation_status: pending` 或
+  `user_confirmation_status: confirmed` 时落盘
+  `spec_confirmation_table.md`。
+- JSON 中登记的 table path 必须存在；blocked audit 不写 placeholder table。
 
 `audit-runtime-semantics`
 - 输出目录固定为 `07_compile_preview/`。

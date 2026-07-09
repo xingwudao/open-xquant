@@ -5,10 +5,11 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-SPEC_AUDIT_SCHEMA_VERSION = 3
+SPEC_AUDIT_SCHEMA_VERSION = 4
 
 REQUIRED_TOP_LEVEL_FIELDS = {
     "schema_version",
@@ -120,6 +121,14 @@ def validate_spec_audit_file(
     if verify_confirmation_table:
         errors = list(result["errors"])
         errors.extend(_validate_spec_confirmation_table_artifact(payload.get("spec_confirmation_table"), audit_path))
+        errors.extend(
+            _validate_confirmation_event_artifact(
+                payload.get("confirmation_event"),
+                audit_path,
+                payload.get("spec_confirmation_table"),
+                payload,
+            )
+        )
         return _result("fail" if errors else "pass", errors)
     return result
 
@@ -185,6 +194,11 @@ def validate_spec_audit(
             audit_conclusion=audit_conclusion,
             confirmation_status=confirmation_status,
         ),
+        errors=errors,
+    )
+    _validate_confirmation_event(
+        payload.get("confirmation_event"),
+        require_event=_requires_confirmation_event(status=status, confirmation_status=confirmation_status),
         errors=errors,
     )
 
@@ -274,6 +288,20 @@ def validate_spec_audit(
             )
         if "blocking" in item and not isinstance(item["blocking"], bool):
             errors.append({"path": f"field_audits[{index}].blocking", "message": "must be a boolean"})
+        if all_pass_gate and item.get("blocking") is True:
+            errors.append(
+                {
+                    "path": f"field_audits[{index}].blocking",
+                    "message": "blocking field audit row cannot pass formal spec audit",
+                }
+            )
+        if all_pass_gate and item.get("status") in {"unconfirmed", "contradiction", "agent_added"}:
+            errors.append(
+                {
+                    "path": f"field_audits[{index}].status",
+                    "message": "unresolved field audit row cannot pass formal spec audit",
+                }
+            )
 
     if spec is not None:
         errors.extend(_validate_effective_field_audit_paths(payload, spec))
@@ -289,6 +317,20 @@ def validate_spec_audit(
             errors.append({"path": f"component_audits[{index}].evidence", "message": "must be a list"})
         if "blocking" in item and not isinstance(item["blocking"], bool):
             errors.append({"path": f"component_audits[{index}].blocking", "message": "must be a boolean"})
+        if all_pass_gate and item.get("blocking") is True:
+            errors.append(
+                {
+                    "path": f"component_audits[{index}].blocking",
+                    "message": "blocking component audit row cannot pass formal spec audit",
+                }
+            )
+        if all_pass_gate and item.get("status") in {"missing", "non_canonical"}:
+            errors.append(
+                {
+                    "path": f"component_audits[{index}].status",
+                    "message": "unresolved component audit row cannot pass formal spec audit",
+                }
+            )
 
     for index, item in enumerate(payload.get("unsupported_mappings", []) if isinstance(payload.get("unsupported_mappings"), list) else []):
         if not isinstance(item, dict):
@@ -379,6 +421,10 @@ def _requires_spec_confirmation_table(
     return status == "pass" or audit_conclusion == "all_pass" or confirmation_status == "confirmed"
 
 
+def _requires_confirmation_event(*, status: Any, confirmation_status: Any) -> bool:
+    return status == "pass" or confirmation_status == "confirmed"
+
+
 def _validate_spec_confirmation_table(value: Any, *, require_table: bool, errors: list[dict[str, str]]) -> None:
     if value is None:
         if require_table:
@@ -401,6 +447,32 @@ def _validate_spec_confirmation_table(value: Any, *, require_table: bool, errors
     hash_type = value.get("hash_type", "sha256")
     if hash_type != "sha256":
         errors.append({"path": "spec_confirmation_table.hash_type", "message": "must be sha256"})
+
+
+def _validate_confirmation_event(value: Any, *, require_event: bool, errors: list[dict[str, str]]) -> None:
+    if value is None:
+        if require_event:
+            errors.append(
+                {
+                    "path": "confirmation_event",
+                    "message": "must be present when user_confirmation_status is confirmed",
+                }
+            )
+        return
+    if not isinstance(value, dict):
+        errors.append({"path": "confirmation_event", "message": "must be an object or null"})
+        return
+    for field in ("path", "event_id", "artifact_path", "spec_audit_path"):
+        item = value.get(field)
+        if not isinstance(item, str) or not item:
+            errors.append({"path": f"confirmation_event.{field}", "message": "must be a non-empty string"})
+    line_number = value.get("line_number")
+    if not isinstance(line_number, int) or isinstance(line_number, bool) or line_number <= 0:
+        errors.append({"path": "confirmation_event.line_number", "message": "must be a positive integer"})
+    for field in ("event_hash", "artifact_hash", "spec_audit_hash"):
+        digest = value.get(field)
+        if not isinstance(digest, str) or not _HASH_RE.fullmatch(digest):
+            errors.append({"path": f"confirmation_event.{field}", "message": "must be a sha256:<hex> hash"})
 
 
 def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path) -> list[dict[str, str]]:
@@ -427,6 +499,129 @@ def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path) -> 
             }
         )
     return errors
+
+
+def _validate_confirmation_event_artifact(
+    value: Any,
+    audit_path: Path,
+    spec_confirmation_table: Any,
+    audit_payload: Any,
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if not isinstance(value, dict):
+        return errors
+    raw_path = value.get("path")
+    line_number = value.get("line_number")
+    event_hash = value.get("event_hash")
+    if not isinstance(raw_path, str) or not raw_path:
+        return errors
+    if not isinstance(line_number, int) or isinstance(line_number, bool) or line_number <= 0:
+        return errors
+    if not isinstance(event_hash, str) or not _HASH_RE.fullmatch(event_hash):
+        return errors
+    event_path = _resolve_audit_artifact_path(raw_path, audit_path)
+    if not event_path.exists():
+        errors.append({"path": "confirmation_event.path", "message": f"file not found: {raw_path}"})
+        return errors
+    lines = event_path.read_text(encoding="utf-8").splitlines()
+    if line_number > len(lines):
+        errors.append(
+            {
+                "path": "confirmation_event.line_number",
+                "message": f"line {line_number} not found in {raw_path}",
+            }
+        )
+        return errors
+    line = lines[line_number - 1]
+    full_hash = f"sha256:{hashlib.sha256(line.encode('utf-8')).hexdigest()}"
+    short_hash = f"sha256:{hashlib.sha256(line.encode('utf-8')).hexdigest()[:16]}"
+    if event_hash not in {short_hash, full_hash}:
+        errors.append(
+            {
+                "path": "confirmation_event.event_hash",
+                "message": f"hash mismatch: recorded={event_hash}, actual={short_hash}",
+            }
+        )
+        return errors
+    try:
+        event_payload = json.loads(line)
+    except json.JSONDecodeError as exc:
+        errors.append({"path": "confirmation_event.line", "message": f"invalid JSON: {exc}"})
+        return errors
+    if not isinstance(event_payload, dict):
+        errors.append({"path": "confirmation_event.line", "message": "must be a JSON object"})
+        return errors
+    if isinstance(spec_confirmation_table, dict):
+        table_path = spec_confirmation_table.get("path")
+        table_hash = spec_confirmation_table.get("hash")
+        if value.get("artifact_path") != table_path:
+            errors.append(
+                {
+                    "path": "confirmation_event.artifact_path",
+                    "message": "must match spec_confirmation_table.path",
+                }
+            )
+        if value.get("artifact_hash") != table_hash:
+            errors.append(
+                {
+                    "path": "confirmation_event.artifact_hash",
+                    "message": "must match spec_confirmation_table.hash",
+                }
+            )
+    spec_audit_ref = value.get("spec_audit_path")
+    if isinstance(spec_audit_ref, str) and spec_audit_ref:
+        referenced_audit_path = _resolve_audit_artifact_path(spec_audit_ref, audit_path)
+        if referenced_audit_path.resolve() != audit_path.resolve():
+            errors.append(
+                {
+                    "path": "confirmation_event.spec_audit_path",
+                    "message": "must reference the current spec_audit.json",
+                }
+            )
+    expected_pre_hashes = _pre_confirmation_spec_audit_hashes(audit_payload)
+    if expected_pre_hashes and value.get("spec_audit_hash") not in expected_pre_hashes:
+        errors.append(
+            {
+                "path": "confirmation_event.spec_audit_hash",
+                "message": "must match the pre-confirmation spec_audit.json hash",
+            }
+        )
+    for field in ("event_id", "artifact_path", "artifact_hash", "spec_audit_path", "spec_audit_hash"):
+        if event_payload.get(field) != value.get(field):
+            errors.append(
+                {
+                    "path": f"confirmation_event.{field}",
+                    "message": f"must match confirmations.jsonl {field}",
+                }
+            )
+    if event_payload.get("phase") != "spec_confirmation":
+        errors.append({"path": "confirmation_event.phase", "message": "must be spec_confirmation"})
+    if event_payload.get("field_scope") != "full_spec_table":
+        errors.append({"path": "confirmation_event.field_scope", "message": "must be full_spec_table"})
+    return errors
+
+
+def _pre_confirmation_spec_audit_hashes(payload: Any) -> set[str]:
+    if not isinstance(payload, dict):
+        return set()
+    if payload.get("status") != "pass" and payload.get("user_confirmation_status") != "confirmed":
+        return set()
+    candidate = deepcopy(payload)
+    candidate.pop("confirmation_event", None)
+    candidate["status"] = "block"
+    candidate["user_confirmation_status"] = "pending"
+    candidates = [candidate]
+    if "next_required_phase" in candidate:
+        pending_candidate = deepcopy(candidate)
+        pending_candidate["next_required_phase"] = "user_spec_confirmation"
+        candidates.append(pending_candidate)
+    hashes: set[str] = set()
+    for item in candidates:
+        canonical = json.dumps(item, sort_keys=True, default=str)
+        digest = hashlib.sha256(canonical.encode()).hexdigest()
+        hashes.add(f"sha256:{digest[:16]}")
+        hashes.add(f"sha256:{digest}")
+    return hashes
 
 
 def _resolve_audit_artifact_path(raw_path: str, audit_path: Path) -> Path:

@@ -25,6 +25,47 @@ def _spec_audit_context() -> dict[str, object]:
     }
 
 
+def _write_confirmation_event(
+    path: Path,
+    *,
+    artifact_path: str,
+    artifact_hash: str,
+    spec_audit_hash: str = "sha256:" + "8" * 16,
+) -> dict[str, object]:
+    event = {
+        "timestamp": "2026-07-07T08:00:00Z",
+        "phase": "spec_confirmation",
+        "field_scope": "full_spec_table",
+        "event_id": "spec-confirmation-1",
+        "user_text": "确认",
+        "artifact_path": artifact_path,
+        "artifact_hash": artifact_hash,
+        "spec_audit_path": "spec_audit.json",
+        "spec_audit_hash": spec_audit_hash,
+    }
+    line = json.dumps(event, sort_keys=True, ensure_ascii=False)
+    path.write_text(line + "\n", encoding="utf-8")
+    return {
+        "path": str(path),
+        "event_id": event["event_id"],
+        "line_number": 1,
+        "event_hash": f"sha256:{hashlib.sha256(line.encode('utf-8')).hexdigest()}",
+        "artifact_path": artifact_path,
+        "artifact_hash": artifact_hash,
+        "spec_audit_path": "spec_audit.json",
+        "spec_audit_hash": spec_audit_hash,
+    }
+
+
+def _pre_confirmation_spec_audit_hash(payload: dict) -> str:
+    candidate = json.loads(json.dumps(payload, default=str))
+    candidate.pop("confirmation_event", None)
+    candidate["status"] = "block"
+    candidate["user_confirmation_status"] = "pending"
+    canonical = json.dumps(candidate, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
 def _write_spec_and_data(tmp_path, *, evaluation_window: str = "full"):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -88,35 +129,36 @@ def _write_spec_audit(
         "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
         encoding="utf-8",
     )
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 3,
-                "status": "pass",
-                "audit_conclusion": "all_pass",
-                "user_confirmation_status": "confirmed",
-                "spec_confirmation_table": {
-                    "path": str(confirmation_table),
-                    "hash": _hash_file(confirmation_table),
-                    "hash_type": "sha256",
-                },
-                "spec_provenance_pass": True,
-                "spec_hash": spec_hash,
-                "conversation_hash": "sha256:" + "2" * 16,
-                "catalog_hash": catalog_hash,
-                **_spec_audit_context(),
-                "recipe_matches": [],
-                "field_audits": _confirmed_field_audits(spec_path) if spec_path is not None else [],
-                "component_audits": [],
-                "missing_user_requirements": [],
-                "agent_added_fields": [],
-                "contradictions": [],
-                "blocking_findings": [],
-            },
-            indent=2,
-        ),
-        encoding="utf-8",
+    audit = {
+        "schema_version": 4,
+        "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": str(confirmation_table),
+            "hash": _hash_file(confirmation_table),
+            "hash_type": "sha256",
+        },
+        "spec_provenance_pass": True,
+        "spec_hash": spec_hash,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": catalog_hash,
+        **_spec_audit_context(),
+        "recipe_matches": [],
+        "field_audits": _confirmed_field_audits(spec_path) if spec_path is not None else [],
+        "component_audits": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [],
+        "blocking_findings": [],
+    }
+    audit["confirmation_event"] = _write_confirmation_event(
+        path.with_name("confirmations.jsonl"),
+        artifact_path=str(confirmation_table),
+        artifact_hash=_hash_file(confirmation_table),
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
     )
+    path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
 
 
 def _confirmed_field_audits(spec_path: Path) -> list[dict]:
@@ -332,7 +374,7 @@ def test_backtest_run_json_requires_audits_by_default(tmp_path) -> None:
 def test_backtest_run_allow_unaudited_ignores_stale_sibling_audits(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     (tmp_path / "spec_audit.json").write_text(
-        json.dumps({"schema_version": 3, "status": "pass", "spec_hash": "sha256:stale"}),
+        json.dumps({"schema_version": 4, "status": "pass", "spec_hash": "sha256:stale"}),
         encoding="utf-8",
     )
     (tmp_path / "runtime_audit.json").write_text("{not-json", encoding="utf-8")
@@ -1186,6 +1228,59 @@ def test_backtest_run_json_rejects_spec_audit_missing_effective_field_confirmati
     response = json.loads(result.output)
     assert response["errors"][0]["check"] == "spec_audit_failed"
     assert "missing confirmed audit row for effective spec field" in response["errors"][0]["message"]
+
+
+def test_backtest_run_json_rejects_tampered_confirmation_event(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    run_out = tmp_path / "runs"
+    _write_spec_audit(audit_path, spec_hash, spec_path=spec_path)
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    event_path = Path(str(audit["confirmation_event"]["path"]))
+    event_path.write_text(
+        event_path.read_text(encoding="utf-8").replace('"field_scope": "full_spec_table"', '"field_scope": "partial"'),
+        encoding="utf-8",
+    )
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+    _write_backtest_authorization(
+        runtime_audit_path.with_name("backtest_authorization.json"),
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        runtime_audit_path=runtime_audit_path,
+        data_dir=data_dir,
+        run_out=run_out,
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(run_out),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    response = json.loads(result.output)
+    assert response["errors"][0]["check"] == "spec_audit_failed"
+    assert "confirmation_event" in response["errors"][0]["message"]
 
 
 def test_backtest_run_json_rejects_runtime_audit_without_spec_audit(tmp_path) -> None:

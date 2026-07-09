@@ -308,6 +308,12 @@ class Engine:
         fill_due_market_orders = getattr(broker, "fill_due_market_orders", None)
         if callable(fill_due_market_orders):
             _sync_broker_cash(broker, portfolio)
+            _cancel_tradability_blocked_market_orders(
+                broker=broker,
+                mktdata=mktdata,
+                date=date,
+                filters=self._data_filters,
+            )
             fill_due_market_orders(mktdata, date)
         _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
@@ -557,6 +563,12 @@ class Engine:
         _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
         _sync_broker_cash(broker, portfolio)
+        _cancel_tradability_blocked_market_orders(
+            broker=broker,
+            mktdata=mktdata,
+            date=date,
+            filters=self._data_filters,
+        )
         broker.on_bar_close(mktdata, date)
         _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
@@ -627,6 +639,12 @@ class Engine:
 
             # ── Step 8: Broker executes exit orders ───────────────────
             _sync_broker_cash(broker, portfolio)
+            _cancel_tradability_blocked_market_orders(
+                broker=broker,
+                mktdata=mktdata,
+                date=date,
+                filters=self._data_filters,
+            )
             broker.on_bar_close(mktdata, date)
             _apply_fills(portfolio, broker.get_fills(), self._trades, strategy.portfolio)
 
@@ -882,6 +900,85 @@ def _record_policy_reason(reasons: dict[str, list[str]] | None, symbol: str, rea
     if reasons is None:
         return
     reasons.setdefault(symbol, []).append(reason)
+
+
+def _cancel_tradability_blocked_market_orders(
+    *,
+    broker: Broker,
+    mktdata: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+    filters: Any | None,
+) -> None:
+    if filters is None:
+        return
+    get_open_orders = getattr(broker, "get_open_orders", None)
+    if not callable(get_open_orders):
+        return
+    suspension_policy = _effective_suspension_policy(filters)
+    if (
+        getattr(filters, "limit_up_policy", "none") == "none"
+        and getattr(filters, "limit_down_policy", "none") == "none"
+        and suspension_policy == "none"
+    ):
+        return
+
+    current_date = pd.Timestamp(date).date()
+    for managed in get_open_orders():
+        order = getattr(managed, "order", None)
+        if order is None or getattr(managed, "status", "") != "open":
+            continue
+        if getattr(order, "order_type", "") != "market":
+            continue
+        if not _is_due_market_order_on_date(managed, current_date):
+            continue
+        symbol = order.symbol
+        frame = mktdata.get(symbol)
+        if frame is None or date not in frame.index:
+            continue
+        row = frame.loc[date]
+        reason = ""
+        if suspension_policy == "hold_existing" and _row_truthy(row, "is_suspended"):
+            reason = "tradability_suspended_pending_order_blocked"
+        elif (
+            order.side == "BUY"
+            and getattr(filters, "limit_up_policy", "none") == "exclude_buy"
+            and _row_truthy(row, "is_limit_up")
+        ):
+            reason = "tradability_limit_up_pending_buy_blocked"
+        elif (
+            order.side == "SELL"
+            and getattr(filters, "limit_down_policy", "none") == "exclude_sell"
+            and _row_truthy(row, "is_limit_down")
+        ):
+            reason = "tradability_limit_down_pending_sell_blocked"
+        if reason:
+            _cancel_managed_market_order(broker, managed, reason)
+
+
+def _cancel_managed_market_order(broker: Broker, managed: Any, reason: str) -> None:
+    cancel_market_order = getattr(broker, "cancel_market_order", None)
+    if callable(cancel_market_order):
+        cancel_market_order(managed, reason=reason)
+        if getattr(managed, "status", "") != "open":
+            return
+    managed.status = "canceled"
+    managed.status_reason = reason
+
+
+def _is_due_market_order_on_date(managed: Any, current_date: Any) -> bool:
+    due_at = getattr(managed, "due_at", None)
+    if due_at:
+        try:
+            return pd.Timestamp(due_at).date() == current_date
+        except (TypeError, ValueError):
+            return False
+    created_at = getattr(managed, "created_at", None)
+    if not created_at:
+        return False
+    try:
+        return pd.Timestamp(created_at).date() < current_date
+    except (TypeError, ValueError):
+        return False
 
 
 def _effective_suspension_policy(filters: Any | None) -> str:

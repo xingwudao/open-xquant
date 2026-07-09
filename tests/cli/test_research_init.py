@@ -175,6 +175,160 @@ def test_research_init_creates_active_v001_governance_manifests(tmp_path) -> Non
         assert phase_state["status"] == "active"
 
 
+def test_research_init_version_manifest_honors_custom_versions_dir(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "custom-version-root",
+                    "paths": {
+                        "versions_dir": "research_versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init", "--name", "demo"])
+
+        assert result.exit_code == 0, result.output
+        version_manifest = json.loads(
+            (cwd_path / "research_versions" / "v001" / "version_manifest.json").read_text(encoding="utf-8")
+        )
+        assert (cwd_path / "research_versions/v001/04_spec_build").is_dir()
+        assert version_manifest["phase_paths"]["04_spec_build"] == "research_versions/v001/04_spec_build"
+        assert not (cwd_path / "versions/v001/04_spec_build").exists()
+        workspace = yaml.safe_load((cwd_path / ".open-xquant/workspace.yaml").read_text(encoding="utf-8"))
+        assert workspace["workflow"]["default_output_dir"] == "research_versions/{active_version}/09_backtests"
+        agents_text = (cwd_path / "AGENTS.md").read_text(encoding="utf-8")
+        assert "research_versions/v001/04_spec_build/strategy_spec.yaml" in agents_text
+        assert "`versions/v001/04_spec_build/strategy_spec.yaml`" not in agents_text
+
+
+def test_research_init_rejects_unsafe_versions_dir(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "unsafe-version-root",
+                    "paths": {
+                        "versions_dir": "../escape",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init", "--name", "demo"])
+
+        assert result.exit_code == 1
+        assert "workspace paths.versions_dir must be a safe relative path" in result.output
+        assert not (cwd_path.parent / "escape").exists()
+
+
+def test_research_init_rejects_symlinked_versions_dir_escape(tmp_path) -> None:
+    runner = CliRunner()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / "versions_link").symlink_to(outside, target_is_directory=True)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "symlink-version-root",
+                    "paths": {
+                        "versions_dir": "versions_link",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init", "--name", "demo"])
+
+        assert result.exit_code == 1
+        assert "workspace paths.versions_dir must stay within the workspace" in result.output
+        assert not (outside / "v001").exists()
+
+
+def test_research_init_repairs_stale_version_manifest_phase_paths_for_custom_versions_dir(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / "research_versions/v001").mkdir(parents=True)
+        (cwd_path / "current.json").write_text(
+            json.dumps({"schema_version": 1, "active_version": "v001", "active_phase": "06_spec_audit"}),
+            encoding="utf-8",
+        )
+        (cwd_path / "research_versions/v001/version_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "version_id": "v001",
+                    "strategy_family_id": "stale",
+                    "active_phase": "04_spec_build",
+                    "phase_paths": {"04_spec_build": "versions/v001/04_spec_build"},
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "custom-version-root",
+                    "paths": {
+                        "versions_dir": "research_versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init", "--name", "demo"])
+
+        assert result.exit_code == 0, result.output
+        version_manifest = json.loads(
+            (cwd_path / "research_versions/v001/version_manifest.json").read_text(encoding="utf-8")
+        )
+        assert version_manifest["active_phase"] == "06_spec_audit"
+        assert version_manifest["phase_paths"]["04_spec_build"] == "research_versions/v001/04_spec_build"
+        assert version_manifest["phase_paths"]["09_backtests"] == "research_versions/v001/09_backtests"
+
+
 def test_research_init_minimal_creates_governance_manifests(tmp_path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:

@@ -107,6 +107,20 @@ def validate_runtime_audit(payload: Any) -> dict[str, Any]:
                 errors.append({"path": f"material_field_audits[{index}].evidence", "message": "must be a list"})
             if "blocking" in item and not isinstance(item["blocking"], bool):
                 errors.append({"path": f"material_field_audits[{index}].blocking", "message": "must be a boolean"})
+            if status == "pass" and item.get("blocking") is True:
+                errors.append(
+                    {
+                        "path": f"material_field_audits[{index}].blocking",
+                        "message": "blocking material field row cannot pass runtime audit",
+                    }
+                )
+            if status == "pass" and item.get("status") in {"missing", "mismatch"}:
+                errors.append(
+                    {
+                        "path": f"material_field_audits[{index}].status",
+                        "message": "unresolved material field row cannot pass runtime audit",
+                    }
+                )
 
     blocking_findings = payload.get("blocking_findings", [])
     if isinstance(blocking_findings, list):
@@ -115,6 +129,8 @@ def validate_runtime_audit(payload: Any) -> dict[str, Any]:
                 errors.append({"path": f"blocking_findings[{index}]", "message": "must be an object"})
             elif "message" not in item or not isinstance(item["message"], str):
                 errors.append({"path": f"blocking_findings[{index}].message", "message": "must be a string"})
+        if status == "pass" and blocking_findings:
+            errors.append({"path": "blocking_findings", "message": "must be empty when status is pass"})
 
     return _result("fail" if errors else "pass", errors)
 

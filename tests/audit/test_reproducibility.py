@@ -25,6 +25,16 @@ def _spec_audit_context() -> dict[str, object]:
             "hash": "sha256:" + "6" * 16,
             "hash_type": "sha256",
         },
+        "confirmation_event": {
+            "path": "conversations/demo/confirmations.jsonl",
+            "event_id": "spec-confirmation-1",
+            "line_number": 1,
+            "event_hash": "sha256:" + "9" * 16,
+            "artifact_path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "artifact_hash": "sha256:" + "6" * 16,
+            "spec_audit_path": "versions/v001/06_spec_audit/spec_audit.json",
+            "spec_audit_hash": "sha256:" + "a" * 16,
+        },
         "strategy_idea_brief": "versions/v001/01_brainstorm/strategy_idea_brief.json",
         "strategy_idea_audit": "versions/v001/02_idea_audit/strategy_idea_audit.json",
         "strategy_idea_brief_hash": "sha256:" + "7" * 16,
@@ -198,7 +208,7 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
     catalog_hash = "sha256:" + "4" * 64
     recipe_catalog_hash = "sha256:" + "5" * 64
     spec_audit = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "pass",
         "spec_provenance_pass": True,
         "spec_hash": spec_hash,
@@ -253,7 +263,7 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
 def test_reproducibility_audit_requires_complete_provenance_bundle(tmp_path) -> None:
     run_dir = _write_minimal_run(tmp_path)
     spec_audit = {
-        "schema_version": 3,
+        "schema_version": 4,
         "status": "pass",
         "spec_provenance_pass": True,
         "spec_hash": (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip(),
