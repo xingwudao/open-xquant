@@ -2023,7 +2023,13 @@ def _resolve_backtest_output_dir(out: str | None) -> str:
     workflow = workspace.get("workflow")
     configured = workflow.get("default_output_dir") if isinstance(workflow, dict) else None
     governed_default = _workspace_default_backtest_output_template(workspace) if _is_version_governed_workspace(workspace) else ""
-    if isinstance(configured, str) and configured == "versions/{active_version}/09_backtests":
+    if isinstance(configured, str) and configured in {
+        "versions/{active_version}/09_backtests",
+        "runs/auto",
+        "runs/auto/runs/runs/{active_version}",
+        "runs",
+        "runs/{active_version}",
+    }:
         configured = governed_default
     if not isinstance(configured, str) and governed_default:
         configured = governed_default
@@ -2069,6 +2075,12 @@ def _workspace_versions_dir(workspace: dict) -> Path:
     path = Path(raw_value)
     if not raw_value or path.is_absolute() or ".." in path.parts:
         raise click.ClickException("workspace paths.versions_dir must be a safe relative path")
+    workspace_root = Path.cwd().resolve()
+    candidate = (Path.cwd() / path).resolve(strict=False)
+    try:
+        candidate.relative_to(workspace_root)
+    except ValueError:
+        raise click.ClickException("workspace paths.versions_dir must stay within the workspace")
     return path
 
 

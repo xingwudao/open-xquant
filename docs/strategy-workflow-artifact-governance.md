@@ -583,7 +583,8 @@ SPEC audit all pass 但未确认：
   `conversations/<conversation_id>/confirmations.jsonl`，记录 `event_id`、
   table path/hash、`spec_audit_path`、pre-confirmation
   `spec_audit_hash`、event line 和 event hash。
-- 更新同一个 `spec_audit.json`，设置
+- Coordinator then routes back to `oxq-spec-auditor-worker`; the
+  `audit-strategy-spec` updates `spec_audit.json`，设置
   `user_confirmation_status: confirmed`，并写入 `confirmation_event` 引用。
 - 使用 `audit-runtime-semantics`。
 

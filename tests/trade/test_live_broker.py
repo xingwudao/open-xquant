@@ -81,6 +81,15 @@ class TestSubmitOrder:
         assert len(open_orders) == 1
         assert open_orders[0].id == oid
 
+    def test_submit_order_stamps_current_bar_date(self, mock_client):
+        broker, _ = mock_client
+        broker.set_current_date(pd.Timestamp("2026-03-11", tz="UTC"))
+
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=100))
+
+        open_orders = broker.get_open_orders("AAPL")
+        assert open_orders[0].created_at == "2026-03-11T00:00:00+00:00"
+
     def test_market_orders_are_not_locally_replaced_without_remote_cancel(self, mock_client):
         broker, client = mock_client
         client.submit_order.side_effect = [
@@ -268,6 +277,24 @@ class TestCancelOrders:
         assert open_orders[0].id == "stop-sell"
         assert open_orders[0].order.order_type == "stop"
         client.cancel_order.assert_called_once_with("market-sell")
+
+    def test_cancel_market_order_only_cancels_target_managed_order(self, mock_client):
+        broker, client = mock_client
+        client.submit_order.side_effect = [
+            {"id": "market-1", "status": "accepted"},
+            {"id": "market-2", "status": "accepted"},
+        ]
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=10))
+        broker.submit_order(Order(symbol="AAPL", side="BUY", shares=20))
+        target, other = broker.get_open_orders("AAPL")
+
+        canceled = broker.cancel_market_order(target, reason="tradability_limit_up_pending_buy_blocked")
+
+        assert canceled is target
+        assert target.status == "canceled"
+        assert target.status_reason == "tradability_limit_up_pending_buy_blocked"
+        assert other.status == "open"
+        client.cancel_order.assert_called_once_with("market-1")
 
 
 class TestCapPendingSells:

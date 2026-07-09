@@ -50,8 +50,16 @@ Use the `audit-runtime-semantics` skill.
 ## Responsibilities
 
 - Read `strategy_spec.yaml` and confirmed `spec_audit.json`.
-- Block unless `spec_audit.json` has `status: pass`,
+- Block unless `spec_audit.json` has `schema_version: 4`, `status: pass`,
   `audit_conclusion: all_pass`, and `user_confirmation_status: confirmed`.
+- Block unless `spec_audit.json` also has a valid `confirmation_event` with
+  `path`, `event_id`, `line_number`, `event_hash`, `artifact_path`,
+  `artifact_hash`, `spec_audit_path`, and `spec_audit_hash`, and the referenced
+  JSONL line binds the full SPEC confirmation table to the current
+  `spec_audit.json`.
+- Before compiling, run
+  `<resolved_runner> spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --strict-confirmed --json`
+  through the resolved runner and block unless it exits 0.
 - Compile the strategy before formal backtest authorization.
 - Print the complete `strategy.py` source to the user after compile preview
   generation and before runtime findings.

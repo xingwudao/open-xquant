@@ -1,6 +1,7 @@
 """Tests for Engine — new pipeline integration."""
 
 from decimal import Decimal
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
@@ -14,6 +15,7 @@ from oxq.portfolio.optimizers import EqualWeightOptimizer, SignalToPositionOptim
 from oxq.portfolio.orderbook import ManagedOrder
 from oxq.signals.crossover import Crossover
 from oxq.spec.schema import DataFilterSection
+from oxq.trade.live_broker import LiveBroker
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
 from oxq.universe.static import StaticUniverse
 
@@ -1973,6 +1975,50 @@ def test_engine_cancel_helper_only_cancels_target_market_order() -> None:
     assert due_order.status_reason == "tradability_limit_up_pending_buy_blocked"
     assert future_order.status == "open"
     assert future_order.status_reason == ""
+
+
+def test_engine_live_broker_cancels_blocked_prior_bar_market_order_via_client() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+                "is_limit_up": [False, True],
+            },
+            index=dates,
+        ),
+    }
+    strategy = Strategy(
+        name="live_broker_limit_up_cancel",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    with patch("oxq.trade.live_broker.AlpacaClient") as mock_cls:
+        client = mock_cls.return_value
+        client.start_trade_stream.return_value = None
+        client.submit_order.return_value = {"id": "live-buy-1", "status": "accepted"}
+        broker = LiveBroker(api_key="k", secret_key="s")
+
+        result = Engine().run(
+            strategy,
+            market=FakeMarketDataProvider(data),
+            broker=broker,
+            start="2024-01-01",
+            end="2024-01-02",
+            data_filters=DataFilterSection(limit_up_policy="exclude_buy"),
+        )
+
+    assert result.trades == []
+    client.cancel_order.assert_called_once_with("live-buy-1")
+    canceled_orders = [order for order in result.orders if order.status == "canceled"]
+    assert len(canceled_orders) == 1
+    assert canceled_orders[0].status_reason == "tradability_limit_up_pending_buy_blocked"
 
 
 def test_engine_cancels_pending_next_close_buy_when_suspended() -> None:

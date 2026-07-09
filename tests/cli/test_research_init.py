@@ -214,6 +214,72 @@ def test_research_init_version_manifest_honors_custom_versions_dir(tmp_path) -> 
         assert "`versions/v001/04_spec_build/strategy_spec.yaml`" not in agents_text
 
 
+def test_research_init_rewrites_root_runs_auto_for_custom_versions_dir(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "custom-version-root",
+                    "paths": {
+                        "versions_dir": "research_versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {
+                        "layout": "version_governed",
+                        "default_output_dir": "runs/auto",
+                    },
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init", "--name", "demo"])
+
+        assert result.exit_code == 0, result.output
+        workspace = yaml.safe_load((cwd_path / ".open-xquant/workspace.yaml").read_text(encoding="utf-8"))
+        assert workspace["workflow"]["default_output_dir"] == "research_versions/{active_version}/09_backtests"
+
+
+def test_research_init_rewrites_nested_root_runs_auto_for_custom_versions_dir(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "custom-version-root",
+                    "paths": {
+                        "versions_dir": "research_versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {
+                        "layout": "version_governed",
+                        "default_output_dir": "runs/auto/runs/runs/{active_version}",
+                    },
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init", "--name", "demo"])
+
+        assert result.exit_code == 0, result.output
+        workspace = yaml.safe_load((cwd_path / ".open-xquant/workspace.yaml").read_text(encoding="utf-8"))
+        assert workspace["workflow"]["default_output_dir"] == "research_versions/{active_version}/09_backtests"
+
+
 def test_research_init_rejects_unsafe_versions_dir(tmp_path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:

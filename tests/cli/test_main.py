@@ -88,6 +88,26 @@ def _pre_confirmation_spec_audit_hash(payload: dict) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
 
+def _attach_confirmation_artifacts(tmp_path: Path, audit: dict) -> None:
+    confirmation_table = tmp_path / "spec_confirmation_table.md"
+    confirmation_table.write_text(
+        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
+        encoding="utf-8",
+    )
+    table_hash = _hash_file(confirmation_table)
+    audit["spec_confirmation_table"] = {
+        "path": str(confirmation_table),
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    audit["confirmation_event"] = _write_confirmation_event(
+        tmp_path / "confirmations.jsonl",
+        artifact_path=str(confirmation_table),
+        artifact_hash=table_hash,
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
+    )
+
+
 def test_robustness_run_exits_nonzero_for_error(monkeypatch, tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()
@@ -233,6 +253,30 @@ def test_spec_init_honors_custom_versions_dir_workspace(tmp_path) -> None:
         assert (cwd_path / "research_versions/v010/04_spec_build/strategy_spec.yaml").exists()
         assert not (cwd_path / "versions/v010/04_spec_build/strategy_spec.yaml").exists()
         assert not (cwd_path / "strategy_spec.yaml").exists()
+
+
+def test_spec_init_rejects_symlinked_versions_dir_escape(tmp_path) -> None:
+    runner = CliRunner()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / "versions_link").symlink_to(outside, target_is_directory=True)
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {"paths": {"versions_dir": "versions_link", "current_manifest": "current.json"}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(json.dumps({"active_version": "v011"}), encoding="utf-8")
+
+        result = runner.invoke(main, ["spec", "init", "symlink escape"])
+
+        assert result.exit_code == 1
+        assert "paths.versions_dir must stay within the workspace" in result.output
+        assert not (outside / "v011").exists()
 
 
 def test_spec_init_fails_when_version_workspace_lacks_current_manifest(tmp_path) -> None:
@@ -1247,6 +1291,150 @@ def test_backtest_default_out_rewrites_legacy_default_for_custom_versions_dir(mo
     assert not (tmp_path / "versions/v004/09_backtests").exists()
 
 
+def test_backtest_default_out_rewrites_stale_runs_auto_for_custom_versions_dir(monkeypatch, tmp_path) -> None:
+    (tmp_path / ".open-xquant").mkdir()
+    (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: research_versions",
+                "  current_manifest: current.json",
+                "workflow:",
+                "  layout: version_governed",
+                "  default_output_dir: runs/auto",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v005", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec_dir = tmp_path / "research_versions" / "v005" / "04_spec_build"
+    spec_dir.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="stale_runs_auto_custom_versions_dir",
+        hypothesis="stale runs/auto default_output_dir should follow configured versions root",
+    )
+    spec_path = spec_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    captured: dict[str, str | None] = {}
+
+    def fake_compile_run(spec, data_dir=None, out_dir=None):
+        captured["out_dir"] = out_dir
+        run_dir = Path(str(out_dir)) / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+        return object(), run_dir
+
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["out_dir"] == "research_versions/v005/09_backtests"
+    assert not (tmp_path / "runs" / "auto").exists()
+
+
+def test_backtest_default_out_rewrites_nested_stale_runs_auto_for_custom_versions_dir(monkeypatch, tmp_path) -> None:
+    (tmp_path / ".open-xquant").mkdir()
+    (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: research_versions",
+                "  current_manifest: current.json",
+                "workflow:",
+                "  layout: version_governed",
+                "  default_output_dir: runs/auto/runs/runs/{active_version}",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v006", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec_dir = tmp_path / "research_versions" / "v006" / "04_spec_build"
+    spec_dir.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="nested_stale_runs_auto_custom_versions_dir",
+        hypothesis="nested stale runs/auto default_output_dir should follow configured versions root",
+    )
+    spec_path = spec_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    captured: dict[str, str | None] = {}
+
+    def fake_compile_run(spec, data_dir=None, out_dir=None):
+        captured["out_dir"] = out_dir
+        run_dir = Path(str(out_dir)) / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+        return object(), run_dir
+
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["out_dir"] == "research_versions/v006/09_backtests"
+    assert not (tmp_path / "runs" / "auto" / "runs" / "runs").exists()
+
+
+def test_backtest_default_out_rejects_symlinked_versions_dir_escape(monkeypatch, tmp_path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / ".open-xquant").mkdir()
+    (workspace / "versions_link").symlink_to(outside, target_is_directory=True)
+    (workspace / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions_link",
+                "  current_manifest: current.json",
+                "workflow:",
+                "  layout: version_governed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v012", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec = StrategySpec.template(
+        strategy_id="symlink_versions_dir_default_out",
+        hypothesis="versions_dir symlinks must not escape workspace",
+    )
+    spec_path = workspace / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "output_dir_failed"
+    assert "paths.versions_dir must stay within the workspace" in payload["errors"][0]["message"]
+    assert not (outside / "v012").exists()
+
+
 def test_backtest_default_out_rejects_unsafe_active_version(monkeypatch, tmp_path) -> None:
     (tmp_path / ".open-xquant").mkdir()
     (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
@@ -1563,6 +1751,7 @@ def test_spec_audit_validate_rejects_confirmed_when_evidence_denies_user_confirm
         "blocking_findings": [],
     }
     path = tmp_path / "spec_audit.json"
+    _attach_confirmation_artifacts(tmp_path, audit)
     path.write_text(json.dumps(audit), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
@@ -1607,6 +1796,7 @@ def test_spec_audit_validate_rejects_confirmed_when_same_evidence_denies_field_c
         "blocking_findings": [],
     }
     path = tmp_path / "spec_audit.json"
+    _attach_confirmation_artifacts(tmp_path, audit)
     path.write_text(json.dumps(audit), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
@@ -1640,6 +1830,7 @@ def test_spec_audit_validate_rejects_confirmation_for_other_field_before_denial(
                 "field_path": "validation.train_period",
                 "spec_value": ["2025-01-01", "2025-12-31"],
                 "status": "confirmed",
+                "material_category": "validation_assumption",
                 "evidence": ["User confirmed the full backtest range in turn 5, but did not specify the train/test split."],
                 "blocking": False,
             }
@@ -1651,6 +1842,7 @@ def test_spec_audit_validate_rejects_confirmation_for_other_field_before_denial(
         "blocking_findings": [],
     }
     path = tmp_path / "spec_audit.json"
+    _attach_confirmation_artifacts(tmp_path, audit)
     path.write_text(json.dumps(audit), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
@@ -1696,6 +1888,7 @@ def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path)
         "blocking_findings": [],
     }
     path = tmp_path / "spec_audit.json"
+    _attach_confirmation_artifacts(tmp_path, audit)
     path.write_text(json.dumps(audit), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
@@ -1739,6 +1932,7 @@ def test_spec_audit_validate_allows_later_confirmation_in_separate_evidence_entr
         "blocking_findings": [],
     }
     path = tmp_path / "spec_audit.json"
+    _attach_confirmation_artifacts(tmp_path, audit)
     path.write_text(json.dumps(audit), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
@@ -1782,6 +1976,7 @@ def test_spec_audit_validate_allows_confirmation_before_historical_negative_cont
         "blocking_findings": [],
     }
     path = tmp_path / "spec_audit.json"
+    _attach_confirmation_artifacts(tmp_path, audit)
     path.write_text(json.dumps(audit), encoding="utf-8")
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
@@ -2057,10 +2252,7 @@ def test_spec_audit_validate_strict_confirmed_rejects_missing_effective_fields(t
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     path = tmp_path / "spec_audit.json"
     confirmation_table = tmp_path / "spec_confirmation_table.md"
-    confirmation_table.write_text(
-        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
-        encoding="utf-8",
-    )
+    confirmation_table.write_text(_spec_confirmation_table_text(spec_path), encoding="utf-8")
     confirmation_event = _write_confirmation_event(
         tmp_path / "confirmations.jsonl",
         artifact_path=str(confirmation_table),
@@ -2164,10 +2356,7 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     path = tmp_path / "spec_audit.json"
     confirmation_table = tmp_path / "spec_confirmation_table.md"
-    confirmation_table.write_text(
-        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
-        encoding="utf-8",
-    )
+    confirmation_table.write_text(_spec_confirmation_table_text(spec_path), encoding="utf-8")
     audit = {
         "schema_version": 4,
         "status": "pass",
@@ -2206,6 +2395,23 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
 
     assert result.exit_code == 0, result.output
     assert json.loads(result.output)["status"] == "pass"
+
+
+def test_spec_audit_validate_rejects_missing_confirmation_event_artifact_without_strict(tmp_path) -> None:
+    audit_path = _write_pass_spec_audit(
+        tmp_path,
+        "sha256:" + "1" * 16,
+        "sha256:" + "3" * 16,
+    )
+    audit = json.loads(audit_path.read_text(encoding="utf-8"))
+    Path(audit["confirmation_event"]["path"]).unlink()
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(audit_path), "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["status"] == "fail"
+    assert any(error["path"] == "confirmation_event.path" for error in payload["errors"])
 
 
 def test_runtime_audit_validate_accepts_required_schema(tmp_path) -> None:
@@ -3141,10 +3347,11 @@ def _write_pass_spec_audit(
     spec_path: Path | None = None,
 ) -> Path:
     confirmation_table = tmp_path / "spec_confirmation_table.md"
-    confirmation_table.write_text(
-        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
-        encoding="utf-8",
-    )
+    if spec_path is not None:
+        table_text = _spec_confirmation_table_text(spec_path)
+    else:
+        table_text = "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n"
+    confirmation_table.write_text(table_text, encoding="utf-8")
     audit = {
         "schema_version": 4,
         "status": "pass",
@@ -3177,6 +3384,31 @@ def _write_pass_spec_audit(
     path = tmp_path / "spec_audit.json"
     path.write_text(json.dumps(audit), encoding="utf-8")
     return path
+
+
+def _spec_confirmation_table_text(spec_path: Path) -> str:
+    spec = StrategySpec.from_yaml(spec_path)
+    rows = [
+        "| Section | Field path | Spec value | Source | Audit status | Impact |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for field_path, value in _flatten_effective_fields(spec.to_effective_dict()):
+        section = field_path.split(".", 1)[0]
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    section,
+                    field_path,
+                    json.dumps(value, sort_keys=True, default=str),
+                    "User confirmed full SPEC table",
+                    "confirmed",
+                    "material",
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(rows) + "\n"
 
 
 def _confirmed_field_audits(spec_path: Path) -> list[dict]:

@@ -20,7 +20,7 @@ inputs:
 outputs:
   - versions/<version_id>/06_spec_audit/spec_audit.json
   - versions/<version_id>/06_spec_audit/audit_notes.md
-  - versions/<version_id>/06_spec_audit/spec_confirmation_table.md when all_pass or user confirmation is pending/confirmed
+  - versions/<version_id>/06_spec_audit/spec_confirmation_table.md only when audit_conclusion is all_pass and user_confirmation_status is pending or confirmed
 forbidden_outputs:
   - versions/<version_id>/04_spec_build/strategy_spec.yaml
   - versions/<version_id>/04_spec_build/builder_phase_result.json
@@ -44,7 +44,7 @@ Use the `audit-strategy-spec` skill.
   "outputs": [
     "versions/<version_id>/06_spec_audit/spec_audit.json",
     "versions/<version_id>/06_spec_audit/audit_notes.md",
-    "versions/<version_id>/06_spec_audit/spec_confirmation_table.md when all_pass or user confirmation is pending/confirmed"
+    "versions/<version_id>/06_spec_audit/spec_confirmation_table.md only when audit_conclusion is all_pass and user_confirmation_status is pending or confirmed"
   ],
   "forbidden_outputs": [
     "versions/<version_id>/04_spec_build/strategy_spec.yaml",
@@ -153,12 +153,14 @@ Use the `audit-strategy-spec` skill.
 - `versions/<version_id>/06_spec_audit/spec_audit.json`
 - `versions/<version_id>/06_spec_audit/audit_notes.md`
 - `versions/<version_id>/06_spec_audit/spec_confirmation_table.md` only when
-  all_pass or user confirmation is pending/confirmed
+  `audit_conclusion: all_pass` and `user_confirmation_status` is pending or
+  confirmed
 
 ## Handoff
 
 Return `spec_audit.json` to the coordinator. Return
-`spec_confirmation_table.md` only for an all_pass pending or confirmed audit.
+`spec_confirmation_table.md` only for `audit_conclusion: all_pass` with
+pending or confirmed user confirmation.
 Do not hand off to `oxq-runtime-auditor-worker` while
 `user_confirmation_status` is pending. The next phase is
 `oxq-runtime-auditor-worker` only after the coordinator records explicit user

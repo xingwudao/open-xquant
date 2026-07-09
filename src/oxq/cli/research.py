@@ -447,6 +447,9 @@ def _normalize_default_output_dir(cwd: Path, workspace: dict[str, object]) -> bo
     if configured == "versions/{active_version}/09_backtests" and configured != expected:
         workflow["default_output_dir"] = expected
         return True
+    if configured in {"runs/auto", "runs/auto/runs/runs/{active_version}", "runs", "runs/{active_version}"}:
+        workflow["default_output_dir"] = expected
+        return True
     if not isinstance(configured, str) or not configured:
         workflow["default_output_dir"] = expected
         return True

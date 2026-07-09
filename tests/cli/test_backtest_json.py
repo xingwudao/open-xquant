@@ -125,10 +125,11 @@ def _write_spec_audit(
         sibling_spec_path = path.with_name("strategy_spec.yaml")
         spec_path = sibling_spec_path if sibling_spec_path.exists() else None
     confirmation_table = path.with_name("spec_confirmation_table.md")
-    confirmation_table.write_text(
-        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
-        encoding="utf-8",
-    )
+    if spec_path is not None:
+        table_text = _spec_confirmation_table_text(spec_path)
+    else:
+        table_text = "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n"
+    confirmation_table.write_text(table_text, encoding="utf-8")
     audit = {
         "schema_version": 4,
         "status": "pass",
@@ -159,6 +160,31 @@ def _write_spec_audit(
         spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
     )
     path.write_text(json.dumps(audit, indent=2), encoding="utf-8")
+
+
+def _spec_confirmation_table_text(spec_path: Path) -> str:
+    spec = StrategySpec.from_yaml(spec_path)
+    rows = [
+        "| Section | Field path | Spec value | Source | Audit status | Impact |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for field_path, value in _flatten_effective_fields(spec.to_effective_dict()):
+        section = field_path.split(".", 1)[0]
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    section,
+                    field_path,
+                    json.dumps(value, sort_keys=True, default=str),
+                    "User confirmed full SPEC table",
+                    "confirmed",
+                    "material",
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(rows) + "\n"
 
 
 def _confirmed_field_audits(spec_path: Path) -> list[dict]:

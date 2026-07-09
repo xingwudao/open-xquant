@@ -733,6 +733,8 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     spec_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
     runtime_role = Path("agent/roles/oxq-runtime-auditor-worker.md").read_text(encoding="utf-8")
     coordinator_role = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+    normalized_spec_role = " ".join(spec_role.split())
+    normalized_coordinator = " ".join(coordinator_role.split())
 
     assert "Two-Step Spec Audit Gate" in spec_skill
     assert "`audit_conclusion: all_pass`" in spec_skill
@@ -770,8 +772,17 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "v003 inherits all v002\nconfirmed values except TopNRanking n=2" in spec_skill
 
     assert "spec_confirmation_table.md" in spec_role
+    assert (
+        "spec_confirmation_table.md only when audit_conclusion is all_pass "
+        "and user_confirmation_status is pending or confirmed"
+    ) in spec_role
+    assert "`audit_conclusion: all_pass` and `user_confirmation_status` is pending or confirmed" in normalized_spec_role
+    assert "all_pass or user confirmation is pending/confirmed" not in spec_role
     assert "Do not write a placeholder\n  `spec_confirmation_table.md` for `audit_conclusion: blocked`" in spec_role
-    assert "Return\n`spec_confirmation_table.md` only for an all_pass pending or confirmed audit" in spec_role
+    assert (
+        "Return `spec_confirmation_table.md` only for `audit_conclusion: all_pass` "
+        "with pending or confirmed user confirmation"
+    ) in normalized_spec_role
     assert "`blocking_findings: []`" in spec_role
     assert "empty `missing_user_requirements`" in spec_role
     assert "not in\n  `agent_added_fields`" in spec_role
@@ -790,11 +801,25 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "Do not start `oxq-runtime-auditor-worker`" in coordinator_role
     assert "confirmed `spec_audit.json`" in runtime_skill
     assert "`confirmation_event` exists" in runtime_skill
+    assert "`schema_version: 4`" in runtime_skill
+    assert "spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json" in runtime_skill
+    assert "--strict-confirmed" in runtime_skill
+    assert "--json" in runtime_skill
     assert "`spec_audit_path` plus `spec_audit_hash`" in runtime_skill
     for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
         assert field in runtime_skill
     assert "print the complete `strategy.py` source" in runtime_skill
     assert "confirmed `spec_audit.json`" in runtime_role
+    assert "`schema_version: 4`" in runtime_role
+    assert "valid `confirmation_event`" in runtime_role
+    assert "<resolved_runner> spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json" in runtime_role
+    assert "--strict-confirmed --json" in runtime_role
+    for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
+        assert field in runtime_role
+    assert "`spec_audit_path`" in runtime_role
+    assert "`spec_audit_hash`" in runtime_role
+    assert "conditionally writes `spec_confirmation_table.md` only" in normalized_coordinator
+    assert "blocked audits omit it or set `spec_confirmation_table: null`" in normalized_coordinator
 
 
 def test_spec_auditor_is_read_only_and_returns_mapping_errors_to_builder() -> None:
@@ -1431,6 +1456,8 @@ def test_workspace_governance_contract_lists_root_phase_pollution_artifacts() ->
         assert artifact in skill
         assert artifact in role
         assert artifact in doc
+    assert "routes back to `oxq-spec-auditor-worker`" in doc
+    assert "`audit-strategy-spec` updates `spec_audit.json`" in doc
     for input_root in ("comparisons/**", "final/**"):
         assert input_root in skill
         assert input_root in role

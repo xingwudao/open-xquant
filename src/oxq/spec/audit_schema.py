@@ -39,6 +39,14 @@ _ALLOWED_AUDIT_CONCLUSION = {"all_pass", "blocked", "fail"}
 _ALLOWED_CONFIRMATION_STATUS = {"pending", "confirmed", "rejected"}
 _ALLOWED_RECIPE_STATUS = {"used", "available_but_not_used", "not_applicable"}
 _ALLOWED_FIELD_STATUS = {"confirmed", "default", "unconfirmed", "contradiction", "agent_added"}
+_ALLOWED_STATE_TRIPLES = {
+    ("pass", "all_pass", "confirmed"),
+    ("block", "all_pass", "pending"),
+    ("block", "blocked", "pending"),
+    ("block", "blocked", "rejected"),
+    ("fail", "fail", "pending"),
+    ("fail", "fail", "rejected"),
+}
 _ALLOWED_MATERIAL_CATEGORY = {
     "strategy_logic",
     "portfolio_construction",
@@ -53,6 +61,7 @@ _ALLOWED_MATERIAL_CATEGORY = {
 }
 _ALLOWED_COMPONENT_STATUS = {"catalog", "recipe", "missing", "non_canonical"}
 _ALLOWED_UNSUPPORTED_MAPPING_DISPOSITION = {"blocked", "deferred_framework", "excluded_non_material", "not_applicable"}
+_REQUIRED_CONFIRMATION_TABLE_COLUMNS = ("section", "field path", "spec value", "source", "audit status", "impact")
 _HASH_RE = re.compile(r"^sha256:[0-9a-f]{16,64}$")
 _NEGATIVE_CONFIRMATION_RE = re.compile(
     r"(未指定|没有指定|未确认|没有确认|未明确|用户未|用户没有|not specified|not confirmed|unconfirmed|"
@@ -118,9 +127,20 @@ def validate_spec_audit_file(
         component_catalog=component_catalog,
         require_confirmed_coverage=require_confirmed_coverage,
     )
-    if verify_confirmation_table:
+    if not isinstance(payload, dict):
+        return result
+    requires_table = _requires_spec_confirmation_table(
+        status=payload.get("status"),
+        audit_conclusion=payload.get("audit_conclusion"),
+        confirmation_status=payload.get("user_confirmation_status"),
+    )
+    requires_event = _requires_confirmation_event(
+        status=payload.get("status"),
+        confirmation_status=payload.get("user_confirmation_status"),
+    )
+    if verify_confirmation_table or requires_table or requires_event:
         errors = list(result["errors"])
-        errors.extend(_validate_spec_confirmation_table_artifact(payload.get("spec_confirmation_table"), audit_path))
+        errors.extend(_validate_spec_confirmation_table_artifact(payload.get("spec_confirmation_table"), audit_path, spec=spec))
         errors.extend(
             _validate_confirmation_event_artifact(
                 payload.get("confirmation_event"),
@@ -184,11 +204,41 @@ def validate_spec_audit(
             errors.append({"path": "audit_conclusion", "message": "must be all_pass when status is pass"})
         if confirmation_status != "confirmed":
             errors.append({"path": "user_confirmation_status", "message": "must be confirmed when status is pass"})
+    if confirmation_status == "confirmed" and status != "pass":
+        errors.append({"path": "status", "message": "must be pass when user_confirmation_status is confirmed"})
     if confirmation_status == "confirmed" and audit_conclusion != "all_pass":
         errors.append({"path": "audit_conclusion", "message": "must be all_pass when user_confirmation_status is confirmed"})
+    if status == "fail" and audit_conclusion != "fail":
+        errors.append({"path": "audit_conclusion", "message": "must be fail when status is fail"})
+    if audit_conclusion == "blocked" and status != "block":
+        errors.append({"path": "status", "message": "must be block when audit_conclusion is blocked"})
+    if status == "block" and audit_conclusion == "all_pass" and confirmation_status != "pending":
+        errors.append(
+            {
+                "path": "user_confirmation_status",
+                "message": "must be pending for an all_pass audit awaiting user confirmation",
+            }
+        )
+    if (
+        isinstance(status, str)
+        and status in _ALLOWED_STATUS
+        and isinstance(audit_conclusion, str)
+        and audit_conclusion in _ALLOWED_AUDIT_CONCLUSION
+        and isinstance(confirmation_status, str)
+        and confirmation_status in _ALLOWED_CONFIRMATION_STATUS
+        and (status, audit_conclusion, confirmation_status) not in _ALLOWED_STATE_TRIPLES
+    ):
+        errors.append(
+            {
+                "path": "state",
+                "message": "must be one of pass/all_pass/confirmed, block/all_pass/pending, "
+                "block/blocked/pending, block/blocked/rejected, fail/fail/pending, or fail/fail/rejected",
+            }
+        )
 
     _validate_spec_confirmation_table(
         payload.get("spec_confirmation_table"),
+        audit_conclusion=audit_conclusion,
         require_table=_requires_spec_confirmation_table(
             status=status,
             audit_conclusion=audit_conclusion,
@@ -425,7 +475,13 @@ def _requires_confirmation_event(*, status: Any, confirmation_status: Any) -> bo
     return status == "pass" or confirmation_status == "confirmed"
 
 
-def _validate_spec_confirmation_table(value: Any, *, require_table: bool, errors: list[dict[str, str]]) -> None:
+def _validate_spec_confirmation_table(
+    value: Any,
+    *,
+    audit_conclusion: Any,
+    require_table: bool,
+    errors: list[dict[str, str]],
+) -> None:
     if value is None:
         if require_table:
             errors.append(
@@ -434,6 +490,14 @@ def _validate_spec_confirmation_table(value: Any, *, require_table: bool, errors
                     "message": "must be present when audit is all_pass, pending user confirmation, or confirmed",
                 }
             )
+        return
+    if audit_conclusion == "blocked":
+        errors.append(
+            {
+                "path": "spec_confirmation_table",
+                "message": "must be null or omitted when audit_conclusion is blocked",
+            }
+        )
         return
     if not isinstance(value, dict):
         errors.append({"path": "spec_confirmation_table", "message": "must be an object or null"})
@@ -475,7 +539,7 @@ def _validate_confirmation_event(value: Any, *, require_event: bool, errors: lis
             errors.append({"path": f"confirmation_event.{field}", "message": "must be a sha256:<hex> hash"})
 
 
-def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path) -> list[dict[str, str]]:
+def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path, *, spec: Any | None = None) -> list[dict[str, str]]:
     errors: list[dict[str, str]] = []
     if not isinstance(value, dict):
         return errors
@@ -489,8 +553,9 @@ def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path) -> 
     if not table_path.exists():
         errors.append({"path": "spec_confirmation_table.path", "message": f"file not found: {raw_path}"})
         return errors
-    full_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
-    short_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()[:16]}"
+    table_bytes = table_path.read_bytes()
+    full_hash = f"sha256:{hashlib.sha256(table_bytes).hexdigest()}"
+    short_hash = f"sha256:{hashlib.sha256(table_bytes).hexdigest()[:16]}"
     if recorded_hash not in {short_hash, full_hash}:
         errors.append(
             {
@@ -498,7 +563,184 @@ def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path) -> 
                 "message": f"hash mismatch: recorded={recorded_hash}, actual={short_hash}",
             }
         )
+    if spec is not None:
+        try:
+            table_text = table_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            errors.append(
+                {
+                    "path": "spec_confirmation_table.content",
+                    "message": f"must be UTF-8 Markdown: {exc}",
+                }
+            )
+        else:
+            errors.extend(_validate_spec_confirmation_table_content(table_text, spec))
     return errors
+
+
+def _validate_spec_confirmation_table_content(table_text: str, spec: Any) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    try:
+        effective_spec = spec.to_effective_dict()
+    except AttributeError:
+        effective_spec = spec
+    expected_fields = dict(_flatten_effective_fields(effective_spec))
+    table_rows = _parse_markdown_table(table_text)
+    if table_rows is None:
+        return [
+            {
+                "path": "spec_confirmation_table.content",
+                "message": "must be a Markdown table with Section, Field path, Spec value, Source, "
+                "Audit status, and Impact columns",
+            }
+        ]
+    field_rows: dict[str, str] = {}
+    for index, row in enumerate(table_rows):
+        field_path = row.get("field path", "").strip()
+        if not field_path:
+            errors.append({"path": f"spec_confirmation_table.content[{index}].field_path", "message": "must be non-empty"})
+            continue
+        if field_path in field_rows:
+            errors.append(
+                {
+                    "path": f"spec_confirmation_table.content[{field_path}]",
+                    "message": "duplicate effective StrategySpec field row",
+                }
+            )
+            continue
+        if field_path not in expected_fields:
+            errors.append(
+                {
+                    "path": f"spec_confirmation_table.content[{field_path}]",
+                    "message": "unknown field path not present in effective StrategySpec",
+                }
+            )
+            continue
+        section = row.get("section", "").strip()
+        expected_section = field_path.split(".", 1)[0]
+        if section != expected_section:
+            errors.append(
+                {
+                    "path": f"spec_confirmation_table.content[{field_path}].section",
+                    "message": f"must be {expected_section}",
+                }
+            )
+        audit_status = row.get("audit status", "").strip().lower()
+        if audit_status != "confirmed":
+            errors.append(
+                {
+                    "path": f"spec_confirmation_table.content[{field_path}].audit_status",
+                    "message": "must be confirmed",
+                }
+            )
+        for column in ("source", "impact"):
+            if not row.get(column, "").strip():
+                errors.append(
+                    {
+                        "path": f"spec_confirmation_table.content[{field_path}].{column.replace(' ', '_')}",
+                        "message": "must be non-empty",
+                    }
+                )
+        field_rows[field_path] = row.get("spec value", "")
+    if not field_rows:
+        return [
+            {
+                "path": "spec_confirmation_table.content",
+                "message": "must include one row for every effective StrategySpec field",
+            }
+        ]
+    for field_path, expected_value in expected_fields.items():
+        if field_path not in field_rows:
+            errors.append(
+                {
+                    "path": "spec_confirmation_table.content",
+                    "message": f"missing effective StrategySpec field {field_path}",
+                }
+            )
+            continue
+        if not _markdown_value_matches(field_rows[field_path], expected_value):
+            errors.append(
+                {
+                    "path": "spec_confirmation_table.content",
+                    "message": f"value for {field_path} does not match effective StrategySpec value",
+                }
+            )
+    return errors
+
+
+def _parse_markdown_table(table_text: str) -> list[dict[str, str]] | None:
+    rows: list[list[str]] = []
+    for raw_line in table_text.splitlines():
+        line = raw_line.strip()
+        cells = _split_markdown_table_row(line)
+        if cells is None:
+            continue
+        if cells and all(cell and set(cell).issubset({"-", ":"}) for cell in cells):
+            continue
+        rows.append(cells)
+    if len(rows) < 2:
+        return None
+    headers = [_normalize_markdown_header(cell) for cell in rows[0]]
+    if len(headers) != len(set(headers)):
+        return None
+    if any(column not in headers for column in _REQUIRED_CONFIRMATION_TABLE_COLUMNS):
+        return None
+    parsed: list[dict[str, str]] = []
+    for cells in rows[1:]:
+        if len(cells) != len(headers):
+            return None
+        parsed.append({headers[index]: cells[index].strip() for index in range(len(headers))})
+    return parsed
+
+
+def _split_markdown_table_row(line: str) -> list[str] | None:
+    if not line.startswith("|") or not line.endswith("|"):
+        return None
+    cells: list[str] = []
+    current: list[str] = []
+    index = 1
+    end = len(line) - 1
+    while index < end:
+        char = line[index]
+        if char == "\\" and index + 1 < end and line[index + 1] == "|":
+            current.append("|")
+            index += 2
+            continue
+        if char == "|":
+            cells.append("".join(current).strip())
+            current = []
+            index += 1
+            continue
+        current.append(char)
+        index += 1
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _normalize_markdown_header(value: str) -> str:
+    return " ".join(value.strip().lower().replace("_", " ").split())
+
+
+def _markdown_value_matches(value_text: str, expected_value: Any) -> bool:
+    stripped = value_text.strip().strip("`").strip()
+    if _json_equivalent(stripped, expected_value):
+        return True
+    variants = {
+        json.dumps(expected_value, sort_keys=True, default=str),
+        json.dumps(expected_value, sort_keys=True, default=str, ensure_ascii=False),
+        str(expected_value),
+    }
+    if expected_value is None:
+        variants.update({"null", "None"})
+    if isinstance(expected_value, bool):
+        variants.update({str(expected_value).lower(), str(expected_value)})
+    if stripped in variants:
+        return True
+    try:
+        parsed = json.loads(stripped)
+    except json.JSONDecodeError:
+        return False
+    return _json_equivalent(parsed, expected_value)
 
 
 def _validate_confirmation_event_artifact(

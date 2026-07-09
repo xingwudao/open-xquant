@@ -63,6 +63,7 @@ Before compiling, read `spec_audit.json` and block unless all of these are
 true:
 
 - `status: pass`
+- `schema_version: 4`
 - `spec_provenance_pass: true`
 - `audit_conclusion: all_pass`
 - `user_confirmation_status: confirmed`
@@ -71,8 +72,17 @@ true:
   SPEC table path/hash, and records `spec_audit_path` plus `spec_audit_hash`
   for the pre-confirmation `spec_audit.json`. The JSONL line must match the
   audit reference for `path`, `event_id`, `line_number`, `event_hash`,
-  `artifact_path`, `artifact_hash`, `spec_audit_path`, and
-  `spec_audit_hash`.
+	  `artifact_path`, `artifact_hash`, `spec_audit_path`, and
+	  `spec_audit_hash`.
+
+Before compiling, run deterministic validation and block unless it exits 0:
+
+```bash
+<resolved_runner> spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json \
+  --spec versions/<version_id>/04_spec_build/strategy_spec.yaml \
+  --strict-confirmed \
+  --json
+```
 
 An `audit_conclusion: all_pass` audit with
 `user_confirmation_status: pending` is still blocked. Do not treat it as

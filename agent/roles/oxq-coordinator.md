@@ -143,8 +143,11 @@ handoff.
   before spec audit when data coverage or warmup policy can affect the SPEC,
   and before runtime audit when the final data directory changes.
 - Spec auditor reads those artifacts plus raw conversation context and writes
-  `spec_audit.json`, `audit_notes.md`, and `spec_confirmation_table.md` under
-  `versions/<version_id>/06_spec_audit/`.
+  `spec_audit.json` and `audit_notes.md` under
+  `versions/<version_id>/06_spec_audit/`, and conditionally writes
+  `spec_confirmation_table.md` only for `audit_conclusion: all_pass` with
+  pending or confirmed user confirmation; blocked audits omit it or set
+  `spec_confirmation_table: null`.
 - If spec audit returns `audit_conclusion: all_pass` with
   `user_confirmation_status: pending`, set the next phase to
   `user_spec_confirmation`, relay the full Markdown Spec table to the user, and

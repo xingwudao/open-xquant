@@ -104,6 +104,68 @@ def _pre_confirmation_spec_audit_hash(payload: dict[str, Any]) -> str:
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
 
+def _spec_confirmation_table(spec: dict[str, Any]) -> str:
+    rows = [
+        "| Section | Field path | Spec value | Source | Audit status | Impact |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for field_path, value in _flatten_effective_fields(spec):
+        section = field_path.split(".", 1)[0]
+        rows.append(
+            "| "
+            + " | ".join(
+                [
+                    section,
+                    field_path,
+                    json.dumps(value, sort_keys=True, default=str),
+                    "User confirmed full SPEC table",
+                    "confirmed",
+                    "material",
+                ]
+            )
+            + " |"
+        )
+    return "\n".join(rows) + "\n"
+
+
+def _write_bound_spec_audit_file(tmp_path: Path, spec: dict[str, Any], table_text: str) -> Path:
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text(table_text, encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+    return audit_path
+
+
+def _flatten_effective_fields(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        fields: list[tuple[str, Any]] = []
+        for key in sorted(value):
+            child_path = f"{prefix}.{key}" if prefix else str(key)
+            fields.extend(_flatten_effective_fields(value[key], child_path))
+        return fields
+    if isinstance(value, list):
+        if all(not isinstance(item, (dict, list)) for item in value):
+            return [(prefix, value)]
+        fields = []
+        for index, item in enumerate(value):
+            fields.extend(_flatten_effective_fields(item, f"{prefix}[{index}]"))
+        return fields
+    return [(prefix, value)]
+
+
 def test_strict_confirmed_coverage_accepts_direct_user_evidence() -> None:
     spec = {"execution": {"initial_cash": 100000}}
     payload = _payload(
@@ -145,6 +207,31 @@ def test_pass_audit_requires_confirmation_event_reference() -> None:
 
     assert result["status"] == "fail"
     assert any(error["path"] == "confirmation_event" for error in result["errors"])
+
+
+def test_confirmed_user_confirmation_requires_pass_status() -> None:
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["status"] = "block"
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "status" and "must be pass" in error["message"] for error in result["errors"])
+
+
+def test_state_machine_rejects_block_fail_pending_state() -> None:
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["status"] = "block"
+    payload["audit_conclusion"] = "fail"
+    payload["user_confirmation_status"] = "pending"
+    payload["spec_provenance_pass"] = False
+    payload["spec_confirmation_table"] = None
+    payload["blocking_findings"] = [{"message": "invalid state triple"}]
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "state" for error in result["errors"])
 
 
 def test_pass_audit_rejects_blocking_field_audit_row() -> None:
@@ -405,6 +492,20 @@ def test_blocked_audit_may_omit_spec_confirmation_table() -> None:
     assert result["errors"] == []
 
 
+def test_blocked_audit_rejects_non_null_spec_confirmation_table() -> None:
+    payload = _payload([])
+    payload["status"] = "block"
+    payload["audit_conclusion"] = "blocked"
+    payload["user_confirmation_status"] = "pending"
+    payload["spec_provenance_pass"] = False
+    payload["blocking_findings"] = [{"message": "execution.initial_cash mistranslated"}]
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "spec_confirmation_table" for error in result["errors"])
+
+
 def test_all_pass_pending_audit_requires_spec_confirmation_table() -> None:
     payload = _payload([])
     payload["status"] = "block"
@@ -437,6 +538,16 @@ def test_all_pass_pending_audit_rejects_blocking_unsupported_mapping() -> None:
 
     assert result["status"] == "fail"
     assert any(error["path"] == "unsupported_mappings" for error in result["errors"])
+
+
+def test_spec_audit_file_rejects_non_object_json_without_crashing(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    audit_path.write_text("[]", encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "$" for error in result["errors"])
 
 
 def test_strict_spec_audit_file_rejects_missing_confirmation_table(tmp_path) -> None:
@@ -474,11 +585,12 @@ def test_strict_spec_audit_file_rejects_stale_confirmation_table_hash(tmp_path) 
 
 
 def test_strict_spec_audit_file_accepts_bound_confirmation_event(tmp_path) -> None:
+    spec = {"execution": {"initial_cash": 100000}}
     audit_path = tmp_path / "spec_audit.json"
     table_path = tmp_path / "spec_confirmation_table.md"
-    table_path.write_text("| Field | Confirmed Value |\n| --- | --- |\n", encoding="utf-8")
+    table_path.write_text(_spec_confirmation_table(spec), encoding="utf-8")
     table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
-    payload = _payload([])
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
     payload["spec_confirmation_table"] = {
         "path": "spec_confirmation_table.md",
         "hash": table_hash,
@@ -492,10 +604,122 @@ def test_strict_spec_audit_file_accepts_bound_confirmation_event(tmp_path) -> No
     )
     audit_path.write_text(json.dumps(payload), encoding="utf-8")
 
-    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
 
     assert result["status"] == "pass"
     assert result["errors"] == []
+
+
+def test_strict_spec_audit_file_rejects_header_only_confirmation_table(tmp_path) -> None:
+    spec = {"execution": {"initial_cash": 100000}}
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text("| Field | Confirmed Value |\n| --- | --- |\n", encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "spec_confirmation_table.content" for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_duplicate_confirmation_table_field(tmp_path) -> None:
+    spec = {"execution": {"initial_cash": 100000}}
+    table_text = _spec_confirmation_table(spec).replace(
+        "| execution | execution.initial_cash | 100000 | User confirmed full SPEC table | confirmed | material |\n",
+        "| execution | execution.initial_cash | 1 | User confirmed full SPEC table | confirmed | material |\n"
+        "| execution | execution.initial_cash | 100000 | User confirmed full SPEC table | confirmed | material |\n",
+    )
+    audit_path = _write_bound_spec_audit_file(tmp_path, spec, table_text)
+
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any("duplicate effective StrategySpec field row" in error["message"] for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_unknown_confirmation_table_field(tmp_path) -> None:
+    spec = {"execution": {"initial_cash": 100000}}
+    table_text = _spec_confirmation_table(spec) + (
+        "| portfolio | portfolio.initial_cash | 100000 | User confirmed full SPEC table | confirmed | material |\n"
+    )
+    audit_path = _write_bound_spec_audit_file(tmp_path, spec, table_text)
+
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any("unknown field path" in error["message"] for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_unconfirmed_confirmation_table_row(tmp_path) -> None:
+    spec = {"execution": {"initial_cash": 100000}}
+    table_text = _spec_confirmation_table(spec).replace(
+        "| execution | execution.initial_cash | 100000 | User confirmed full SPEC table | confirmed | material |",
+        "| execution | execution.initial_cash | 100000 | User confirmed full SPEC table | unconfirmed | material |",
+    )
+    audit_path = _write_bound_spec_audit_file(tmp_path, spec, table_text)
+
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"].endswith(".audit_status") for error in result["errors"])
+
+
+def test_strict_spec_audit_file_accepts_escaped_pipe_in_confirmation_table_value(tmp_path) -> None:
+    spec = {"metadata": {"hypothesis": "alpha | beta"}}
+    table_text = "\n".join(
+        [
+            "| Section | Field path | Spec value | Source | Audit status | Impact |",
+            "| --- | --- | --- | --- | --- | --- |",
+            '| metadata | metadata.hypothesis | "alpha \\| beta" | User confirmed full SPEC table | confirmed | material |',
+            "",
+        ]
+    )
+    audit_path = _write_bound_spec_audit_file(tmp_path, spec, table_text)
+
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert result["status"] == "pass"
+    assert result["errors"] == []
+
+
+def test_strict_spec_audit_file_rejects_non_utf8_confirmation_table(tmp_path) -> None:
+    spec = {"execution": {"initial_cash": 100000}}
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_bytes(b"\xff\xfe\x00")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        tmp_path / "confirmations.jsonl",
+        artifact_path="spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any("UTF-8 Markdown" in error["message"] for error in result["errors"])
 
 
 def test_strict_spec_audit_file_rejects_confirmation_event_line_mismatch(tmp_path) -> None:
