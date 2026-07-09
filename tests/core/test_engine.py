@@ -1231,7 +1231,7 @@ def test_tradability_policy_blocks_pre_trade_rule_weight_sell() -> None:
     assert [trade.order.side for trade in result.trades] == ["BUY"]
     assert "AAA" in result.snapshots[1].positions
     assert result.snapshots[1].adjusted_weights["AAA"] == pytest.approx(1.0)
-    assert result.snapshots[1].rule_reasons == {"AAA": "rule_sell"}
+    assert result.snapshots[1].rule_reasons == {"AAA": "rule_sell; tradability_suspended_hold_existing"}
 
 
 def test_tradability_policy_blocks_post_trade_exit_sell() -> None:
@@ -1284,7 +1284,7 @@ def test_tradability_policy_blocks_post_trade_exit_sell() -> None:
     assert [trade.order.side for trade in result.trades] == ["BUY"]
     assert "AAA" in result.snapshots[1].positions
     assert result.snapshots[1].adjusted_weights["AAA"] == pytest.approx(1.0)
-    assert result.snapshots[1].rule_reasons == {"AAA": "exit_sell"}
+    assert result.snapshots[1].rule_reasons == {"AAA": "exit_sell; tradability_limit_down_sell_blocked"}
 
 
 def test_signal_to_position_mixed_hold_does_not_rebalance_held_symbol() -> None:

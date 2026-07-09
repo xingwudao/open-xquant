@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 from pathlib import Path
@@ -85,6 +86,7 @@ def validate_spec_audit_file(
     component_catalog_path: str | Path | None = None,
     component_catalog: Any | None = None,
     require_confirmed_coverage: bool = False,
+    verify_confirmation_table: bool = False,
 ) -> dict[str, Any]:
     """Validate a spec_audit.json file and return deterministic findings."""
     audit_path = Path(path)
@@ -109,12 +111,17 @@ def validate_spec_audit_file(
             return _result("fail", [{"path": "component_catalog", "message": f"invalid JSON: {exc}"}])
         except OSError as exc:
             return _result("fail", [{"path": "component_catalog", "message": str(exc)}])
-    return validate_spec_audit(
+    result = validate_spec_audit(
         payload,
         spec=spec,
         component_catalog=component_catalog,
         require_confirmed_coverage=require_confirmed_coverage,
     )
+    if verify_confirmation_table:
+        errors = list(result["errors"])
+        errors.extend(_validate_spec_confirmation_table_artifact(payload.get("spec_confirmation_table"), audit_path))
+        return _result("fail" if errors else "pass", errors)
+    return result
 
 
 def validate_spec_audit(
@@ -221,8 +228,15 @@ def validate_spec_audit(
     ):
         if field in payload and not isinstance(payload[field], list):
             errors.append({"path": field, "message": "must be a list"})
-    if status == "pass" or audit_conclusion == "all_pass":
-        for field in ("missing_user_requirements", "agent_added_fields", "contradictions", "blocking_findings"):
+    all_pass_gate = status == "pass" or audit_conclusion == "all_pass"
+    if all_pass_gate:
+        for field in (
+            "missing_user_requirements",
+            "agent_added_fields",
+            "contradictions",
+            "blocking_findings",
+            "unsupported_mappings",
+        ):
             value = payload.get(field)
             if isinstance(value, list) and value:
                 errors.append({"path": field, "message": "must be empty when audit is all_pass or status is pass"})
@@ -292,14 +306,14 @@ def validate_spec_audit(
         )
         if "blocking" not in item or not isinstance(item["blocking"], bool):
             errors.append({"path": f"unsupported_mappings[{index}].blocking", "message": "must be a boolean"})
-        elif status == "pass" and item["blocking"] is True:
+        elif all_pass_gate and item["blocking"] is True:
             errors.append(
                 {
                     "path": f"unsupported_mappings[{index}].blocking",
                     "message": "blocking unsupported mapping cannot pass formal spec audit",
                 }
             )
-        if status == "pass" and item.get("disposition") in {"blocked", "deferred_framework"}:
+        if all_pass_gate and item.get("disposition") in {"blocked", "deferred_framework"}:
             errors.append(
                 {
                     "path": f"unsupported_mappings[{index}].disposition",
@@ -387,6 +401,41 @@ def _validate_spec_confirmation_table(value: Any, *, require_table: bool, errors
     hash_type = value.get("hash_type", "sha256")
     if hash_type != "sha256":
         errors.append({"path": "spec_confirmation_table.hash_type", "message": "must be sha256"})
+
+
+def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if not isinstance(value, dict):
+        return errors
+    raw_path = value.get("path")
+    recorded_hash = value.get("hash")
+    if not isinstance(raw_path, str) or not raw_path:
+        return errors
+    if not isinstance(recorded_hash, str) or not _HASH_RE.fullmatch(recorded_hash):
+        return errors
+    table_path = _resolve_audit_artifact_path(raw_path, audit_path)
+    if not table_path.exists():
+        errors.append({"path": "spec_confirmation_table.path", "message": f"file not found: {raw_path}"})
+        return errors
+    full_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    short_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()[:16]}"
+    if recorded_hash not in {short_hash, full_hash}:
+        errors.append(
+            {
+                "path": "spec_confirmation_table.hash",
+                "message": f"hash mismatch: recorded={recorded_hash}, actual={short_hash}",
+            }
+        )
+    return errors
+
+
+def _resolve_audit_artifact_path(raw_path: str, audit_path: Path) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    if (audit_path.parent / path).exists():
+        return audit_path.parent / path
+    return Path.cwd() / path
 
 
 def _validate_catalog_hash(payload: dict[str, Any], component_catalog: Any) -> list[dict[str, str]]:

@@ -1842,6 +1842,79 @@ def test_compile_plan_uses_side_aware_fee_for_explicit_zero_side_rate() -> None:
     assert fee_model.calculate(Order(symbol="AAA", side="SELL", shares=100), Decimal("100")) == Decimal("10.000")
 
 
+def test_compile_run_applies_side_aware_sell_fee_to_sell_fills(tmp_path) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    frame = pd.DataFrame(
+        {
+            "open": [100, 90, 89, 94, 110, 111, 105, 104],
+            "high": [101, 91, 90, 95, 111, 112, 106, 105],
+            "low": [99, 89, 88, 93, 109, 110, 104, 103],
+            "close": [100, 90, 89, 94, 110, 111, 105, 104],
+            "volume": [1000, 1000, 1000, 1000, 1000, 1000, 1000, 1000],
+        },
+        index=pd.date_range("2024-01-02", periods=8, freq="B", tz="UTC"),
+    )
+    frame.to_parquet(data_dir / "CSI300.parquet")
+
+    spec = StrategySpec.template(
+        strategy_id="side_aware_sell_fee_e2e",
+        hypothesis="compiled backtests must apply sell-side taxes to SELL fills",
+    )
+    spec.universe.symbols = ["CSI300"]
+    spec.signal.indicators = {
+        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
+    }
+    spec.signal.rules = {
+        "timing": SignalRuleDef(
+            type="ROCTiming",
+            params={"column": "roc_1", "mode": "fixed", "bottom": -5.0, "top": 10.0},
+        )
+    }
+    spec.portfolio.type = "SignalToPosition"
+    spec.portfolio.params = {"signal": "timing"}
+    spec.validation.train_period = ["2024-01-02", "2024-01-05"]
+    spec.validation.test_period = ["2024-01-08", "2024-01-11"]
+    spec.benchmark.symbols = ["CSI300"]
+    spec.cost.fee_min = 0.0
+    spec.cost.buy_fee_rate = 0.0
+    spec.cost.sell_fee_rate = 0.0
+    spec.cost.sell_tax_rate = 0.01
+
+    _, run_dir = compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+    plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    trades = pd.read_csv(run_dir / "trades.csv")
+
+    assert plan["cost"]["fee_model"] == "SideAwarePercentageFee"
+    assert trades["side"].tolist() == ["BUY", "SELL", "BUY"]
+    assert trades.loc[trades["side"] == "BUY", "fee"].tolist() == [0.0, 0.0]
+    assert trades.loc[trades["side"] == "SELL", "fee"].iloc[0] > 0.0
+
+
+def test_compile_plan_records_effective_top_n_defaults() -> None:
+    spec = StrategySpec.template(
+        strategy_id="top_n_effective_defaults",
+        hypothesis="runtime plans must expose material optimizer defaults",
+    )
+    spec.data.required_columns.append("score")
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "score", "n": 3}
+
+    plan = compile_plan(spec)
+
+    assert plan["portfolio"]["params"] == {
+        "score_col": "score",
+        "n": 3,
+        "filter_negative": True,
+        "max_weight": 1.0,
+        "pre_filter_signal": "",
+        "weighting": "score",
+        "ascending": False,
+    }
+    assert spec.to_effective_dict()["portfolio"]["params"] == plan["portfolio"]["params"]
+
+
 def test_metadata_compiled_plan_matches_constrained_portfolio_runtime_class() -> None:
     spec = StrategySpec.template(
         strategy_id="constrained_metadata_plan",

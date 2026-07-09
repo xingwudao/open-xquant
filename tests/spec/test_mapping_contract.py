@@ -93,7 +93,7 @@ def test_mapping_contract_rejects_unsupported_strategy_semantic_without_blocking
     assert result["status"] == "fail"
     assert any(
         error["path"] == "field_mappings[0].blocking"
-        and "unsupported strategy semantics require blocking=true" in error["message"]
+        and "unsupported mappings require blocking=true" in error["message"]
         for error in result["errors"]
     )
 
@@ -149,9 +149,36 @@ def test_mapping_contract_builder_pass_rejects_blocked_strategy_row() -> None:
     assert pass_result["status"] == "fail"
     assert any(
         error["path"] == "field_mappings[0].status"
-        and "builder pass requires strategy mappings to be mapped and non-blocking" in error["message"]
+        and "builder pass requires mappings to be mapped or excluded_non_material and non-blocking"
+        in error["message"]
         for error in pass_result["errors"]
     )
+
+
+def test_mapping_contract_builder_pass_rejects_unsupported_semantic_bypass() -> None:
+    payload = {
+        "schema_version": 1,
+        "source_format": "ebacktestcraft_yaml",
+        "field_mappings": [
+            {
+                "source_field": "portfolio.cross_sectional_winsorization",
+                "target_field": "",
+                "semantic": "unsupported",
+                "status": "unsupported",
+                "confirmation_required": False,
+                "blocking": False,
+                "reason": "No executable target was found for this cross-sectional transform.",
+            }
+        ],
+    }
+
+    base_result = validate_mapping_contract(payload)
+    pass_result = validate_mapping_contract_for_builder_pass(payload)
+
+    assert base_result["status"] == "fail"
+    assert pass_result["status"] == "fail"
+    assert any(error["path"] == "field_mappings[0].blocking" for error in base_result["errors"])
+    assert any(error["path"] == "field_mappings[0].status" for error in pass_result["errors"])
 
 
 def test_mapping_contract_accepts_effective_strategy_target_field() -> None:

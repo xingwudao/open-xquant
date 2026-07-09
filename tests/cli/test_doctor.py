@@ -222,6 +222,33 @@ def test_doctor_warns_when_version_governed_workspace_has_no_active_version(monk
     assert "lineage_versions_empty" in result["governance_warnings"]
 
 
+def test_doctor_treats_versions_dir_workspace_as_version_governed(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  current_manifest: current.json",
+                "  lineage_manifest: lineage.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (work / "versions").mkdir()
+    (work / "current.json").write_text(json.dumps({"active_version": "", "active_phase": ""}), encoding="utf-8")
+    (work / "lineage.json").write_text(json.dumps({"versions": []}), encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert "active_version_missing" in result["governance_warnings"]
+    assert "lineage_versions_empty" in result["governance_warnings"]
+
+
 def test_doctor_warns_when_version_governed_workspace_uses_hidden_root_manifests(monkeypatch, tmp_path) -> None:
     work = tmp_path / "work"
     (work / ".open-xquant").mkdir(parents=True)

@@ -158,6 +158,7 @@ Common commands:
 <runner> agent install --all-targets --profile standalone-agent --yes
 <runner> agent install --repair --yes
 <runner> agent upgrade --all-targets --yes
+<runner> agent upgrade --all-targets --from-local . --yes
 <runner> agent uninstall --all-targets --yes
 <runner> agent uninstall --all-targets --purge-config --yes
 ```

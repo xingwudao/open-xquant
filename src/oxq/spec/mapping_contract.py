@@ -100,11 +100,11 @@ def validate_mapping_contract(payload: Any) -> dict[str, Any]:
             )
         if semantic == "strategy" and status == "excluded_non_material":
             errors.append({"path": f"{path}.status", "message": "strategy semantics must be mapped, blocked, or unsupported"})
-        if semantic == "strategy" and status == "unsupported" and item.get("blocking") is not True:
+        if status == "unsupported" and item.get("blocking") is not True:
             errors.append(
                 {
                     "path": f"{path}.blocking",
-                    "message": "unsupported strategy semantics require blocking=true",
+                    "message": "unsupported mappings require blocking=true",
                 }
             )
         if semantic == "strategy" and status == "needs_user_confirmation" and item.get("blocking") is not True:
@@ -141,14 +141,12 @@ def validate_mapping_contract_for_builder_pass(payload: Any) -> dict[str, Any]:
     for index, item in enumerate(mappings):
         if not isinstance(item, dict):
             continue
-        if item.get("semantic") != "strategy":
-            continue
         status = item.get("status")
         if status in {"blocked", "unsupported", "needs_user_confirmation"} or item.get("blocking") is True:
             errors.append(
                 {
                     "path": f"field_mappings[{index}].status",
-                    "message": "builder pass requires strategy mappings to be mapped and non-blocking",
+                    "message": "builder pass requires mappings to be mapped or excluded_non_material and non-blocking",
                 }
             )
     return _result("fail" if errors else "pass", errors)

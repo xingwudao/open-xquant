@@ -340,6 +340,7 @@ class Engine:
             set_pending_buy_symbols(pending_buy_symbols)
         target_weights = strategy.portfolio.optimize(signals_data, indicators_data)
         raw_target_weights = dict(target_weights)
+        policy_reasons: dict[str, list[str]] = {}
         target_weights = _apply_limit_trade_policies(
             target_weights,
             filters=self._data_filters,
@@ -347,6 +348,7 @@ class Engine:
             date=date,
             portfolio=portfolio,
             prices=bar_prices,
+            reasons=policy_reasons,
         )
         optimizer_hold = bool(getattr(strategy.portfolio, "skip_rebalance", False))
 
@@ -481,6 +483,7 @@ class Engine:
             date=date,
             portfolio=portfolio,
             prices=bar_prices,
+            reasons=policy_reasons,
         )
 
         # ── Step 4: Trading algorithm (skip if hold) ──────────────────
@@ -596,6 +599,7 @@ class Engine:
                 date=date,
                 portfolio=portfolio,
                 prices=bar_prices,
+                reasons=policy_reasons,
             )
             for sym, target_ratio in exit_targets.items():
                 if sym not in portfolio.positions:
@@ -653,6 +657,12 @@ class Engine:
             for sym, pos in portfolio.positions.items()
         }
         tv = float(portfolio.total_value(prices))
+        combined_reasons = {symbol: list(reasons) for symbol, reasons in rule_reasons.items()}
+        for symbol, reasons in policy_reasons.items():
+            target = combined_reasons.setdefault(symbol, [])
+            for reason in reasons:
+                if reason not in target:
+                    target.append(reason)
         self._snapshots.append(
             BarSnapshot(
                 date=date,
@@ -661,7 +671,7 @@ class Engine:
                 positions=pos_snapshot,
                 cash=float(portfolio.cash),
                 total_value=tv,
-                rule_reasons={symbol: "; ".join(reasons) for symbol, reasons in rule_reasons.items()},
+                rule_reasons={symbol: "; ".join(reasons) for symbol, reasons in combined_reasons.items()},
             )
         )
 
@@ -786,6 +796,7 @@ def _apply_limit_trade_policies(
     date: pd.Timestamp,
     portfolio: Portfolio,
     prices: dict[str, Decimal],
+    reasons: dict[str, list[str]] | None = None,
 ) -> dict[str, float]:
     if filters is None:
         return target_weights
@@ -814,6 +825,7 @@ def _apply_limit_trade_policies(
         desired_weight = float(adjusted.get(symbol, 0.0))
         if suspension_policy == "hold_existing" and _row_truthy(row, "is_suspended"):
             locked_symbols.add(symbol)
+            _record_policy_reason(reasons, symbol, "tradability_suspended_hold_existing")
             if desired_weight != current_weight:
                 adjusted[symbol] = current_weight
             changed = True
@@ -822,11 +834,13 @@ def _apply_limit_trade_policies(
             if desired_weight > current_weight:
                 adjusted[symbol] = current_weight
                 locked_symbols.add(symbol)
+                _record_policy_reason(reasons, symbol, "tradability_limit_up_buy_blocked")
                 changed = True
         if getattr(filters, "limit_down_policy", "none") == "exclude_sell" and _row_truthy(row, "is_limit_down"):
             if desired_weight < current_weight:
                 adjusted[symbol] = current_weight
                 locked_symbols.add(symbol)
+                _record_policy_reason(reasons, symbol, "tradability_limit_down_sell_blocked")
                 changed = True
 
     if suspension_policy == "hold_existing":
@@ -837,6 +851,7 @@ def _apply_limit_trade_policies(
             if current_weight <= 0:
                 continue
             locked_symbols.add(symbol)
+            _record_policy_reason(reasons, symbol, "tradability_missing_bar_hold_existing")
             if float(adjusted.get(symbol, 0.0)) != current_weight:
                 adjusted[symbol] = current_weight
             changed = True
@@ -854,10 +869,19 @@ def _apply_limit_trade_policies(
     if scalable_weight > remaining_capacity:
         scale = remaining_capacity / scalable_weight if scalable_weight > 0 else 0.0
         for symbol in scalable_symbols:
-            adjusted[symbol] = float(adjusted[symbol]) * scale
+            scaled_weight = float(adjusted[symbol]) * scale
+            if scaled_weight != float(adjusted[symbol]):
+                _record_policy_reason(reasons, symbol, "tradability_scaled_for_locked_positions")
+            adjusted[symbol] = scaled_weight
     invested_weight = sum(max(0.0, float(weight)) for symbol, weight in adjusted.items() if symbol != "CASH")
     adjusted["CASH"] = max(0.0, 1.0 - invested_weight)
     return adjusted
+
+
+def _record_policy_reason(reasons: dict[str, list[str]] | None, symbol: str, reason: str) -> None:
+    if reasons is None:
+        return
+    reasons.setdefault(symbol, []).append(reason)
 
 
 def _effective_suspension_policy(filters: Any | None) -> str:

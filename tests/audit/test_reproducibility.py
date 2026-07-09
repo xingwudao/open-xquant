@@ -942,7 +942,15 @@ def _rewrite_run_with_archived_indicator_spec(run_dir: Path) -> None:
         "type": "TopNRanking",
         "runtime_type": "TopNRanking",
         "class": "oxq.portfolio.optimizers.TopNRankingOptimizer",
-        "params": {"score_col": "archived_score", "n": 1},
+        "params": {
+            "ascending": False,
+            "filter_negative": True,
+            "max_weight": 1.0,
+            "n": 1,
+            "pre_filter_signal": "",
+            "score_col": "archived_score",
+            "weighting": "score",
+        },
         "rules": {},
         "constraints": {
             "cash_reserve": 0.0,

@@ -173,17 +173,16 @@ def _workspace_required_paths(config: dict[str, Any]) -> list[Path]:
 def _uses_version_local_backtest_output(config: dict[str, Any]) -> bool:
     workflow = config.get("workflow")
     if not isinstance(workflow, dict):
-        return False
+        return _is_version_governed_workspace(config)
     return (
         workflow.get("layout") == "version_governed"
         and workflow.get("default_output_dir") == "versions/{active_version}/09_backtests"
-    )
+    ) or _is_version_governed_workspace(config)
 
 
 def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
-    workflow = config.get("workflow")
     paths = config.get("paths")
-    if not isinstance(workflow, dict) or workflow.get("layout") != "version_governed":
+    if not _is_version_governed_workspace(config):
         return []
     if not isinstance(paths, dict):
         paths = {}
@@ -243,6 +242,14 @@ def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
             warnings.append(f"root_phase_artifact:{artifact}")
 
     return warnings
+
+
+def _is_version_governed_workspace(config: dict[str, Any]) -> bool:
+    workflow = config.get("workflow")
+    if isinstance(workflow, dict) and workflow.get("layout") == "version_governed":
+        return True
+    paths = config.get("paths")
+    return isinstance(paths, dict) and isinstance(paths.get("versions_dir"), str) and bool(paths["versions_dir"])
 
 
 def _root_manifest_path_warnings(paths: dict[str, Any]) -> list[str]:

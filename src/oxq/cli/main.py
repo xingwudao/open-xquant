@@ -104,8 +104,7 @@ def _active_workspace_version() -> str:
         return ""
     if not isinstance(workspace, dict):
         return ""
-    workflow = workspace.get("workflow")
-    if not isinstance(workflow, dict) or workflow.get("layout") != "version_governed":
+    if not _is_version_governed_workspace(workspace):
         return ""
     paths = workspace.get("paths")
     current_manifest = "current.json"
@@ -860,6 +859,13 @@ def compare_runs(left_run_dir: str, right_run_dir: str, as_json: bool):
     help="component_catalog.json used by the audited spec gate.",
 )
 @click.option(
+    "--authorization",
+    "authorization_path",
+    default=None,
+    type=click.Path(exists=False, dir_okay=False),
+    help="backtest_authorization.json approving the formal audited backtest.",
+)
+@click.option(
     "--component-manifest",
     "component_manifest",
     multiple=True,
@@ -879,6 +885,7 @@ def run(
     spec_audit: str | None,
     runtime_audit: str | None,
     component_catalog: str | None,
+    authorization_path: str | None,
     component_manifest: tuple[str, ...],
     allow_unaudited: bool,
     as_json: bool,
@@ -921,6 +928,11 @@ def run(
         Path(component_catalog)
         if component_catalog is not None
         else (None if allow_unaudited and pre_run_audit_path is None else _default_component_catalog_path(spec_path))
+    )
+    pre_run_authorization_path = (
+        Path(authorization_path)
+        if authorization_path is not None
+        else _default_backtest_authorization_path(pre_run_runtime_audit_path)
     )
     if pre_run_runtime_audit_path is not None and pre_run_audit_path is None:
         message = "spec_audit.json is required when a runtime audit gates a formal backtest"
@@ -1003,7 +1015,6 @@ def run(
             click.echo(json.dumps(_backtest_json_failure("output_dir_failed", e.message), indent=2))
             raise SystemExit(1)
         raise
-
     if component_manifest_payloads:
         out_path = Path(resolved_out)
         if out_path.name == "auto":
@@ -1070,6 +1081,30 @@ def run(
                         indent=2,
                     )
                 )
+                raise SystemExit(1)
+            raise
+
+    if formal_gated_run:
+        try:
+            _require_backtest_authorization(
+                pre_run_authorization_path,
+                spec=gate_spec,
+                spec_path=spec_path,
+                spec_audit_path=pre_run_audit_path,
+                runtime_audit_path=pre_run_runtime_audit_path,
+                component_catalog_path=pre_run_component_catalog_path,
+                component_manifest_paths=component_manifest,
+                data_dir=data_dir,
+                run_out=Path(resolved_out),
+            )
+        except click.ClickException as e:
+            check = (
+                "backtest_authorization_missing"
+                if pre_run_authorization_path is None or not pre_run_authorization_path.exists()
+                else "backtest_authorization_failed"
+            )
+            if as_json:
+                click.echo(json.dumps(_backtest_json_failure(check, e.message, warnings=validation.warnings), indent=2))
                 raise SystemExit(1)
             raise
 
@@ -1559,6 +1594,122 @@ def _require_runtime_audit_hashes(
             )
 
 
+def _require_backtest_authorization(
+    authorization_path: Path | None,
+    *,
+    spec: StrategySpec,
+    spec_path: Path,
+    spec_audit_path: Path | None,
+    runtime_audit_path: Path | None,
+    component_catalog_path: Path | None,
+    component_manifest_paths: tuple[str, ...],
+    data_dir: str | None,
+    run_out: Path,
+) -> None:
+    """Require coordinator authorization before an audited formal backtest."""
+    if authorization_path is None or not authorization_path.exists():
+        raise click.ClickException(
+            "backtest_authorization.json is required before an audited formal backtest"
+        )
+    if spec_audit_path is None:
+        raise click.ClickException("spec_audit.json is required by backtest authorization")
+    if runtime_audit_path is None:
+        raise click.ClickException("runtime_audit.json is required by backtest authorization")
+    if component_catalog_path is None:
+        raise click.ClickException("component_catalog.json is required by backtest authorization")
+    try:
+        payload = json.loads(authorization_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise click.ClickException(
+            f"backtest_authorization.json is not valid JSON: {authorization_path}: {exc.msg}"
+        ) from exc
+    if not isinstance(payload, dict):
+        raise click.ClickException("backtest_authorization.json must be an object")
+    status = _require_json_str(payload, "status")
+    if status != "authorized":
+        raise click.ClickException(f"backtest authorization status must be authorized: {status}")
+
+    _require_authorized_path(payload, "strategy_spec", spec_path, authorization_path)
+    _require_authorized_path(payload, "spec_audit", spec_audit_path, authorization_path)
+    _require_authorized_path(payload, "runtime_audit", runtime_audit_path, authorization_path)
+    _require_authorized_path(payload, "component_catalog", component_catalog_path, authorization_path)
+    _require_authorized_path(payload, "run_out", run_out, authorization_path)
+    _require_authorized_path(
+        payload,
+        "data_dir",
+        Path(_resolve_effective_data_dir(spec, data_dir)),
+        authorization_path,
+    )
+    _require_authorized_manifest_paths(payload, component_manifest_paths, authorization_path)
+
+    from oxq.spec.compiler import _hash_json_file
+
+    expected = {
+        "spec_hash": spec.compute_hash(),
+        "spec_audit_hash": _hash_json_file(spec_audit_path),
+        "runtime_audit_hash": _hash_json_file(runtime_audit_path),
+    }
+    for field, value in expected.items():
+        recorded = _require_json_str(payload, field)
+        if recorded != value:
+            raise click.ClickException(
+                f"backtest authorization {field} mismatch: authorization={recorded}, expected={value}"
+            )
+
+
+def _require_authorized_path(
+    payload: dict[str, object],
+    field: str,
+    expected: Path,
+    authorization_path: Path,
+) -> None:
+    raw = _require_json_str(payload, field)
+    if not _authorization_path_matches(raw, expected, authorization_path):
+        raise click.ClickException(
+            f"backtest authorization {field} mismatch: authorization={raw}, expected={expected}"
+        )
+
+
+def _require_authorized_manifest_paths(
+    payload: dict[str, object],
+    component_manifest_paths: tuple[str, ...],
+    authorization_path: Path,
+) -> None:
+    raw_paths = payload.get("component_manifests")
+    if not isinstance(raw_paths, list) or not all(isinstance(item, str) for item in raw_paths):
+        raise click.ClickException("backtest authorization component_manifests must be a list of strings")
+    recorded = {
+        str(_authorization_resolve_path(Path(item), authorization_path))
+        for item in raw_paths
+    }
+    expected = {str(_resolve_path_for_compare(Path(item))) for item in component_manifest_paths}
+    if recorded != expected:
+        raise click.ClickException(
+            "backtest authorization component_manifests mismatch: "
+            f"authorization={sorted(recorded)}, expected={sorted(expected)}"
+        )
+
+
+def _authorization_path_matches(raw_path: str, expected: Path, authorization_path: Path) -> bool:
+    expected_path = _resolve_path_for_compare(expected)
+    recorded = Path(raw_path)
+    candidates = [recorded] if recorded.is_absolute() else [authorization_path.parent / recorded, Path.cwd() / recorded]
+    return any(_resolve_path_for_compare(candidate) == expected_path for candidate in candidates)
+
+
+def _authorization_resolve_path(path: Path, authorization_path: Path) -> Path:
+    if path.is_absolute():
+        return _resolve_path_for_compare(path)
+    auth_relative = authorization_path.parent / path
+    if auth_relative.exists():
+        return _resolve_path_for_compare(auth_relative)
+    return _resolve_path_for_compare(Path.cwd() / path)
+
+
+def _resolve_path_for_compare(path: Path) -> Path:
+    return path.expanduser().resolve(strict=False)
+
+
 def _normalize_spec_for_run(spec: StrategySpec) -> StrategySpec:
     """Normalize a spec with the same serialization boundary as run artifacts."""
     return StrategySpec.from_dict(spec.to_dict())
@@ -1853,6 +2004,12 @@ def _default_runtime_audit_path(spec_path: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _default_backtest_authorization_path(runtime_audit_path: Path | None) -> Path | None:
+    if runtime_audit_path is None:
+        return None
+    return runtime_audit_path.parent / "backtest_authorization.json"
+
+
 def _default_component_catalog_path(spec_path: Path) -> Path | None:
     candidate = spec_path.parent / "component_catalog.json"
     return candidate if candidate.exists() else None
@@ -1865,9 +2022,9 @@ def _resolve_backtest_output_dir(out: str | None) -> str:
     if not workspace:
         return "runs/auto"
     workflow = workspace.get("workflow")
-    if not isinstance(workflow, dict):
-        return "runs/auto"
-    configured = workflow.get("default_output_dir")
+    configured = workflow.get("default_output_dir") if isinstance(workflow, dict) else None
+    if not isinstance(configured, str) and _is_version_governed_workspace(workspace):
+        configured = "versions/{active_version}/09_backtests"
     if not isinstance(configured, str) or not configured:
         return "runs/auto"
     if "{active_version}" not in configured:
@@ -1878,6 +2035,14 @@ def _resolve_backtest_output_dir(out: str | None) -> str:
             "workspace default_output_dir requires current.json active_version; run `oxq research init` or repair current.json"
         )
     return configured.replace("{active_version}", active_version)
+
+
+def _is_version_governed_workspace(workspace: dict) -> bool:
+    workflow = workspace.get("workflow")
+    if isinstance(workflow, dict) and workflow.get("layout") == "version_governed":
+        return True
+    paths = workspace.get("paths")
+    return isinstance(paths, dict) and isinstance(paths.get("versions_dir"), str) and bool(paths["versions_dir"])
 
 
 def _workspace_active_version(workspace: dict) -> str:
@@ -2133,6 +2298,7 @@ def spec_audit_validate(
         spec_path=spec_path,
         component_catalog_path=component_catalog_path,
         require_confirmed_coverage=strict_confirmed,
+        verify_confirmation_table=strict_confirmed,
     )
     try:
         audit_payload = json.loads(Path(audit_file).read_text(encoding="utf-8"))

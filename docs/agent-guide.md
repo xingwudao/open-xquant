@@ -322,6 +322,9 @@ uv run oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml 
 uv run oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \
   --component-manifest components/bundles/<bundle_id>/component_manifest.json \
   --out versions/<version_id>/07_compile_preview
+# oxq-coordinator must first write:
+# versions/<version_id>/08_runtime_audit/backtest_authorization.json
+# oxq-runner-worker then uses run-authorized-backtest.
 uv run oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \
   --component-manifest components/bundles/<bundle_id>/component_manifest.json \
   --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json \

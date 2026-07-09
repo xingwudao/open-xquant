@@ -46,6 +46,9 @@ Use the `run-authorized-backtest` skill.
     "strategy_spec.yaml",
     "spec_audit.json",
     "runtime_audit.json",
+    "reproducibility_audit.json",
+    "research_bias_audit.json",
+    "robustness.json",
     "research_report.md",
     "research_report.html"
   ]

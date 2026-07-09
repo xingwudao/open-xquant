@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from oxq.core.component_catalog import _catalog_hash
-from oxq.spec.audit_schema import validate_spec_audit
+from oxq.spec.audit_schema import validate_spec_audit, validate_spec_audit_file
 from oxq.spec.schema import StrategySpec
 
 
@@ -277,6 +277,61 @@ def test_all_pass_pending_audit_requires_spec_confirmation_table() -> None:
 
     assert result["status"] == "fail"
     assert any(error["path"] == "spec_confirmation_table" for error in result["errors"])
+
+
+def test_all_pass_pending_audit_rejects_blocking_unsupported_mapping() -> None:
+    payload = _payload([])
+    payload["status"] = "block"
+    payload["audit_conclusion"] = "all_pass"
+    payload["user_confirmation_status"] = "pending"
+    payload["unsupported_mappings"] = [
+        {
+            "source_field": "portfolio.cross_sectional_winsorization",
+            "requested_semantic": "clip cross-sectional scores before rank",
+            "reason": "No executable target exists.",
+            "disposition": "blocked",
+            "blocking": True,
+        }
+    ]
+
+    result = validate_spec_audit(payload)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "unsupported_mappings" for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_missing_confirmation_table(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": "sha256:" + "1" * 16,
+        "hash_type": "sha256",
+    }
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "spec_confirmation_table.path" for error in result["errors"])
+
+
+def test_strict_spec_audit_file_rejects_stale_confirmation_table_hash(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    table_path = tmp_path / "spec_confirmation_table.md"
+    table_path.write_text("| Field | Value |\n| --- | --- |\n", encoding="utf-8")
+    payload = _payload([])
+    payload["spec_confirmation_table"] = {
+        "path": "spec_confirmation_table.md",
+        "hash": "sha256:" + "1" * 16,
+        "hash_type": "sha256",
+    }
+    audit_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = validate_spec_audit_file(audit_path, verify_confirmation_table=True)
+
+    assert result["status"] == "fail"
+    assert any(error["path"] == "spec_confirmation_table.hash" for error in result["errors"])
 
 
 def test_spec_audit_requires_idea_and_mapping_contract_fields() -> None:

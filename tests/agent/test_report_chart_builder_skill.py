@@ -333,6 +333,7 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "Install And Upgrade Questions" in text
     assert "installed Agents must not depend on that file" in text
     assert "<runner> agent status" in text
+    assert "<runner> agent upgrade --all-targets --from-local . --yes" in text
     for leaf_skill in [
         "manage-strategy-version",
         "govern-research-workspace",
@@ -383,6 +384,9 @@ def test_coordinator_role_documents_subagent_workflow() -> None:
     assert "Data inspector checks required symbols" in text
     assert "oxq-data-inspection-worker" in text
     assert "Spec auditor reads those artifacts" in text
+    phase_order = text[text.index("## Strategy Phase Order"): text.index("If `oxq-strategy-idea-auditor-worker` blocks")]
+    assert phase_order.index("`oxq-strategy-builder-worker`") < phase_order.index("`oxq-data-inspection-worker`")
+    assert phase_order.index("`oxq-data-inspection-worker`") < phase_order.index("`oxq-spec-auditor-worker`")
     assert "Runtime auditor reads the authorized spec/audit artifacts" in text
     assert "Runner reads `backtest_authorization.json`" in text
     assert "Do not\n  delegate this file to a generic worker" in text
@@ -1299,6 +1303,9 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "Do not run\n  `oxq registry export`" in role
     assert "`08_runtime_audit`, `09_backtests`, or any root-level path" in role
     assert "_hash_json_file(Path(...))" in role
+    assert role.count("reproducibility_audit.json") >= 2
+    assert role.count("research_bias_audit.json") >= 2
+    assert role.count("robustness.json") >= 2
     assert "uv run oxq audit reproducibility" not in text
     assert "uv run oxq audit research" not in text
     assert "uv run oxq robustness run" not in text

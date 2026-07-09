@@ -856,6 +856,9 @@ def _dataclass_to_canonical_dict(obj: Any) -> Any:
                 continue
             if isinstance(obj, PortfolioSection) and f.name == "rules" and not obj.rules:
                 continue
+            if isinstance(obj, PortfolioSection) and f.name == "params":
+                result[f.name] = effective_portfolio_params(obj.type, obj.params)
+                continue
             result[f.name] = _dataclass_to_canonical_dict(getattr(obj, f.name))
         return result
     if isinstance(obj, (list, tuple)):
@@ -863,6 +866,22 @@ def _dataclass_to_canonical_dict(obj: Any) -> Any:
     if isinstance(obj, dict):
         return {k: _dataclass_to_canonical_dict(v) for k, v in obj.items()}
     return obj
+
+
+def effective_portfolio_params(portfolio_type: str, params: dict[str, Any]) -> dict[str, Any]:
+    """Return material optimizer params after runtime defaults are applied."""
+    effective = dict(params)
+    if portfolio_type == "TopNRanking":
+        defaults = {
+            "n": 5,
+            "filter_negative": True,
+            "max_weight": 1.0,
+            "pre_filter_signal": "",
+            "weighting": "score",
+            "ascending": False,
+        }
+        return {**defaults, **effective}
+    return effective
 
 
 def _effective_metrics_dict(obj: MetricsSection) -> dict[str, Any]:

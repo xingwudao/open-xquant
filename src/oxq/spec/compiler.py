@@ -34,7 +34,7 @@ from oxq.portfolio.analytics import RunResult
 from oxq.portfolio.metrics_profile import compute_equity_curve_metrics, compute_profile_metrics, metric_assumptions
 from oxq.rules.constraint import CalendarRebalanceRule, RebalanceFrequencyRule
 from oxq.spec.execution import derive_execution_semantics
-from oxq.spec.schema import StrategySpec
+from oxq.spec.schema import StrategySpec, effective_portfolio_params
 from oxq.trade.fees import PercentageFee, SideAwarePercentageFee
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
 from oxq.trade.slippage import PercentageSlippage
@@ -103,7 +103,7 @@ def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
         optimizer = _SignalFilteredEqualWeightOptimizer(signal_names=signal_names, signal_types=signal_types)
         return _apply_portfolio_constraints(spec, optimizer)
 
-    return _apply_portfolio_constraints(spec, opt_cls(**spec.portfolio.params))
+    return _apply_portfolio_constraints(spec, opt_cls(**effective_portfolio_params(spec.portfolio.type, spec.portfolio.params)))
 
 
 class _LaggedIndicator:
@@ -885,7 +885,7 @@ def _build_compiled_plan(
             "type": spec.portfolio.type,
             "runtime_type": portfolio_runtime_type,
             "class": _class_ref(type(strategy.portfolio)),
-            "params": dict(spec.portfolio.params),
+            "params": effective_portfolio_params(spec.portfolio.type, spec.portfolio.params),
             "rules": {
                 name: {
                     "type": definition.type,
@@ -1017,7 +1017,7 @@ def _build_compiled_plan_from_spec_metadata(
             "type": spec.portfolio.type,
             "runtime_type": portfolio_runtime_type,
             "class": portfolio_class,
-            "params": dict(spec.portfolio.params),
+            "params": effective_portfolio_params(spec.portfolio.type, spec.portfolio.params),
             "rules": {
                 name: {
                     "type": definition.type,

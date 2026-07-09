@@ -135,6 +135,27 @@ def test_spec_init_defaults_to_active_version_spec_path(tmp_path) -> None:
         assert not (cwd_path / "strategy_spec.yaml").exists()
 
 
+def test_spec_init_treats_versions_dir_workspace_as_version_governed(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {"paths": {"versions_dir": "versions", "current_manifest": "current.json"}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(json.dumps({"active_version": "v009"}), encoding="utf-8")
+
+        result = runner.invoke(main, ["spec", "init", "versions dir governed"])
+
+        assert result.exit_code == 0, result.output
+        assert (cwd_path / "versions/v009/04_spec_build/strategy_spec.yaml").exists()
+        assert not (cwd_path / "strategy_spec.yaml").exists()
+
+
 def test_spec_init_fails_when_version_workspace_lacks_current_manifest(tmp_path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
@@ -1005,6 +1026,52 @@ def test_backtest_default_out_uses_version_governed_workspace_default(monkeypatc
     assert payload["run_dir"] == "versions/v001/09_backtests/run_001"
 
 
+def test_backtest_default_out_uses_versions_dir_workspace_default(monkeypatch, tmp_path) -> None:
+    (tmp_path / ".open-xquant").mkdir()
+    (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  current_manifest: current.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v002", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec_dir = tmp_path / "versions" / "v002" / "04_spec_build"
+    spec_dir.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="versions_dir_default_out",
+        hypothesis="versions_dir-only workspace should still use governed backtest output",
+    )
+    spec_path = spec_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    captured: dict[str, str | None] = {}
+
+    def fake_compile_run(spec, data_dir=None, out_dir=None):
+        captured["out_dir"] = out_dir
+        run_dir = Path(str(out_dir)) / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+        return object(), run_dir
+
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["out_dir"] == "versions/v002/09_backtests"
+
+
 def test_backtest_default_out_rejects_unsafe_active_version(monkeypatch, tmp_path) -> None:
     (tmp_path / ".open-xquant").mkdir()
     (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
@@ -1709,7 +1776,8 @@ def test_spec_audit_validate_rejects_pass_with_blocked_strategy_mapping(tmp_path
     payload = json.loads(result.output)
     assert any(
         error["path"] == "mapping_contract.builder_pass.field_mappings[0].status"
-        and "builder pass requires strategy mappings to be mapped and non-blocking" in error["message"]
+        and "builder pass requires mappings to be mapped or excluded_non_material and non-blocking"
+        in error["message"]
         for error in payload["errors"]
     )
 
@@ -1781,6 +1849,11 @@ def test_spec_audit_validate_strict_confirmed_rejects_missing_effective_fields(t
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     path = tmp_path / "spec_audit.json"
+    confirmation_table = tmp_path / "spec_confirmation_table.md"
+    confirmation_table.write_text(
+        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
+        encoding="utf-8",
+    )
     path.write_text(
         json.dumps(
             {
@@ -1789,8 +1862,8 @@ def test_spec_audit_validate_strict_confirmed_rejects_missing_effective_fields(t
                 "audit_conclusion": "all_pass",
                 "user_confirmation_status": "confirmed",
                 "spec_confirmation_table": {
-                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
-                    "hash": "sha256:" + "4" * 16,
+                    "path": str(confirmation_table),
+                    "hash": _hash_file(confirmation_table),
                     "hash_type": "sha256",
                 },
                 "spec_provenance_pass": True,
@@ -1876,6 +1949,11 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
     path = tmp_path / "spec_audit.json"
+    confirmation_table = tmp_path / "spec_confirmation_table.md"
+    confirmation_table.write_text(
+        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
+        encoding="utf-8",
+    )
     path.write_text(
         json.dumps(
             {
@@ -1884,8 +1962,8 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
                 "audit_conclusion": "all_pass",
                 "user_confirmation_status": "confirmed",
                 "spec_confirmation_table": {
-                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
-                    "hash": "sha256:" + "4" * 16,
+                    "path": str(confirmation_table),
+                    "hash": _hash_file(confirmation_table),
                     "hash_type": "sha256",
                 },
                 "spec_provenance_pass": True,

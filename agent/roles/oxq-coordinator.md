@@ -228,12 +228,14 @@ For a new strategy workflow, keep this order:
 2. `oxq-strategy-brainstorm-worker`
 3. `oxq-strategy-idea-auditor-worker`
 4. `oxq-strategy-builder-worker`
-5. `oxq-spec-auditor-worker`
-6. `oxq-runtime-auditor-worker`
-7. `oxq-runner-worker`
-8. `oxq-monitor-worker`
-9. `oxq-report-writer-worker`
-10. `oxq-report-reviewer-worker`
+5. `oxq-data-inspection-worker` when builder/data assumptions require it;
+   record a skip reason when the workflow does not need data inspection.
+6. `oxq-spec-auditor-worker`
+7. `oxq-runtime-auditor-worker`
+8. `oxq-runner-worker`
+9. `oxq-monitor-worker`
+10. `oxq-report-writer-worker`
+11. `oxq-report-reviewer-worker`
 
 If `oxq-strategy-idea-auditor-worker` blocks, return to
 `oxq-strategy-brainstorm-worker`. If `oxq-spec-auditor-worker` finds the

@@ -219,6 +219,35 @@ def _write_runtime_audit(
     )
 
 
+def _write_backtest_authorization(
+    path: Path,
+    *,
+    spec_path: Path,
+    spec_audit_path: Path,
+    runtime_audit_path: Path,
+    component_catalog_path: Path | None = None,
+    component_manifest_paths: list[Path] | None = None,
+    data_dir: Path | str = "data",
+    run_out: Path | str,
+) -> None:
+    if component_catalog_path is None:
+        component_catalog_path = spec_audit_path.with_name("component_catalog.json")
+    payload = {
+        "status": "authorized",
+        "strategy_spec": str(spec_path),
+        "spec_audit": str(spec_audit_path),
+        "runtime_audit": str(runtime_audit_path),
+        "component_catalog": str(component_catalog_path),
+        "component_manifests": [str(path) for path in (component_manifest_paths or [])],
+        "data_dir": str(data_dir),
+        "run_out": str(run_out),
+        "spec_hash": StrategySpec.from_yaml(spec_path).compute_hash(),
+        "spec_audit_hash": _hash_json_file(spec_audit_path),
+        "runtime_audit_hash": _hash_json_file(runtime_audit_path),
+    }
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
 def _canonical_json_hash(payload: object) -> str:
     canonical = json.dumps(payload, sort_keys=True, default=str)
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
@@ -749,6 +778,15 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
         effective_data_dir=str(data_dir),
         component_bundle_hashes=[bundle_hash],
     )
+    _write_backtest_authorization(
+        runtime_audit_path.with_name("backtest_authorization.json"),
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        runtime_audit_path=runtime_audit_path,
+        component_manifest_paths=[manifest],
+        data_dir=data_dir,
+        run_out=tmp_path / "runs_ok",
+    )
     ok = CliRunner().invoke(
         main,
         [
@@ -1117,6 +1155,14 @@ def test_backtest_run_json_rejects_spec_audit_missing_effective_field_confirmati
         spec_audit_path=audit_path,
         effective_data_dir=str(data_dir),
     )
+    _write_backtest_authorization(
+        runtime_audit_path.with_name("backtest_authorization.json"),
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        runtime_audit_path=runtime_audit_path,
+        data_dir=data_dir,
+        run_out=tmp_path / "runs",
+    )
 
     result = CliRunner().invoke(
         main,
@@ -1279,6 +1325,14 @@ def test_backtest_run_preserves_explicit_default_fill_price_mode_hash(tmp_path) 
         spec_audit_path=audit_path,
         effective_data_dir=str(data_dir),
     )
+    _write_backtest_authorization(
+        runtime_audit_path.with_name("backtest_authorization.json"),
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        runtime_audit_path=runtime_audit_path,
+        data_dir=data_dir,
+        run_out=tmp_path / "runs",
+    )
 
     result = CliRunner().invoke(
         main,
@@ -1333,7 +1387,7 @@ def test_backtest_run_json_auto_rejects_sibling_failed_runtime_audit(tmp_path) -
     assert "runtime_semantics_pass" in payload["errors"][0]["message"]
 
 
-def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
+def test_backtest_run_json_rejects_missing_backtest_authorization(tmp_path) -> None:
     spec_path, data_dir = _write_spec_and_data(tmp_path)
     spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
     audit_path = tmp_path / "spec_audit.json"
@@ -1366,6 +1420,53 @@ def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
         ],
     )
 
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "backtest_authorization_missing"
+
+
+def test_backtest_run_json_accepts_passing_pre_run_audits(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    run_out = tmp_path / "runs"
+    _write_spec_audit(audit_path, spec_hash)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+    )
+    _write_backtest_authorization(
+        runtime_audit_path.with_name("backtest_authorization.json"),
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        runtime_audit_path=runtime_audit_path,
+        data_dir=data_dir,
+        run_out=run_out,
+    )
+    runner = CliRunner()
+
+    result = runner.invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(run_out),
+            "--json",
+        ],
+    )
+
     assert result.exit_code == 0, result.output
     payload = json.loads(result.output)
     assert payload["status"] == "pass"
@@ -1389,6 +1490,14 @@ def test_backtest_run_json_hashes_runtime_audit_with_resolved_data_dir(monkeypat
         spec_path=spec_path,
         spec_audit_path=audit_path,
         effective_data_dir=str(data_dir.resolve()),
+    )
+    _write_backtest_authorization(
+        runtime_audit_path.with_name("backtest_authorization.json"),
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        runtime_audit_path=runtime_audit_path,
+        data_dir=data_dir,
+        run_out=tmp_path / "runs",
     )
     monkeypatch.chdir(tmp_path)
 

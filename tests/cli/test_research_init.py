@@ -175,6 +175,20 @@ def test_research_init_creates_active_v001_governance_manifests(tmp_path) -> Non
         assert phase_state["status"] == "active"
 
 
+def test_research_init_minimal_creates_governance_manifests(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+
+        result = runner.invoke(main, ["research", "init", "--minimal"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads((cwd_path / "current.json").read_text(encoding="utf-8"))["active_version"] == "v001"
+        assert (cwd_path / "lineage.json").exists()
+        assert (cwd_path / "workflow_manifest.json").exists()
+        assert (cwd_path / "versions/v001/04_spec_build").is_dir()
+
+
 def test_research_init_rejects_unsafe_existing_active_version(tmp_path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
@@ -207,6 +221,44 @@ def test_research_init_rejects_unsafe_existing_active_version(tmp_path) -> None:
         assert result.exit_code == 1
         assert "active_version is unsafe" in result.output
         assert not (cwd_path.parent / "escape").exists()
+
+
+def test_research_init_preserves_active_phase_in_repaired_version_manifests(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "phase-preserve",
+                    "paths": {
+                        "versions_dir": "versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(
+            json.dumps({"active_version": "v003", "active_phase": "06_spec_audit", "active_run": "run_001"}),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 0, result.output
+        version_manifest = json.loads(
+            (cwd_path / "versions/v003/version_manifest.json").read_text(encoding="utf-8")
+        )
+        phase_state = json.loads((cwd_path / "versions/v003/phase_state.json").read_text(encoding="utf-8"))
+        assert version_manifest["active_phase"] == "06_spec_audit"
+        assert phase_state["current_phase"] == "06_spec_audit"
 
 
 def test_research_init_appends_active_version_to_existing_lineage(tmp_path) -> None:
@@ -508,6 +560,52 @@ def test_research_init_repairs_hidden_manifest_paths_to_root_manifests(tmp_path)
         assert workspace["paths"]["current_manifest"] == "current.json"
         assert workspace["paths"]["lineage_manifest"] == "lineage.json"
         assert workspace["paths"]["workflow_manifest"] == "workflow_manifest.json"
+
+
+def test_research_init_hidden_manifest_source_wins_over_stale_root_manifest(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "hidden-source-wins",
+                    "paths": {
+                        "versions_dir": "versions",
+                        "current_manifest": ".open-xquant/current.json",
+                        "lineage_manifest": ".open-xquant/lineage.json",
+                        "workflow_manifest": ".open-xquant/workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(json.dumps({"active_version": "v001"}), encoding="utf-8")
+        (cwd_path / ".open-xquant" / "current.json").write_text(
+            json.dumps({"active_version": "v004", "active_phase": "05_data_inspection"}),
+            encoding="utf-8",
+        )
+        (cwd_path / "lineage.json").write_text(json.dumps({"versions": [{"version_id": "v001"}]}), encoding="utf-8")
+        (cwd_path / ".open-xquant" / "lineage.json").write_text(
+            json.dumps({"versions": [{"version_id": "v004"}]}),
+            encoding="utf-8",
+        )
+        (cwd_path / ".open-xquant" / "workflow_manifest.json").write_text(
+            json.dumps({"layout": "version_governed", "strategy_family_id": "hidden-source-wins"}),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 0, result.output
+        assert json.loads((cwd_path / "current.json").read_text(encoding="utf-8"))["active_version"] == "v004"
+        lineage = json.loads((cwd_path / "lineage.json").read_text(encoding="utf-8"))
+        assert [item["version_id"] for item in lineage["versions"]] == ["v004"]
+        assert (cwd_path / "versions/v004/05_data_inspection").is_dir()
 
 
 def test_install_workspace_sdk_rejects_existing_non_venv_path(tmp_path) -> None:

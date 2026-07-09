@@ -633,6 +633,8 @@ oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
 oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --strict-confirmed
 oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml --out versions/<version_id>/07_compile_preview
 oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+# oxq-coordinator must first write versions/<version_id>/08_runtime_audit/backtest_authorization.json
+# oxq-runner-worker then uses run-authorized-backtest; the raw CLI call below is not a manual bypass.
 oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --out versions/<version_id>/09_backtests --json
 oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
 oxq audit research versions/<version_id>/09_backtests/<run_id>/
@@ -935,6 +937,8 @@ target-specific 包维护。
 oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
 oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --strict-confirmed
 oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+# oxq-coordinator must first write versions/<version_id>/08_runtime_audit/backtest_authorization.json
+# oxq-runner-worker then uses run-authorized-backtest; the raw CLI call below is not a manual bypass.
 oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --out versions/<version_id>/09_backtests --json
 oxq audit research versions/<version_id>/09_backtests/<run_id>/
 oxq robustness run versions/<version_id>/09_backtests/<run_id>/

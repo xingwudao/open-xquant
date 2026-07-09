@@ -134,6 +134,8 @@ class TopNRankingOptimizer:
             raise ValueError("filter_negative must be a boolean")
         if not isinstance(ascending, bool):
             raise ValueError("ascending must be a boolean")
+        if not isinstance(pre_filter_signal, str):
+            raise ValueError("pre_filter_signal must be a string")
         if weighting not in {"score", "equal"}:
             raise ValueError("weighting must be score or equal")
         self.score_col = score_col

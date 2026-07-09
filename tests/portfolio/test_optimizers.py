@@ -195,8 +195,10 @@ class TestTopNRankingOptimizerRedistribution:
         {"max_weight": -0.5},
         {"max_weight": 1.5},
         {"max_weight": float("nan")},
+        {"pre_filter_signal": 1},
         {"filter_negative": "yes"},
         {"ascending": "no"},
+        {"weighting": 1},
         {"weighting": "invalid"},
     ],
 )

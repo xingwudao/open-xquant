@@ -144,8 +144,7 @@ def initialize_workspace(
         comparison_registry = cwd / "comparisons" / "comparisons.jsonl"
     if not minimal and comparison_registry is not None and not comparison_registry.exists():
         write_text_file(comparison_registry, "")
-    if not minimal:
-        _create_default_governance_manifests(cwd, workspace_config)
+    _create_default_governance_manifests(cwd, workspace_config)
     upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
     if _installed_agent_profile() == AGENT_PROFILE_STANDALONE:
         remove_marker_block(cwd / "AGENTS.md", "open-xquant-subagents")
@@ -225,6 +224,9 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
     current_path = _configured_root_manifest_path(cwd, workspace, "current_manifest", "current.json")
     current_payload = _read_json_object(current_path)
     active_version = current_payload.get("active_version")
+    active_phase = current_payload.get("active_phase")
+    if not isinstance(active_phase, str) or not active_phase:
+        active_phase = "01_brainstorm"
     if active_version:
         if not isinstance(active_version, str) or not _WORKSPACE_VERSION_RE.fullmatch(active_version):
             raise click.ClickException(
@@ -262,7 +264,7 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
                     "schema_version": 1,
                     "strategy_family_id": name,
                     "active_version": version_id,
-                    "active_phase": "01_brainstorm",
+                    "active_phase": active_phase,
                     "active_run": "",
                 },
                 indent=2,
@@ -311,7 +313,7 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
                     "parent_version_id": "",
                     "created_reason": "initial_strategy_version",
                     "status": "active",
-                    "active_phase": "01_brainstorm",
+                    "active_phase": active_phase,
                     "source_conversation": "",
                     "phase_paths": {
                         phase: f"versions/{version_id}/{phase}" for phase in VERSION_PHASE_DIRS
@@ -331,7 +333,7 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
                 {
                     "schema_version": 1,
                     "version_id": version_id,
-                    "current_phase": "01_brainstorm",
+                    "current_phase": active_phase,
                     "status": "active",
                     "completed_phases": [],
                     "blocked_phase": "",
@@ -407,9 +409,12 @@ def _migrate_hidden_root_manifest_files(cwd: Path, workspace: dict[str, object])
             continue
         source = cwd / configured_path
         target = cwd / filename
-        if source.is_file() and not target.exists():
-            write_text_file(target, source.read_text(encoding="utf-8"))
-            migrated = True
+        if source.is_file():
+            source_content = source.read_text(encoding="utf-8")
+            target_content = target.read_text(encoding="utf-8") if target.exists() else None
+            if target_content != source_content:
+                write_text_file(target, source_content)
+                migrated = True
     return migrated
 
 
