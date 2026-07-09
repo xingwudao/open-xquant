@@ -94,8 +94,7 @@ open-xquant/
 │
 ├── agent/                          # Agent 层
 │   ├── skills/                     # Agent Skill 定义（markdown 工作流）
-│   ├── roles/                      # Multi-agent role 模板
-│   └── opencode/                   # OpenCode 本地 skills.path 配置
+│   └── roles/                      # Multi-agent role 模板
 │
 ├── examples/                       # 示例
 │   ├── modules/                     # 模块 SDK 使用示例（可执行 Python 脚本）
@@ -104,8 +103,10 @@ open-xquant/
 ├── tests/                          # 测试（镜像 src/oxq/ 结构）
 ├── docs/                           # 文档
 │   ├── architecture.md             # 本文档
-│   ├── design/                     # 设计文档和 RFC
-│   └── schemas/                    # spec schema 文档
+│   ├── agent-guide.md              # Agent 安装指南
+│   ├── human-guide.md              # 人类安装入口
+│   ├── strategy-workflow-artifact-governance.md
+│   └── images/                     # 架构图和 workflow 图
 ├── pyproject.toml
 ├── LICENSE                         # MIT
 └── README.md
@@ -844,7 +845,7 @@ installed SDK bundle。确定性命令可以使用 `--component-manifest` 临时
 extension 组件，并校验 `bundle_hash` 后再 validate、compile、export catalog
 或 run backtest。
 
-### 13.3 OpenCode 集成
+### 13.4 OpenCode 集成
 
 OpenCode 不再保留 `agent/opencode/` 源码包。OpenCode skills 由
 `agent/skills/<name>/SKILL.md` 单一来源安装到

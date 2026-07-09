@@ -7,7 +7,7 @@ open-xquant 是面向 AI Coding Agent 和人类量化研究者的 **Agentic Quan
 它把交易想法转化为可声明、可复现、可审计、可沉淀的研究产物：
 
 ```
-spec → validate → compile → backtest → audit → robustness → report
+idea → idea audit → spec → user confirmation → backtest → report → final
 ```
 
 open-xquant 不是一个 Coding Agent，而是 Coding Agent 应该调用的确定性量化研究内核。
@@ -76,26 +76,34 @@ equity curve、artifact hashes、audit、report——可版本化、可 diff、�
 
 ```
 Agent loads open-xquant skill
-  → build-strategy-spec writes and validates strategy_spec.yaml
-  → audit-strategy-spec checks assumption provenance
-  → oxq spec-audit validate spec_audit.json
+  → manage-strategy-version opens or continues a strategy version
+  → brainstorm-strategy-idea writes strategy_idea_brief.json
+  → audit-strategy-idea checks the brainstorm process and user evidence
+  → build-strategy-spec writes versions/<version_id>/04_spec_build/strategy_spec.yaml
+  → audit-strategy-spec checks provenance and prints the full SPEC table
+  → user confirms the full SPEC table
   → audit-runtime-semantics compiles and checks compiled_plan.json semantics
-  → oxq runtime-audit validate runtime_audit.json
+  → oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
   → run-authorized-backtest runs gated backtest
-  → oxq audit reproducibility runs/<run_id>/
-  → oxq audit research runs/<run_id>/
-  → oxq robustness run runs/<run_id>/
+  → oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
+  → oxq audit research versions/<version_id>/09_backtests/<run_id>/
+  → oxq robustness run versions/<version_id>/09_backtests/<run_id>/
   → build-report-charts registers chart assets when needed
   → write-research-report writes research_report.md/html
-  → oxq report qa runs/<run_id>/
+  → oxq report qa versions/<version_id>/10_reports/<run_id>/
   → review-research-report reviews the final report
-  → oxq experiment add runs/<run_id>/
+  → oxq experiment add versions/<version_id>/09_backtests/<run_id>/
+  → compare-strategy-versions and select-final-version govern final choice
 ```
 
 这里的 `oxq` CLI 步骤是确定性 primitives：验证、编译、回测、审计、
 稳健性、报告文件与资产完整性 QA，以及实验登记。报告数值叙事是否合理、
 图表是否足以支撑结论、是否接受某个 run 为最终版本，都需要由 skill
 结合上下文判断。
+
+策略研究目录按 `strategy family -> strategy version -> run attempt` 治理。
+完整目录结构、角色协作和有向图见
+[Strategy Workflow Artifact Governance](docs/strategy-workflow-artifact-governance.md)。
 
 ## 谁适合使用 open-xquant？
 
@@ -149,7 +157,8 @@ uv run python examples/strategies/spec_validation_demo.py
 
 open-xquant 是完整可用的开源研究内核，聚焦确定性计算、
 声明式 spec、审计、artifact QA 和 Agent 可调用的 CLI / SDK / Tools。
-需要语义判断的报告、图表和实验对比由 Agent skills 编排。
+需要语义判断的策略描述收集、报告、图表、实验对比和最终版本选择由
+Agent skills 编排。
 
 不属于 open-xquant 核心边界的能力：
 
@@ -177,10 +186,12 @@ open-xquant 正在从 Agent First 量化交易框架升级为 Agentic Quant Rese
 - Metrics profiles (`open_xquant_default`, `xquant_production`)
 - Robustness Runner (cost stress, IS/OOS diff, parameter perturbation, regimes)
 - Report asset manifest and deterministic report QA
-- Agent skills for report writing, chart building, spec auditing, and
-  experiment comparison
+- Agent skills for strategy brainstorming, idea audit, spec build, spec audit,
+  report writing, chart building, experiment comparison, and final selection
 - Workspace-local custom component manifests and deterministic extension
   loading
+- Version-governed research workspace layout, lineage audit, and mapping
+  contract validation
 - Multi-Agent role presets for Codex, OpenCode, Claude Code, and Cursor,
   including component authoring
 - OpenCode 集成
@@ -202,7 +213,7 @@ open-xquant is an **Agentic Quant Research Kernel** for AI coding agents and hum
 It turns trading ideas into declarative, reproducible, auditable, and persistent research artifacts:
 
 ```
-spec → validate → compile → backtest → audit → robustness → report
+idea → idea audit → spec → user confirmation → backtest → report → final
 ```
 
 open-xquant is not a coding agent. It is the deterministic quant research runtime that coding agents should use.
@@ -269,20 +280,24 @@ diffable, and persistent.
 
 ```
 Agent loads the open-xquant skill
-  → build-strategy-spec writes and validates strategy_spec.yaml
-  → audit-strategy-spec checks assumption provenance
-  → oxq spec-audit validate spec_audit.json
+  → manage-strategy-version opens or continues a strategy version
+  → brainstorm-strategy-idea writes strategy_idea_brief.json
+  → audit-strategy-idea checks the brainstorm process and user evidence
+  → build-strategy-spec writes versions/<version_id>/04_spec_build/strategy_spec.yaml
+  → audit-strategy-spec checks provenance and prints the full SPEC table
+  → user confirms the full SPEC table
   → audit-runtime-semantics compiles and checks compiled_plan.json semantics
-  → oxq runtime-audit validate runtime_audit.json
+  → oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
   → run-authorized-backtest runs gated backtest
-  → oxq audit reproducibility runs/<run_id>/
-  → oxq audit research runs/<run_id>/
-  → oxq robustness run runs/<run_id>/
+  → oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
+  → oxq audit research versions/<version_id>/09_backtests/<run_id>/
+  → oxq robustness run versions/<version_id>/09_backtests/<run_id>/
   → build-report-charts registers chart assets when needed
   → write-research-report writes research_report.md/html
-  → oxq report qa runs/<run_id>/
+  → oxq report qa versions/<version_id>/10_reports/<run_id>/
   → review-research-report reviews the final report
-  → oxq experiment add runs/<run_id>/
+  → oxq experiment add versions/<version_id>/09_backtests/<run_id>/
+  → compare-strategy-versions and select-final-version govern final choice
 ```
 
 The `oxq` CLI steps are deterministic primitives: validation, compilation,
@@ -290,6 +305,11 @@ backtesting, audits, robustness, report file and asset-integrity QA, and
 experiment registration. Skills handle contextual judgment, including whether
 numeric narratives are justified, whether charts support the conclusion, and
 whether a run should be accepted as final.
+
+Research workspaces are governed as `strategy family -> strategy version ->
+run attempt`. See
+[Strategy Workflow Artifact Governance](docs/strategy-workflow-artifact-governance.md)
+for the directory layout, role handoffs, and workflow graph.
 
 ## Who Is This For?
 
@@ -339,8 +359,9 @@ Complete E2E pipeline examples (spec → backtest → audit → report):
 
 open-xquant is a complete open-source research kernel focused on deterministic
 computation, declarative specs, audits, artifact QA, and Agent-callable
-CLI / SDK / Tools. Semantic report writing, chart selection, and experiment
-comparison are orchestrated by Agent skills.
+CLI / SDK / Tools. Strategy idea collection, semantic report writing, chart
+selection, experiment comparison, and final version selection are orchestrated
+by Agent skills.
 
 Capabilities outside the core open-xquant boundary:
 
@@ -369,10 +390,12 @@ Completed:
 - Metrics profiles (`open_xquant_default`, `xquant_production`)
 - Robustness Runner (cost stress, IS/OOS diff, parameter perturbation, regimes)
 - Report asset manifest and deterministic report QA
-- Agent skills for report writing, chart building, spec auditing, and
-  experiment comparison
+- Agent skills for strategy brainstorming, idea audit, spec build, spec audit,
+  report writing, chart building, experiment comparison, and final selection
 - Workspace-local custom component manifests and deterministic extension
   loading
+- Version-governed research workspace layout, lineage audit, and mapping
+  contract validation
 - Multi-Agent role presets for Codex, OpenCode, Claude Code, and Cursor,
   including component authoring
 - OpenCode integration
