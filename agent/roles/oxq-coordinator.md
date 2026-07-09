@@ -15,6 +15,10 @@ outputs:
   - phase plan
   - worker handoffs
   - user confirmation requests
+  - conversations/<conversation_id>/transcript.md
+  - conversations/<conversation_id>/confirmations.jsonl
+  - conversations/<conversation_id>/conversation_hash.txt
+  - versions/<version_id>/08_runtime_audit/backtest_authorization.json
 forbidden_outputs:
   - strategy_spec.yaml
   - spec_audit.json
@@ -36,7 +40,11 @@ Use the `open-xquant` router skill.
   "outputs": [
     "phase plan",
     "worker handoffs",
-    "user confirmation requests"
+    "user confirmation requests",
+    "conversations/<conversation_id>/transcript.md",
+    "conversations/<conversation_id>/confirmations.jsonl",
+    "conversations/<conversation_id>/conversation_hash.txt",
+    "versions/<version_id>/08_runtime_audit/backtest_authorization.json"
   ],
   "forbidden_outputs": [
     "strategy_spec.yaml",
@@ -55,6 +63,8 @@ Use the `open-xquant` router skill.
 - Route each phase to the narrow worker that owns it.
 - Keep the user informed about status, blockers, and required confirmations.
 - Preserve the handoff artifacts produced by workers.
+- Own durable conversation artifacts under `conversations/<conversation_id>/`,
+  including transcript, confirmation events, and conversation hash.
 - Decide the next worker or user confirmation; do not perform the worker's job.
 - Use version governance before starting a new strategy or after a user changes
   strategy meaning.
@@ -87,10 +97,14 @@ The active path map is:
   `versions/<version_id>/06_spec_audit/spec_audit.json`
 - spec confirmation:
   `versions/<version_id>/06_spec_audit/spec_confirmation_table.md`
+- user confirmation log:
+  `conversations/<conversation_id>/confirmations.jsonl`
 - compile preview:
   `versions/<version_id>/07_compile_preview/compiled_plan.json`
 - runtime audit:
   `versions/<version_id>/08_runtime_audit/runtime_audit.json`
+- backtest authorization:
+  `versions/<version_id>/08_runtime_audit/backtest_authorization.json`
 - backtest run:
   `versions/<version_id>/09_backtests/<run_id>/`
 - report package:
@@ -131,8 +145,11 @@ handoff.
 - If spec audit returns `audit_conclusion: all_pass` with
   `user_confirmation_status: pending`, relay the full Markdown Spec table to the user
   and ask for explicit confirmation. Do not start `oxq-runtime-auditor-worker`
-  until the user confirms and
-  `spec_audit.json` records `user_confirmation_status: confirmed`.
+  until the user confirms, the coordinator appends a confirmation event to
+  `conversations/<conversation_id>/confirmations.jsonl`, and
+  `spec_audit.json` records `user_confirmation_status: confirmed`. The event
+  must include `artifact_path`, `artifact_hash`, `spec_audit_path`, and
+  `spec_audit_hash`.
 - Runtime auditor reads the authorized spec/audit artifacts, compiles a preview,
   and writes `compiled_plan.json` and `runtime_audit.json` under
   `versions/<version_id>/07_compile_preview/` and
@@ -246,8 +263,11 @@ needs to compute a conversation hash or verify user evidence.
 
 When receiving `spec_confirmation_table.md`, show the complete Markdown table
 to the user. Do not replace it with a prose summary. The user must confirm the
-table itself; only then may the coordinator ask the spec auditor to mark
-`user_confirmation_status: confirmed`.
+table itself. After confirmation, append the durable event to
+`conversations/<conversation_id>/confirmations.jsonl`; only then may the
+coordinator ask the spec auditor to mark `user_confirmation_status: confirmed`.
+Do not accept a confirmed SPEC audit without the confirmation event path and
+hashes for both `spec_confirmation_table.md` and `spec_audit.json`.
 
 ## Red Lines
 

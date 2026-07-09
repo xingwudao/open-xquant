@@ -143,6 +143,7 @@ versions/v001/
 
   08_runtime_audit/
     runtime_audit.json
+    backtest_authorization.json
 
   09_backtests/
     run_20260707_161018/
@@ -240,7 +241,8 @@ versions/<version_id>/09_backtests/<run_id>/
 
 ## Conversation And Confirmation Governance
 
-用户确认不能只存在于 Agent 回复里。
+用户确认不能只存在于 Agent 回复里。`oxq-coordinator` 负责落盘和维护
+conversation artifacts；worker 可以读取它们，但不拥有确认事件写入。
 
 必须落盘：
 
@@ -259,7 +261,10 @@ conversations/<conversation_id>/
   "phase": "spec_confirmation",
   "field_scope": "full_spec_table",
   "user_text": "确认",
-  "artifact_path": "versions/v001/06_spec_audit/spec_confirmation_table.md"
+  "artifact_path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+  "artifact_hash": "sha256:...",
+  "spec_audit_path": "versions/v001/06_spec_audit/spec_audit.json",
+  "spec_audit_hash": "sha256:..."
 }
 ```
 
@@ -277,6 +282,10 @@ SPEC 审计必须分成两个状态：
 - `user_confirmation_status: confirmed`：用户确认完整 SPEC 表。
 
 只有两者同时成立，才能进入 compile preview。
+`user_confirmation_status: confirmed` 必须引用
+`conversations/<conversation_id>/confirmations.jsonl` 中对应事件的路径和 hash；
+没有 durable confirmation event 时，即使审计内容 all pass，也仍然停留在
+confirmation gate。
 
 ## Existing Roles
 
@@ -284,7 +293,7 @@ SPEC 审计必须分成两个状态：
 
 `oxq-coordinator`
 - 使用 `open-xquant`。
-- 负责路由、phase 状态、用户确认、worker handoff。
+- 负责路由、phase 状态、用户确认、conversation artifact、worker handoff。
 - 不写 SPEC、audit、runtime、run、report。
 - 新增职责：调用 version governance 和 final governance。
 

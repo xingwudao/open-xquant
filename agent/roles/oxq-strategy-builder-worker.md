@@ -146,7 +146,10 @@ Use the `build-strategy-spec` skill.
 Return `builder_phase_result.json` to the coordinator. The next phase is
 `oxq-spec-auditor-worker` when the builder passes, `oxq-strategy-brainstorm-worker`
 when the audited idea gate is missing or blocked, or `oxq-component-author-worker`
-when custom component authoring is required.
+when custom component authoring is required. If
+`builder_phase_result.json.next_required_phase` is `data_inspection`, hand off to
+`oxq-data-inspection-worker` and resume this builder only after
+`data_inspection_result.json` is available.
 
 ## Red Lines
 

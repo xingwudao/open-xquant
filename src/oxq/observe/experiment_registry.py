@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 DEFAULT_REGISTRY_PATH = "experiments.jsonl"
+_VERSION_RE = re.compile(r"^v[0-9][A-Za-z0-9_-]*$")
 
 
 def add_experiment(
@@ -98,12 +100,15 @@ def list_experiments(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> list[
 def _infer_version_id(run_path: Path) -> str:
     parts = run_path.parts
     try:
-        version_index = parts.index("versions")
+        backtest_index = parts.index("09_backtests")
     except ValueError:
         return ""
-    if version_index + 1 >= len(parts):
+    if backtest_index < 2 or parts[backtest_index - 2] != "versions":
         return ""
-    return parts[version_index + 1]
+    version_id = parts[backtest_index - 1]
+    if not _VERSION_RE.fullmatch(version_id):
+        return ""
+    return version_id
 
 
 def _infer_run_role(run_path: Path) -> str:

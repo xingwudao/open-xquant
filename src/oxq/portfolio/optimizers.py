@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 import pandas as pd
 
 
@@ -119,10 +121,25 @@ class TopNRankingOptimizer:
         weighting: str = "score",
         ascending: bool = False,
     ) -> None:
+        if not isinstance(score_col, str) or not score_col:
+            raise ValueError("score_col must be a non-empty string")
+        if isinstance(n, bool) or not isinstance(n, int) or n <= 0:
+            raise ValueError("n must be a positive integer")
+        if isinstance(max_weight, bool) or not isinstance(max_weight, (int, float)):
+            raise ValueError("max_weight must be numeric")
+        max_weight_float = float(max_weight)
+        if not math.isfinite(max_weight_float) or max_weight_float <= 0.0 or max_weight_float > 1.0:
+            raise ValueError("max_weight must be in (0, 1]")
+        if not isinstance(filter_negative, bool):
+            raise ValueError("filter_negative must be a boolean")
+        if not isinstance(ascending, bool):
+            raise ValueError("ascending must be a boolean")
+        if weighting not in {"score", "equal"}:
+            raise ValueError("weighting must be score or equal")
         self.score_col = score_col
         self.n = n
         self.filter_negative = filter_negative
-        self.max_weight = max_weight
+        self.max_weight = max_weight_float
         self.pre_filter_signal = pre_filter_signal
         self.weighting = weighting
         self.ascending = ascending

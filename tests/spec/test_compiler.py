@@ -468,6 +468,43 @@ def test_write_artifacts_persists_target_weights(tmp_path) -> None:
     assert "target_weights.csv" in hashes
 
 
+def test_target_weights_mark_runtime_policy_adjustment_when_adjusted_weight_is_unchanged() -> None:
+    from oxq.core.types import BarSnapshot
+
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("0")),
+        trades=[],
+        equity_curve=[(dates[0], 100000.0), (dates[1], 100000.0)],
+        mktdata={},
+        snapshots=[
+            BarSnapshot(
+                date=dates[0],
+                target_weights={"AAA": 1.0},
+                adjusted_weights={"AAA": 1.0},
+                positions={},
+                cash=0.0,
+                total_value=100000.0,
+            ),
+            BarSnapshot(
+                date=dates[1],
+                target_weights={"BBB": 1.0},
+                adjusted_weights={"AAA": 1.0, "BBB": 0.0},
+                positions={},
+                cash=0.0,
+                total_value=100000.0,
+            ),
+        ],
+    )
+
+    rows = compiler._build_target_weight_rows(result)
+
+    bbb_row = next(row for row in rows if row["date"] == str(dates[1]) and row["symbol"] == "BBB")
+    assert bbb_row["raw_target_weight"] == 1.0
+    assert bbb_row["adjusted_target_weight"] == 0.0
+    assert bbb_row["reason"] == "target_adjusted_by_runtime_policy"
+
+
 def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compiled_plan", hypothesis="compiled plans should be auditable")
     spec.universe.symbols = ["SPY"]
@@ -1786,6 +1823,23 @@ def test_compile_plan_records_supported_extensions() -> None:
     assert plan["execution"]["rebalance"]["frequency"] == "monthly"
     assert plan["execution"]["rebalance"]["schedule"] == "month_start"
     assert any(rule["type"] == "StopLossRule" for rule in plan["runtime_rules"])
+
+
+def test_compile_plan_uses_side_aware_fee_for_explicit_zero_side_rate() -> None:
+    spec = StrategySpec.template(
+        strategy_id="explicit_zero_side_rate",
+        hypothesis="explicit zero side rates must not be treated as missing",
+    )
+    spec.cost.fee_rate = 0.001
+    spec.cost.fee_min = 0.0
+    spec.cost.buy_fee_rate = 0.0
+
+    plan = compile_plan(spec)
+    fee_model = compiler._build_fee_model(spec)
+
+    assert plan["cost"]["fee_model"] == "SideAwarePercentageFee"
+    assert fee_model.calculate(Order(symbol="AAA", side="BUY", shares=100), Decimal("100")) == Decimal("0.0")
+    assert fee_model.calculate(Order(symbol="AAA", side="SELL", shares=100), Decimal("100")) == Decimal("10.000")
 
 
 def test_metadata_compiled_plan_matches_constrained_portfolio_runtime_class() -> None:

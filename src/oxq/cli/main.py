@@ -111,25 +111,42 @@ def _active_workspace_version() -> str:
     current_manifest = "current.json"
     if isinstance(paths, dict) and isinstance(paths.get("current_manifest"), str):
         configured_manifest = Path(paths["current_manifest"])
-        if (
-            not configured_manifest.is_absolute()
-            and len(configured_manifest.parts) == 1
-            and configured_manifest.name == "current.json"
-        ):
-            current_manifest = paths["current_manifest"]
+        invalid_manifest_path = (
+            configured_manifest.is_absolute()
+            or len(configured_manifest.parts) != 1
+            or configured_manifest.name != "current.json"
+        )
+        if invalid_manifest_path:
+            raise click.ClickException(
+                "version-governed workspace requires root current.json active_version; "
+                "run `oxq research init` to repair manifests"
+            )
+        current_manifest = paths["current_manifest"]
     manifest_path = Path(current_manifest)
     if manifest_path.is_absolute() or ".." in manifest_path.parts:
-        return ""
+        raise click.ClickException(
+            "version-governed workspace requires root current.json active_version; "
+            "run `oxq research init` to repair manifests"
+        )
     try:
         payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
-        return ""
+        raise click.ClickException(
+            "version-governed workspace requires root current.json active_version; "
+            "run `oxq research init` to repair manifests"
+        )
     if not isinstance(payload, dict):
-        return ""
+        raise click.ClickException(
+            "version-governed workspace requires root current.json active_version; "
+            "run `oxq research init` to repair manifests"
+        )
     version = payload.get("active_version")
     if isinstance(version, str) and _WORKSPACE_VERSION_RE.fullmatch(version):
         return version
-    return ""
+    raise click.ClickException(
+        "version-governed workspace requires a safe current.json active_version; "
+        "run `oxq research init` to repair manifests"
+    )
 
 
 @spec.command()

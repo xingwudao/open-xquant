@@ -1492,6 +1492,21 @@ def test_validate_rejects_zero_fee_even_with_explicit_execution_fields() -> None
     assert any(error["check"] == "fee_missing" for error in result.errors)
 
 
+def test_validate_accepts_explicit_zero_side_fee_with_positive_fallback_fee() -> None:
+    spec = StrategySpec.template(
+        strategy_id="explicit_zero_side_fee",
+        hypothesis="explicit zero side fees are confirmed fee assumptions",
+    )
+    spec.cost.fee_rate = 0.001
+    spec.cost.slippage_rate = 0.001
+    spec.cost.buy_fee_rate = 0.0
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+    assert not any(error["check"] == "fee_missing" for error in result.errors)
+
+
 def test_validate_rejects_zero_slippage_even_with_explicit_execution_fields() -> None:
     spec = StrategySpec.template(
         strategy_id="zero_slippage",

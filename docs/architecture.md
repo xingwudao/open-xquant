@@ -605,7 +605,9 @@ versions/<version_id>/10_reports/<run_id>/
 报告资产命令：
 
 ```bash
-oxq report asset add versions/<version_id>/10_reports/<run_id>/ chart.png --id chart_id --title "Chart"
+oxq report asset add versions/<version_id>/10_reports/<run_id>/ \
+  versions/<version_id>/10_reports/<run_id>/report_assets/figures/chart.png \
+  --id chart_id --title "Chart"
 oxq report asset add-batch versions/<version_id>/10_reports/<run_id>/ versions/<version_id>/10_reports/<run_id>/report_assets/assets.json
 oxq report asset list versions/<version_id>/10_reports/<run_id>/
 ```

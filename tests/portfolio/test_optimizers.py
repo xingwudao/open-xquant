@@ -184,3 +184,24 @@ class TestTopNRankingOptimizerRedistribution:
         result = opt.optimize({}, indicators)
 
         assert result == {"CASH": 1.0}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"score_col": ""},
+        {"n": 0},
+        {"n": True},
+        {"max_weight": -0.5},
+        {"max_weight": 1.5},
+        {"max_weight": float("nan")},
+        {"filter_negative": "yes"},
+        {"ascending": "no"},
+        {"weighting": "invalid"},
+    ],
+)
+def test_top_n_ranking_rejects_invalid_constructor_params(kwargs: dict[str, object]) -> None:
+    params = {"score_col": "score", **kwargs}
+
+    with pytest.raises(ValueError):
+        TopNRankingOptimizer(**params)

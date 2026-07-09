@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import click
@@ -13,6 +14,7 @@ from oxq.cli.sdk_bundle import install_workspace_sdk
 
 AGENT_PROFILE_MULTI = "multi-agent"
 AGENT_PROFILE_STANDALONE = "standalone-agent"
+_WORKSPACE_VERSION_RE = re.compile(r"^v[0-9][A-Za-z0-9_-]*$")
 
 WORKSPACE_BLOCK = """This is an open-xquant research workspace.
 
@@ -223,7 +225,15 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
     current_path = _configured_root_manifest_path(cwd, workspace, "current_manifest", "current.json")
     current_payload = _read_json_object(current_path)
     active_version = current_payload.get("active_version")
-    version_id = active_version if isinstance(active_version, str) and active_version else "v001"
+    if active_version:
+        if not isinstance(active_version, str) or not _WORKSPACE_VERSION_RE.fullmatch(active_version):
+            raise click.ClickException(
+                f"workspace current.json active_version is unsafe: {active_version}; "
+                "repair current.json before running research init"
+            )
+        version_id = active_version
+    else:
+        version_id = "v001"
     version_dir = (_configured_path(cwd, workspace, "versions_dir") or (cwd / "versions")) / version_id
     _create_version_phase_dirs(version_dir)
 
@@ -264,28 +274,29 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
     lineage_path = _configured_root_manifest_path(cwd, workspace, "lineage_manifest", "lineage.json")
     lineage_payload = _read_json_object(lineage_path)
     versions = lineage_payload.get("versions")
-    if not isinstance(versions, list) or not any(
-        isinstance(item, dict) and item.get("version_id") == version_id for item in versions
-    ):
+    if isinstance(versions, list):
+        lineage_versions = list(versions)
+    else:
+        lineage_versions = []
+    if not any(isinstance(item, dict) and item.get("version_id") == version_id for item in lineage_versions):
+        lineage_versions.append(
+            {
+                "version_id": version_id,
+                "parent_version_id": "",
+                "created_reason": "initial_strategy_version",
+                "status": "active",
+            }
+        )
+    if lineage_payload.get("versions") != lineage_versions:
+        lineage_payload = {
+            **lineage_payload,
+            "schema_version": lineage_payload.get("schema_version", 1),
+            "strategy_family_id": lineage_payload.get("strategy_family_id", name),
+            "versions": lineage_versions,
+        }
         write_text_file(
             lineage_path,
-            json.dumps(
-                {
-                    "schema_version": 1,
-                    "strategy_family_id": name,
-                    "versions": [
-                        {
-                            "version_id": version_id,
-                            "parent_version_id": "",
-                            "created_reason": "initial_strategy_version",
-                            "status": "active",
-                        }
-                    ],
-                },
-                indent=2,
-                ensure_ascii=False,
-            )
-            + "\n",
+            json.dumps(lineage_payload, indent=2, ensure_ascii=False) + "\n",
         )
 
     version_manifest = version_dir / "version_manifest.json"

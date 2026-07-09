@@ -326,7 +326,9 @@ uv run oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \
   --component-manifest components/bundles/<bundle_id>/component_manifest.json \
   --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json \
   --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json \
-  --component-catalog versions/<version_id>/04_spec_build/component_catalog.json
+  --component-catalog versions/<version_id>/04_spec_build/component_catalog.json \
+  --out versions/<version_id>/09_backtests \
+  --json
 ```
 
 `component_manifest.json` 的 `bundle_hash` 覆盖 manifest 内容

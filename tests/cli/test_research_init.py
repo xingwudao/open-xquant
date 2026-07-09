@@ -175,6 +175,92 @@ def test_research_init_creates_active_v001_governance_manifests(tmp_path) -> Non
         assert phase_state["status"] == "active"
 
 
+def test_research_init_rejects_unsafe_existing_active_version(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "unsafe-active-version",
+                    "paths": {
+                        "versions_dir": "versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(
+            json.dumps({"active_version": "../escape"}),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 1
+        assert "active_version is unsafe" in result.output
+        assert not (cwd_path.parent / "escape").exists()
+
+
+def test_research_init_appends_active_version_to_existing_lineage(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = tmp_path / cwd
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "schema_version": 1,
+                    "name": "lineage-preserve",
+                    "paths": {
+                        "versions_dir": "versions",
+                        "current_manifest": "current.json",
+                        "lineage_manifest": "lineage.json",
+                        "workflow_manifest": "workflow_manifest.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(
+            json.dumps({"active_version": "v003"}),
+            encoding="utf-8",
+        )
+        (cwd_path / "lineage.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "strategy_family_id": "lineage-preserve",
+                    "versions": [
+                        {
+                            "version_id": "v002",
+                            "parent_version_id": "v001",
+                            "created_reason": "parameter_change",
+                            "status": "superseded",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 0, result.output
+        lineage = json.loads((cwd_path / "lineage.json").read_text(encoding="utf-8"))
+        assert [item["version_id"] for item in lineage["versions"]] == ["v002", "v003"]
+        assert lineage["versions"][0]["created_reason"] == "parameter_change"
+
+
 def test_research_init_repairs_version_governed_workspace_without_manifest_path_keys(tmp_path) -> None:
     runner = CliRunner()
     with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:

@@ -1252,7 +1252,17 @@ def validate(spec: StrategySpec) -> ValidationResult:
     else:
         effective_buy_fee_rate = spec.cost.buy_fee_rate if spec.cost.buy_fee_rate is not None else spec.cost.fee_rate
         effective_sell_fee_rate = spec.cost.sell_fee_rate if spec.cost.sell_fee_rate is not None else spec.cost.fee_rate
-        if any(value < 0.0 for value in (*side_cost_values, spec.cost.sell_tax_rate, spec.cost.stamp_tax)):
+        if any(
+            value < 0.0
+            for value in (
+                spec.cost.fee_rate,
+                spec.cost.slippage_rate,
+                spec.cost.fee_min,
+                *side_cost_values,
+                spec.cost.sell_tax_rate,
+                spec.cost.stamp_tax,
+            )
+        ):
             errors.append(_err("fatal", "cost_model_invalid", "cost fields must be non-negative"))
         if spec.cost.sell_tax_rate > 0.0 and spec.cost.stamp_tax > 0.0 and not math.isclose(spec.cost.sell_tax_rate, spec.cost.stamp_tax):
             errors.append(
@@ -1284,7 +1294,10 @@ def validate(spec: StrategySpec) -> ValidationResult:
                     "cost_model_missing",
                     "fee rates and slippage_rate must be positive — zero or negative costs are not acceptable",
                 ))
-        elif effective_buy_fee_rate <= 0.0 or effective_sell_fee_rate <= 0.0:
+        elif (
+            (effective_buy_fee_rate <= 0.0 and spec.cost.buy_fee_rate is None)
+            or (effective_sell_fee_rate <= 0.0 and spec.cost.sell_fee_rate is None)
+        ):
             errors.append(_err("fatal", "fee_missing", "effective buy and sell fee rates must be positive"))
         elif spec.cost.slippage_rate <= 0.0:
             errors.append(_err("fatal", "slippage_missing", "slippage_rate must be positive"))

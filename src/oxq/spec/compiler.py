@@ -209,14 +209,11 @@ def _effective_sell_tax_rate(spec: StrategySpec) -> float:
 
 
 def _uses_side_aware_cost(spec: StrategySpec) -> bool:
-    return any(
-        value is not None and value != 0.0
-        for value in (
-            spec.cost.buy_fee_rate,
-            spec.cost.sell_fee_rate,
-            spec.cost.sell_tax_rate,
-            spec.cost.stamp_tax,
-        )
+    return (
+        spec.cost.buy_fee_rate is not None
+        or spec.cost.sell_fee_rate is not None
+        or spec.cost.sell_tax_rate > 0.0
+        or spec.cost.stamp_tax > 0.0
     )
 
 
@@ -1932,11 +1929,14 @@ def _build_target_weight_rows(result: RunResult) -> list[dict[str, Any]]:
                 current_adjusted[symbol] = adjusted_weight
             reason = rule_reasons.get(symbol) or rule_reasons.get("__all__")
             if not reason:
-                reason = (
-                    "target_changed"
-                    if adjusted_weight != previous_adjusted.get(symbol, 0.0)
-                    else "target_unchanged"
-                )
+                if raw_weight != adjusted_weight:
+                    reason = "target_adjusted_by_runtime_policy"
+                else:
+                    reason = (
+                        "target_changed"
+                        if adjusted_weight != previous_adjusted.get(symbol, 0.0)
+                        else "target_unchanged"
+                    )
             rows.append(
                 {
                     "date": str(snapshot.date),

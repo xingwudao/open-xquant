@@ -135,6 +135,81 @@ def test_spec_init_defaults_to_active_version_spec_path(tmp_path) -> None:
         assert not (cwd_path / "strategy_spec.yaml").exists()
 
 
+def test_spec_init_fails_when_version_workspace_lacks_current_manifest(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {"current_manifest": "current.json"},
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["spec", "init", "missing current"])
+
+        assert result.exit_code == 1
+        assert "run `oxq research init` to repair manifests" in result.output
+        assert not (cwd_path / "strategy_spec.yaml").exists()
+
+
+def test_spec_init_fails_for_unsafe_active_version(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {"current_manifest": "current.json"},
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(json.dumps({"active_version": "../escape"}), encoding="utf-8")
+
+        result = runner.invoke(main, ["spec", "init", "unsafe current"])
+
+        assert result.exit_code == 1
+        assert "requires a safe current.json active_version" in result.output
+        assert not (cwd_path / "strategy_spec.yaml").exists()
+        assert not (cwd_path.parent / "escape").exists()
+
+
+def test_spec_init_fails_for_hidden_current_manifest_path(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {"current_manifest": ".open-xquant/current.json"},
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / ".open-xquant/current.json").write_text(
+            json.dumps({"active_version": "v007"}),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["spec", "init", "hidden current"])
+
+        assert result.exit_code == 1
+        assert "requires root current.json active_version" in result.output
+        assert not (cwd_path / "strategy_spec.yaml").exists()
+
+
 def test_registry_export_writes_component_catalog(tmp_path) -> None:
     out = tmp_path / "component_catalog.json"
 
