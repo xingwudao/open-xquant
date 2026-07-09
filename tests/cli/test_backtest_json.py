@@ -212,8 +212,7 @@ def _write_runtime_audit(
         "material_field_audits": [],
         "blocking_findings": [],
     }
-    if component_bundle_hashes is not None:
-        payload["component_bundle_hashes"] = component_bundle_hashes
+    payload["component_bundle_hashes"] = component_bundle_hashes or []
     path.write_text(
         json.dumps(payload, indent=2),
         encoding="utf-8",
@@ -772,6 +771,45 @@ def test_backtest_run_json_requires_runtime_audit_component_bundle_hashes(tmp_pa
 
     assert ok.exit_code == 0, ok.output
     assert marker.read_text(encoding="utf-8") == "imported"
+
+
+def test_backtest_run_json_rejects_extra_runtime_audit_component_bundle_hashes(tmp_path) -> None:
+    spec_path, data_dir = _write_spec_and_data(tmp_path)
+    spec_hash = StrategySpec.from_yaml(spec_path).compute_hash()
+    audit_path = tmp_path / "spec_audit.json"
+    runtime_audit_path = tmp_path / "runtime_audit.json"
+    _write_spec_audit(audit_path, spec_hash, spec_path=spec_path)
+    _write_runtime_audit(
+        runtime_audit_path,
+        spec_hash,
+        spec_path=spec_path,
+        spec_audit_path=audit_path,
+        effective_data_dir=str(data_dir),
+        component_bundle_hashes=["sha256:" + "9" * 16],
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(audit_path),
+            "--runtime-audit",
+            str(runtime_audit_path),
+            "--data-dir",
+            str(data_dir),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "runtime_audit_failed"
+    assert "component_bundle_hashes mismatch" in payload["errors"][0]["message"]
 
 
 def test_backtest_run_rejects_component_catalog_bundle_mismatch_before_import(tmp_path) -> None:

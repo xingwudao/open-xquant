@@ -154,6 +154,55 @@ def test_mapping_contract_builder_pass_rejects_blocked_strategy_row() -> None:
     )
 
 
+def test_mapping_contract_accepts_effective_strategy_target_field() -> None:
+    payload = {
+        "schema_version": 1,
+        "source_format": "ebacktestcraft_yaml",
+        "field_mappings": [
+            {
+                "source_field": "backtest.initial_cash",
+                "target_field": "execution.initial_cash",
+                "semantic": "strategy",
+                "status": "mapped",
+                "confirmation_required": False,
+                "blocking": False,
+                "reason": "Initial cash maps to execution assumptions.",
+            }
+        ],
+    }
+
+    result = validate_mapping_contract(payload)
+
+    assert result["status"] == "pass"
+
+
+def test_mapping_contract_rejects_misplaced_strategy_target_field() -> None:
+    payload = {
+        "schema_version": 1,
+        "source_format": "ebacktestcraft_yaml",
+        "field_mappings": [
+            {
+                "source_field": "backtest.initial_cash",
+                "target_field": "portfolio.initial_cash",
+                "semantic": "strategy",
+                "status": "mapped",
+                "confirmation_required": False,
+                "blocking": False,
+                "reason": "This field is intentionally misplaced.",
+            }
+        ],
+    }
+
+    result = validate_mapping_contract(payload)
+
+    assert result["status"] == "fail"
+    assert any(
+        error["path"] == "field_mappings[0].target_field"
+        and "effective StrategySpec field path" in error["message"]
+        for error in result["errors"]
+    )
+
+
 def test_mapping_contract_rejects_duplicate_source_field() -> None:
     payload = {
         "schema_version": 1,

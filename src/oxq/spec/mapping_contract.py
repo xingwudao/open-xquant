@@ -3,13 +3,26 @@
 from __future__ import annotations
 
 import json
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
+
+from oxq.spec.schema import StrategySpec
 
 MAPPING_CONTRACT_SCHEMA_VERSION = 1
 
 _ALLOWED_SEMANTICS = {"strategy", "run", "report", "studio", "metadata", "unsupported"}
 _ALLOWED_STATUS = {"mapped", "needs_user_confirmation", "unsupported", "excluded_non_material", "blocked"}
+_DYNAMIC_STRATEGY_TARGET_PREFIXES = (
+    "signal.indicators.",
+    "signal.rules.",
+    "portfolio.params.",
+    "portfolio.rules.",
+    "execution.lot_size_config.by_symbol.",
+    "robustness.parameter_perturbation.",
+    "decision_policy.reject_if.",
+    "decision_policy.promote_if.",
+)
 
 
 def validate_mapping_contract_file(path: str | Path) -> dict[str, Any]:
@@ -72,6 +85,19 @@ def validate_mapping_contract(payload: Any) -> dict[str, Any]:
         _require_str(item, path, "reason", errors)
         if status in {"mapped", "needs_user_confirmation"} and not item.get("target_field"):
             errors.append({"path": f"{path}.target_field", "message": "mapped fields require a target_field"})
+        if (
+            semantic == "strategy"
+            and status in {"mapped", "needs_user_confirmation"}
+            and isinstance(target_field, str)
+            and target_field
+            and not _is_effective_strategy_target_field(target_field)
+        ):
+            errors.append(
+                {
+                    "path": f"{path}.target_field",
+                    "message": "strategy target_field must be an effective StrategySpec field path",
+                }
+            )
         if semantic == "strategy" and status == "excluded_non_material":
             errors.append({"path": f"{path}.status", "message": "strategy semantics must be mapped, blocked, or unsupported"})
         if semantic == "strategy" and status == "unsupported" and item.get("blocking") is not True:
@@ -148,6 +174,36 @@ def _require_enum(
         errors.append({"path": f"{path}.{field}", "message": f"must be one of {sorted(allowed)}"})
         return ""
     return value
+
+
+def _is_effective_strategy_target_field(field_path: str) -> bool:
+    if field_path in _effective_strategy_field_paths():
+        return True
+    return any(field_path.startswith(prefix) for prefix in _DYNAMIC_STRATEGY_TARGET_PREFIXES)
+
+
+@lru_cache(maxsize=1)
+def _effective_strategy_field_paths() -> frozenset[str]:
+    return frozenset(path for path, _value in _flatten_effective_fields(StrategySpec.template().to_effective_dict()))
+
+
+def _flatten_effective_fields(value: Any, prefix: str = "") -> list[tuple[str, Any]]:
+    if isinstance(value, dict):
+        if not value and prefix:
+            return [(prefix, {})]
+        fields: list[tuple[str, Any]] = []
+        for key in sorted(value):
+            child_path = f"{prefix}.{key}" if prefix else str(key)
+            fields.extend(_flatten_effective_fields(value[key], child_path))
+        return fields
+    if isinstance(value, list):
+        if all(not isinstance(item, (dict, list)) for item in value):
+            return [(prefix, value)]
+        fields = []
+        for index, item in enumerate(value):
+            fields.extend(_flatten_effective_fields(item, f"{prefix}[{index}]"))
+        return fields
+    return [(prefix, value)]
 
 
 def _result(status: str, errors: list[dict[str, str]]) -> dict[str, Any]:

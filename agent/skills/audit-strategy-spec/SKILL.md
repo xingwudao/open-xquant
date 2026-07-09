@@ -35,8 +35,8 @@ the brainstorm workflow audit.
 
   If Studio provides a `conversation.json` object or path variable, use that
   provided value. Do not hardcode `conversation.json` as a required path.
-- `component_catalog.json`, or a freshly exported catalog after the audited
-  idea gate passes
+- `component_catalog.json` produced by the builder after the audited idea gate
+  passes
 
 ## Version-Governed Artifact Gate
 
@@ -74,6 +74,8 @@ from `spec_audit.json` or set it to `null`.
 
 Do not write root-level `spec_audit.json`, `audit_notes.md`, or
 `spec_confirmation_table.md`.
+Do not write `versions/<version_id>/04_spec_build/component_catalog.json` or
+any other builder phase artifact.
 
 ## Read-Only SPEC Boundary
 
@@ -380,11 +382,9 @@ Before approving a spec for backtest, audit component provenance against the
 same catalog used while building the spec:
 
 1. Load `versions/<version_id>/04_spec_build/component_catalog.json` from the
-   active version. If it is missing after the audited idea gate passes, run:
-
-   ```bash
-   uv run oxq registry export --out versions/<version_id>/04_spec_build/component_catalog.json
-   ```
+   active version. If it is missing or stale, block with
+   `next_required_phase: build`. The builder must export or refresh the catalog;
+   the auditor must not write into `04_spec_build/`.
 
 2. Record `component_catalog.json`'s internal `catalog_hash` field and compare
    it with any catalog hash recorded in `builder_phase_result.json`,

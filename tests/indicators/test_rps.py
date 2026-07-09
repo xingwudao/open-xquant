@@ -39,3 +39,12 @@ def test_rps_returns_nan_when_not_enough_cross_sectional_members() -> None:
 
     assert np.isnan(result["AAA"].iloc[2])
     assert np.isnan(result["BBB"].iloc[2])
+
+
+@pytest.mark.parametrize("period", [0, -1])
+def test_rps_rejects_non_positive_period(period: int) -> None:
+    dates = pd.bdate_range("2024-01-01", periods=3, tz="UTC")
+    data = {"AAA": pd.DataFrame({"close": [100.0, 101.0, 102.0]}, index=dates)}
+
+    with pytest.raises(ValueError, match="period must be a positive integer"):
+        RPS().compute_cross_section(data, period=period)

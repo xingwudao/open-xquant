@@ -67,6 +67,35 @@ def test_add_experiment_records_version_governed_lineage_fields(tmp_path, monkey
     assert entry["run_role"] == "primary"
 
 
+def test_add_experiment_marks_cost_x2_version_governed_run(tmp_path, monkeypatch) -> None:
+    workspace = tmp_path / "workspace"
+    run_id = "20260709_060149_demo_cost_x2"
+    run_dir = workspace / "versions" / "v003" / "09_backtests" / run_id
+    run_dir.mkdir(parents=True)
+    registry_path = workspace / "experiments.jsonl"
+    monkeypatch.chdir(workspace)
+
+    spec = StrategySpec.template(strategy_id="cost_x2_registry", hypothesis="robustness role is preserved")
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "cost_x2_registry", "run_id": run_id, "trade_count": 12}),
+        encoding="utf-8",
+    )
+    (run_dir / "spec_hash.txt").write_text(spec.compute_hash(), encoding="utf-8")
+    (run_dir / "data_manifest.json").write_text(
+        json.dumps({"symbols": ["SPY"], "missing_ratio": 0.0}),
+        encoding="utf-8",
+    )
+
+    entry = add_experiment(run_dir, registry_path=registry_path)
+
+    assert entry["version_id"] == "v003"
+    assert entry["run_role"] == "robustness_cost_x2"
+
+
 def test_add_experiment_ids_are_unique_within_same_second(tmp_path) -> None:
     run_dir = tmp_path / "run"
     run_dir.mkdir()

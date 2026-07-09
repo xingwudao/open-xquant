@@ -1,7 +1,14 @@
 import pandas as pd
 import pytest
+
 from oxq.core.types import PortfolioOptimizer
-from oxq.portfolio.optimizers import EqualWeightOptimizer, RiskParityOptimizer, KellyOptimizer, PctEquityOptimizer, TopNRankingOptimizer
+from oxq.portfolio.optimizers import (
+    EqualWeightOptimizer,
+    KellyOptimizer,
+    PctEquityOptimizer,
+    RiskParityOptimizer,
+    TopNRankingOptimizer,
+)
 
 
 def test_equal_weight_protocol():
@@ -166,3 +173,14 @@ class TestTopNRankingOptimizerRedistribution:
         result = opt.optimize({}, indicators)
         assert "CASH" not in result
         assert sum(result.values()) == pytest.approx(1.0)
+
+    def test_score_weighting_does_not_emit_negative_target_weights(self):
+        opt = TopNRankingOptimizer(score_col="score", n=2, weighting="score", filter_negative=False)
+        indicators = {
+            "A": pd.DataFrame({"score": [1.0]}),
+            "B": pd.DataFrame({"score": [-1.0]}),
+        }
+
+        result = opt.optimize({}, indicators)
+
+        assert result == {"CASH": 1.0}

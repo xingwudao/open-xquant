@@ -339,6 +339,7 @@ class Engine:
             ]
             set_pending_buy_symbols(pending_buy_symbols)
         target_weights = strategy.portfolio.optimize(signals_data, indicators_data)
+        raw_target_weights = dict(target_weights)
         target_weights = _apply_limit_trade_policies(
             target_weights,
             filters=self._data_filters,
@@ -348,7 +349,6 @@ class Engine:
             prices=bar_prices,
         )
         optimizer_hold = bool(getattr(strategy.portfolio, "skip_rebalance", False))
-        raw_target_weights = dict(target_weights)
 
         # ── Step 3: Pre-trade rules ───────────────────────────────────
         rule_hold = False
@@ -804,9 +804,11 @@ def _apply_limit_trade_policies(
     if total_value <= 0:
         return adjusted
 
+    symbols_with_current_row: set[str] = set()
     for symbol, frame in mktdata.items():
         if date not in frame.index:
             continue
+        symbols_with_current_row.add(symbol)
         row = frame.loc[date]
         current_weight = _position_weight(symbol, portfolio, prices, total_value)
         desired_weight = float(adjusted.get(symbol, 0.0))
@@ -826,6 +828,18 @@ def _apply_limit_trade_policies(
                 adjusted[symbol] = current_weight
                 locked_symbols.add(symbol)
                 changed = True
+
+    if suspension_policy == "hold_existing":
+        for symbol in portfolio.positions:
+            if symbol in symbols_with_current_row or symbol not in prices:
+                continue
+            current_weight = _position_weight(symbol, portfolio, prices, total_value)
+            if current_weight <= 0:
+                continue
+            locked_symbols.add(symbol)
+            if float(adjusted.get(symbol, 0.0)) != current_weight:
+                adjusted[symbol] = current_weight
+            changed = True
 
     if not changed:
         return target_weights

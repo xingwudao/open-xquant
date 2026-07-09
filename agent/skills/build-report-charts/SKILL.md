@@ -236,11 +236,11 @@ Use `write-research-report` to read run artifacts, audits, robustness output,
 metrics, and registered assets, then write the final Markdown report and render
 HTML from that final Markdown. The expected outputs are:
 
-- `research_report.md`
-- `research_report.html`
-- `report_assets/manifest.json`
-- `report_assets/figures/<figure>.png`
-- `report_assets/scripts/<script>.py`
+- `versions/<version_id>/10_reports/<run_id>/research_report.md`
+- `versions/<version_id>/10_reports/<run_id>/research_report.html`
+- `versions/<version_id>/10_reports/<run_id>/report_assets/manifest.json`
+- `versions/<version_id>/10_reports/<run_id>/report_assets/figures/<figure>.png`
+- `versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py`
 
 ## Common Charts
 

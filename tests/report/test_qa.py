@@ -8,8 +8,13 @@ import yaml
 
 from oxq.report.assets import add_report_asset
 from oxq.report.html import render_markdown_html_report
-from oxq.report.qa import run_report_qa
+from oxq.report.qa import run_report_qa as _run_report_qa
 from oxq.spec.schema import StrategySpec
+
+
+def run_report_qa(run_dir, **kwargs):
+    kwargs.setdefault("include_advisory_checks", True)
+    return _run_report_qa(run_dir, **kwargs)
 
 
 def test_report_qa_passes_complete_registered_report(tmp_path) -> None:
@@ -237,6 +242,23 @@ def test_report_qa_flags_non_percent_numeric_claims(tmp_path) -> None:
     assert "99" in messages
     assert "10" in messages
     assert "9.99" in messages
+
+
+def test_report_qa_defaults_to_deterministic_checks(tmp_path) -> None:
+    run_dir = _write_qa_run(tmp_path)
+    markdown = (
+        "# Report\n\n"
+        "Effective last trading day: 2024-03-29\n\n"
+        "Configured end date: 2024-03-31\n\n"
+        "The report claims 99 OOS trades and Sharpe 9.99.\n"
+    )
+    (run_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (run_dir / "research_report.html").write_text(render_markdown_html_report(markdown, lang="en"), encoding="utf-8")
+
+    result = _run_report_qa(run_dir)
+
+    assert result.status == "pass"
+    assert not any(finding.id == "numeric_claim_unverified" for finding in result.findings)
 
 
 def test_report_qa_does_not_match_percent_claims_against_counts(tmp_path) -> None:

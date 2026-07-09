@@ -216,6 +216,64 @@ def test_tradability_policy_scales_new_targets_around_locked_positions() -> None
     assert result["CASH"] == pytest.approx(0.0)
 
 
+def test_tradability_policy_locks_missing_bar_existing_position() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0],
+                "high": [10.0],
+                "low": [10.0],
+                "close": [10.0],
+                "volume": [1_000_000],
+            },
+            index=[dates[0]],
+        ),
+        "BBB": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+            },
+            index=dates,
+        ),
+    }
+
+    class RotateWhenAAAMissing:
+        name = "RotateWhenAAAMissing"
+
+        def optimize(self, signals, indicators):
+            if "AAA" in indicators:
+                return {"AAA": 1.0}
+            if "BBB" in indicators:
+                return {"BBB": 1.0}
+            return {"CASH": 1.0}
+
+    strategy = Strategy(
+        name="missing_bar_lock",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={},
+        portfolio=RotateWhenAAAMissing(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        data_filters=DataFilterSection(suspension_policy="hold_existing"),
+    )
+
+    assert result.snapshots[1].target_weights == {"BBB": 1.0}
+    assert result.snapshots[1].adjusted_weights["AAA"] == pytest.approx(1.0)
+    assert result.snapshots[1].adjusted_weights.get("BBB", 0.0) == pytest.approx(0.0)
+    assert not any(managed.order.symbol == "AAA" and managed.order.side == "SELL" for managed in result.orders)
+    assert not any(managed.order.symbol == "BBB" for managed in result.orders)
+
+
 def test_engine_run_uses_strategy_rules_by_default() -> None:
     data = _make_trending_data()
 

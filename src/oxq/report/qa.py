@@ -86,7 +86,7 @@ class ReportQAResult:
         }
 
 
-def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) -> ReportQAResult:
+def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = False) -> ReportQAResult:
     """Run report QA checks for a run directory or version-governed report package.
 
     Deterministic artifact checks always run. Advisory semantic checks are kept

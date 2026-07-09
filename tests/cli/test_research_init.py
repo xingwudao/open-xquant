@@ -396,6 +396,18 @@ def test_research_init_repairs_hidden_manifest_paths_to_root_manifests(tmp_path)
             ),
             encoding="utf-8",
         )
+        (cwd_path / ".open-xquant" / "current.json").write_text(
+            json.dumps({"active_version": "v003"}),
+            encoding="utf-8",
+        )
+        (cwd_path / ".open-xquant" / "lineage.json").write_text(
+            json.dumps({"versions": [{"version_id": "v003"}]}),
+            encoding="utf-8",
+        )
+        (cwd_path / ".open-xquant" / "workflow_manifest.json").write_text(
+            json.dumps({"workflow": "legacy-hidden"}),
+            encoding="utf-8",
+        )
 
         result = runner.invoke(main, ["research", "init"])
 
@@ -403,8 +415,9 @@ def test_research_init_repairs_hidden_manifest_paths_to_root_manifests(tmp_path)
         assert (cwd_path / "current.json").exists()
         assert (cwd_path / "lineage.json").exists()
         assert (cwd_path / "workflow_manifest.json").exists()
-        assert not (cwd_path / ".open-xquant" / "current.json").exists()
-        assert json.loads((cwd_path / "current.json").read_text(encoding="utf-8"))["active_version"] == "v001"
+        assert json.loads((cwd_path / "current.json").read_text(encoding="utf-8"))["active_version"] == "v003"
+        assert json.loads((cwd_path / "lineage.json").read_text(encoding="utf-8"))["versions"][0]["version_id"] == "v003"
+        assert json.loads((cwd_path / "workflow_manifest.json").read_text(encoding="utf-8"))["workflow"] == "legacy-hidden"
         workspace = yaml.safe_load((cwd_path / ".open-xquant" / "workspace.yaml").read_text(encoding="utf-8"))
         assert workspace["paths"]["current_manifest"] == "current.json"
         assert workspace["paths"]["lineage_manifest"] == "lineage.json"

@@ -25,7 +25,8 @@ class RPS:
         scale: float = 100.0,
         min_symbols: int = 1,
     ) -> pd.Series:
-        del column, period, scale, min_symbols
+        _validate_rps_params(period=period, scale=scale, min_symbols=min_symbols)
+        del column
         return pd.Series(pd.NA, index=mktdata.index, dtype="float64")
 
     def compute_cross_section(
@@ -37,6 +38,7 @@ class RPS:
         min_symbols: int = 1,
     ) -> dict[str, pd.Series]:
         """Return same-date percentile ranks of simple N-day returns."""
+        _validate_rps_params(period=period, scale=scale, min_symbols=min_symbols)
         returns = {
             symbol: frame[column].astype(float) / frame[column].astype(float).shift(period) - 1.0
             for symbol, frame in mktdata.items()
@@ -50,3 +52,12 @@ class RPS:
             symbol: ranks[symbol].reindex(frame.index)
             for symbol, frame in mktdata.items()
         }
+
+
+def _validate_rps_params(*, period: int, scale: float, min_symbols: int) -> None:
+    if isinstance(period, bool) or not isinstance(period, int) or period <= 0:
+        raise ValueError("period must be a positive integer")
+    if isinstance(min_symbols, bool) or not isinstance(min_symbols, int) or min_symbols <= 0:
+        raise ValueError("min_symbols must be a positive integer")
+    if float(scale) <= 0:
+        raise ValueError("scale must be positive")

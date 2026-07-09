@@ -111,6 +111,30 @@ def test_spec_init_can_generate_china_a_share_candidate_template(tmp_path) -> No
     assert "candidate values; Agent workflows must still collect user confirmation" in result.output
 
 
+def test_spec_init_defaults_to_active_version_spec_path(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / ".open-xquant" / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {"current_manifest": "current.json"},
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(json.dumps({"active_version": "v007"}), encoding="utf-8")
+
+        result = runner.invoke(main, ["spec", "init", "version governed spec"])
+
+        assert result.exit_code == 0, result.output
+        assert (cwd_path / "versions/v007/04_spec_build/strategy_spec.yaml").exists()
+        assert not (cwd_path / "strategy_spec.yaml").exists()
+
+
 def test_registry_export_writes_component_catalog(tmp_path) -> None:
     out = tmp_path / "component_catalog.json"
 
@@ -1999,10 +2023,8 @@ def test_backtest_attach_provenance_rejects_missing_runtime_audit(tmp_path) -> N
         ],
     )
 
-    assert result.exit_code == 1
-    payload = json.loads(result.output)
-    assert payload["errors"][0]["check"] == "runtime_audit_missing"
-    assert "runtime_audit.json is required" in payload["errors"][0]["message"]
+    assert result.exit_code == 2
+    assert "Missing option '--runtime-audit'" in result.output
 
 
 def test_backtest_attach_provenance_rejects_spec_audit_without_user_confirmation(tmp_path) -> None:
@@ -2018,6 +2040,7 @@ def test_backtest_attach_provenance_rejects_spec_audit_without_user_confirmation
     audit = json.loads(spec_audit.read_text(encoding="utf-8"))
     audit["user_confirmation_status"] = "pending"
     spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
 
     result = CliRunner().invoke(
         main,
@@ -2027,6 +2050,8 @@ def test_backtest_attach_provenance_rejects_spec_audit_without_user_confirmation
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -2049,6 +2074,7 @@ def test_backtest_attach_provenance_rejects_tampered_spec_confirmation_table(tmp
     audit = json.loads(spec_audit.read_text(encoding="utf-8"))
     table_path = Path(audit["spec_confirmation_table"]["path"])
     table_path.write_text(table_path.read_text(encoding="utf-8") + "\n| tampered | yes |\n", encoding="utf-8")
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
 
     result = CliRunner().invoke(
         main,
@@ -2058,6 +2084,8 @@ def test_backtest_attach_provenance_rejects_tampered_spec_confirmation_table(tmp
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -2381,6 +2409,7 @@ def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:
     audit["spec_provenance_pass"] = False
     audit["blocking_findings"] = [{"message": "confirm allocation"}]
     spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
 
     result = CliRunner().invoke(
         main,
@@ -2390,6 +2419,8 @@ def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -2415,6 +2446,7 @@ def test_backtest_attach_provenance_rejects_hash_mismatch(tmp_path) -> None:
         json.dumps({"catalog_hash": "sha256:" + "4" * 64, "recipe_catalog_hash": "sha256:" + "5" * 64}),
         encoding="utf-8",
     )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
 
     result = CliRunner().invoke(
         main,
@@ -2424,6 +2456,8 @@ def test_backtest_attach_provenance_rejects_hash_mismatch(tmp_path) -> None:
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -2475,6 +2509,7 @@ def test_backtest_attach_provenance_rejects_nested_blockers(tmp_path) -> None:
             item["blocking"] = True
             break
     spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
 
     result = CliRunner().invoke(
         main,
@@ -2484,6 +2519,8 @@ def test_backtest_attach_provenance_rejects_nested_blockers(tmp_path) -> None:
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -2538,6 +2575,7 @@ def test_backtest_attach_provenance_rejects_non_reproducible_run(tmp_path) -> No
         catalog["catalog_hash"],
         spec_path=run_dir / "strategy_spec.yaml",
     )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     metrics["total_return"] = 999
     (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
@@ -2550,6 +2588,8 @@ def test_backtest_attach_provenance_rejects_non_reproducible_run(tmp_path) -> No
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -2709,8 +2749,7 @@ def _write_pass_runtime_audit(
         ],
         "blocking_findings": [],
     }
-    if component_bundle_hashes is not None:
-        payload["component_bundle_hashes"] = component_bundle_hashes
+    payload["component_bundle_hashes"] = component_bundle_hashes or []
     path.write_text(
         json.dumps(payload),
         encoding="utf-8",

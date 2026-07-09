@@ -232,6 +232,27 @@ def test_validate_accepts_cross_sectional_rps_indicator_dry_run() -> None:
     assert result.status == "pass"
 
 
+def test_validate_rejects_cross_sectional_rps_non_positive_period() -> None:
+    spec = StrategySpec.template(
+        strategy_id="rps_negative_period",
+        hypothesis="cross-sectional indicators must not look ahead",
+    )
+    spec.universe.symbols = ["AAA", "BBB"]
+    spec.signal.indicators = {
+        "rps_bad": IndicatorDef(type="RPS", params={"column": "close", "period": -1, "min_symbols": 1})
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "rps_bad", "n": 1}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "compute_dry_run_failed" and "period must be a positive integer" in error["message"]
+        for error in result.errors
+    )
+
+
 def test_validate_rejects_data_filter_without_required_column() -> None:
     spec = StrategySpec.template(strategy_id="filter_missing_col", hypothesis="filter columns must be declared")
     spec.data.filters.exclude_st = True

@@ -327,7 +327,10 @@ SPEC 审计必须分成两个状态：
 `oxq-spec-auditor-worker`
 - 使用 `audit-strategy-spec`。
 - 写 `06_spec_audit/`。
-- 先写 `spec_audit.json` 和 `spec_confirmation_table.md`。
+- 先写 `spec_audit.json`。
+- 仅当 `audit_conclusion: all_pass` 且等待用户确认或已确认时，写
+  `spec_confirmation_table.md`。
+- `audit_conclusion: blocked` 时不得写占位 confirmation table。
 - `audit_conclusion: all_pass` 但 `user_confirmation_status: pending` 时仍然
   block。
 - 用户确认后更新同一个 `spec_audit.json` 为
@@ -419,7 +422,7 @@ governance/workspace_audit.md
 
 ```text
 versions/vNNN/version_manifest.json
-phase_state.json
+versions/vNNN/phase_state.json
 lineage.json
 current.json
 ```

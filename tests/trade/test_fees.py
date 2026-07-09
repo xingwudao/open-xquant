@@ -3,11 +3,16 @@
 from decimal import Decimal
 
 from oxq.core.types import Order
+from oxq.trade import SideAwarePercentageFee as ExportedSideAwarePercentageFee
 from oxq.trade.fees import FeeModel, PercentageFee, SideAwarePercentageFee
 
 
 def test_percentage_fee_satisfies_protocol() -> None:
     assert isinstance(PercentageFee(), FeeModel)
+
+
+def test_side_aware_percentage_fee_is_exported_from_trade_package() -> None:
+    assert ExportedSideAwarePercentageFee is SideAwarePercentageFee
 
 
 def test_percentage_fee_basic() -> None:

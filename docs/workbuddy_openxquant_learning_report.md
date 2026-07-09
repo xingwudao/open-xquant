@@ -448,8 +448,8 @@ ASAR 内转置依赖扫描：
 
 OpenXQuant 技能与角色：
 
-- 技能数量：28 个。
-- Worker role 数量：9 个。
+- 技能数量：35 个。
+- Worker role 数量：17 个。
 - 入口技能：`agent/skills/open-xquant/SKILL.md`
 - 角色目录：`agent/roles`
 - 安装目标：`codex`、`opencode`、`claude-code`、`cursor`、`openclaw`、

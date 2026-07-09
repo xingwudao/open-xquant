@@ -33,14 +33,22 @@ def spec():
 
 @spec.command()
 @click.argument("description")
-@click.option("--out", "-o", default="strategy_spec.yaml", help="Output file path")
+@click.option(
+    "--out",
+    "-o",
+    default=None,
+    help=(
+        "Output file path. Defaults to versions/<active_version>/04_spec_build/strategy_spec.yaml "
+        "inside version-governed research workspaces."
+    ),
+)
 @click.option(
     "--market-preset",
     type=click.Choice(["us_equity", "cn_a_share"]),
     default="us_equity",
     help="Explicit template preset; generated values are candidates until user-confirmed in Agent workflows.",
 )
-def init(description: str, out: str, market_preset: str):
+def init(description: str, out: str | None, market_preset: str):
     """Initialize a new strategy spec from a natural language description.
 
     DESCRIPTION is a brief strategy idea in natural language.
@@ -69,7 +77,7 @@ def init(description: str, out: str, market_preset: str):
         payload.setdefault("metrics", {})["calmar_denominator"] = "max_drawdown"
         payload.setdefault("metrics", {})["evaluation_window"] = "full"
 
-    output_path = Path(out)
+    output_path = Path(out) if out else _default_spec_init_output_path()
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(yaml.dump(payload, sort_keys=False, allow_unicode=True, default_flow_style=False), encoding="utf-8")
 
@@ -77,6 +85,51 @@ def init(description: str, out: str, market_preset: str):
     click.echo(f"Strategy ID: {strategy_id}")
     click.echo("Template preset values are candidate values; Agent workflows must still collect user confirmation.")
     click.echo("Next: edit the file, then run `oxq spec validate`")
+
+
+def _default_spec_init_output_path() -> Path:
+    version = _active_workspace_version()
+    if version:
+        return Path("versions") / version / "04_spec_build" / "strategy_spec.yaml"
+    return Path("strategy_spec.yaml")
+
+
+def _active_workspace_version() -> str:
+    workspace_file = Path(".open-xquant") / "workspace.yaml"
+    if not workspace_file.exists():
+        return ""
+    try:
+        workspace = yaml.safe_load(workspace_file.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return ""
+    if not isinstance(workspace, dict):
+        return ""
+    workflow = workspace.get("workflow")
+    if not isinstance(workflow, dict) or workflow.get("layout") != "version_governed":
+        return ""
+    paths = workspace.get("paths")
+    current_manifest = "current.json"
+    if isinstance(paths, dict) and isinstance(paths.get("current_manifest"), str):
+        configured_manifest = Path(paths["current_manifest"])
+        if (
+            not configured_manifest.is_absolute()
+            and len(configured_manifest.parts) == 1
+            and configured_manifest.name == "current.json"
+        ):
+            current_manifest = paths["current_manifest"]
+    manifest_path = Path(current_manifest)
+    if manifest_path.is_absolute() or ".." in manifest_path.parts:
+        return ""
+    try:
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    version = payload.get("active_version")
+    if isinstance(version, str) and _WORKSPACE_VERSION_RE.fullmatch(version):
+        return version
+    return ""
 
 
 @spec.command()
@@ -1071,7 +1124,7 @@ def run(
 @click.option("--spec-audit", required=True, type=click.Path(exists=True, dir_okay=False), help="spec_audit.json path.")
 @click.option(
     "--runtime-audit",
-    required=False,
+    required=True,
     type=click.Path(exists=True, dir_okay=False),
     help="runtime_audit.json path.",
 )
@@ -1082,7 +1135,7 @@ def run(
     help="component_catalog.json path.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
-def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, component_catalog: str, as_json: bool):
+def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str, component_catalog: str, as_json: bool):
     """Attach pre-run provenance artifacts while preserving run digests."""
     from oxq.audit import audit_reproducibility
     from oxq.core.component_catalog import _catalog_hash, _stable_hash
@@ -1477,7 +1530,7 @@ def _require_runtime_audit_hashes(
                 f"audit={audit_compiled_plan_hash}, expected={expected_compiled_plan_hash}"
             )
     expected_component_hashes = sorted(component_bundle_hashes or set())
-    if expected_component_hashes:
+    if component_bundle_hashes is not None or "component_bundle_hashes" in audit_payload:
         audit_hashes = audit_payload.get("component_bundle_hashes")
         if not isinstance(audit_hashes, list) or not all(isinstance(item, str) for item in audit_hashes):
             raise click.ClickException("runtime audit component_bundle_hashes must list authorized component bundle hashes")

@@ -16,9 +16,8 @@ inputs:
   - component_catalog.json
   - component_manifest.json
 outputs:
-  - backtest_result.json
   - versions/<version_id>/09_backtests/<run_id>/
-  - runner_result.json
+  - versions/<version_id>/09_backtests/<run_id>/runner_result.json
 forbidden_outputs:
   - strategy_spec.yaml
   - spec_audit.json
@@ -40,9 +39,8 @@ Use the `run-authorized-backtest` skill.
   "default_agent": "oxq-runner-worker",
   "required_skills": ["open-xquant", "run-authorized-backtest"],
   "outputs": [
-    "backtest_result.json",
     "versions/<version_id>/09_backtests/<run_id>/",
-    "runner_result.json"
+    "versions/<version_id>/09_backtests/<run_id>/runner_result.json"
   ],
   "forbidden_outputs": [
     "strategy_spec.yaml",
@@ -85,16 +83,16 @@ Use the `run-authorized-backtest` skill.
 
 ## Outputs
 
-- `backtest_result.json`
 - `versions/<version_id>/09_backtests/<run_id>/`
 - `versions/<version_id>/09_backtests/<run_id>/runner_result.json`
 
 ## Handoff
 
-Return `runner_result.json` and the run directory to the coordinator. The next
-phase is `oxq-monitor-worker` when the formal backtest command succeeds. The
-report writer only runs after the monitor has completed reproducibility,
-research-bias, robustness, and experiment logging.
+Return `versions/<version_id>/09_backtests/<run_id>/runner_result.json` and the
+run directory to the coordinator. The next phase is `oxq-monitor-worker` when
+the formal backtest command succeeds. The report writer only runs after the
+monitor has completed reproducibility, research-bias, robustness, and
+experiment logging.
 
 ## Red Lines
 

@@ -396,7 +396,9 @@ decision_policy:
 Spec Auditor 必须在完整确认表里让用户确认每个有效字段。
 
 ```bash
-oxq spec init "A-share momentum TopN" --market-preset cn_a_share --out strategy_spec.yaml
+oxq spec init "A-share momentum TopN" --market-preset cn_a_share
+# version-governed workspace default:
+# versions/<version_id>/04_spec_build/strategy_spec.yaml
 ```
 
 `cn_a_share` 会显式写出关键候选假设，包括：
@@ -592,7 +594,7 @@ manifest。最终 `research_report.md` 必须由 Agent 调用
 图表和附件通过 manifest 登记：
 
 ```text
-versions/<version_id>/09_backtests/<run_id>/
+versions/<version_id>/10_reports/<run_id>/
   report_assets/
     manifest.json
     figures/
@@ -603,9 +605,9 @@ versions/<version_id>/09_backtests/<run_id>/
 报告资产命令：
 
 ```bash
-oxq report asset add versions/<version_id>/09_backtests/<run_id>/ chart.png --id chart_id --title "Chart"
-oxq report asset add-batch versions/<version_id>/09_backtests/<run_id>/ versions/<version_id>/09_backtests/<run_id>/report_assets/assets.json
-oxq report asset list versions/<version_id>/09_backtests/<run_id>/
+oxq report asset add versions/<version_id>/10_reports/<run_id>/ chart.png --id chart_id --title "Chart"
+oxq report asset add-batch versions/<version_id>/10_reports/<run_id>/ versions/<version_id>/10_reports/<run_id>/report_assets/assets.json
+oxq report asset list versions/<version_id>/10_reports/<run_id>/
 ```
 
 ---
@@ -614,7 +616,7 @@ oxq report asset list versions/<version_id>/09_backtests/<run_id>/
 
 每次研究进入实验登记册，防止选择性记忆。
 
-本地实现：`experiments/experiments.jsonl`
+本地实现：`experiments.jsonl`
 
 记录：experiment_id, strategy_id, spec_hash, run_id, metrics, audit_status, decision, created_at。
 

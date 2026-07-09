@@ -126,9 +126,12 @@ def initialize_workspace(
         click.echo(f"Workspace config written to {workspace_file}")
 
     workspace_config = workspace_config or {}
+    migrated_manifests = _migrate_hidden_root_manifest_files(cwd, workspace_config)
     if _normalize_root_manifest_paths(workspace_config):
         write_yaml_file(workspace_file, workspace_config)
         click.echo(f"Workspace manifest paths normalized in {workspace_file}")
+    elif migrated_manifests:
+        click.echo("Workspace root manifests migrated from .open-xquant/")
     if not minimal:
         _create_configured_workspace_dirs(cwd, workspace_config)
     experiments = _configured_path(cwd, workspace_config, "experiment_registry") or (cwd / "experiments.jsonl")
@@ -217,7 +220,10 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
         return
     name = str(workspace.get("name") or cwd.name)
     paths = workspace.get("paths") if isinstance(workspace.get("paths"), dict) else {}
-    version_id = "v001"
+    current_path = _configured_root_manifest_path(cwd, workspace, "current_manifest", "current.json")
+    current_payload = _read_json_object(current_path)
+    active_version = current_payload.get("active_version")
+    version_id = active_version if isinstance(active_version, str) and active_version else "v001"
     version_dir = (_configured_path(cwd, workspace, "versions_dir") or (cwd / "versions")) / version_id
     _create_version_phase_dirs(version_dir)
 
@@ -238,8 +244,6 @@ def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]
             + "\n",
         )
 
-    current_path = _configured_root_manifest_path(cwd, workspace, "current_manifest", "current.json")
-    current_payload = _read_json_object(current_path)
     if not current_payload.get("active_version"):
         write_text_file(
             current_path,
@@ -368,6 +372,34 @@ def _normalize_root_manifest_paths(workspace: dict[str, object]) -> bool:
             paths[key] = filename
             changed = True
     return changed
+
+
+def _migrate_hidden_root_manifest_files(cwd: Path, workspace: dict[str, object]) -> bool:
+    if not _is_version_governed_workspace(workspace):
+        return False
+    paths = workspace.get("paths")
+    if not isinstance(paths, dict):
+        return False
+    migrated = False
+    for key, filename in (
+        ("current_manifest", "current.json"),
+        ("lineage_manifest", "lineage.json"),
+        ("workflow_manifest", "workflow_manifest.json"),
+    ):
+        configured = paths.get(key)
+        if not isinstance(configured, str) or not configured:
+            continue
+        configured_path = Path(configured)
+        if configured_path.is_absolute() or ".." in configured_path.parts:
+            continue
+        if len(configured_path.parts) != 2 or configured_path.parts[0] != ".open-xquant":
+            continue
+        source = cwd / configured_path
+        target = cwd / filename
+        if source.is_file() and not target.exists():
+            write_text_file(target, source.read_text(encoding="utf-8"))
+            migrated = True
+    return migrated
 
 
 VERSION_PHASE_DIRS = (

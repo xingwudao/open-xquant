@@ -166,6 +166,8 @@ class TopNRankingOptimizer:
         if self.weighting != "score":
             return {"CASH": 1.0}
 
+        if any(v <= 0 for _, v in top):
+            return {"CASH": 1.0}
         total = sum(v for _, v in top)
         if total <= 0:
             return {"CASH": 1.0}

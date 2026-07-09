@@ -111,7 +111,7 @@ def _infer_run_role(run_path: Path) -> str:
     if "09_backtests" not in parts:
         return "primary"
     backtest_index = parts.index("09_backtests")
-    if backtest_index + 2 < len(parts) and parts[backtest_index + 1].endswith("_cost_x2"):
+    if backtest_index + 1 < len(parts) and parts[backtest_index + 1].endswith("_cost_x2"):
         return "robustness_cost_x2"
     return "primary"
 
