@@ -17,10 +17,10 @@ inputs:
   - chart decision
   - report_language
 outputs:
-  - report_assets/**
-  - research_report.md
-  - research_report.html
-  - writer_result.json
+  - versions/<version_id>/10_reports/<run_id>/report_assets/**
+  - versions/<version_id>/10_reports/<run_id>/research_report.md
+  - versions/<version_id>/10_reports/<run_id>/research_report.html
+  - versions/<version_id>/10_reports/<run_id>/writer_result.json
 forbidden_outputs:
   - strategy_spec.yaml
   - spec_audit.json
@@ -43,10 +43,10 @@ drafting.
     "write-research-report"
   ],
   "outputs": [
-    "report_assets/**",
-    "research_report.md",
-    "research_report.html",
-    "writer_result.json"
+    "versions/<version_id>/10_reports/<run_id>/report_assets/**",
+    "versions/<version_id>/10_reports/<run_id>/research_report.md",
+    "versions/<version_id>/10_reports/<run_id>/research_report.html",
+    "versions/<version_id>/10_reports/<run_id>/writer_result.json"
   ],
   "forbidden_outputs": [
     "strategy_spec.yaml",
@@ -67,6 +67,18 @@ drafting.
 - Write `research_report.md` and `research_report.html`.
 - Disclose audit warnings, unconfirmed defaults, recipe choices, runtime audit
   conclusions, and material limitations.
+- Disclose configured and effective dates with deterministic QA labels:
+  `配置结束日：YYYY-MM-DD` and `有效数据最后交易日：YYYY-MM-DD` for Chinese
+  reports, or `Configured end date: YYYY-MM-DD` and
+  `Effective last trading day: YYYY-MM-DD` for English reports.
+  Do not use variants such as `配置的回测结束日期`, `有效最后交易日`, or English
+  fallback labels inside a Chinese report.
+- Read source run artifacts from
+  `versions/<version_id>/09_backtests/<run_id>/`.
+- Write final report artifacts only under
+  `versions/<version_id>/10_reports/<run_id>/`, including
+  `versions/<version_id>/10_reports/<run_id>/research_report.md`.
+- Do not write root-level `research_report.md`.
 
 ## Inputs
 
@@ -80,9 +92,13 @@ drafting.
 ## Outputs
 
 - Chart asset files under the report asset directory.
-- `research_report.md`
-- `research_report.html`
-- `writer_result.json` when the coordinator requires it.
+- `versions/<version_id>/10_reports/<run_id>/research_report.md`
+- `versions/<version_id>/10_reports/<run_id>/research_report.html`
+- `versions/<version_id>/10_reports/<run_id>/writer_result.json` when the
+  coordinator requires it.
+  The JSON must include `version_id`, `run_id`, `strategy_id`, and
+  `source_run_dir` so lineage auditors do not have to infer report identity
+  only from the directory path.
 
 ## Handoff
 

@@ -14,8 +14,9 @@ inputs:
   - component_catalog.json
   - component_manifest.json
 outputs:
-  - compiled_plan.json
-  - runtime_audit.json
+  - versions/<version_id>/07_compile_preview/compiled_plan.json
+  - versions/<version_id>/07_compile_preview/strategy.py
+  - versions/<version_id>/08_runtime_audit/runtime_audit.json
 forbidden_outputs:
   - spec_audit.json
   - runs/**
@@ -32,7 +33,11 @@ Use the `audit-runtime-semantics` skill.
   "role_kind": "runtime_auditor",
   "default_agent": "oxq-runtime-auditor-worker",
   "required_skills": ["open-xquant", "audit-runtime-semantics"],
-  "outputs": ["compiled_plan.json", "runtime_audit.json"],
+  "outputs": [
+    "versions/<version_id>/07_compile_preview/compiled_plan.json",
+    "versions/<version_id>/07_compile_preview/strategy.py",
+    "versions/<version_id>/08_runtime_audit/runtime_audit.json"
+  ],
   "forbidden_outputs": [
     "spec_audit.json",
     "runs/**",
@@ -44,12 +49,25 @@ Use the `audit-runtime-semantics` skill.
 
 ## Responsibilities
 
-- Read `strategy_spec.yaml` and passing `spec_audit.json`.
+- Read `strategy_spec.yaml` and confirmed `spec_audit.json`.
+- Block unless `spec_audit.json` has `status: pass`,
+  `audit_conclusion: all_pass`, and `user_confirmation_status: confirmed`.
 - Compile the strategy before formal backtest authorization.
+- Print the complete `strategy.py` source to the user after compile preview
+  generation and before runtime findings.
 - Verify that `compiled_plan.json` preserves material execution semantics,
   including rebalance rules, costs, slippage, execution timing, validation
   settings, and runtime rules.
 - Fail fast when the engine cannot preserve a supported material field.
+- Read
+  `versions/<version_id>/04_spec_build/strategy_spec.yaml` and
+  `versions/<version_id>/06_spec_audit/spec_audit.json`.
+- Write compile preview artifacts to
+  `versions/<version_id>/07_compile_preview/compiled_plan.json` and
+  `versions/<version_id>/07_compile_preview/strategy.py`.
+- Write runtime audit to
+  `versions/<version_id>/08_runtime_audit/runtime_audit.json`.
+- Do not write root-level `runtime_audit.json`.
 
 ## Inputs
 
@@ -60,8 +78,9 @@ Use the `audit-runtime-semantics` skill.
 
 ## Outputs
 
-- `compiled_plan.json`
-- `runtime_audit.json`
+- `versions/<version_id>/07_compile_preview/compiled_plan.json`
+- `versions/<version_id>/07_compile_preview/strategy.py`
+- `versions/<version_id>/08_runtime_audit/runtime_audit.json`
 
 ## Handoff
 

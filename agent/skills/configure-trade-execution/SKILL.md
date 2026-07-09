@@ -33,10 +33,23 @@ execution:
   rebalance:
     frequency: daily
     interval_days: 1
+    schedule: ""
 
 cost:
   fee_rate: 0.001
   fee_min: 0.0
+  slippage_rate: 0.001
+```
+
+Use side-specific costs only when confirmed:
+
+```yaml
+cost:
+  fee_rate: 0.0003
+  fee_min: 0.0
+  buy_fee_rate: 0.0003
+  sell_fee_rate: 0.0003
+  sell_tax_rate: 0.001
   slippage_rate: 0.001
 ```
 
@@ -47,6 +60,11 @@ Validator constraints:
 - Legacy `trade_time` / `fill_price_mode` must agree with explicit
   `order_timing` / `price_bar` / `price_type` when both are present.
 - `fee_rate` and `slippage_rate` must each be positive.
+- `buy_fee_rate` and `sell_fee_rate` may override `fee_rate` when the user
+  explicitly confirms side-specific fees.
+- `sell_tax_rate` and `stamp_tax` model sell-side tax. If both are set, they
+  must match; otherwise use one confirmed field and leave the other empty or
+  zero.
 - The only zero-cost exception is when both values are exactly `0.0` and the
   spec declares explicit execution semantics for a replay-style validation run;
   preserve the warning.
@@ -56,6 +74,11 @@ Validator constraints:
   until by-symbol sizing is supported.
 - `initial_cash` must be positive and finite.
 - `cash_annual_return` must be non-negative and finite.
+- `execution.rebalance.frequency=daily` uses `interval_days`.
+- `frequency=weekly` requires `schedule: week_start`.
+- `frequency=monthly` requires `schedule: month_start`.
+- Do not use month-end or week-end calendar schedules in audited specs; those
+  depend on future-row knowledge unless the runtime has explicit support.
 
 Supported audited calendars are `XNYS`, `ARCX`, `XSHG`, and `XSHE`.
 Use `lot_size_config.default: 100` for A-share examples.
@@ -66,7 +89,8 @@ If the user does not specify costs, use conservative placeholders only after
 stating the assumption:
 
 - US equity demo: `fee_rate=0.001`, `slippage_rate=0.001`, `lot_size=1`
-- A-share demo: ask first; lot size is often `100`
+- A-share demo: ask first; lot size is often `100`; commission, stamp tax, and
+  slippage must be confirmed instead of inferred
 - crypto demo: ask exchange and fee tier first
 
 Do not silently choose zero fees or zero slippage.
@@ -76,12 +100,16 @@ Do not silently choose zero fees or zero slippage.
 ```python
 from decimal import Decimal
 
-from oxq.trade.fees import PercentageFee
+from oxq.trade.fees import PercentageFee, SideAwarePercentageFee
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
 from oxq.trade.slippage import PercentageSlippage
 
 broker = SimBroker(
-    fee_model=PercentageFee(rate=Decimal("0.001")),
+    fee_model=SideAwarePercentageFee(
+        buy_rate=Decimal("0.0003"),
+        sell_rate=Decimal("0.0003"),
+        sell_tax_rate=Decimal("0.001"),
+    ),
     slippage_model=PercentageSlippage(rate=Decimal("0.001")),
     fill_price_mode=FillPriceMode.NEXT_OPEN,
     market_calendar="XNYS",

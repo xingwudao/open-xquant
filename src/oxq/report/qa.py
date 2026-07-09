@@ -87,24 +87,24 @@ class ReportQAResult:
 
 
 def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) -> ReportQAResult:
-    """Run report QA checks for a backtest run directory.
+    """Run report QA checks for a run directory or version-governed report package.
 
     Deterministic artifact checks always run. Advisory semantic checks are kept
     available for targeted tests and tooling, but the CLI leaves them to the
     review-research-report skill by default.
     """
-    run_path = Path(run_dir)
+    run_path, report_path = _resolve_report_qa_paths(Path(run_dir))
     artifacts = RunArtifacts.load(run_path)
     facts = build_report_facts(artifacts)
     findings: list[ReportQAFinding] = []
     _check_metrics_artifact(run_path, findings)
 
-    markdown_path = run_path / "research_report.md"
-    html_path = run_path / "research_report.html"
+    markdown_path = report_path / "research_report.md"
+    html_path = report_path / "research_report.html"
     markdown = _read_text(markdown_path, findings, "research_report.md")
     html = _read_text(html_path, findings, "research_report.html")
 
-    manifest_assets = _manifest_assets(run_path, findings)
+    manifest_assets = _manifest_assets(report_path, findings)
     registered_paths = {
         f"report_assets/{asset.get('path')}"
         for asset in manifest_assets
@@ -119,7 +119,7 @@ def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) 
     _check_image_sources(markdown_images, html_images, findings)
     _check_markdown_images(markdown_images, registered_paths, registered_figure_paths, findings)
     _check_html_images(html_images, registered_paths, registered_figure_paths, findings)
-    _check_manifest_assets(run_path, manifest_assets, findings)
+    _check_manifest_assets(report_path, manifest_assets, findings)
     _check_source_script_paths(manifest_assets, findings)
     _check_required_date_disclosure(markdown, html, facts, findings)
     if include_advisory_checks:
@@ -128,6 +128,15 @@ def run_report_qa(run_dir: str | Path, *, include_advisory_checks: bool = True) 
 
     status = "fail" if any(f.severity == "fatal" for f in findings) else ("warn" if findings else "pass")
     return ReportQAResult(status=status, findings=findings, facts=facts)
+
+
+def _resolve_report_qa_paths(path: Path) -> tuple[Path, Path]:
+    if path.parent.name == "10_reports":
+        version_dir = path.parent.parent
+        source_run = version_dir / "09_backtests" / path.name
+        if source_run.exists():
+            return source_run, path
+    return path, path
 
 
 def _read_text(path: Path, findings: list[ReportQAFinding], label: str) -> str:

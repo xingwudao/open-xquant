@@ -116,12 +116,18 @@ SUBAGENT_POLICY_BLOCK = """## SubAgent policy
 - If SubAgent tools are unavailable, explicitly say so before continuing in
   the main thread.
 - Delegate independent phases to workers:
+  - version manager worker
+  - artifact governor worker
+  - strategy brainstorm worker
+  - strategy idea audit worker
   - strategy builder worker
   - data inspection worker
   - spec audit worker
   - runtime audit worker
   - backtest runner worker
-  - monitor/report worker
+  - monitor worker
+  - report writer/reviewer worker
+  - comparison/final selection worker
 - Do not force parallel execution when phases are strictly dependent. Use
   sequential SubAgents with artifact handoff instead."""
 

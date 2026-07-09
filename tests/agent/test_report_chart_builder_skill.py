@@ -288,6 +288,34 @@ def test_research_report_writer_skill_requires_institutional_report_structure() 
     assert "message-first" in text
 
 
+def test_research_report_writer_skill_requires_deterministic_date_labels() -> None:
+    skill = Path("agent/skills/write-research-report/SKILL.md")
+    role = Path("agent/roles/oxq-report-writer-worker.md")
+
+    skill_text = skill.read_text(encoding="utf-8")
+    role_text = role.read_text(encoding="utf-8")
+
+    assert "配置结束日：YYYY-MM-DD" in skill_text
+    assert "有效数据最后交易日：YYYY-MM-DD" in skill_text
+    assert "Configured end date: YYYY-MM-DD" in skill_text
+    assert "Effective last trading day: YYYY-MM-DD" in skill_text
+    assert "Do not use label variants" in skill_text
+    assert "English fallback labels inside a Chinese report" in skill_text
+    assert "配置结束日：YYYY-MM-DD" in role_text
+    assert "有效数据最后交易日：YYYY-MM-DD" in role_text
+    assert "English\n  fallback labels inside a Chinese report" in role_text
+
+
+def test_research_report_writer_skill_requires_artifact_backed_drawdown_periods() -> None:
+    skill = Path("agent/skills/write-research-report/SKILL.md")
+
+    text = skill.read_text(encoding="utf-8")
+
+    assert "maximum drawdown peak/trough dates" in text
+    assert "equity_curve.csv" in text
+    assert "omit the peak/trough dates and equity values" in text
+
+
 def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     skill = Path("agent/skills/open-xquant/SKILL.md")
 
@@ -301,10 +329,16 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "Do not write report files directly" in text
     assert "minimal runner/workspace commands" in text
     assert "`research init --sdk`" in text
+    assert "Do not resolve a runner for `brainstorm-strategy-idea` or `audit-strategy-idea`" in text
     assert "Install And Upgrade Questions" in text
     assert "installed Agents must not depend on that file" in text
     assert "<runner> agent status" in text
     for leaf_skill in [
+        "manage-strategy-version",
+        "govern-research-workspace",
+        "audit-artifact-lineage",
+        "brainstorm-strategy-idea",
+        "audit-strategy-idea",
         "build-strategy-spec",
         "audit-strategy-spec",
         "audit-runtime-semantics",
@@ -312,6 +346,8 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
         "monitor-strategy-run",
         "build-report-charts",
         "compare-experiments",
+        "compare-strategy-versions",
+        "select-final-version",
         "write-research-report",
         "review-research-report",
         "review-performance",
@@ -326,6 +362,9 @@ def test_open_xquant_router_skill_routes_quant_tasks_to_leaf_skills() -> None:
     assert "Multi-Agent workflows use narrow leaf skills only" in text
     assert "Workspace-local custom Rule requests must block" in text
     assert "audited spec, compile, runtime, and backtest support" in text
+    assert "Final version selection" in text
+    assert "version governance" in text
+    assert "Cross-version strategy comparison" in text
     assert "strategy-builder-standalone" not in text
     assert "quant-research" not in text
 
@@ -337,13 +376,198 @@ def test_coordinator_role_documents_subagent_workflow() -> None:
 
     assert "open-xquant SubAgent workflow" in text
     assert "Prefer SubAgents by default" in text
-    assert "Builder writes `strategy_spec.yaml`" in text
+    assert "Brainstormer writes `strategy_idea_brief.json`" in text
+    assert "Idea auditor writes `strategy_idea_audit.json`" in text
+    assert "Builder reads the audited idea artifacts" in text
+    assert "If builder returns `next_required_phase: data_inspection`" in text
     assert "Data inspector checks required symbols" in text
     assert "oxq-data-inspection-worker" in text
     assert "Spec auditor reads those artifacts" in text
     assert "Runtime auditor reads the authorized spec/audit artifacts" in text
     assert "Runner reads `backtest_authorization.json`" in text
+    assert "Do not\n  delegate this file to a generic worker" in text
+    assert "`run-authorized-backtest` contract exactly" in text
+    assert "`status: authorized`" in text
+    assert "`spec_hash`, `spec_audit_hash`, and `runtime_audit_hash`" in text
+    assert "nested\n  `canonical_hashes` object" in text
+    assert "Version manager decides whether a user change creates a new version" in text
+    assert "Artifact governor audits workspace layout" in text
+    assert "Lineage auditor verifies version/run/final references" in text
+    assert "Final selector writes final selection artifacts" in text
     assert "Main agent only coordinates" in text
+    assert "phase completion" in text
+    assert "active_phase" in text
+    assert "10_reports" in text
+
+
+def test_workspace_governance_skills_are_canonical_sources() -> None:
+    expected = {
+        "manage-strategy-version": [
+            "strategy family",
+            "new version",
+            "semantic change",
+            "phase completion",
+            "current_phase",
+            "lineage.json",
+            "current.json",
+            "version_manifest.json",
+        ],
+        "govern-research-workspace": [
+            "workspace artifact governance",
+            "root-level `strategy_spec.yaml`",
+            "workflow_manifest.json",
+            "workspace_audit.json",
+            "phase artifact",
+        ],
+        "audit-artifact-lineage": [
+            "artifact lineage",
+            "version/run/final",
+            "hash_type",
+            "lineage_audit",
+            "eligible candidate",
+        ],
+        "compare-strategy-versions": [
+            "cross-version",
+            "within-version",
+            "comparison_manifest.json",
+            "comparability_audit.json",
+            "spec_diff.yaml",
+        ],
+        "select-final-version": [
+            "final version",
+            "selection_policy.json",
+            "final_decision.json",
+            "current_final.json",
+            "confirmed_by_user",
+        ],
+    }
+
+    for skill_name, required_fragments in expected.items():
+        skill = Path(f"agent/skills/{skill_name}/SKILL.md")
+        assert skill.exists(), skill
+        text = skill.read_text(encoding="utf-8")
+        assert f"name: {skill_name}" in text
+        for fragment in required_fragments:
+            assert fragment in text
+
+
+def test_workspace_governance_worker_roles_are_installed_boundaries() -> None:
+    expected = {
+        "oxq-version-manager-worker": "manage-strategy-version",
+        "oxq-artifact-governor-worker": "govern-research-workspace",
+        "oxq-lineage-auditor-worker": "audit-artifact-lineage",
+        "oxq-experiment-comparator-worker": "compare-strategy-versions",
+        "oxq-final-selector-worker": "select-final-version",
+        "oxq-monitor-worker": "monitor-strategy-run",
+    }
+
+    for role_name, skill_name in expected.items():
+        role = Path(f"agent/roles/{role_name}.md")
+        assert role.exists(), role
+        text = role.read_text(encoding="utf-8")
+        assert f"name: {role_name}" in text
+        assert skill_name in text
+        assert "forbidden_outputs" in text
+        assert "strategy_spec.yaml" in text or "runs/**" in text or "research_report.md" in text
+
+
+def test_version_governed_phase_paths_are_mandatory_for_leaf_skills_and_roles() -> None:
+    required_skill_fragments = {
+        "brainstorm-strategy-idea": [
+            "versions/<version_id>/01_brainstorm/strategy_idea_brief.json",
+            "Do not write root-level `strategy_idea_brief.json`",
+        ],
+        "audit-strategy-idea": [
+            "versions/<version_id>/02_idea_audit/strategy_idea_audit.json",
+            "Do not write root-level `strategy_idea_audit.json`",
+        ],
+        "build-strategy-spec": [
+            "versions/<version_id>/04_spec_build/strategy_spec.yaml",
+            "Do not write root-level `strategy_spec.yaml`",
+        ],
+        "audit-strategy-spec": [
+            "versions/<version_id>/06_spec_audit/spec_confirmation_table.md",
+            "Do not write root-level `spec_audit.json`",
+        ],
+        "audit-runtime-semantics": [
+            "versions/<version_id>/07_compile_preview/compiled_plan.json",
+            "versions/<version_id>/08_runtime_audit/runtime_audit.json",
+        ],
+        "run-authorized-backtest": [
+            "versions/<version_id>/09_backtests/<run_id>/strategy_spec.yaml",
+            "Do not write formal run outputs to root `runs/`",
+        ],
+        "monitor-strategy-run": [
+            "versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json",
+            "version_id",
+        ],
+        "write-research-report": [
+            "versions/<version_id>/10_reports/<run_id>/research_report.md",
+            "Do not write root-level `research_report.md`",
+        ],
+        "review-research-report": [
+            "versions/<version_id>/10_reports/<run_id>/report_review.json",
+            "Do not write root-level `report_review.json`",
+        ],
+    }
+
+    for skill_name, fragments in required_skill_fragments.items():
+        text = Path(f"agent/skills/{skill_name}/SKILL.md").read_text(encoding="utf-8")
+        for fragment in fragments:
+            assert fragment in text, f"{skill_name} missing {fragment}"
+
+    coordinator = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+    assert "Version-Governed Artifact Contract" in coordinator
+    assert "active_version" in coordinator
+    assert "Root-level phase artifacts are layout pollution" in coordinator
+    assert "versions/<version_id>/04_spec_build/strategy_spec.yaml" in coordinator
+
+
+def test_architecture_doc_links_strategy_workflow_governance_design() -> None:
+    text = Path("docs/architecture.md").read_text(encoding="utf-8")
+
+    assert "Strategy Workflow Artifact Governance" in text
+    assert "docs/strategy-workflow-artifact-governance.md" in text
+    assert "docs/images/strategy-workflow-artifact-governance.png" in text
+    assert "strategy family -> strategy version -> run attempt" in text
+    assert "select-final-version" in text
+
+
+def test_architecture_and_agent_guide_list_workspace_governance_roles() -> None:
+    expected_roles = [
+        "oxq-version-manager-worker",
+        "oxq-artifact-governor-worker",
+        "oxq-lineage-auditor-worker",
+        "oxq-experiment-comparator-worker",
+        "oxq-final-selector-worker",
+    ]
+
+    for doc_path in ["docs/architecture.md", "docs/agent-guide.md"]:
+        text = Path(doc_path).read_text(encoding="utf-8")
+        for role in expected_roles:
+            assert role in text, f"{doc_path} missing {role}"
+
+
+def test_version_governed_docs_and_skill_examples_do_not_use_root_run_paths() -> None:
+    checked_paths = [
+        "docs/architecture.md",
+        "docs/agent-guide.md",
+        "agent/skills/build-strategy-spec/SKILL.md",
+        "agent/skills/audit-strategy-idea/SKILL.md",
+        "agent/skills/audit-runtime-semantics/SKILL.md",
+        "agent/skills/run-authorized-backtest/SKILL.md",
+        "agent/skills/review-performance/SKILL.md",
+    ]
+
+    for checked_path in checked_paths:
+        text = Path(checked_path).read_text(encoding="utf-8")
+        assert "runs/<run_id>" not in text, checked_path
+        assert "oxq spec validate strategy_spec.yaml" not in text, checked_path
+        assert "oxq strategy compile strategy_spec.yaml" not in text, checked_path
+        assert "oxq backtest run strategy_spec.yaml" not in text, checked_path
+        assert '"strategy_spec": "strategy_spec.yaml"' not in text, checked_path
+        assert '"component_catalog": "component_catalog.json"' not in text, checked_path
+        assert '"strategy_idea_brief": "strategy_idea_brief.json"' not in text, checked_path
 
 
 def test_data_inspection_worker_is_narrow_role() -> None:
@@ -367,21 +591,103 @@ def test_component_author_skill_documents_workspace_extension_contract() -> None
 
     assert "name: author-component" in text
     assert "component_request.json" in text
+    assert "versions/<version_id>/03_component_authoring/component_request.json" in text
+    assert "versions/<version_id>/03_component_authoring/result.json" in text
+    assert "components/bundles/<bundle_id>/" in text
+    assert "Do not write root-level `component_request.json`" in text
+    assert "Do not write root-level `result.json`" in text
     assert "custom_components/" in text
     assert "component_manifest.json" in text
     assert "result.json" in text
     assert "oxq component-manifest hash" in text
     assert "oxq component-manifest validate" in text
-    assert "--component-manifest component_manifest.json" in text
+    assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
     assert "Workspace-local `Rule` authoring is currently blocked" in text
     assert "Do not emit `component_ready` for a workspace-local custom `Rule`" in text
     assert "Do not build or edit `strategy_spec.yaml`" in text
     assert "Do not modify the installed SDK bundle" in text
     assert "role_kind: component_author" in role_text
     assert "author-component" in role_text
+    assert "versions/<version_id>/03_component_authoring/" in role_text
+    assert "components/bundles/<bundle_id>/" in role_text
     assert "create-rule" not in role_text
     assert "Block workspace-local custom `Rule` requests" in role_text
     assert "forbidden_outputs" in role_text
+    for ignored_artifact in ["__pycache__", ".pytest_cache", "*.egg-info", ".mypy_cache", ".ruff_cache"]:
+        assert ignored_artifact in text
+        assert ignored_artifact in role_text
+    assert "must not remain" in text
+    assert "must not remain" in role_text
+
+
+def test_cross_sectional_component_logic_prefers_optimizer_without_forcing_it() -> None:
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    author = Path("agent/skills/author-component/SKILL.md").read_text(encoding="utf-8")
+    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+
+    for text in (builder, author, auditor):
+        assert "Cross-Sectional Component Feasibility" in text
+        assert "PortfolioOptimizer first" in text
+        assert "do not force `PortfolioOptimizer`" in text
+        assert "framework_unsupported" in text
+        assert "all-symbol same-date" in text
+
+    assert "needs_custom_component" in builder
+    assert "`suggested_kind`: `PortfolioOptimizer`" in builder
+    assert "`feasibility_status`: `candidate`" in builder
+    assert "`feasibility_status`: `unsupported`" in builder
+    assert "`signal.indicators.<name>.type: RPS`" in builder
+
+    assert "If the request says `Indicator` but the behavior requires all-symbol same-date input" in author
+    assert "reclassify the candidate kind to `PortfolioOptimizer` only when" in author
+    assert "write `status: blocked` with `blocked_reason`" in author
+
+    assert "A SPEC must not claim a cross-sectional transform is implemented" in auditor
+    assert "registered `RPS`" in auditor
+
+
+def test_builder_documents_tradability_lag_latest_and_timing_boundaries() -> None:
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
+    data_skill = Path("agent/skills/explore-data/SKILL.md").read_text(encoding="utf-8")
+    data_role = Path("agent/roles/oxq-data-inspection-worker.md").read_text(encoding="utf-8")
+
+    assert "Data Inspection Boundary" in builder
+    assert "Current SPEC Template Shape" in builder
+    assert "`schema_version` must be the string `\"0.1\"`" in builder
+    assert "top-level `strategy_id` and `name`" in builder
+    assert "`validation.train_period` and `validation.test_period` are two-item lists" in builder
+    assert "`cost` is a top-level section" in builder
+    assert "list `data_dir`, read parquet files" in builder
+    assert "Do not inspect market data to resolve it inside this builder phase" in builder
+    assert "Do not choose an arbitrary calendar date to make `oxq spec validate` pass" in builder
+    assert "A validation error caused by an" in builder
+    assert "unresolved data-inspection dependency is a blocked handoff" in builder
+    assert "`next_required_phase: data_inspection`" in builder
+    assert "`data.filters.exclude_suspended: true`" in builder
+    assert "`data.filters.suspension_policy: hold_existing`" in builder
+    assert "`data.required_columns`" in builder
+    assert "do not drop the column because it is" in builder
+    assert "unverified or missing" in builder
+    assert "before-close" in builder
+    assert "substituting `next_open`" in builder
+    assert "Do not replace `latest_available`" in builder
+    assert "every indicator that directly reads `close`" in builder
+    assert "Data Boundary Audit" in auditor
+    assert "Do not accept" in auditor
+    assert "builder-authored notes saying it inspected parquet files" in auditor
+    assert "A silent default `lag_bars: 0`" in auditor
+    assert "Data coverage, required columns, and" in builder_role
+    assert "`latest_available` resolution belong to `oxq-data-inspection-worker`" in builder_role
+    assert "`schema_version: \"0.1\"`" in builder_role
+    assert "Do not choose an arbitrary fixed date to make validation pass" in builder_role
+
+    assert "Use the resolved runner's virtualenv Python" in data_skill
+    assert "`oxq run python` does not exist" in data_skill
+    assert "Do not run `uv run python` in an installed research workspace" in data_skill
+    assert "`oxq run python` does not exist" in data_role
+    assert "optimizer-internal transform" in auditor
 
 
 def test_spec_auditor_skill_documents_source_trace_gate() -> None:
@@ -406,12 +712,123 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
     assert "field_path" in text
     assert "agent_added" in text
     assert "spec_audit.json" in text
-    assert "oxq spec-audit validate spec_audit.json" in text
+    assert "oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json" in text
     assert "component_catalog.json" in text
     assert "catalog_hash" in text
+    assert '"catalog_hash": "sha256:<component_catalog.catalog_hash>"' not in text
     assert "RiskAdjustedMomentum" in text
     assert "NdayReturn + RollingVolatility + Ratio" in text
     assert "TopNRanking" in text
+
+
+def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None:
+    spec_skill = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    runtime_skill = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
+    spec_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
+    runtime_role = Path("agent/roles/oxq-runtime-auditor-worker.md").read_text(encoding="utf-8")
+    coordinator_role = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+
+    assert "Two-Step Spec Audit Gate" in spec_skill
+    assert "`audit_conclusion: all_pass`" in spec_skill
+    assert "`user_confirmation_status: pending`" in spec_skill
+    assert "`status: block`" in spec_skill
+    assert "`next_required_phase: user_spec_confirmation`" in spec_skill
+    assert "Full Spec Confirmation Table" in spec_skill
+    assert "| Section | Field path | Spec value | Source | Audit status | Impact |" in spec_skill
+    assert "Do not summarize only blockers" in spec_skill
+    assert "the audit remains blocked" in spec_skill
+    assert "`user_confirmation_status: confirmed`" in spec_skill
+    assert "Only after the user explicitly confirms the full Markdown table" in spec_skill
+    assert "complete `strategy.py` source" in spec_skill
+    assert "`blocking_findings` must\nbe an empty list" in spec_skill
+    assert "Do not keep resolved historical blockers" in spec_skill
+    assert "empty `missing_user_requirements`" in spec_skill
+    assert "do not keep the resolved item in\n`agent_added_fields`" in spec_skill
+    assert "spec_confirmation_table.hash" in spec_skill
+    assert "from oxq.spec.compiler import _hash_file" in spec_skill
+    assert "not with `shasum`" in spec_skill
+    assert "Run `--strict-confirmed` before returning any\n`audit_conclusion: all_pass`" in spec_skill
+    assert "including the user-confirmation-pending state" in spec_skill
+    assert "it is not downstream runtime or backtest authorization" in spec_skill
+    assert "Do not create a placeholder `spec_confirmation_table.md`" in spec_skill
+    assert "For `audit_conclusion: blocked`, omit\n`spec_confirmation_table` or set it to `null`" in spec_skill
+    assert "required only when the SPEC has\nno audit blockers" in spec_skill
+    assert '"Effective StrategySpec default value"' in spec_skill
+    assert '"Documented for full SPEC coverage"' in spec_skill
+    assert "v003 inherits all v002\nconfirmed values except TopNRanking n=2" in spec_skill
+
+    assert "spec_confirmation_table.md" in spec_role
+    assert "Do not write a placeholder\n  `spec_confirmation_table.md` for `audit_conclusion: blocked`" in spec_role
+    assert "Return\n`spec_confirmation_table.md` only for an all_pass pending or confirmed audit" in spec_role
+    assert "`blocking_findings: []`" in spec_role
+    assert "empty `missing_user_requirements`" in spec_role
+    assert "not in\n  `agent_added_fields`" in spec_role
+    assert "oxq.spec.compiler._hash_file(Path(...))" in spec_role
+    assert "all_pass but user-confirmation-pending audit" in spec_role
+    assert '"Effective StrategySpec default value"' in spec_role
+    assert "Use actual user confirmation evidence" in spec_role
+    assert "Do not hand off to `oxq-runtime-auditor-worker`" in spec_role
+    assert "relay the full Markdown Spec table to the user" in coordinator_role
+    assert "`user_confirmation_status: confirmed`" in coordinator_role
+    assert "Do not start `oxq-runtime-auditor-worker`" in coordinator_role
+    assert "confirmed `spec_audit.json`" in runtime_skill
+    assert "print the complete `strategy.py` source" in runtime_skill
+    assert "confirmed `spec_audit.json`" in runtime_role
+
+
+def test_spec_auditor_is_read_only_and_returns_mapping_errors_to_builder() -> None:
+    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    auditor_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
+
+    assert "Read-Only SPEC Boundary" in auditor
+    assert "Do not write, patch, rewrite, normalize, or repair" in auditor
+    assert "versions/<version_id>/04_spec_build/strategy_spec.yaml" in auditor
+    assert "misplaced, ignored, dropped, or mistranslated" in auditor
+    assert "block with `next_required_phase: build`" in auditor
+    assert "`execution.initial_cash`" in auditor
+    assert "Do not convert that finding into a confirmation-table row" in auditor
+    assert "The builder must make the YAML change" in auditor
+    assert "return to `build-strategy-spec`" in auditor
+    assert "User-confirmed source value vs effective value check" in auditor
+    assert "before any Default Confirmation Checklist" in auditor
+    assert "`portfolio.initial_cash: 1000000`" in auditor
+    assert "`execution.initial_cash: 100000.0`" in auditor
+    assert "cannot be repaired by user confirmation" in auditor
+    assert "do not write `audit_conclusion: all_pass`" in auditor
+    assert "Use `StrategySpec.from_yaml(...).to_effective_dict()`" in auditor
+    assert "`portfolio.initial_cash` is not an effective StrategySpec field" in auditor
+    assert "audit `execution.initial_cash`, not `portfolio.initial_cash`" in auditor
+    assert "material_category" in auditor
+    assert "`strategy_logic`" in auditor
+    assert "`backtest_assumption`" in auditor
+    assert "`execution_assumption`" in auditor
+    assert "`field_audits` must contain only effective StrategySpec field paths" in auditor
+    assert "`source_yaml_path`" in auditor
+    assert "`builder_required_fix`" in auditor
+    assert "Do not write YAML-only paths such as `portfolio.initial_cash` as `field_audits` rows" in auditor
+
+    assert "versions/<version_id>/04_spec_build/strategy_spec.yaml" in auditor_role
+    assert "Do not edit, patch, repair, or normalize" in auditor_role
+    assert "return `next_required_phase: build`" in auditor_role
+    assert "User-confirmed source values must match effective StrategySpec values" in auditor_role
+    assert "`portfolio.initial_cash: 1000000`" in auditor_role
+    assert "`execution.initial_cash: 100000.0`" in auditor_role
+    assert "must not become `user_spec_confirmation`" in auditor_role
+    assert "`portfolio.initial_cash` is not an effective field" in auditor_role
+    assert "`field_audits` contain only effective StrategySpec field paths" in auditor_role
+    assert "`source_yaml_path`" in auditor_role
+    assert "`builder_required_fix`" in auditor_role
+
+    assert "SPEC Audit Repair Handoff" in builder
+    assert "move the value to the effective field path" in builder
+    assert "remove the non-operative YAML path" in builder
+    assert "`source_yaml_path`" in builder
+    assert "`effective_field_path`" in builder
+    assert "rerun `oxq spec validate`" in builder
+    assert "SPEC Audit Repair Handoff" in builder_role
+    assert "move values to effective field paths" in builder_role
 
 
 def test_experiment_comparator_skill_documents_cross_run_outputs() -> None:
@@ -484,6 +901,15 @@ def test_report_reviewer_worker_receives_writer_result() -> None:
     assert text.index("writer_result.json") < text.index("## Outputs")
 
 
+def test_report_writer_result_declares_lineage_identity_fields() -> None:
+    skill = Path("agent/skills/write-research-report/SKILL.md").read_text(encoding="utf-8")
+    role = Path("agent/roles/oxq-report-writer-worker.md").read_text(encoding="utf-8")
+
+    for field in ("version_id", "run_id", "strategy_id", "source_run_dir"):
+        assert f'"{field}"' in skill
+        assert f"`{field}`" in role
+
+
 def test_opencode_legacy_agent_command_bundle_is_removed() -> None:
     assert not Path("agent/opencode").exists()
     assert not Path("agent/opencode/agents").exists()
@@ -499,15 +925,24 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
     text = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
     assert "audit-runtime-semantics" in text
-    assert "oxq strategy compile strategy_spec.yaml \\" in text
+    assert "oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \\" in text
     assert "--data-dir data" in text
     assert "compiled_plan.json" in text
     assert "runtime_audit.json" in text
-    assert "oxq runtime-audit validate runtime_audit.json" in text
+    assert "oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json" in text
     assert "same `data_dir` and every `component_manifest` path" in text
+    assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
+    assert "--component-manifest versions/<version_id>/03_component_authoring/component_manifest.json" not in text
+    assert "Omit `--component-manifest` when no workspace-local custom" in text
+    assert "components are authorized; repeat it for each authorized bundle manifest" in text
     assert "component_bundle_hashes" in text
     assert "rebalance interval" in text
     assert "runtime_semantics_pass" in text
+    assert "from oxq.spec.schema import StrategySpec" in text
+    assert "from pathlib import Path" in text
+    assert "from oxq.spec.compiler import _hash_json_file" in text
+    assert 'spec_path = Path("versions/<version_id>/04_spec_build/strategy_spec.yaml")' in text
+    assert "Do not import non-existent helpers from `oxq.core.hashing`" in text
 
 
 def test_strategy_builder_is_build_only_for_multi_agent_systems() -> None:
@@ -534,8 +969,243 @@ def test_strategy_builder_is_build_only_for_multi_agent_systems() -> None:
     assert "audit-strategy-spec" not in text
 
 
+def test_strategy_brainstorm_skill_owns_pre_spec_workflow() -> None:
+    text = Path("agent/skills/brainstorm-strategy-idea/SKILL.md").read_text(encoding="utf-8")
+
+    assert "name: brainstorm-strategy-idea" in text
+    assert "strategy_idea_brief.json" in text
+    assert "Do not run `oxq`" in text
+    assert "Do not write or edit `strategy_spec.yaml`" in text
+    assert "Explain the phase before asking for values" in text
+    assert "Pull the user back to the earliest incomplete phase" in text
+    assert "Any default or candidate value must be explicitly confirmed by the user" in text
+    assert "Compute `conversation_hash` from the exact raw brainstorm conversation" in text
+    assert "Never write `sha256:placeholder`" in text
+    assert "strip only leading and trailing" in text
+    assert "whitespace from that body" in text
+    for phase in [
+        "research intent and hypothesis",
+        "market, universe, and benchmark",
+        "data and evaluation window",
+        "Indicator definitions",
+        "Signal rule definitions",
+        "Portfolio construction",
+        "execution, costs, rebalance, and risk constraints",
+        "metrics, robustness, and decision policy",
+    ]:
+        assert phase in text
+    for field_path in [
+        "`research.hypothesis`",
+        "`market.*`",
+        "`universe.*`",
+        "`data.min_start_date`",
+        "`signal.indicators.*`",
+        "`signal.rules.*`",
+        "`portfolio.type`",
+        "`execution.*`",
+        "`metrics.*`",
+        "`decision_policy.*`",
+    ]:
+        assert field_path in text
+
+
+def test_strategy_idea_auditor_skill_audits_brainstorm_process() -> None:
+    text = Path("agent/skills/audit-strategy-idea/SKILL.md").read_text(encoding="utf-8")
+
+    assert "name: audit-strategy-idea" in text
+    assert "strategy_idea_brief.json" in text
+    assert "strategy_idea_audit.json" in text
+    assert "Strategy Idea Workflow Audit" in text
+    assert "every required brainstorm phase is present" in text
+    assert "the brainstormer explained the phase before asking for values" in text
+    assert "default or candidate values were explicitly confirmed by the user" in text
+    assert "next_required_phase: brainstorm" in text
+    assert "Do not use the SHA-256 of an empty string" in text
+    assert "strategy_idea_brief.json.conversation_hash" in text
+    assert "placeholder" in text
+    assert "mismatched" in text
+    assert "Canonical hash rule" in text
+    assert "CONVERSATION_HISTORY_RAW" in text
+    assert "Do not read, write, or edit `strategy_spec.yaml`" in text
+    assert "Indicator definitions" in text
+    assert "signal.indicators.*" in text
+
+
+def test_strategy_builder_requires_audited_idea_before_spec_work() -> None:
+    text = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+
+    assert "Audited Idea Input Gate" in text
+    assert "strategy_idea_brief.json" in text
+    assert "strategy_idea_audit.json" in text
+    assert "Do not run `oxq spec init`" in text
+    assert "Do not run `oxq registry export`" in text
+    assert "Do not write or edit `strategy_spec.yaml`" in text
+    assert "before `strategy_idea_audit.json` passes" in text
+    assert "next_required_phase: brainstorm" in text
+    assert "strategy_idea_brief_hash" in text
+    assert "strategy_idea_audit_hash" in text
+    assert "Explain the phase before asking for values" not in text
+    assert "Pull the user back to the earliest incomplete phase" not in text
+
+
+def test_strategy_builder_forbids_root_level_spec_initializer() -> None:
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
+
+    assert "Never run `oxq spec init` without an explicit `--out` path" in builder
+    assert "root-level `strategy_spec.yaml`" in builder
+    assert "workspace layout violation" in builder
+    assert "deleted later" in builder
+    assert "record `layout_violation` in `builder_phase_result.json`" in builder
+    assert "The only acceptable" in builder
+    assert "initializer target is" in builder
+
+    assert "Never run `oxq spec init` without `--out`" in builder_role
+    assert "root-level `strategy_spec.yaml`" in builder_role
+    assert "workspace layout violation" in builder_role
+    assert "later deleted" in builder_role
+    assert "record `layout_violation` in" in builder_role
+
+
+def test_strategy_builder_records_required_open_xquant_version() -> None:
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    spec_auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    runtime_auditor = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
+
+    assert "OpenXQuant Version Provenance" in builder
+    assert "`schema_version` is the SPEC schema version" in builder
+    assert "`required_oxq_version` is the OpenXQuant package version" in builder
+    assert "Do not change `schema_version` to the package version" in builder
+    assert "write `required_oxq_version`" in builder
+    assert "builder_phase_result.json" in builder
+
+    assert "`required_oxq_version`" in spec_auditor
+    assert "OpenXQuant version provenance" in spec_auditor
+    assert "blocks formal backtest" in spec_auditor
+
+    assert "`required_oxq_version`" in runtime_auditor
+    assert "open_xquant_version" in runtime_auditor
+    assert "environment.json" in runtime_auditor
+
+
+def test_builder_and_spec_auditor_reject_unconfirmed_effective_defaults() -> None:
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+
+    assert "`market.region: cn`" in builder
+    assert "`market.currency: CNY`" in builder
+    assert "`execution.lot_size`" in builder
+    assert "`execution.rebalance.frequency`" in builder
+    assert "`decision_policy.promote_if`" in builder
+    assert "`decision_policy.pass.conditions`" in builder
+
+    assert "Framework default" in auditor
+    assert "`market.region: us`" in auditor
+    assert "`market.currency: USD`" in auditor
+    assert "`execution.rebalance.interval_days: 1`" in auditor
+    assert "next_required_phase: build" in auditor
+
+
+def test_builder_and_spec_auditor_require_unsupported_mapping_disclosure() -> None:
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
+    auditor_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
+
+    assert "spec_mapping_notes.md" in builder
+    assert "spec_mapping_contract.json" in builder
+    assert "unsupported_mappings" in builder
+    assert "unmapped_source_fields" in builder
+    assert "threshold_then_rank_top_n" in builder
+    assert "Unsupported strategy semantics are blocking by default" in builder
+    assert "mapping-contract row must use `blocking: true`" in builder
+    assert "strategy source field is marked `needs_user_confirmation`" in builder
+    assert "`confirmation_required: true` and `blocking: true`" in builder
+    assert "validate_mapping_contract_for_builder_pass_file" in builder
+    assert "do not run `oxq spec validate_mapping_contract`" in builder.lower()
+    assert "every `semantic: strategy` row must be mapped and non-blocking" in builder
+    assert "`status: blocked`, `status: unsupported`" in builder
+    assert "Do not read the full catalog into the model context" in builder
+    assert "jq -r '.catalog_hash'" in builder
+    assert '"catalog_hash": "sha256:<component_catalog.catalog_hash>"' not in builder
+    assert '"catalog_hash": "<component_catalog.catalog_hash>"' in builder
+
+    assert "unsupported_mappings" in auditor
+    assert "spec_mapping_contract.json" in auditor
+    assert "--mapping-contract versions/<version_id>/04_spec_build/spec_mapping_contract.json" in auditor
+    assert "Do not use `--strict-confirmed` for `audit_conclusion: blocked`" in auditor
+    assert "Strategy rows with `status: needs_user_confirmation` and `blocking: false`" in auditor
+    assert "builder-pass" in auditor
+    assert "mapping gate" in auditor
+    assert "`blocked`, `unsupported`, `needs_user_confirmation`, or `blocking: true`" in auditor
+    assert "do not run `oxq spec validate_mapping_contract`" in auditor.lower()
+    assert "blocked" in auditor
+    assert "source_field" in auditor
+    assert "requested_semantic" in auditor
+    assert "disposition" in auditor
+    assert "no unsupported source fields were found" in auditor
+    assert '"catalog_hash": "sha256:<component_catalog.catalog_hash>"' not in auditor
+    assert '"catalog_hash": "<component_catalog.catalog_hash>"' in auditor
+
+    assert "spec_mapping_contract.json" in builder_role
+    assert "spec_mapping_contract.json" in auditor_role
+    assert "unsupported_mappings" in auditor_role
+    assert "Validate `spec_mapping_contract.json`" in builder_role
+    assert "validate_mapping_contract_for_builder_pass" in builder_role
+    assert "do not run\n  `oxq spec validate_mapping_contract`" in builder_role
+    assert "every strategy row to be mapped and" in builder_role
+    assert "Do not read the full catalog into context" in builder_role
+    assert "Treat strategy mapping-contract rows with `status: needs_user_confirmation`" in builder_role
+    assert "Unsupported `strategy` semantics with `blocking: false`" in auditor_role
+    assert "Strategy rows with `status: needs_user_confirmation` and `blocking: false`" in auditor_role
+    assert "Passing audits must satisfy the builder-pass mapping gate" in auditor_role
+
+
+def test_spec_auditor_requires_audited_idea_and_calibrates_spec() -> None:
+    text = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+
+    assert "strategy_idea_brief.json" in text
+    assert "strategy_idea_audit.json" in text
+    assert "Spec Calibration Audit" in text
+    assert "fast-fail" in text
+    assert "next_required_phase: brainstorm" in text
+    assert "next_required_phase: build" in text
+    assert "verify the spec faithfully maps the audited idea" in text
+    assert "Indicator definitions" in text
+    assert "signal.indicators.*" in text
+
+
+def test_strategy_idea_artifacts_are_in_worker_handoffs() -> None:
+    brainstorm_role = Path("agent/roles/oxq-strategy-brainstorm-worker.md").read_text(encoding="utf-8")
+    idea_auditor_role = Path("agent/roles/oxq-strategy-idea-auditor-worker.md").read_text(
+        encoding="utf-8"
+    )
+    builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
+    spec_auditor_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
+    coordinator_role = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+
+    for artifact in ["strategy_idea_brief.json", "strategy_idea_audit.json"]:
+        assert artifact in builder_role
+        assert artifact in spec_auditor_role
+        assert artifact in coordinator_role
+    assert "strategy_idea_brief.json" in brainstorm_role
+    assert "strategy_idea_audit.json" in idea_auditor_role
+    assert "CONVERSATION_HISTORY_RAW" in idea_auditor_role
+    assert "sha256:placeholder" in brainstorm_role
+    assert "compare it to" in idea_auditor_role
+    assert "stripping only leading and" in brainstorm_role
+    assert "trailing whitespace" in brainstorm_role
+    assert "stripping only leading and trailing" in idea_auditor_role
+    assert "whitespace" in idea_auditor_role
+    assert "CONVERSATION_HISTORY_RAW" in coordinator_role
+    assert "Require passing `strategy_idea_audit.json` before writing `strategy_spec.yaml`" in builder_role
+    assert "audit the strategy brainstorm workflow" in idea_auditor_role
+    assert "audit the spec calibration against the audited strategy idea" in spec_auditor_role
+
+
 def test_strategy_monitor_is_post_run_and_uses_runtime_audit() -> None:
     strategy_monitor = Path("agent/skills/monitor-strategy-run/SKILL.md").read_text(encoding="utf-8")
+    monitor_role = Path("agent/roles/oxq-monitor-worker.md").read_text(encoding="utf-8")
 
     assert "_cost_x2" in strategy_monitor
     assert "created sub-run directory" in strategy_monitor
@@ -544,7 +1214,19 @@ def test_strategy_monitor_is_post_run_and_uses_runtime_audit() -> None:
     assert "component_catalog_hash.txt" in strategy_monitor
     assert "recipe_catalog_hash.txt" in strategy_monitor
     assert "conversation_hash.txt" in strategy_monitor
-    assert "oxq spec-audit validate runs/<run_id>/spec_audit.json" in strategy_monitor
+    assert (
+        "oxq spec-audit validate versions/<version_id>/09_backtests/<run_id>/spec_audit.json"
+        in strategy_monitor
+    )
+    assert "> versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json" in strategy_monitor
+    assert "> versions/<version_id>/09_backtests/<run_id>/research_bias_audit.json" in strategy_monitor
+    assert "> versions/<version_id>/09_backtests/<run_id>/robustness.json" in strategy_monitor
+    assert "stdout-only audit output is not sufficient" in strategy_monitor
+    assert "Monitoring is not a separate version phase name" in strategy_monitor
+    assert "Do not set `current.json.active_phase`" in strategy_monitor
+    assert "Keep the active phase at\n`09_backtests`" in strategy_monitor
+    assert "Monitoring is not a standalone active phase" in monitor_role
+    assert "keep\n  `09_backtests` until report artifacts" in monitor_role
 
 
 def test_agent_guide_is_install_only_and_points_to_router_skill() -> None:
@@ -594,17 +1276,33 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "--spec-audit spec_audit.json" in text
     assert "--runtime-audit runtime_audit.json" in text
     assert "--component-catalog component_catalog.json" in text
-    assert "--component-manifest component_manifest.json" in text
+    assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
     assert "Omit `--component-manifest` only when" in text
-    assert "component_manifests.json" in text
     assert "same `component_bundle_hashes`" in text
+    assert "top-level fields above are required" in text.lower()
+    assert "only records nested\ndiagnostic hashes" in text
+    assert "must not run `oxq registry export`" in text.lower()
+    assert "Use the authorized\n`versions/<version_id>/04_spec_build/component_catalog.json`" in text
+    assert "Do not write `component_catalog.json` outside" in text
+    assert "pass\n`Path` objects to `_hash_json_file`" in text
     assert "formal run command attaches `spec_audit.json`" in text
-    assert "do not rerun the" in text
     assert "workspace-local custom components" in text
     assert "runner_result.json" in text
+    assert "next_phase" in text
+    assert "oxq-monitor-worker" in text
     assert "Do not edit `strategy_spec.yaml`" in text
     assert "Do not edit `spec_audit.json`" in text
     assert "Do not edit `runtime_audit.json`" in text
+    assert "Do not run reproducibility" in text
+
+    role = Path("agent/roles/oxq-runner-worker.md").read_text(encoding="utf-8")
+    assert "Do not run\n  `oxq registry export`" in role
+    assert "`08_runtime_audit`, `09_backtests`, or any root-level path" in role
+    assert "_hash_json_file(Path(...))" in role
+    assert "uv run oxq audit reproducibility" not in text
+    assert "uv run oxq audit research" not in text
+    assert "uv run oxq robustness run" not in text
+    assert "uv run oxq experiment add" not in text
 
 
 def test_pyproject_packages_agent_roles() -> None:
@@ -629,3 +1327,77 @@ def test_report_writer_and_reviewer_require_spec_audit_disclosure() -> None:
     assert "unconfirmed defaults" in reviewer
     assert "selected recipes" in reviewer
     assert "unresolved `spec_audit.json` blockers" in reviewer
+
+
+def test_report_writer_documents_installed_bundle_facts_api_and_qa_safe_markdown() -> None:
+    writer = Path("agent/skills/write-research-report/SKILL.md").read_text(encoding="utf-8")
+    html_output = writer[writer.index("## HTML Output"): writer.index("## Red Lines")]
+    normalized = " ".join(writer.split())
+    normalized_html = " ".join(html_output.split())
+
+    assert "from oxq.report.artifacts import RunArtifacts" in writer
+    assert "from oxq.report.facts import build_report_facts" in writer
+    assert "build_report_facts(RunArtifacts.load(run_dir))" in writer
+    assert "Do not import `RunArtifacts` from `oxq.api`" in writer
+    assert "Do not import `RunArtifacts` from `oxq.run.artifacts`" in normalized
+    assert "Use the resolved runner's virtualenv Python" in html_output
+    assert "`oxq python` does not exist" in normalized_html
+    assert "Do not run `uv run python` in an installed research workspace" in normalized_html
+    assert "Do not write raw `<` or `>` comparison text" in writer
+    assert "report QA strips HTML tags" in writer
+
+
+def test_version_governed_manifests_live_at_workspace_root() -> None:
+    coordinator = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+    router = Path("agent/skills/open-xquant/SKILL.md").read_text(encoding="utf-8")
+    governor = Path("agent/skills/govern-research-workspace/SKILL.md").read_text(encoding="utf-8")
+
+    for text in (coordinator, router, governor):
+        normalized = " ".join(text.split())
+        assert "`.open-xquant/workspace.yaml` is configuration only" in text
+        assert "`current.json`, `lineage.json`, and `experiments.jsonl` live at the workspace root" in normalized
+        assert "Do not probe `.open-xquant/current.json`" in normalized
+        assert ".open-xquant/experiments.jsonl" not in text
+
+
+def test_comparison_skills_do_not_leave_empty_figures_directories() -> None:
+    comparator = Path("agent/skills/compare-strategy-versions/SKILL.md").read_text(encoding="utf-8")
+    legacy = Path("agent/skills/compare-experiments/SKILL.md").read_text(encoding="utf-8")
+    role = Path("agent/roles/oxq-experiment-comparator-worker.md").read_text(encoding="utf-8")
+
+    for text in (comparator, legacy, role):
+        normalized = " ".join(text.split())
+        assert "Do not leave `figures/` empty" in text
+        assert "If no figure will be generated, do not create the directory" in normalized
+
+
+def test_workspace_governor_accepts_version_local_run_registry_and_robustness_subruns() -> None:
+    text = Path("agent/skills/govern-research-workspace/SKILL.md").read_text(encoding="utf-8")
+
+    assert "root-level `runs/` is not required" in text
+    assert "versions/<version_id>/09_backtests/run_digests.jsonl" in text
+    assert "_cost_x2" in text
+    assert "not root-level pollution" in text
+
+
+def test_workspace_governance_contract_lists_root_phase_pollution_artifacts() -> None:
+    skill = Path("agent/skills/govern-research-workspace/SKILL.md").read_text(encoding="utf-8")
+    role = Path("agent/roles/oxq-artifact-governor-worker.md").read_text(encoding="utf-8")
+    doc = Path("docs/strategy-workflow-artifact-governance.md").read_text(encoding="utf-8")
+    required_artifacts = [
+        "spec_mapping_notes.md",
+        "spec_mapping_contract.json",
+        "audit_notes.md",
+        "compile_preview/",
+        "component_request.json",
+        "component_manifest.json",
+        "result.json",
+    ]
+
+    for artifact in required_artifacts:
+        assert artifact in skill
+        assert artifact in role
+        assert artifact in doc
+    for input_root in ("comparisons/**", "final/**"):
+        assert input_root in skill
+        assert input_root in role

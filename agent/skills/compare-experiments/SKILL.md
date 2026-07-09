@@ -49,6 +49,8 @@ failure the primary result.
    - `equity_overlay.png`
    - `drawdown_overlay.png`
    - `metrics_bar.png`
+   Do not leave `figures/` empty. If no figure will be generated, do not create
+   the directory.
 5. Write `comparison_report.md`.
    - Explain which spec differences plausibly drove the metric differences.
    - Do not claim causality when the evidence only supports association.

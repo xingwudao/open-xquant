@@ -11,7 +11,7 @@ import copy
 import logging
 import time as _time
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -73,6 +73,7 @@ class Engine:
         lot_size: int = 1,
         cash_annual_return: float = 0.0,
         data_start: str | None = None,
+        data_filters: Any | None = None,
     ) -> None:
         """Initialize engine state and run vectorized phases.
 
@@ -102,6 +103,8 @@ class Engine:
         data_start : str | None
             Start date for loading market data (for indicator warmup).
             If None, uses ``start``.
+        data_filters : object | None
+            Optional SPEC data filters applied before portfolio optimization.
         """
         self._strategy = strategy
         self._broker = broker
@@ -109,6 +112,7 @@ class Engine:
         self._rules: list[Rule] = _clone_rules(rules if rules is not None else getattr(strategy, "rules", []))
         self._lot_size = lot_size
         self._cash_annual_return = cash_annual_return
+        self._data_filters = data_filters
         reset_optimizer = getattr(strategy.portfolio, "reset", None)
         if callable(reset_optimizer):
             reset_optimizer()
@@ -199,19 +203,25 @@ class Engine:
 
         for ind_name, (indicator, params) in all_indicators.items():
             t0 = _time.perf_counter()
-            for symbol in self._universe.symbols:
-                for dep_col in getattr(indicator, "depends_on", ()):
-                    if dep_col not in self._mktdata[symbol].columns:
-                        logger.warning(
-                            "Indicator '%s' depends on column '%s' which does "
-                            "not yet exist in mktdata. Ensure the producing "
-                            "indicator is registered first.",
-                            ind_name,
-                            dep_col,
-                        )
-                self._mktdata[symbol][ind_name] = indicator.compute(
-                    self._mktdata[symbol], **params,
-                )
+            compute_cross_section = getattr(indicator, "compute_cross_section", None)
+            if callable(compute_cross_section):
+                outputs = compute_cross_section(self._mktdata, **params)
+                for symbol in self._universe.symbols:
+                    self._mktdata[symbol][ind_name] = outputs[symbol]
+            else:
+                for symbol in self._universe.symbols:
+                    for dep_col in getattr(indicator, "depends_on", ()):
+                        if dep_col not in self._mktdata[symbol].columns:
+                            logger.warning(
+                                "Indicator '%s' depends on column '%s' which does "
+                                "not yet exist in mktdata. Ensure the producing "
+                                "indicator is registered first.",
+                                ind_name,
+                                dep_col,
+                            )
+                    self._mktdata[symbol][ind_name] = indicator.compute(
+                        self._mktdata[symbol], **params,
+                    )
             elapsed = (_time.perf_counter() - t0) * 1000
             if tracer:
                 sample = self._mktdata[self._universe.symbols[0]][ind_name]
@@ -307,6 +317,13 @@ class Engine:
         for s in universe.symbols:
             if date in mktdata[s].index:
                 sliced = mktdata[s].loc[:date]
+                if _row_filtered_from_optimization(
+                    symbol=s,
+                    row=sliced.iloc[-1],
+                    portfolio=portfolio,
+                    filters=self._data_filters,
+                ):
+                    continue
                 signals_data[s] = sliced
                 indicators_data[s] = sliced
 
@@ -322,6 +339,14 @@ class Engine:
             ]
             set_pending_buy_symbols(pending_buy_symbols)
         target_weights = strategy.portfolio.optimize(signals_data, indicators_data)
+        target_weights = _apply_limit_trade_policies(
+            target_weights,
+            filters=self._data_filters,
+            mktdata=mktdata,
+            date=date,
+            portfolio=portfolio,
+            prices=bar_prices,
+        )
         optimizer_hold = bool(getattr(strategy.portfolio, "skip_rebalance", False))
         raw_target_weights = dict(target_weights)
 
@@ -449,6 +474,14 @@ class Engine:
             adjusted_weights["CASH"] = max(0.0, 1.0 - invested_weight)
         else:
             adjusted_weights = dict(target_weights)
+        adjusted_weights = _apply_limit_trade_policies(
+            adjusted_weights,
+            filters=self._data_filters,
+            mktdata=mktdata,
+            date=date,
+            portfolio=portfolio,
+            prices=bar_prices,
+        )
 
         # ── Step 4: Trading algorithm (skip if hold) ──────────────────
         if not hold:
@@ -556,11 +589,22 @@ class Engine:
                 adjusted_weights[sym] = float(held_weight)
             if cash_weight:
                 adjusted_weights["CASH"] = cash_weight
+            adjusted_weights = _apply_limit_trade_policies(
+                adjusted_weights,
+                filters=self._data_filters,
+                mktdata=mktdata,
+                date=date,
+                portfolio=portfolio,
+                prices=bar_prices,
+            )
             for sym, target_ratio in exit_targets.items():
                 if sym not in portfolio.positions:
                     continue
                 pos = portfolio.positions[sym]
-                target_shares = int(pos.shares * target_ratio)
+                current_weight = float(held_weights.get(sym, 0.0))
+                retained_weight = float(adjusted_weights.get(sym, 0.0))
+                effective_ratio = retained_weight / current_weight if current_weight > 0 else float(target_ratio)
+                target_shares = int(pos.shares * effective_ratio)
                 sell_shares = pos.shares - target_shares
                 if sell_shares > 0:
                     cancel_market_orders = getattr(broker, "cancel_market_orders", None)
@@ -636,6 +680,7 @@ class Engine:
         lot_size: int = 1,
         cash_annual_return: float = 0.0,
         data_start: str | None = None,
+        data_filters: Any | None = None,
     ) -> RunResult:
         """Run the strategy pipeline.
 
@@ -666,6 +711,8 @@ class Engine:
         data_start : str | None
             Start date for loading market data (for indicator warmup).
             If None, uses ``start``.
+        data_filters : object | None
+            Optional SPEC data filters applied before portfolio optimization.
         """
         self.setup(
             strategy=strategy, market=market, broker=broker,
@@ -674,6 +721,7 @@ class Engine:
             universe=universe,
             lot_size=lot_size, cash_annual_return=cash_annual_return,
             data_start=data_start,
+            data_filters=data_filters,
         )
 
         if run_through == "indicator":
@@ -707,6 +755,139 @@ class Engine:
             self._tracer.on_run_end("ok")
 
         return self.result
+
+
+def _row_filtered_from_optimization(
+    symbol: str,
+    row: pd.Series,
+    portfolio: Portfolio,
+    filters: Any | None,
+) -> bool:
+    if filters is None:
+        return False
+    if getattr(filters, "exclude_st", False) and _row_truthy(row, "is_st"):
+        return True
+    if getattr(filters, "exclude_suspended", False) and _row_truthy(row, "is_suspended") and symbol not in portfolio.positions:
+        return True
+    listed_days = int(getattr(filters, "exclude_new_listed_days", 0) or 0)
+    if listed_days > 0 and _row_number(row, "listed_days") < listed_days:
+        return True
+    if getattr(filters, "limit_up_policy", "none") == "exclude_buy":
+        if _row_truthy(row, "is_limit_up") and symbol not in portfolio.positions:
+            return True
+    return False
+
+
+def _apply_limit_trade_policies(
+    target_weights: dict[str, float],
+    *,
+    filters: Any | None,
+    mktdata: dict[str, pd.DataFrame],
+    date: pd.Timestamp,
+    portfolio: Portfolio,
+    prices: dict[str, Decimal],
+) -> dict[str, float]:
+    if filters is None:
+        return target_weights
+    suspension_policy = _effective_suspension_policy(filters)
+    if (
+        getattr(filters, "limit_up_policy", "none") == "none"
+        and getattr(filters, "limit_down_policy", "none") == "none"
+        and suspension_policy == "none"
+    ):
+        return target_weights
+
+    adjusted = dict(target_weights)
+    changed = False
+    locked_symbols: set[str] = set()
+    total_value = portfolio.total_value(prices)
+    if total_value <= 0:
+        return adjusted
+
+    for symbol, frame in mktdata.items():
+        if date not in frame.index:
+            continue
+        row = frame.loc[date]
+        current_weight = _position_weight(symbol, portfolio, prices, total_value)
+        desired_weight = float(adjusted.get(symbol, 0.0))
+        if suspension_policy == "hold_existing" and _row_truthy(row, "is_suspended"):
+            locked_symbols.add(symbol)
+            if desired_weight != current_weight:
+                adjusted[symbol] = current_weight
+            changed = True
+            continue
+        if getattr(filters, "limit_up_policy", "none") == "exclude_buy" and _row_truthy(row, "is_limit_up"):
+            if desired_weight > current_weight:
+                adjusted[symbol] = current_weight
+                locked_symbols.add(symbol)
+                changed = True
+        if getattr(filters, "limit_down_policy", "none") == "exclude_sell" and _row_truthy(row, "is_limit_down"):
+            if desired_weight < current_weight:
+                adjusted[symbol] = current_weight
+                locked_symbols.add(symbol)
+                changed = True
+
+    if not changed:
+        return target_weights
+    locked_weight = sum(max(0.0, float(adjusted.get(symbol, 0.0))) for symbol in locked_symbols)
+    remaining_capacity = max(0.0, 1.0 - locked_weight)
+    scalable_symbols = [
+        symbol
+        for symbol, weight in adjusted.items()
+        if symbol != "CASH" and symbol not in locked_symbols and float(weight) > 0.0
+    ]
+    scalable_weight = sum(float(adjusted[symbol]) for symbol in scalable_symbols)
+    if scalable_weight > remaining_capacity:
+        scale = remaining_capacity / scalable_weight if scalable_weight > 0 else 0.0
+        for symbol in scalable_symbols:
+            adjusted[symbol] = float(adjusted[symbol]) * scale
+    invested_weight = sum(max(0.0, float(weight)) for symbol, weight in adjusted.items() if symbol != "CASH")
+    adjusted["CASH"] = max(0.0, 1.0 - invested_weight)
+    return adjusted
+
+
+def _effective_suspension_policy(filters: Any | None) -> str:
+    if filters is None:
+        return "none"
+    policy = getattr(filters, "suspension_policy", "none")
+    if policy != "none":
+        return policy
+    if getattr(filters, "exclude_suspended", False):
+        return "hold_existing"
+    return "none"
+
+
+def _position_weight(
+    symbol: str,
+    portfolio: Portfolio,
+    prices: dict[str, Decimal],
+    total_value: Decimal,
+) -> float:
+    position = portfolio.positions.get(symbol)
+    price = prices.get(symbol)
+    if position is None or price is None or total_value <= 0:
+        return 0.0
+    return float((Decimal(position.shares) * price) / total_value)
+
+
+def _row_truthy(row: pd.Series, column: str) -> bool:
+    if column not in row:
+        return False
+    value = row[column]
+    if pd.isna(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y"}
+    return bool(value)
+
+
+def _row_number(row: pd.Series, column: str) -> float:
+    if column not in row or pd.isna(row[column]):
+        return 0.0
+    try:
+        return float(row[column])
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _signal_output_summary(sample: pd.Series) -> dict[str, object]:

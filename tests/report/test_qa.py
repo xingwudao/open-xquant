@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import shutil
 
 import yaml
 
@@ -45,6 +46,26 @@ def test_report_qa_passes_complete_registered_report(tmp_path) -> None:
     assert result.status == "pass"
     assert result.fatal_count == 0
     assert result.warning_count == 0
+    assert result.facts.configured_end_date == "2024-03-31"
+    assert result.facts.effective_last_trading_day == "2024-03-29"
+
+
+def test_report_qa_accepts_version_governed_report_package(tmp_path) -> None:
+    source_run = _write_qa_run(tmp_path)
+    run_id = "20240101_000000_qa_case"
+    version_dir = tmp_path / "versions" / "v001"
+    run_dir = version_dir / "09_backtests" / run_id
+    shutil.copytree(source_run, run_dir)
+    report_dir = version_dir / "10_reports" / run_id
+    report_dir.mkdir(parents=True)
+    markdown = "# 研究报告\n\n有效数据最后交易日：2024-03-29\n\n配置结束日：2024-03-31\n"
+    (report_dir / "research_report.md").write_text(markdown, encoding="utf-8")
+    (report_dir / "research_report.html").write_text(render_markdown_html_report(markdown), encoding="utf-8")
+
+    result = run_report_qa(report_dir)
+
+    assert result.status == "pass"
+    assert result.fatal_count == 0
     assert result.facts.configured_end_date == "2024-03-31"
     assert result.facts.effective_last_trading_day == "2024-03-29"
 

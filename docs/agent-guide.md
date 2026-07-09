@@ -94,19 +94,36 @@ uv run oxq agent install --target trae --profile standalone-agent --yes
 预制 multi-agent 角色：
 
 - `oxq-coordinator`: 面向用户的主控 Agent，只路由阶段和管理确认。
-- `oxq-strategy-builder-worker`: 使用 `build-strategy-spec`，只构建和验证
-  `strategy_spec.yaml`。
+- `oxq-version-manager-worker`: 使用 `manage-strategy-version`，只判断用户变更
+  是否延续当前版本或创建新版本，并维护 version lineage。
+- `oxq-artifact-governor-worker`: 使用 `govern-research-workspace`，只审查
+  workspace 布局、root-level 污染和 phase handoff。
+- `oxq-strategy-brainstorm-worker`: 使用 `brainstorm-strategy-idea`，引导
+  用户按阶段说清楚策略描述，输出 `strategy_idea_brief.json`。
+- `oxq-strategy-idea-auditor-worker`: 使用 `audit-strategy-idea`，检查
+  brainstorm 是否按阶段解释、询问、拉回和确认，输出
+  `strategy_idea_audit.json`。
+- `oxq-strategy-builder-worker`: 使用 `build-strategy-spec`，只从通过审核的
+  idea artifacts 构建和验证 `strategy_spec.yaml`。
 - `oxq-data-inspection-worker`: 使用 `explore-data`，只检查数据可用性、
   provider readiness、parquet 质量和覆盖区间。
 - `oxq-component-author-worker`: 使用 `author-component`，只创建
   workspace-local Indicator、Signal、PortfolioOptimizer components、测试、
   manifest 和 catalog；workspace-local Rule 默认阻塞。
 - `oxq-spec-auditor-worker`: 使用 `audit-strategy-spec`，只审用户确认、字段来源
-  和组件 provenance。
+  和组件 provenance，并校准 SPEC 是否忠实映射已审核 idea。
 - `oxq-runtime-auditor-worker`: 使用 `audit-runtime-semantics`，只编译并审核
   runtime semantics。
 - `oxq-runner-worker`: 使用 `run-authorized-backtest`，只在授权后运行
-  backtest 和跑后确定性检查。
+  formal backtest 并写 `runner_result.json`。
+- `oxq-monitor-worker`: 使用 `monitor-strategy-run`，只做跑后
+  reproducibility、research audit、robustness 和 experiment registry。
+- `oxq-lineage-auditor-worker`: 使用 `audit-artifact-lineage`，只审计
+  version/run/final 引用、hash 和最终候选资格。
+- `oxq-experiment-comparator-worker`: 使用 `compare-strategy-versions` 和
+  `compare-experiments`，只做可比性审计和版本/run 对比。
+- `oxq-final-selector-worker`: 使用 `select-final-version`，只在用户确认后
+  标记最终版本。
 - `oxq-report-writer-worker`: 使用 `build-report-charts` 和
   `write-research-report`，只写图表和报告。
 - `oxq-report-reviewer-worker`: 使用 `review-research-report`，只输出
@@ -122,6 +139,10 @@ Cursor 使用 Markdown agent files。没有官方确认 subagent 角色目录的
 ```text
 <agent-skill-root>/
   open-xquant/
+    SKILL.md
+  brainstorm-strategy-idea/
+    SKILL.md
+  audit-strategy-idea/
     SKILL.md
   build-strategy-spec/
     SKILL.md
@@ -283,29 +304,29 @@ workspace-local custom Rule 当前不属于普通 authoring 能力；如果需�
 组件 authoring 阶段默认写入：
 
 ```text
-custom_components/
-component_manifest.json
-component_catalog.json
-result.json
+components/bundles/<bundle_id>/custom_components/
+components/bundles/<bundle_id>/component_manifest.json
+components/bundles/<bundle_id>/component_catalog.json
+versions/<version_id>/03_component_authoring/result.json
 ```
 
 后续确定性命令通过 manifest 加载组件：
 
 ```bash
-uv run oxq component-manifest validate component_manifest.json
+uv run oxq component-manifest validate components/bundles/<bundle_id>/component_manifest.json
 uv run oxq registry export \
-  --component-manifest component_manifest.json \
-  --out component_catalog.json
-uv run oxq spec validate strategy_spec.yaml \
-  --component-manifest component_manifest.json
-uv run oxq strategy compile strategy_spec.yaml \
-  --component-manifest component_manifest.json \
-  --out compile_preview
-uv run oxq backtest run strategy_spec.yaml \
-  --component-manifest component_manifest.json \
-  --spec-audit spec_audit.json \
-  --runtime-audit runtime_audit.json \
-  --component-catalog component_catalog.json
+  --component-manifest components/bundles/<bundle_id>/component_manifest.json \
+  --out versions/<version_id>/04_spec_build/component_catalog.json
+uv run oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml \
+  --component-manifest components/bundles/<bundle_id>/component_manifest.json
+uv run oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \
+  --component-manifest components/bundles/<bundle_id>/component_manifest.json \
+  --out versions/<version_id>/07_compile_preview
+uv run oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \
+  --component-manifest components/bundles/<bundle_id>/component_manifest.json \
+  --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json \
+  --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json \
+  --component-catalog versions/<version_id>/04_spec_build/component_catalog.json
 ```
 
 `component_manifest.json` 的 `bundle_hash` 覆盖 manifest 内容

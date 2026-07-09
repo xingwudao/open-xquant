@@ -17,12 +17,15 @@ inputs:
   - component_manifest.json
 outputs:
   - backtest_result.json
-  - runs/<run_id>/
+  - versions/<version_id>/09_backtests/<run_id>/
   - runner_result.json
 forbidden_outputs:
   - strategy_spec.yaml
   - spec_audit.json
   - runtime_audit.json
+  - reproducibility_audit.json
+  - research_bias_audit.json
+  - robustness.json
   - research_report.md
   - research_report.html
 ---
@@ -38,7 +41,7 @@ Use the `run-authorized-backtest` skill.
   "required_skills": ["open-xquant", "run-authorized-backtest"],
   "outputs": [
     "backtest_result.json",
-    "runs/<run_id>/",
+    "versions/<version_id>/09_backtests/<run_id>/",
     "runner_result.json"
   ],
   "forbidden_outputs": [
@@ -55,10 +58,21 @@ Use the `run-authorized-backtest` skill.
 
 - Read `backtest_authorization.json` before running any command.
 - Verify referenced hashes for the spec, spec audit, and runtime audit.
+- When recomputing JSON hashes, call `_hash_json_file(Path(...))`; do not pass
+  strings.
+- Use the authorized
+  `versions/<version_id>/04_spec_build/component_catalog.json`. Do not run
+  `oxq registry export`, and do not create `component_catalog.json` in
+  `08_runtime_audit`, `09_backtests`, or any root-level path.
 - Run the formal backtest only after authorization passes.
-- Attach provenance, run deterministic reproducibility and research audits,
-  run robustness checks, and add the experiment.
+- Let the formal backtest gate attach provenance during `oxq backtest run`.
 - Record failures in the runner result instead of repairing inputs.
+- Read gated inputs from the active version phase directories.
+- Write formal run outputs only under
+  `versions/<version_id>/09_backtests/<run_id>/`.
+- Do not write formal run outputs to root `runs/`.
+- Do not run reproducibility, research-bias, robustness, experiment, or report
+  commands.
 
 ## Inputs
 
@@ -72,25 +86,28 @@ Use the `run-authorized-backtest` skill.
 ## Outputs
 
 - `backtest_result.json`
-- `runs/<run_id>/`
-- `runner_result.json`
+- `versions/<version_id>/09_backtests/<run_id>/`
+- `versions/<version_id>/09_backtests/<run_id>/runner_result.json`
 
 ## Handoff
 
 Return `runner_result.json` and the run directory to the coordinator. The next
-phase is `oxq-report-writer-worker` only when all required gates and post-run
-checks pass.
+phase is `oxq-monitor-worker` when the formal backtest command succeeds. The
+report writer only runs after the monitor has completed reproducibility,
+research-bias, robustness, and experiment logging.
 
 ## Red Lines
 
 - Do not edit `strategy_spec.yaml`.
 - Do not edit `spec_audit.json`.
 - Do not edit `runtime_audit.json`.
+- Do not run `oxq audit reproducibility`, `oxq audit research`,
+  `oxq robustness run`, or `oxq experiment add`.
 - Do not change report files.
 - Do not continue after failed authorization or failed gates.
 
 ## Result
 
-Return the run directory, artifact hashes, provenance attachment status,
-reproducibility status, research audit status, robustness status, and any
-runner failure.
+Return the run directory, artifact hashes, provenance attachment status, the
+formal backtest status, `next_phase: oxq-monitor-worker`, and any runner
+failure.

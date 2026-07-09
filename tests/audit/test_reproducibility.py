@@ -16,6 +16,23 @@ from oxq.spec.compiler import _build_strategy_py_artifact, _hash_file, _write_ar
 from oxq.spec.schema import StrategySpec
 
 
+def _spec_audit_context() -> dict[str, object]:
+    return {
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "6" * 16,
+            "hash_type": "sha256",
+        },
+        "strategy_idea_brief": "versions/v001/01_brainstorm/strategy_idea_brief.json",
+        "strategy_idea_audit": "versions/v001/02_idea_audit/strategy_idea_audit.json",
+        "strategy_idea_brief_hash": "sha256:" + "7" * 16,
+        "strategy_idea_audit_hash": "sha256:" + "8" * 16,
+        "unsupported_mappings": [],
+    }
+
+
 def test_reproducibility_audit_accepts_xshe_calendar_alias(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="xshe_audit", hypothesis="audit resolves aliased exchange calendars")
     spec.market.calendar = "XSHE"
@@ -187,12 +204,14 @@ def test_reproducibility_audit_validates_attached_provenance_hashes(tmp_path) ->
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog_hash,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
                 "field_path": "portfolio.type",
                 "spec_value": "EqualWeight",
                 "status": "confirmed",
+                "material_category": "portfolio_construction",
                 "evidence": [],
             }
         ],
@@ -240,6 +259,7 @@ def test_reproducibility_audit_requires_complete_provenance_bundle(tmp_path) -> 
         "spec_hash": (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip(),
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "4" * 64,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [],
         "component_audits": [],
@@ -924,6 +944,13 @@ def _rewrite_run_with_archived_indicator_spec(run_dir: Path) -> None:
         "class": "oxq.portfolio.optimizers.TopNRankingOptimizer",
         "params": {"score_col": "archived_score", "n": 1},
         "rules": {},
+        "constraints": {
+            "cash_reserve": 0.0,
+            "max_holdings": None,
+            "max_weight": None,
+            "min_position_value": None,
+            "min_weight": None,
+        },
     }
     plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     plan_hash = _hash_json_file(plan_path)

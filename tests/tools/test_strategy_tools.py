@@ -409,6 +409,7 @@ def test_rule_types_registry_completeness() -> None:
         "MaxDrawdownRisk",
         "MaxHoldingsRule",
         "RebalanceFrequencyRule",
+        "CalendarRebalanceRule",
         "StopLossRule",
         "TakeProfitRule",
         "TrailingStopRule",

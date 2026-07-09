@@ -15,6 +15,16 @@ from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, c
 from oxq.spec.schema import IndicatorDef, SignalRuleDef, StrategySpec
 
 
+def _spec_audit_context() -> dict[str, object]:
+    return {
+        "strategy_idea_brief": "versions/v001/01_brainstorm/strategy_idea_brief.json",
+        "strategy_idea_audit": "versions/v001/02_idea_audit/strategy_idea_audit.json",
+        "strategy_idea_brief_hash": "sha256:" + "5" * 16,
+        "strategy_idea_audit_hash": "sha256:" + "6" * 16,
+        "unsupported_mappings": [],
+    }
+
+
 def _write_spec_and_data(tmp_path, *, evaluation_window: str = "full"):
     data_dir = tmp_path / "data"
     data_dir.mkdir()
@@ -73,15 +83,28 @@ def _write_spec_audit(
     if spec_path is None:
         sibling_spec_path = path.with_name("strategy_spec.yaml")
         spec_path = sibling_spec_path if sibling_spec_path.exists() else None
+    confirmation_table = path.with_name("spec_confirmation_table.md")
+    confirmation_table.write_text(
+        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
+        encoding="utf-8",
+    )
     path.write_text(
         json.dumps(
             {
                 "schema_version": 3,
                 "status": "pass",
+                "audit_conclusion": "all_pass",
+                "user_confirmation_status": "confirmed",
+                "spec_confirmation_table": {
+                    "path": str(confirmation_table),
+                    "hash": _hash_file(confirmation_table),
+                    "hash_type": "sha256",
+                },
                 "spec_provenance_pass": True,
                 "spec_hash": spec_hash,
                 "conversation_hash": "sha256:" + "2" * 16,
                 "catalog_hash": catalog_hash,
+                **_spec_audit_context(),
                 "recipe_matches": [],
                 "field_audits": _confirmed_field_audits(spec_path) if spec_path is not None else [],
                 "component_audits": [],
@@ -103,11 +126,34 @@ def _confirmed_field_audits(spec_path: Path) -> list[dict]:
             "field_path": field_path,
             "spec_value": value,
             "status": "confirmed",
+            "material_category": _material_category_for_field_path(field_path),
             "evidence": [f"user confirmed {field_path} = {json.dumps(value, sort_keys=True, default=str)}"],
             "blocking": False,
         }
         for field_path, value in _flatten_effective_fields(spec.to_effective_dict())
     ]
+
+
+def _material_category_for_field_path(field_path: str) -> str:
+    if field_path.startswith(("signal.", "rules.")):
+        return "strategy_logic"
+    if field_path.startswith("portfolio."):
+        return "portfolio_construction"
+    if field_path.startswith("execution."):
+        return "execution_assumption"
+    if field_path.startswith("cost."):
+        return "cost_assumption"
+    if field_path.startswith(("data.", "universe.", "market.", "benchmark.")):
+        return "data_assumption"
+    if field_path.startswith("validation."):
+        return "validation_assumption"
+    if field_path.startswith(("metrics.", "decision_policy.")):
+        return "metric_assumption"
+    if field_path.startswith(("robustness.", "risk.")):
+        return "risk_assumption"
+    if field_path == "required_oxq_version":
+        return "system_provenance"
+    return "backtest_assumption"
 
 
 def _flatten_effective_fields(value: object, prefix: str = "") -> list[tuple[str, object]]:
@@ -158,6 +204,7 @@ def _write_runtime_audit(
         "schema_version": 1,
         "status": "pass",
         "runtime_semantics_pass": runtime_semantics_pass,
+        "strategy_source_printed": True,
         "spec_hash": spec_hash,
         "spec_audit_hash": spec_audit_hash,
         "compiled_plan_hash": compiled_plan_hash,

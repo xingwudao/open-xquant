@@ -11,12 +11,37 @@ description: >-
 
 Use this skill after `write-research-report` has written `research_report.md`,
 HTML has been rendered from the same Markdown, and deterministic artifact QA has
-run with `oxq report qa runs/<run_id>/`.
+run with `oxq report qa versions/<version_id>/10_reports/<run_id>/`.
 
 `oxq report qa` checks files, dates, registered image references, manifest
 integrity, hashes, and dimensions. This skill reviews the research meaning:
 whether the report's decision, explanation, risk language, and chart narrative
 are faithful to the artifacts.
+
+## Version-Governed Review Gate
+
+Before reviewing, read `current.json` and use `active_version` as
+`version_id`. Read the source run package from:
+
+```text
+versions/<version_id>/09_backtests/<run_id>/
+```
+
+Read final report artifacts from:
+
+```text
+versions/<version_id>/10_reports/<run_id>/research_report.md
+versions/<version_id>/10_reports/<run_id>/research_report.html
+versions/<version_id>/10_reports/<run_id>/writer_result.json
+```
+
+Write the semantic review only to:
+
+```text
+versions/<version_id>/10_reports/<run_id>/report_review.json
+```
+
+Do not write root-level `report_review.json`.
 
 ## Inputs
 

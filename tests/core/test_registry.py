@@ -101,6 +101,7 @@ class TestBuiltinsLoaded:
             "ExitRule",
             "MaxHoldingsRule",
             "RebalanceFrequencyRule",
+            "CalendarRebalanceRule",
         ):
             assert name in rules, f"{name} missing from rule registry"
 

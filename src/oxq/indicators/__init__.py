@@ -46,6 +46,7 @@ from oxq.indicators.ratio import Ratio
 from oxq.indicators.roe_change import ROEChange
 from oxq.indicators.rolling_mdd import RollingMDD
 from oxq.indicators.rolling_volatility import RollingVolatility
+from oxq.indicators.rps import RPS
 from oxq.indicators.simple_momentum import SimpleMomentum
 from oxq.indicators.sma import SMA
 from oxq.indicators.turnover_rate import TurnoverRate
@@ -91,6 +92,7 @@ __all__ = [
     "Ratio",
     "RollingMDD",
     "RollingVolatility",
+    "RPS",
     "SMA",
     "SimpleMomentum",
     "StochK",

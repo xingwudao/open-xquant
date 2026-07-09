@@ -37,6 +37,11 @@ and load the leaf skill first.
 
 Resolve the runner before the leaf skill runs commands:
 
+Do not resolve a runner for `brainstorm-strategy-idea` or `audit-strategy-idea`
+unless a later routed skill will actually run `oxq`. These two skills forbid
+`oxq` commands, SDK imports, and SPEC writes; reading runner metadata before
+them only adds permission surface and can interrupt a pure conversation gate.
+
 1. If the current directory is an open-xquant source worktree, or the user is
    developing the framework itself, use the current worktree runner such as
    `uv run oxq` or `uv run --project . oxq`.
@@ -54,19 +59,36 @@ initialize it with the resolved runner before loading the leaf skill that will
 create strategy artifacts. Use `research init --sdk` when the user will write
 SDK-based custom research code.
 
+`.open-xquant/workspace.yaml` is configuration only. `current.json`,
+`lineage.json`, and `experiments.jsonl` live at the workspace root. Do not probe
+`.open-xquant/current.json` or other hidden-directory manifest paths when
+checking active version, lineage, or experiment registry state.
+
 ## Task Routing
 
 - Agent install, upgrade, uninstall, cached runner, or target directory
   questions: use the embedded "Install And Upgrade Questions" section below.
   If the source checkout is available, `docs/agent-guide.md` has the longer
   installation guide, but installed Agents must not depend on that file.
-- New strategy idea, strategy spec creation, or spec validation only: use
-  `build-strategy-spec`.
+- Workspace artifact governance, misplaced root-level phase artifacts, messy
+  research directories, or pre-handoff layout checks: use
+  `govern-research-workspace`.
+- version governance for a new strategy family, a user strategy edit, a
+  semantic change, or deciding whether to create a new version or append a run:
+  use `manage-strategy-version`.
+- Artifact lineage checks across version/run/final references before
+  comparison, migration, or final selection: use `audit-artifact-lineage`.
+- New strategy idea or incomplete strategy description: use
+  `brainstorm-strategy-idea`.
+- Audit a completed strategy idea brief or brainstorm process: use
+  `audit-strategy-idea`.
+- Strategy spec creation from a passing `strategy_idea_audit.json`, or spec
+  validation only: use `build-strategy-spec`.
 - Multi-Agent workflows use narrow leaf skills only. Do not route worker tasks
   to end-to-end skills; the downstream system owns phase ordering and
   orchestration.
-- Spec field provenance or pre-backtest assumption confirmation: use
-  `audit-strategy-spec`.
+- Spec field provenance, SPEC calibration against an audited idea, or
+  pre-backtest assumption confirmation: use `audit-strategy-spec`.
 - SPEC-to-runtime compile consistency or `compiled_plan.json` material field
   checks: use `audit-runtime-semantics`.
 - Authorized backtest execution from gated artifacts: use
@@ -94,6 +116,11 @@ SDK-based custom research code.
   registering generated figures: use `build-report-charts`.
 - Cross-run experiment comparison, spec diff, metric comparison, or comparison
   report: use `compare-experiments`.
+- Cross-version strategy comparison, within-version reproducibility
+  comparison, or comparison in a version-governed workspace: use
+  `compare-strategy-versions`.
+- Final version selection, final research candidate selection, or requests to
+  choose/promote/mark a version as final: use `select-final-version`.
 - Final human-readable report writing or editing `research_report.md` /
   `research_report.html`: use `write-research-report`.
 - Semantic review of a completed report, decision consistency, audit fidelity,
@@ -163,27 +190,39 @@ Supported target role roots for `multi-agent` profile:
 - Claude Code: `~/.claude/agents/*.md`
 - Cursor: `~/.cursor/agents/*.md`
 
-Prebuilt roles are `oxq-coordinator`, `oxq-strategy-builder-worker`,
+Prebuilt roles are `oxq-coordinator`, `oxq-version-manager-worker`,
+`oxq-artifact-governor-worker`, `oxq-strategy-brainstorm-worker`,
+`oxq-strategy-idea-auditor-worker`, `oxq-strategy-builder-worker`,
 `oxq-data-inspection-worker`, `oxq-component-author-worker`,
 `oxq-spec-auditor-worker`, `oxq-runtime-auditor-worker`, `oxq-runner-worker`,
-`oxq-report-writer-worker`, and
-`oxq-report-reviewer-worker`.
+`oxq-monitor-worker`, `oxq-report-writer-worker`,
+`oxq-report-reviewer-worker`, `oxq-lineage-auditor-worker`,
+`oxq-experiment-comparator-worker`, and `oxq-final-selector-worker`.
 
 The installed skills are flat peer directories such as `open-xquant/`,
-`build-strategy-spec/`, and `write-research-report/`. Do not nest leaf skills
-under `open-xquant/`.
+`brainstorm-strategy-idea/`, `build-strategy-spec/`, and
+`write-research-report/`. Do not nest leaf skills under `open-xquant/`.
 
 ## Common Sequences
 
 - "Build and test this idea":
+  `manage-strategy-version` -> `brainstorm-strategy-idea` ->
+  `audit-strategy-idea` ->
   `build-strategy-spec` -> `explore-data` when data availability is unknown ->
-  `audit-strategy-spec` -> `audit-runtime-semantics` ->
+  `audit-strategy-spec` -> user confirmation of the full SPEC table ->
+  `audit-runtime-semantics` ->
   `run-authorized-backtest` -> `monitor-strategy-run` ->
   `build-report-charts` when chart assets are required ->
   `write-research-report` ->
   `review-research-report`.
 - "Compare two experiments":
   `compare-experiments` -> review `comparisons/<comparison_id>/`.
+- "Compare strategy versions":
+  `audit-artifact-lineage` -> `compare-strategy-versions` -> review
+  `comparisons/<comparison_id>/`.
+- "Select a final version":
+  `audit-artifact-lineage` -> user confirmation of selection policy ->
+  `select-final-version` -> review `final/current_final.json`.
 - "Generate charts for this run":
   `build-report-charts` -> update report through `write-research-report` ->
   run deterministic `oxq report qa` -> use `review-research-report`.

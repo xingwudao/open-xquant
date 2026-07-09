@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 import shutil
 from pathlib import Path
 
@@ -16,6 +17,8 @@ from oxq.cli.doctor import doctor
 from oxq.cli.research import research as research_group
 from oxq.spec.schema import StrategySpec, make_strategy_id
 from oxq.spec.validator import validate as validate_spec
+
+_WORKSPACE_VERSION_RE = re.compile(r"^v[0-9][A-Za-z0-9_-]*$")
 
 
 @click.group()
@@ -31,20 +34,48 @@ def spec():
 @spec.command()
 @click.argument("description")
 @click.option("--out", "-o", default="strategy_spec.yaml", help="Output file path")
-def init(description: str, out: str):
+@click.option(
+    "--market-preset",
+    type=click.Choice(["us_equity", "cn_a_share"]),
+    default="us_equity",
+    help="Explicit template preset; generated values are candidates until user-confirmed in Agent workflows.",
+)
+def init(description: str, out: str, market_preset: str):
     """Initialize a new strategy spec from a natural language description.
 
     DESCRIPTION is a brief strategy idea in natural language.
     """
     strategy_id = make_strategy_id(description)
-    template = StrategySpec.template(strategy_id=strategy_id, hypothesis=description)
+    template = StrategySpec.template(strategy_id=strategy_id, hypothesis=description, market_preset=market_preset)
+
+    payload = template.to_dict()
+    if market_preset == "cn_a_share":
+        payload.setdefault("market", {})["asset_class"] = "equity"
+        payload.setdefault("universe", {})["type"] = "static"
+        payload.setdefault("universe", {})["point_in_time"] = False
+        payload.setdefault("universe", {})["survivorship_bias_policy"] = "warn"
+        payload.setdefault("data", {})["provider"] = "local"
+        payload.setdefault("data", {})["price_adjustment"] = "adjusted"
+        payload.setdefault("data", {})["required_columns"] = ["open", "high", "low", "close", "volume"]
+        payload.setdefault("signal", {})["signal_time"] = "close_t"
+        payload.setdefault("execution", {})["trade_time"] = "next_open"
+        payload.setdefault("execution", {})["fill_price_mode"] = "next_open"
+        payload.setdefault("execution", {})["cash_annual_return"] = 0.0
+        payload.setdefault("execution", {})["initial_cash"] = 100000.0
+        payload.setdefault("metrics", {})["profile"] = "open_xquant_default"
+        payload.setdefault("metrics", {})["risk_free_rate"] = 0.0
+        payload.setdefault("metrics", {})["return_type"] = "simple"
+        payload.setdefault("metrics", {})["annualization_days"] = 252
+        payload.setdefault("metrics", {})["calmar_denominator"] = "max_drawdown"
+        payload.setdefault("metrics", {})["evaluation_window"] = "full"
 
     output_path = Path(out)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(yaml.dump(template.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False), encoding="utf-8")
+    output_path.write_text(yaml.dump(payload, sort_keys=False, allow_unicode=True, default_flow_style=False), encoding="utf-8")
 
     click.echo(f"Spec template written to {output_path}")
     click.echo(f"Strategy ID: {strategy_id}")
+    click.echo("Template preset values are candidate values; Agent workflows must still collect user confirmation.")
     click.echo("Next: edit the file, then run `oxq spec validate`")
 
 
@@ -191,7 +222,12 @@ def _read_component_manifest_payloads(manifest_paths: tuple[str, ...]) -> list[d
     return manifests
 
 
-def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]) -> None:
+def _write_run_component_manifest_artifacts(
+    run_dir: Path,
+    manifests: list[dict],
+    *,
+    update_artifact_hashes: bool = True,
+) -> None:
     from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file
 
     _preflight_component_extension_archives(run_dir, manifests)
@@ -246,6 +282,8 @@ def _write_run_component_manifest_artifacts(run_dir: Path, manifests: list[dict]
             encoding="utf-8",
         )
 
+    if not update_artifact_hashes:
+        return
     artifact_hashes_path = run_dir / "artifact_hashes.json"
     artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
     artifact_hashes["component_manifests.json"] = _hash_json_file(run_dir / "component_manifests.json")
@@ -719,7 +757,12 @@ def compare_runs(left_run_dir: str, right_run_dir: str, as_json: bool):
 
 @backtest.command()
 @click.argument("spec_file", type=click.Path())
-@click.option("--out", "-o", default="runs/auto", help="Output directory for run artifacts")
+@click.option(
+    "--out",
+    "-o",
+    default=None,
+    help="Output directory for run artifacts. Defaults to workspace default_output_dir or runs/auto.",
+)
 @click.option(
     "--data-dir",
     default=None,
@@ -761,7 +804,7 @@ def compare_runs(left_run_dir: str, right_run_dir: str, as_json: bool):
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON")
 def run(
     spec_file: str,
-    out: str,
+    out: str | None,
     data_dir: str | None,
     spec_audit: str | None,
     runtime_audit: str | None,
@@ -883,8 +926,16 @@ def run(
                 raise SystemExit(1)
             raise
 
+    try:
+        resolved_out = _resolve_backtest_output_dir(out)
+    except click.ClickException as e:
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("output_dir_failed", e.message), indent=2))
+            raise SystemExit(1)
+        raise
+
     if component_manifest_payloads:
-        out_path = Path(out)
+        out_path = Path(resolved_out)
         if out_path.name == "auto":
             preflight_run_dir = out_path.parent / "__component_archive_preflight__"
         else:
@@ -958,7 +1009,7 @@ def run(
         click.echo(f"  Effective data dir: {effective_data_dir}")
         click.echo("  Note: effective data_dir is included in compiled_plan.json and its hash.")
     try:
-        result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=out)
+        result, run_dir = compile_run(spec, data_dir=data_dir, out_dir=resolved_out)
     except Exception as e:
         if as_json:
             click.echo(
@@ -1071,6 +1122,18 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, 
     audit_status = _require_json_str(audit_payload, "status")
     if audit_status != "pass":
         raise click.ClickException(f"spec audit status must be pass before attaching provenance: {audit_status}")
+    audit_conclusion = _require_json_str(audit_payload, "audit_conclusion")
+    if audit_conclusion != "all_pass":
+        raise click.ClickException(
+            f"spec audit audit_conclusion must be all_pass before attaching provenance: {audit_conclusion}"
+        )
+    confirmation_status = _require_json_str(audit_payload, "user_confirmation_status")
+    if confirmation_status != "confirmed":
+        raise click.ClickException(
+            "spec audit user_confirmation_status must be confirmed before attaching provenance: "
+            f"{confirmation_status}"
+        )
+    _require_spec_confirmation_table_hash(audit_payload, Path(spec_audit), _hash_file)
     blocking_findings = audit_payload.get("blocking_findings")
     if isinstance(blocking_findings, list) and blocking_findings:
         raise click.ClickException("spec audit has blocking findings")
@@ -1085,28 +1148,35 @@ def attach_provenance(run_dir: str, spec_audit: str, runtime_audit: str | None, 
     audit_spec_hash = _require_json_str(audit_payload, "spec_hash")
     if audit_spec_hash != run_spec_hash:
         raise click.ClickException(f"spec audit hash mismatch: audit={audit_spec_hash}, run={run_spec_hash}")
+    if runtime_audit is None:
+        message = "runtime_audit.json is required before attaching provenance"
+        if as_json:
+            click.echo(json.dumps(_backtest_json_failure("runtime_audit_missing", message), indent=2))
+            raise SystemExit(1)
+        raise click.ClickException(message)
     runtime_payload: dict[str, object] | None = None
-    if runtime_audit is not None:
-        runtime_validation = validate_runtime_audit_file(runtime_audit)
-        if runtime_validation["status"] == "fail":
-            raise click.ClickException(f"invalid runtime audit: {runtime_validation['errors']}")
-        runtime_payload = json.loads(Path(runtime_audit).read_text(encoding="utf-8"))
-        runtime_status = _require_json_str(runtime_payload, "status")
-        if runtime_status != "pass":
-            raise click.ClickException(f"runtime audit status must be pass before attaching provenance: {runtime_status}")
-        if runtime_payload.get("runtime_semantics_pass") is not True:
-            raise click.ClickException("runtime audit runtime_semantics_pass must be true before attaching provenance")
-        _reject_blocking_runtime_audit_rows(runtime_payload)
-        runtime_spec_hash = _require_json_str(runtime_payload, "spec_hash")
-        if runtime_spec_hash != run_spec_hash:
-            raise click.ClickException(f"runtime audit hash mismatch: audit={runtime_spec_hash}, run={run_spec_hash}")
-        _require_runtime_audit_hashes(
-            runtime_payload,
-            spec_hash=run_spec_hash,
-            spec_audit_path=Path(spec_audit),
-            compiled_plan_path=run_path / "compiled_plan.json",
-            component_bundle_hashes=_run_component_bundle_hashes(run_path),
-        )
+    runtime_validation = validate_runtime_audit_file(runtime_audit)
+    if runtime_validation["status"] == "fail":
+        raise click.ClickException(f"invalid runtime audit: {runtime_validation['errors']}")
+    runtime_payload = json.loads(Path(runtime_audit).read_text(encoding="utf-8"))
+    runtime_status = _require_json_str(runtime_payload, "status")
+    if runtime_status != "pass":
+        raise click.ClickException(f"runtime audit status must be pass before attaching provenance: {runtime_status}")
+    if runtime_payload.get("runtime_semantics_pass") is not True:
+        raise click.ClickException("runtime audit runtime_semantics_pass must be true before attaching provenance")
+    if runtime_payload.get("strategy_source_printed") is not True:
+        raise click.ClickException("runtime audit strategy_source_printed must be true before attaching provenance")
+    _reject_blocking_runtime_audit_rows(runtime_payload)
+    runtime_spec_hash = _require_json_str(runtime_payload, "spec_hash")
+    if runtime_spec_hash != run_spec_hash:
+        raise click.ClickException(f"runtime audit hash mismatch: audit={runtime_spec_hash}, run={run_spec_hash}")
+    _require_runtime_audit_hashes(
+        runtime_payload,
+        spec_hash=run_spec_hash,
+        spec_audit_path=Path(spec_audit),
+        compiled_plan_path=run_path / "compiled_plan.json",
+        component_bundle_hashes=_run_component_bundle_hashes(run_path),
+    )
 
     conversation_hash = _require_json_str(audit_payload, "conversation_hash")
     catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
@@ -1218,6 +1288,7 @@ def _reject_blocking_runtime_audit_rows(audit_payload: object) -> None:
 def _require_pre_backtest_spec_audit(spec: StrategySpec, spec_audit_path: Path) -> None:
     """Deterministically gate a formal backtest on a pre-run spec audit."""
     from oxq.spec.audit_schema import validate_spec_audit_file
+    from oxq.spec.compiler import _hash_file
 
     audit_validation = validate_spec_audit_file(
         spec_audit_path,
@@ -1231,6 +1302,16 @@ def _require_pre_backtest_spec_audit(spec: StrategySpec, spec_audit_path: Path) 
     audit_status = _require_json_str(audit_payload, "status")
     if audit_status != "pass":
         raise click.ClickException(f"spec audit status must be pass before backtest: {audit_status}")
+    audit_conclusion = _require_json_str(audit_payload, "audit_conclusion")
+    if audit_conclusion != "all_pass":
+        raise click.ClickException(f"spec audit audit_conclusion must be all_pass before backtest: {audit_conclusion}")
+    confirmation_status = _require_json_str(audit_payload, "user_confirmation_status")
+    if confirmation_status != "confirmed":
+        raise click.ClickException(
+            "spec audit user_confirmation_status must be confirmed before backtest: "
+            f"{confirmation_status}"
+        )
+    _require_spec_confirmation_table_hash(audit_payload, spec_audit_path, _hash_file)
     if audit_payload.get("spec_provenance_pass") is not True:
         raise click.ClickException("spec audit spec_provenance_pass must be true before backtest")
     blocking_findings = audit_payload.get("blocking_findings")
@@ -1268,6 +1349,8 @@ def _require_pre_backtest_runtime_audit(
         raise click.ClickException(f"runtime audit status must be pass before backtest: {audit_status}")
     if audit_payload.get("runtime_semantics_pass") is not True:
         raise click.ClickException("runtime audit runtime_semantics_pass must be true before backtest")
+    if audit_payload.get("strategy_source_printed") is not True:
+        raise click.ClickException("runtime audit strategy_source_printed must be true before backtest")
     _reject_blocking_runtime_audit_rows(audit_payload)
 
     audit_spec_hash = _require_json_str(audit_payload, "spec_hash")
@@ -1304,6 +1387,8 @@ def _require_component_bundles_authorized_before_import(
         raise click.ClickException(f"runtime audit status must be pass before component import: {audit_status}")
     if audit_payload.get("runtime_semantics_pass") is not True:
         raise click.ClickException("runtime audit runtime_semantics_pass must be true before component import")
+    if audit_payload.get("strategy_source_printed") is not True:
+        raise click.ClickException("runtime audit strategy_source_printed must be true before component import")
     _reject_blocking_runtime_audit_rows(audit_payload)
     _require_runtime_audit_hashes(
         audit_payload,
@@ -1455,6 +1540,8 @@ def _attach_provenance_artifacts(
     )
     if runtime_payload.get("runtime_semantics_pass") is not True:
         raise click.ClickException("runtime audit runtime_semantics_pass must be true before attaching provenance")
+    if runtime_payload.get("strategy_source_printed") is not True:
+        raise click.ClickException("runtime audit strategy_source_printed must be true before attaching provenance")
     _reject_blocking_runtime_audit_rows(runtime_payload)
 
     catalog_hash = _require_json_str(catalog_payload, "catalog_hash")
@@ -1495,6 +1582,42 @@ def _attach_provenance_artifacts(
 def _hash_json_payload(payload: object) -> str:
     canonical = json.dumps(payload, sort_keys=True, default=str)
     return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
+def _require_spec_confirmation_table_hash(
+    audit_payload: dict[str, object],
+    spec_audit_path: Path,
+    hash_file,
+) -> None:
+    table = audit_payload.get("spec_confirmation_table")
+    if not isinstance(table, dict):
+        raise click.ClickException("spec audit spec_confirmation_table must be present before backtest")
+    raw_path = table.get("path")
+    if not isinstance(raw_path, str) or not raw_path:
+        raise click.ClickException("spec audit spec_confirmation_table.path must be present before backtest")
+    recorded_hash = table.get("hash")
+    if not isinstance(recorded_hash, str) or not recorded_hash:
+        raise click.ClickException("spec audit spec_confirmation_table.hash must be present before backtest")
+    table_path = _resolve_audit_artifact_path(raw_path, spec_audit_path)
+    if not table_path.exists():
+        raise click.ClickException(f"spec confirmation table not found: {raw_path}")
+    actual_hash = hash_file(table_path)
+    actual_full_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    if recorded_hash not in {actual_hash, actual_full_hash}:
+        raise click.ClickException(
+            "spec confirmation table hash mismatch: "
+            f"audit={recorded_hash}, actual={actual_hash}"
+        )
+
+
+def _resolve_audit_artifact_path(raw_path: str, audit_path: Path) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    audit_relative = audit_path.parent / path
+    if audit_relative.exists():
+        return audit_relative
+    return Path.cwd() / path
 
 
 def _resolve_effective_data_dir(spec: StrategySpec, data_dir: str | None) -> str:
@@ -1665,6 +1788,72 @@ def _default_component_catalog_path(spec_path: Path) -> Path | None:
     return candidate if candidate.exists() else None
 
 
+def _resolve_backtest_output_dir(out: str | None) -> str:
+    if out:
+        return out
+    workspace = _read_workspace_config(Path.cwd() / ".open-xquant" / "workspace.yaml")
+    if not workspace:
+        return "runs/auto"
+    workflow = workspace.get("workflow")
+    if not isinstance(workflow, dict):
+        return "runs/auto"
+    configured = workflow.get("default_output_dir")
+    if not isinstance(configured, str) or not configured:
+        return "runs/auto"
+    if "{active_version}" not in configured:
+        return configured
+    active_version = _workspace_active_version(workspace)
+    if not active_version:
+        raise click.ClickException(
+            "workspace default_output_dir requires current.json active_version; run `oxq research init` or repair current.json"
+        )
+    return configured.replace("{active_version}", active_version)
+
+
+def _workspace_active_version(workspace: dict) -> str:
+    paths = workspace.get("paths")
+    if not isinstance(paths, dict):
+        paths = {}
+    current_path = _workspace_root_manifest_path(paths, "current_manifest", "current.json")
+    current = _read_json_object(current_path)
+    active_version = current.get("active_version")
+    if not isinstance(active_version, str) or not active_version:
+        return ""
+    if not _WORKSPACE_VERSION_RE.fullmatch(active_version):
+        raise click.ClickException(f"workspace current.json active_version is unsafe: {active_version}")
+    return active_version
+
+
+def _workspace_root_manifest_path(paths: dict, key: str, filename: str) -> Path:
+    raw_value = paths.get(key) or filename
+    if not isinstance(raw_value, str) or not raw_value:
+        raw_value = filename
+    path = Path(raw_value)
+    if path.is_absolute() or len(path.parts) != 1 or path.name != filename:
+        raise click.ClickException(f"workspace paths.{key} must be {filename} at the workspace root")
+    return Path.cwd() / filename
+
+
+def _read_workspace_config(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _read_json_object(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
 @main.group()
 def strategy():
     """Manage compiled strategies."""
@@ -1698,9 +1887,9 @@ def compile(spec_file: str, data_dir: str | None, component_manifest: tuple[str,
 
     SPEC_FILE is the path to a strategy_spec.yaml file.
     """
-    from oxq.spec.compiler import compile_plan, compile_strategy
+    from oxq.spec.compiler import _build_strategy_py_artifact, compile_plan, compile_strategy
 
-    _load_component_manifests(component_manifest)
+    loaded_component_manifests = _load_component_manifests(component_manifest)
     spec = StrategySpec.from_yaml(spec_file)
     validation = validate_spec(spec)
     if validation.status == "fail":
@@ -1725,7 +1914,23 @@ def compile(spec_file: str, data_dir: str | None, component_manifest: tuple[str,
             encoding="utf-8",
         )
         (out_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
+        out_spec = out_dir / "strategy_spec.yaml"
+        source_spec = Path(spec_file)
+        if source_spec.resolve() != out_spec.resolve():
+            shutil.copyfile(source_spec, out_spec)
+        compiled_plan_hash = _hash_json_payload(plan)
+        (out_dir / "strategy.py").write_text(
+            _build_strategy_py_artifact(spec, plan, spec.compute_hash(), compiled_plan_hash),
+            encoding="utf-8",
+        )
+        if loaded_component_manifests:
+            _write_run_component_manifest_artifacts(
+                out_dir,
+                loaded_component_manifests,
+                update_artifact_hashes=False,
+            )
         click.echo(f"  Compile preview: {out_dir / 'compiled_plan.json'}")
+        click.echo(f"  Python source preview: {out_dir / 'strategy.py'}")
         click.echo(f"  Effective data dir: {effective_data_dir}")
         click.echo("  Note: effective data_dir is included in compiled_plan.json and its hash.")
 
@@ -1825,20 +2030,78 @@ def spec_audit():
     help="strategy_spec.yaml for strict effective field confirmation coverage.",
 )
 @click.option(
+    "--component-catalog",
+    "component_catalog_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="component_catalog.json used by the audited spec gate.",
+)
+@click.option(
+    "--mapping-contract",
+    "mapping_contract_path",
+    type=click.Path(exists=True, dir_okay=False),
+    help="spec_mapping_contract.json used by the builder-to-auditor handoff.",
+)
+@click.option(
     "--strict-confirmed",
     is_flag=True,
     help="Require every effective strategy spec field to have a confirmed audit row.",
 )
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
-def spec_audit_validate(audit_file: str, spec_path: str | None, strict_confirmed: bool, as_json: bool):
+def spec_audit_validate(
+    audit_file: str,
+    spec_path: str | None,
+    component_catalog_path: str | None,
+    mapping_contract_path: str | None,
+    strict_confirmed: bool,
+    as_json: bool,
+):
     """Validate spec_audit.json schema without semantic language judgment."""
     from oxq.spec.audit_schema import validate_spec_audit_file
 
     result = validate_spec_audit_file(
         audit_file,
         spec_path=spec_path,
+        component_catalog_path=component_catalog_path,
         require_confirmed_coverage=strict_confirmed,
     )
+    try:
+        audit_payload = json.loads(Path(audit_file).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        audit_payload = {}
+    if mapping_contract_path:
+        from oxq.spec.mapping_contract import (
+            validate_mapping_contract_file,
+            validate_mapping_contract_for_builder_pass_file,
+        )
+
+        mapping_result = validate_mapping_contract_file(mapping_contract_path)
+        if mapping_result["status"] == "fail":
+            result["status"] = "fail"
+            result["errors"].extend(
+                {
+                    "path": f"mapping_contract.{error['path']}",
+                    "message": error["message"],
+                }
+                for error in mapping_result["errors"]
+            )
+        audit_all_pass = (
+            result.get("status") == "pass"
+            or (
+                isinstance(audit_payload, dict)
+                and (audit_payload.get("status") == "pass" or audit_payload.get("audit_conclusion") == "all_pass")
+            )
+        )
+        if audit_all_pass:
+            builder_pass_result = validate_mapping_contract_for_builder_pass_file(mapping_contract_path)
+            if builder_pass_result["status"] == "fail":
+                result["status"] = "fail"
+                result["errors"].extend(
+                    {
+                        "path": f"mapping_contract.builder_pass.{error['path']}",
+                        "message": error["message"],
+                    }
+                    for error in builder_pass_result["errors"]
+                )
     if as_json:
         click.echo(json.dumps(result, indent=2, ensure_ascii=False))
     else:

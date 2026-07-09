@@ -14,8 +14,9 @@ support.
 ## Current Execution Model
 
 Rules are Python objects passed to `Engine.run(..., rules=[...])` or added by
-the spec compiler internally. The audited CLI spec path does not currently
-support a generic top-level `rules:` YAML section or `oxq backtest run --rules`.
+the spec compiler internally. The audited CLI spec path does not support a
+generic top-level `rules:` YAML section or `oxq backtest run --rules`, but it
+does support a narrow whitelist under `portfolio.rules`.
 
 In current `Engine.step()`:
 
@@ -47,12 +48,17 @@ Common built-ins:
 - `DailyLossLimitRisk`
 - `MaxHoldingsRule`
 - `RebalanceFrequencyRule`
+- `CalendarRebalanceRule`
 - `BlacklistRule`
 
 ## Safe CLI Path
 
 For `Crossover` specs, `compile_run()` automatically adds `ExitRule` using the
-declared `fast` and `slow` columns. For rebalance throttling, use:
+declared `fast` and `slow` columns. For every explicit `portfolio.rules` item,
+all required params must be present; do not rely on runtime constructor
+defaults.
+
+For rebalance throttling by trading-session count, use:
 
 ```yaml
 execution:
@@ -61,7 +67,74 @@ execution:
     interval_days: 5
 ```
 
-For other rules, use SDK execution until generic rule YAML support exists.
+or:
+
+```yaml
+portfolio:
+  rules:
+    rebalance:
+      type: RebalanceFrequencyRule
+      params:
+        interval_days: 5
+```
+
+For calendar rebalance, use the execution schedule. The compiler emits
+`CalendarRebalanceRule` internally:
+
+```yaml
+execution:
+  rebalance:
+    frequency: monthly
+    schedule: month_start
+```
+
+Supported audited `portfolio.rules` entries are:
+
+```yaml
+portfolio:
+  rules:
+    stop_loss:
+      type: StopLossRule
+      params:
+        threshold: 0.05
+    take_profit:
+      type: TakeProfitRule
+      params:
+        threshold: 0.20
+    trailing_stop:
+      type: TrailingStopRule
+      params:
+        trail_pct: 0.08
+    max_drawdown:
+      type: MaxDrawdownRisk
+      params:
+        max_drawdown: 0.15
+    daily_loss:
+      type: DailyLossLimitRisk
+      params:
+        max_daily_loss: 0.03
+    max_holdings:
+      type: MaxHoldingsRule
+      params:
+        max_holdings: 10
+```
+
+For portfolio target constraints, use:
+
+```yaml
+portfolio:
+  constraints:
+    max_weight: 0.2
+    min_weight: 0.01
+    max_holdings: 10
+    cash_reserve: 0.05
+```
+
+`portfolio.constraints.min_position_value` is parsed but blocked by validation
+because the audited runtime cannot execute it yet.
+
+Use SDK execution for rules outside the whitelist until the SPEC validator,
+compiler, runtime, and artifact audit support them.
 
 ## SDK Pattern
 

@@ -280,6 +280,20 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
         filter_negative = params.get("filter_negative", True)
         if not isinstance(filter_negative, bool):
             errors.append(_optimizer_param_error("portfolio.params.filter_negative must be boolean"))
+        ascending = params.get("ascending", False)
+        if not isinstance(ascending, bool):
+            errors.append(_optimizer_param_error("portfolio.params.ascending must be boolean"))
+        weighting = params.get("weighting", "score")
+        if weighting not in {"score", "equal"}:
+            errors.append(_optimizer_param_error("portfolio.params.weighting must be score or equal"))
+        pre_filter_signal = params.get("pre_filter_signal", "")
+        if pre_filter_signal:
+            if not _is_non_empty_string(pre_filter_signal):
+                errors.append(_optimizer_param_error("portfolio.params.pre_filter_signal must be a non-empty string"))
+            elif pre_filter_signal not in spec.signal.rules:
+                errors.append(_optimizer_param_error("portfolio.params.pre_filter_signal must reference a signal rule"))
+            elif _is_categorical_signal_rule(spec.signal.rules[pre_filter_signal]):
+                errors.append(_optimizer_param_error("portfolio.params.pre_filter_signal must reference a boolean signal rule"))
     elif spec.portfolio.type == "RiskParity":
         errors.extend(_require_optimizer_column("portfolio.params.volatility_col", params.get("volatility_col"), available_columns))
     elif spec.portfolio.type == "Kelly":
@@ -498,18 +512,96 @@ def _validate_lot_size_config(spec: StrategySpec) -> list[dict]:
     return errors
 
 
+_SUPPORTED_RUNTIME_RULES = frozenset(
+    {
+        "StopLossRule",
+        "TakeProfitRule",
+        "TrailingStopRule",
+        "MaxDrawdownRisk",
+        "DailyLossLimitRisk",
+        "MaxHoldingsRule",
+    }
+)
+
+_RULE_ALLOWED_PARAMS = {
+    "StopLossRule": {"threshold"},
+    "TakeProfitRule": {"threshold"},
+    "TrailingStopRule": {"trail_pct"},
+    "MaxDrawdownRisk": {"max_drawdown"},
+    "DailyLossLimitRisk": {"max_daily_loss"},
+    "MaxHoldingsRule": {"max_holdings"},
+}
+
+
+def _validate_runtime_rule(rule_name: str, rule_type: str, params: dict) -> list[dict]:
+    errors: list[dict] = []
+    if rule_type not in _SUPPORTED_RUNTIME_RULES:
+        return [
+            _err(
+                "fatal",
+                "portfolio_rule_unsupported",
+                f"portfolio.rules.{rule_name} is not supported by the audited runtime",
+                ["executable"],
+            )
+        ]
+
+    unsupported_params = sorted(set(params) - _RULE_ALLOWED_PARAMS[rule_type])
+    if unsupported_params:
+        errors.append(
+            _err(
+                "fatal",
+                "portfolio_rule_params_unsupported",
+                f"portfolio.rules.{rule_name}.params contains unsupported keys: "
+                + ", ".join(unsupported_params),
+                ["executable"],
+            )
+        )
+        return errors
+
+    if rule_type in {"StopLossRule", "TakeProfitRule"}:
+        errors.extend(_validate_fraction_param(f"portfolio.rules.{rule_name}.params.threshold", params.get("threshold")))
+    elif rule_type == "TrailingStopRule":
+        errors.extend(_validate_fraction_param(f"portfolio.rules.{rule_name}.params.trail_pct", params.get("trail_pct")))
+    elif rule_type == "MaxDrawdownRisk":
+        errors.extend(
+            _validate_fraction_param(f"portfolio.rules.{rule_name}.params.max_drawdown", params.get("max_drawdown"))
+        )
+    elif rule_type == "DailyLossLimitRisk":
+        errors.extend(
+            _validate_fraction_param(f"portfolio.rules.{rule_name}.params.max_daily_loss", params.get("max_daily_loss"))
+        )
+    elif rule_type == "MaxHoldingsRule":
+        max_holdings = params.get("max_holdings")
+        if not _is_positive_int(max_holdings):
+            errors.append(
+                _err(
+                    "fatal",
+                    "portfolio_rule_param_invalid",
+                    f"portfolio.rules.{rule_name}.params.max_holdings must be a positive integer",
+                    ["executable"],
+                )
+            )
+    return errors
+
+
+def _validate_fraction_param(field_name: str, value: object) -> list[dict]:
+    if not _is_finite_number(value) or not 0.0 < float(value) < 1.0:
+        return [
+            _err(
+                "fatal",
+                "portfolio_rule_param_invalid",
+                f"{field_name} must be in (0, 1)",
+                ["executable"],
+            )
+        ]
+    return []
+
+
 def _validate_portfolio_rules(spec: StrategySpec) -> list[dict]:
     errors: list[dict] = []
     for rule_name, rule_def in sorted(spec.portfolio.rules.items()):
         if rule_name != "rebalance":
-            errors.append(
-                _err(
-                    "fatal",
-                    "portfolio_rule_unsupported",
-                    f"portfolio.rules.{rule_name} is not supported by the audited runtime",
-                    ["executable"],
-                )
-            )
+            errors.extend(_validate_runtime_rule(rule_name, rule_def.type, rule_def.params))
             continue
         if rule_def.type != "RebalanceFrequencyRule":
             errors.append(
@@ -555,6 +647,186 @@ def _validate_portfolio_rules(spec: StrategySpec) -> list[dict]:
                     ["executable"],
                 )
             )
+    return errors
+
+
+def _validate_portfolio_constraints(spec: StrategySpec) -> list[dict]:
+    errors: list[dict] = []
+    constraints = spec.portfolio.constraints
+
+    def add_invalid(message: str) -> None:
+        errors.append(_err("fatal", "portfolio_constraint_invalid", message, ["executable"]))
+
+    if constraints.max_weight is not None and (
+        not _is_finite_number(constraints.max_weight) or not 0.0 < float(constraints.max_weight) <= 1.0
+    ):
+        add_invalid("portfolio.constraints.max_weight must be in (0, 1]")
+    if constraints.min_weight is not None and (
+        not _is_finite_number(constraints.min_weight) or not 0.0 < float(constraints.min_weight) <= 1.0
+    ):
+        add_invalid("portfolio.constraints.min_weight must be in (0, 1]")
+    if (
+        constraints.min_weight is not None
+        and constraints.max_weight is not None
+        and _is_finite_number(constraints.min_weight)
+        and _is_finite_number(constraints.max_weight)
+        and float(constraints.min_weight) > float(constraints.max_weight)
+    ):
+        add_invalid("portfolio.constraints.min_weight must be less than or equal to max_weight")
+    if constraints.max_holdings is not None and not _is_positive_int(constraints.max_holdings):
+        add_invalid("portfolio.constraints.max_holdings must be a positive integer")
+    if constraints.min_position_value is not None:
+        errors.append(
+            _err(
+                "fatal",
+                "portfolio_constraint_unsupported",
+                "portfolio.constraints.min_position_value is parsed but not executable by the audited runtime",
+                ["executable"],
+            )
+        )
+    if not _is_finite_number(constraints.cash_reserve) or not 0.0 <= float(constraints.cash_reserve) < 1.0:
+        add_invalid("portfolio.constraints.cash_reserve must be in [0, 1)")
+    return errors
+
+
+def _validate_data_filters(spec: StrategySpec, required_columns: set[str]) -> list[dict]:
+    errors: list[dict] = []
+    filters = spec.data.filters
+    required_by_filter = {
+        "exclude_st": ("is_st", filters.exclude_st),
+        "exclude_suspended": ("is_suspended", filters.exclude_suspended),
+        "exclude_new_listed_days": ("listed_days", filters.exclude_new_listed_days > 0),
+        "limit_up_policy": ("is_limit_up", filters.limit_up_policy != "none"),
+        "limit_down_policy": ("is_limit_down", filters.limit_down_policy != "none"),
+    }
+    for field_name, (column, enabled) in required_by_filter.items():
+        if enabled and column not in required_columns:
+            errors.append(
+                _err(
+                    "fatal",
+                    "data_filter_column_missing",
+                    f"data.filters.{field_name} requires data.required_columns to include {column}",
+                    ["executable", "causal"],
+                )
+            )
+    if (
+        not isinstance(filters.exclude_new_listed_days, int)
+        or isinstance(filters.exclude_new_listed_days, bool)
+        or filters.exclude_new_listed_days < 0
+    ):
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_invalid",
+                "data.filters.exclude_new_listed_days must be a non-negative integer",
+                ["executable"],
+            )
+        )
+    if filters.limit_up_policy not in {"none", "exclude_buy"}:
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_invalid",
+                "data.filters.limit_up_policy must be none or exclude_buy",
+                ["executable"],
+            )
+        )
+    if filters.limit_down_policy not in {"none", "exclude_sell"}:
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_invalid",
+                "data.filters.limit_down_policy must be none or exclude_sell",
+                ["executable"],
+            )
+        )
+    if filters.suspension_policy not in {"none", "hold_existing"}:
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_invalid",
+                "data.filters.suspension_policy must be none or hold_existing",
+                ["executable"],
+            )
+        )
+    if filters.suspension_policy != "none" and "is_suspended" not in required_columns:
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_column_missing",
+                "data.filters.suspension_policy requires data.required_columns to include is_suspended",
+                ["executable", "causal"],
+            )
+        )
+    if filters.lookahead_policy not in {"", "point_in_time_required"}:
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_invalid",
+                "data.filters.lookahead_policy must be empty or point_in_time_required",
+                ["causal"],
+            )
+        )
+    if filters.lookahead_policy == "point_in_time_required" and not spec.universe.point_in_time:
+        errors.append(
+            _err(
+                "fatal",
+                "data_filter_point_in_time_required",
+                "data.filters.lookahead_policy=point_in_time_required requires universe.point_in_time=true",
+                ["causal"],
+            )
+        )
+    return errors
+
+
+def _validate_rebalance_schedule(spec: StrategySpec, effective_interval_days: int) -> list[dict]:
+    errors: list[dict] = []
+    frequency = spec.execution.rebalance.frequency
+    schedule = spec.execution.rebalance.schedule
+    if frequency not in {"daily", "weekly", "monthly"}:
+        errors.append(
+            _err(
+                "fatal",
+                "rebalance_frequency_unsupported",
+                "execution.rebalance.frequency must be daily, weekly, or monthly",
+                ["executable"],
+            )
+        )
+        return errors
+    if frequency == "daily":
+        if schedule:
+            errors.append(
+                _err(
+                    "fatal",
+                    "rebalance_schedule_unsupported",
+                    "execution.rebalance.schedule is only supported for weekly or monthly frequency",
+                    ["executable"],
+                )
+            )
+        return errors
+
+    expected_schedule = {"weekly": "week_start", "monthly": "month_start"}[frequency]
+    if schedule:
+        if schedule != expected_schedule:
+            errors.append(
+                _err(
+                    "fatal",
+                    "rebalance_schedule_unsupported",
+                    f"execution.rebalance.frequency={frequency} requires schedule={expected_schedule}",
+                    ["executable"],
+                )
+            )
+        return errors
+
+    if effective_interval_days <= 1:
+        errors.append(
+            _err(
+                "fatal",
+                "rebalance_frequency_unsupported",
+                "calendar rebalance frequency requires execution.rebalance.schedule",
+                ["executable"],
+            )
+        )
     return errors
 
 
@@ -682,7 +954,12 @@ def _validate_compute_params(spec: StrategySpec) -> list[dict]:
     for indicator_name, indicator_def in spec.signal.indicators.items():
         try:
             indicator = _resolve_indicator(indicator_def.type)()
-            frame[indicator_name] = indicator.compute(frame, **indicator_def.params)
+            compute_cross_section = getattr(indicator, "compute_cross_section", None)
+            if callable(compute_cross_section):
+                outputs = compute_cross_section({"__dry_run__": frame}, **indicator_def.params)
+                frame[indicator_name] = outputs["__dry_run__"]
+            else:
+                frame[indicator_name] = indicator.compute(frame, **indicator_def.params)
         except Exception as exc:
             errors.append(
                 _err(
@@ -739,6 +1016,9 @@ def validate(spec: StrategySpec) -> ValidationResult:
     errors: list[dict] = []
     warnings: list[dict] = []
 
+    if spec.schema_version != "0.1":
+        errors.append(_err("fatal", "schema_version_invalid", "schema_version must be the string '0.1'"))
+
     if not isinstance(spec.strategy_id, str) or _unsafe_strategy_id(spec.strategy_id):
         errors.append(_err("fatal", "strategy_id_invalid", "strategy_id must be non-empty and must not contain path separators or '..'"))
 
@@ -749,18 +1029,37 @@ def validate(spec: StrategySpec) -> ValidationResult:
     # --- Universe ---
     if not spec.universe.type:
         errors.append(_err("fatal", "universe_missing", "universe.type is missing — cannot define research scope"))
-    supported_universe_types = frozenset({"static"})
+    supported_universe_types = frozenset({"static", "index"})
     if spec.universe.type and spec.universe.type not in supported_universe_types:
         errors.append(
             _err(
                 "fatal",
                 "universe_type_unsupported",
                 f"Universe type '{spec.universe.type}' is not yet supported. "
-                f"Only 'static' is available.",
+                f"Only 'static' and 'index' are available.",
             )
         )
     if spec.universe.type == "static" and not spec.universe.symbols:
         errors.append(_err("fatal", "universe_empty", "static universe has no symbols"))
+    if spec.universe.type == "index":
+        if not spec.universe.symbols:
+            errors.append(
+                _err(
+                    "fatal",
+                    "index_universe_snapshot_missing",
+                    "index universe requires a local constituent snapshot in universe.symbols",
+                    ["executable", "causal"],
+                )
+            )
+        if not (spec.universe.index_key or spec.universe.index_code):
+            errors.append(
+                _err(
+                    "fatal",
+                    "index_universe_identifier_missing",
+                    "index universe requires universe.index_key or universe.index_code",
+                    ["executable"],
+                )
+            )
     for symbol in spec.universe.symbols:
         if _unsafe_symbol(symbol):
             errors.append(_err("fatal", "universe_symbol_unsafe", f"universe symbol '{symbol}' is not a safe data symbol"))
@@ -842,6 +1141,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "required_columns_missing_close", "data.required_columns must include close"))
     if effective_execution is not None:
         errors.extend(_validate_required_execution_columns(required_columns, effective_execution.fill_price_mode))
+    errors.extend(_validate_data_filters(spec, required_columns))
 
     # --- Signal ---
     if not spec.signal.signal_time:
@@ -864,6 +1164,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
         errors.append(_err("fatal", "lot_size_invalid", "execution.lot_size must be a positive integer"))
     errors.extend(_validate_lot_size_config(spec))
     errors.extend(_validate_portfolio_rules(spec))
+    errors.extend(_validate_portfolio_constraints(spec))
     if (
         not isinstance(spec.execution.rebalance.interval_days, int)
         or isinstance(spec.execution.rebalance.interval_days, bool)
@@ -871,14 +1172,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
     ):
         errors.append(_err("fatal", "rebalance_interval_invalid", "execution.rebalance.interval_days must be a positive integer"))
     effective_rebalance_interval_days = _effective_rebalance_interval_days(spec)
-    if spec.execution.rebalance.frequency != "daily" and effective_rebalance_interval_days <= 1:
-        errors.append(
-            _err(
-                "fatal",
-                "rebalance_frequency_unsupported",
-                "calendar rebalance frequency is not implemented; set execution.rebalance.interval_days explicitly",
-            )
-        )
+    errors.extend(_validate_rebalance_schedule(spec, effective_rebalance_interval_days))
     if not _is_finite_number(spec.execution.initial_cash) or spec.execution.initial_cash <= 0:
         errors.append(_err("fatal", "initial_cash_invalid", "execution.initial_cash must be a positive finite number"))
     if not _is_finite_real_number(spec.execution.cash_annual_return) or spec.execution.cash_annual_return < 0:
@@ -937,33 +1231,63 @@ def validate(spec: StrategySpec) -> ValidationResult:
             )
 
     # --- Cost ---
-    finite_costs = (
-        _is_finite_number(spec.cost.fee_rate)
-        and _is_finite_number(spec.cost.slippage_rate)
-        and _is_finite_number(spec.cost.fee_min)
+    side_cost_values = [
+        value
+        for value in (spec.cost.buy_fee_rate, spec.cost.sell_fee_rate)
+        if value is not None
+    ]
+    finite_costs = all(
+        _is_finite_number(value)
+        for value in (
+            spec.cost.fee_rate,
+            spec.cost.slippage_rate,
+            spec.cost.fee_min,
+            spec.cost.sell_tax_rate,
+            spec.cost.stamp_tax,
+            *side_cost_values,
+        )
     )
     if not finite_costs:
         errors.append(_err("fatal", "cost_model_invalid", "cost fields must be finite numbers"))
-    elif spec.cost.fee_rate <= 0.0 and spec.cost.slippage_rate <= 0.0:
-        if spec.cost.fee_rate == 0.0 and spec.cost.slippage_rate == 0.0 and has_any_explicit_execution_field:
-            warnings.append(
+    else:
+        effective_buy_fee_rate = spec.cost.buy_fee_rate if spec.cost.buy_fee_rate is not None else spec.cost.fee_rate
+        effective_sell_fee_rate = spec.cost.sell_fee_rate if spec.cost.sell_fee_rate is not None else spec.cost.fee_rate
+        if any(value < 0.0 for value in (*side_cost_values, spec.cost.sell_tax_rate, spec.cost.stamp_tax)):
+            errors.append(_err("fatal", "cost_model_invalid", "cost fields must be non-negative"))
+        if spec.cost.sell_tax_rate > 0.0 and spec.cost.stamp_tax > 0.0 and not math.isclose(spec.cost.sell_tax_rate, spec.cost.stamp_tax):
+            errors.append(
                 _err(
-                    "warning",
-                    "cost_model_zero",
-                    "fee_rate and slippage_rate are zero; acceptable only for declared replay-style validation",
-                    ["conservative", "production_consistent"],
+                    "fatal",
+                    "cost_tax_conflict",
+                    "cost.sell_tax_rate and cost.stamp_tax both set but differ",
+                    ["production_consistent"],
                 )
             )
-        else:
-            errors.append(_err(
-                "fatal",
-                "cost_model_missing",
-                "fee_rate and slippage_rate must be positive — zero or negative costs are not acceptable",
-            ))
-    elif spec.cost.fee_rate <= 0.0:
-        errors.append(_err("fatal", "fee_missing", "fee_rate must be positive"))
-    elif spec.cost.slippage_rate <= 0.0:
-        errors.append(_err("fatal", "slippage_missing", "slippage_rate must be positive"))
+        if effective_buy_fee_rate <= 0.0 and effective_sell_fee_rate <= 0.0 and spec.cost.slippage_rate <= 0.0:
+            if (
+                effective_buy_fee_rate == 0.0
+                and effective_sell_fee_rate == 0.0
+                and spec.cost.slippage_rate == 0.0
+                and has_any_explicit_execution_field
+            ):
+                warnings.append(
+                    _err(
+                        "warning",
+                        "cost_model_zero",
+                        "fee rates and slippage_rate are zero; acceptable only for declared replay-style validation",
+                        ["conservative", "production_consistent"],
+                    )
+                )
+            else:
+                errors.append(_err(
+                    "fatal",
+                    "cost_model_missing",
+                    "fee rates and slippage_rate must be positive — zero or negative costs are not acceptable",
+                ))
+        elif effective_buy_fee_rate <= 0.0 or effective_sell_fee_rate <= 0.0:
+            errors.append(_err("fatal", "fee_missing", "effective buy and sell fee rates must be positive"))
+        elif spec.cost.slippage_rate <= 0.0:
+            errors.append(_err("fatal", "slippage_missing", "slippage_rate must be positive"))
     if finite_costs and spec.cost.fee_min < 0.0:
         errors.append(_err("fatal", "fee_min_negative", "fee_min must not be negative"))
 
@@ -1052,7 +1376,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
             _err("warning", "parameter_count", f"signal indicators have {param_count} total params — risk of overfitting")
         )
 
-    if spec.signal.rules and spec.portfolio.type not in {"EqualWeight", "SignalToPosition"}:
+    if spec.signal.rules and spec.portfolio.type not in {"EqualWeight", "SignalToPosition", "TopNRanking"}:
         errors.append(
             _err(
                 "fatal",
@@ -1060,6 +1384,26 @@ def validate(spec: StrategySpec) -> ValidationResult:
                 f"portfolio.type={spec.portfolio.type} with signal.rules is not supported by the spec compiler",
             )
         )
+    if spec.signal.rules and spec.portfolio.type == "TopNRanking" and not spec.portfolio.params.get("pre_filter_signal"):
+        errors.append(
+            _err(
+                "fatal",
+                "signal_portfolio_unsupported",
+                "portfolio.type=TopNRanking with signal.rules requires portfolio.params.pre_filter_signal",
+            )
+        )
+
+    for indicator_name, indicator_def in spec.signal.indicators.items():
+        lag_bars = getattr(indicator_def, "lag_bars", 0)
+        if not isinstance(lag_bars, int) or isinstance(lag_bars, bool) or lag_bars < 0:
+            errors.append(
+                _err(
+                    "fatal",
+                    "indicator_lag_invalid",
+                    f"signal.indicators.{indicator_name}.lag_bars must be a non-negative integer",
+                    ["causal"],
+                )
+            )
 
     errors.extend(_validate_derived_column_names(spec))
     errors.extend(_validate_signal_column_references(spec))

@@ -11,7 +11,19 @@ OpenCode = 通用执行器，负责读写文件、调用命令、运行代码
 open-xquant = 量化研究内核，负责约束、计算、审计和产物标准
 ```
 
-核心工作流：**spec → validate → compile → backtest → audit → robustness → report**
+核心工作流：**brainstorm → idea audit → spec → spec audit → user confirmation
+→ compile → runtime audit → backtest → monitor → report → report review →
+comparison → final selection**
+
+策略研究产物必须按 **strategy family -> strategy version -> run attempt**
+治理，避免 root 目录被 `strategy_spec.yaml`、`spec_audit.json`、
+`runtime_audit.json`、报告和回测结果混写。完整设计见
+`docs/strategy-workflow-artifact-governance.md`，图源和渲染图位于
+`docs/images/strategy-workflow-artifact-governance.png` 与
+`docs/images/strategy-workflow-artifact-governance.dot`。最终版本治理由
+`select-final-version` skill 承接。
+
+![Strategy Workflow Artifact Governance](images/strategy-workflow-artifact-governance.png)
 
 底层是严谨的量化金融引擎，经 Universe → Indicator → Signal → Portfolio → Rule → Broker
 管道生成交易决策；核心资产是 **Python SDK + 协议无关的 Tool 定义 + 声明式 Strategy Spec**。
@@ -33,7 +45,7 @@ open-xquant = 量化研究内核，负责约束、计算、审计和产物标准
 
 ---
 
-## 2. 总体架构（升级后）
+## 2. 总体架构
 
 ```
 ┌────────────────────────────────────────────────────────────┐
@@ -55,7 +67,7 @@ open-xquant = 量化研究内核，负责约束、计算、审计和产物标准
 
 ---
 
-## 3. 项目结构（升级后）
+## 3. 项目结构
 
 ```
 open-xquant/
@@ -264,7 +276,7 @@ Engine.step(date) — 逐 bar 阶段:
 
 ---
 
-## 5. Strategy Spec 系统（新增）
+## 5. Strategy Spec 系统
 
 ### 5.1 设计动机
 
@@ -278,6 +290,7 @@ Engine.step(date) — 逐 bar 阶段:
 
 ```yaml
 schema_version: "0.1"
+required_oxq_version: "0.1.0"
 strategy_id: "momentum_topn_weekly"
 name: "20-day Momentum Top-N Weekly Rotation"
 
@@ -327,6 +340,7 @@ portfolio:
 execution:
   rebalance:
     frequency: "weekly"
+    schedule: "week_start"
   trade_time: "next_open"
   fill_price_mode: "next_open"
   order_timing: "next_session_open"
@@ -373,9 +387,70 @@ decision_policy:
     max_drawdown_gte: -0.20
 ```
 
+`schema_version` 是 SPEC schema 版本；`required_oxq_version` 是生成和审计该
+策略配置时使用的 OpenXQuant 包版本，用于复现和运行时版本校准。
+
+`oxq spec init` 支持显式模板 preset。默认 `us_equity` 保持最小模板行为；
+`cn_a_share` 用于生成 A 股候选模板，但这些值仍然只是候选值。
+在 Agent 工作流里，Builder 不得把 preset、parser 或 runtime 默认值当成用户确认值，
+Spec Auditor 必须在完整确认表里让用户确认每个有效字段。
+
+```bash
+oxq spec init "A-share momentum TopN" --market-preset cn_a_share --out strategy_spec.yaml
+```
+
+`cn_a_share` 会显式写出关键候选假设，包括：
+
+- `market.region: cn`
+- `market.currency: CNY`
+- `market.calendar: XSHG`
+- `universe.type: static`
+- `execution.lot_size: 100`
+- `benchmark.symbols: ["000300.SH"]`
+
+### 5.2.1 当前可执行 SPEC Surface
+
+当前 audited CLI/runtime 支持的新增 material fields：
+
+- `universe.type: static`
+- `universe.type: index`，但必须把本地成分快照写入 `universe.symbols`；
+  `index_key` 和 `index_code` 只作为 provenance，不触发远程取成分
+- `data.filters.exclude_st`
+- `data.filters.exclude_suspended`
+- `data.filters.exclude_new_listed_days`
+- `data.filters.limit_up_policy: exclude_buy`
+- `data.filters.limit_down_policy: exclude_sell`
+- `data.filters.suspension_policy: hold_existing`
+- `signal.indicators.*.lag_bars`
+- 横截面 `RPS` 指标，通过 `compute_cross_section(dict[str, DataFrame])`
+  在同一交易日跨标的计算相对强弱百分位排名
+- `TopNRanking.pre_filter_signal`，将 confirmed boolean signal 作为排名前置过滤
+- `TopNRanking.weighting: score | equal`
+- `TopNRanking.ascending`
+- side-aware costs: `buy_fee_rate`、`sell_fee_rate`、`sell_tax_rate`、
+  `stamp_tax`
+- `execution.rebalance.frequency: weekly` + `schedule: week_start`
+- `execution.rebalance.frequency: monthly` + `schedule: month_start`
+- `portfolio.rules` 白名单：
+  `RebalanceFrequencyRule`、`StopLossRule`、`TakeProfitRule`、
+  `TrailingStopRule`、`MaxDrawdownRisk`、`DailyLossLimitRisk`、
+  `MaxHoldingsRule`
+- `portfolio.constraints.max_weight`
+- `portfolio.constraints.min_weight`
+- `portfolio.constraints.max_holdings`
+- `portfolio.constraints.cash_reserve`
+
+仍然会阻断的字段或语义：
+
+- `portfolio.constraints.min_position_value`：schema 可解析，但当前 runtime
+  没有资本规模上下文来精确执行
+- `month_end`、`week_end`、`quarter_end` 等依赖未来 bar 的 calendar schedule
+- 未注册的 `portfolio.rules` 或缺少显式必填参数的白名单 rule
+- 远程/PIT 动态指数成分解析，除非调用方提供独立数据源和审计证据
+
 ### 5.3 Spec Validator
 
-命令：`oxq spec validate strategy_spec.yaml`
+命令：`oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml`
 
 P0 校验规则：
 
@@ -383,15 +458,24 @@ P0 校验规则：
 |--------|----------|------|
 | hypothesis 为空 | fatal | 没有可测试假设 |
 | universe 缺失 | fatal | 无法定义研究范围 |
+| index universe 缺本地成分快照 | fatal | `index` 只支持本地 `symbols` 快照 |
 | signal_time 缺失 | fatal | 无法判断是否未来函数 |
 | trade_time 缺失 | fatal | 无法判断成交时点 |
 | signal_time=close_t 且 trade_time=close_t | fatal | 同根 K 线生成并成交 |
 | execution 语义冲突 | fatal | legacy 与显式执行字段不一致 |
+| calendar rebalance schedule 缺失或不支持 | fatal | weekly 只能 `week_start`，monthly 只能 `month_start` |
 | market calendar 不支持 | fatal | 非受支持交易日历 |
 | lot_size_config 非法 | fatal | 交易单位不可执行 |
 | metrics profile 非法 | fatal | 指标口径不可解释 |
 | cost 缺失 | fatal | 默认零成本不可接受 |
+| side-aware cost 冲突 | fatal | `sell_tax_rate` 和 `stamp_tax` 同时设置时必须一致 |
 | slippage 缺失 | fatal | 默认零滑点不可接受 |
+| data filter 缺依赖列 | fatal | 启用过滤时必须声明对应 `required_columns` |
+| suspension_policy 非法 | fatal | 只能 `none` 或 `hold_existing` |
+| indicator lag 非法 | fatal | `lag_bars` 必须是非负整数 |
+| TopN pre_filter_signal 无效 | fatal | 必须引用 boolean `signal.rules.*` |
+| portfolio rule 不在白名单或缺显式参数 | fatal | 防止 runtime 默认参数混入 SPEC |
+| portfolio constraint 不可执行 | fatal | 例如 `min_position_value` |
 | validation.test_period 缺失 | fatal | 无样本外验证 |
 | benchmark 缺失 | warning | 难以判断超额收益 |
 | static universe + point_in_time=false | warning | 可能有幸存者偏差 |
@@ -413,9 +497,22 @@ P0 校验规则：
 确认它们与 `strategy_spec.yaml`、`compiled_plan.json` 一致。`strategy.py` 可以
 包含面向人类的流程函数和详细注释，但这些函数不能替代正式 runtime。
 
+`compiled_plan.json` 必须保留所有会影响运行语义的 SPEC 字段，包括：
+
+- universe type、index metadata、symbols、PIT policy
+- data provider、effective data dir、required columns、data filters
+- indicator、`lag_bars`、signal、portfolio optimizer、portfolio constraints
+- `TopNRanking` 的 `pre_filter_signal`、`weighting`、`ascending`
+- rebalance interval、calendar schedule、runtime rule source
+- side-aware fee model、sell-side tax、minimum fee、slippage
+- validation periods、metrics profile、benchmark
+
+Runtime audit 不得从缺失字段中推断成功。如果 `strategy_spec.yaml` 包含上述
+material field 而 `compiled_plan.json` 没有保留，必须阻断 formal backtest。
+
 ---
 
-## 6. Audit System（新增）
+## 6. Audit System
 
 ### 6.1 两层审计
 
@@ -429,7 +526,7 @@ Research Bias Audit   — 判断回测研究是否可信
 检查 spec hash、compiled plan hash、strategy.py 一致性、data manifest hash、
 trades hash、equity curve hash、metrics hash、environment hash。
 
-命令：`oxq audit reproducibility runs/<run_id>/`
+命令：`oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/`
 
 ### 6.3 Research Bias Audit
 
@@ -448,11 +545,11 @@ P0 检查项：
 | drawdown_tail | warning | 最大回撤是否不可接受 |
 | missing_data | warning | 数据缺失是否严重 |
 
-命令：`oxq audit research runs/<run_id>/`
+命令：`oxq audit research versions/<version_id>/09_backtests/<run_id>/`
 
 ---
 
-## 7. Robustness Runner（新增）
+## 7. Robustness Runner
 
 P0 稳健性测试四类：
 
@@ -464,7 +561,7 @@ P0 稳健性测试四类：
 输出 `robustness.json`，用于报告和实验比较。报告不应只复述
 baseline Sharpe，而应保留 fragile、warn 和 error 状态。
 
-命令：`oxq robustness run runs/<run_id>/`
+命令：`oxq robustness run versions/<version_id>/09_backtests/<run_id>/`
 
 ---
 
@@ -495,7 +592,7 @@ manifest。最终 `research_report.md` 必须由 Agent 调用
 图表和附件通过 manifest 登记：
 
 ```text
-runs/<run_id>/
+versions/<version_id>/09_backtests/<run_id>/
   report_assets/
     manifest.json
     figures/
@@ -506,14 +603,14 @@ runs/<run_id>/
 报告资产命令：
 
 ```bash
-oxq report asset add runs/<run_id>/ chart.png --id chart_id --title "Chart"
-oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
-oxq report asset list runs/<run_id>/
+oxq report asset add versions/<version_id>/09_backtests/<run_id>/ chart.png --id chart_id --title "Chart"
+oxq report asset add-batch versions/<version_id>/09_backtests/<run_id>/ versions/<version_id>/09_backtests/<run_id>/report_assets/assets.json
+oxq report asset list versions/<version_id>/09_backtests/<run_id>/
 ```
 
 ---
 
-## 9. Experiment Registry（新增）
+## 9. Experiment Registry
 
 每次研究进入实验登记册，防止选择性记忆。
 
@@ -521,23 +618,22 @@ oxq report asset list runs/<run_id>/
 
 记录：experiment_id, strategy_id, spec_hash, run_id, metrics, audit_status, decision, created_at。
 
-命令：`oxq experiment add runs/<run_id>/`
+命令：`oxq experiment add versions/<version_id>/09_backtests/<run_id>/`
 
 ---
 
 ## 10. CLI 设计
 
 ```
-oxq spec init "策略想法"
-oxq spec validate strategy_spec.yaml
-oxq spec-audit validate spec_audit.json
-oxq strategy compile strategy_spec.yaml
-oxq runtime-audit validate runtime_audit.json
-oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --component-catalog component_catalog.json --out runs/auto --json
-oxq audit reproducibility runs/<run_id>/
-oxq audit research runs/<run_id>/
-oxq robustness run runs/<run_id>/
-oxq experiment add runs/<run_id>/
+oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
+oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --strict-confirmed
+oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml --out versions/<version_id>/07_compile_preview
+oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --out versions/<version_id>/09_backtests --json
+oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
+oxq audit research versions/<version_id>/09_backtests/<run_id>/
+oxq robustness run versions/<version_id>/09_backtests/<run_id>/
+oxq experiment add versions/<version_id>/09_backtests/<run_id>/
 ```
 
 CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现；最终研究报告文本由
@@ -568,6 +664,9 @@ Agent skill 完成。
 ### 11.3 指标库 (oxq.indicators)
 
 30+ 内置指标，按类别分：趋势 (SMA, EMA, WMA, DEMA, TEMA)、动量 (RSI, ROC, Momentum, NdayReturn)、MACD (MACDLine, MACDSignal, MACDHistogram)、波动 (Bollinger, ATR, RollingVolatility)、成交量 (OBV, VWAP, MFI)、方向 (ADX, AROON, CCI)。
+`RPS` 是内置横截面指标，用 `close / close.shift(period) - 1` 计算
+N 日收益，再在同一交易日跨标的做百分位排名。普通单标的 Indicator 仍使用
+`compute(DataFrame)`；横截面 Indicator 必须显式实现 `compute_cross_section`。
 
 ### 11.4 信号生成器 (oxq.signals)
 
@@ -583,13 +682,20 @@ Agent skill 完成。
 | `EqualWeightOptimizer` | 等权分配 |
 | `RiskParityOptimizer` | 按波动率倒数加权 |
 | `KellyOptimizer` | Kelly 公式计算最优仓位 |
-| `TopNRankingOptimizer` | 按评分排名取 Top N 归一化 |
+| `TopNRankingOptimizer` | 可先按 boolean signal 过滤，再按评分排名取 Top N，支持分数加权或等权 |
 | `PctEquityOptimizer` | 每个信号标的固定权益比例 |
 | `SignalToPositionOptimizer` | 将 `BUY`、`SELL`、`HOLD` 信号映射为目标仓位 |
 
 `SignalToPositionOptimizer` 是有状态优化器：每个独立 run 开始时重置状态；
 `BUY` 更新目标仓位，`SELL` 清空或降到 `sell_weight`，`HOLD` 维持上一目标仓位。
 当 pre-trade Rule 只 override 部分标的时，其他 `HOLD` 标的不参与再平衡。
+
+Catalog recipes 用于让 Builder 和 Auditor 识别标准语义。
+`threshold_then_rank_top_n` 表示“先阈值过滤，再按分数排名取 Top N”，通过
+`TopNRanking.pre_filter_signal` 连接 boolean signal gate。
+`rps_top_n_rotation` 表示“先计算横截面 RPS，再做 TopN 轮动”。
+Builder 必须把 recipe 的 placeholder 映射到用户确认值，不能用 catalog
+默认值替代用户确认。
 
 ### 11.6 交易规则 (oxq.rules)
 
@@ -653,9 +759,11 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 
 | Skill | 说明 |
 |-------|------|
-| `build-strategy-spec` | 构建/编辑 SPEC，输出 builder phase result |
+| `brainstorm-strategy-idea` | 按阶段收集策略描述，输出 strategy idea brief |
+| `audit-strategy-idea` | 审核 brainstorm 流程和 brief 完整性 |
+| `build-strategy-spec` | 从通过审核的 idea artifacts 构建/编辑 SPEC，输出 builder phase result |
 | `author-component` | 创建 workspace-local custom components、测试、manifest 和 catalog |
-| `audit-strategy-spec` | 审核用户来源、默认值、组件 provenance 和 recipe canonicality |
+| `audit-strategy-spec` | 校准 SPEC 是否映射已审核 idea，并审核用户来源、默认值、组件 provenance 和 recipe canonicality |
 | `audit-runtime-semantics` | 编译 preview 并审核 SPEC 到 compiled_plan 的执行语义一致性 |
 | `run-authorized-backtest` | 读取授权 artifact，运行 gated backtest |
 | `monitor-strategy-run` | 跑后 reproducibility/research audit、robustness 和 experiment 记录 |
@@ -666,7 +774,29 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 | `create-component` | 组件创建路由 |
 | ... | ... |
 
-### 13.2 Agent Roles（agent/roles/）
+### 13.2 Mapping Contract
+
+外部来源，例如飞书 YAML、Studio 表单或用户给出的半结构化配置，不能直接被
+Builder 静默改写成 SPEC。Builder 必须输出两层映射产物：
+
+- `spec_mapping_notes.md`：面向人的解释，说明字段为什么这样映射
+- `spec_mapping_contract.json`：面向审计的结构化 contract
+
+`spec_mapping_contract.json` 使用 `schema_version: 1`。每个
+`field_mappings` 条目必须声明 `source_field`、`semantic`、`status`、
+`confirmation_required`、`blocking` 和 `reason`。映射到 SPEC 的字段还必须写
+`target_field`。`semantic: strategy` 的字段不能被标记为
+`excluded_non_material`；无法表达时必须是 `unsupported` 或 `blocked`。
+
+Spec Auditor 在通过前必须用 Python API
+`oxq.spec.validate_mapping_contract` 校验该
+contract。这样可以区分三类边界：
+
+- OpenXQuant SPEC 层必须承载的策略语义
+- Studio 或报告层可以承载的展示、交互、审批和 UI 配置
+- 当前框架不支持、需要阻断或转入组件/框架开发的语义
+
+### 13.3 Agent Roles（agent/roles/）
 
 `agent/roles/*.md` 是 OpenXQuant multi-agent 预制角色的单一来源。
 安装器会把这些角色渲染成各 Agent 的官方格式：
@@ -679,14 +809,25 @@ Tool 定义与传输协议无关。每个 Tool 是 SDK 的薄封装。
 当前预制角色：
 
 - `oxq-coordinator`: 面向用户的主控 Agent，只负责阶段路由和确认。
-- `oxq-strategy-builder-worker`: 构建和验证 `strategy_spec.yaml`。
+- `oxq-version-manager-worker`: 决定继续当前版本还是创建新版本。
+- `oxq-artifact-governor-worker`: 审查工作区布局和阶段产物落点。
+- `oxq-strategy-brainstorm-worker`: 引导用户按阶段完成策略描述。
+- `oxq-strategy-idea-auditor-worker`: 审核策略描述收集流程和 brief。
+- `oxq-strategy-builder-worker`: 从通过审核的 idea artifacts 构建和验证
+  `strategy_spec.yaml`。
 - `oxq-data-inspection-worker`: 检查数据可用性、provider readiness、
   parquet 质量和覆盖区间。
 - `oxq-component-author-worker`: 创建 workspace-local Indicator、Signal、
   PortfolioOptimizer custom components；workspace-local Rule 默认阻塞。
 - `oxq-spec-auditor-worker`: 审用户确认、字段来源和组件 provenance。
 - `oxq-runtime-auditor-worker`: 编译并审核 runtime semantics。
-- `oxq-runner-worker`: 授权后运行 backtest 和确定性跑后检查。
+- `oxq-runner-worker`: 授权后只运行 formal backtest，并写
+  `runner_result.json`。
+- `oxq-monitor-worker`: 做跑后 reproducibility、research audit、robustness
+  和 experiment registry。
+- `oxq-lineage-auditor-worker`: 审计 version/run/final lineage 和 hash 引用。
+- `oxq-experiment-comparator-worker`: 比较版本或 run，区分复现差异和策略差异。
+- `oxq-final-selector-worker`: 用户确认后写最终版本选择产物。
 - `oxq-report-writer-worker`: 写图表资产和研究报告。
 - `oxq-report-reviewer-worker`: 审核报告并输出 `report_review.json`。
 
@@ -787,14 +928,13 @@ target-specific 包维护。
 用以下命令验证系统端到端可工作：
 
 ```bash
-oxq spec init "20日动量轮动" --out strategy_spec.yaml
-oxq spec validate strategy_spec.yaml
-oxq spec-audit validate spec_audit.json
-oxq runtime-audit validate runtime_audit.json
-oxq backtest run strategy_spec.yaml --spec-audit spec_audit.json --runtime-audit runtime_audit.json --component-catalog component_catalog.json --out runs/auto --json
-oxq audit research runs/<run_id>/
-oxq robustness run runs/<run_id>/
-oxq experiment add runs/<run_id>/
+oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
+oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --strict-confirmed
+oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --out versions/<version_id>/09_backtests --json
+oxq audit research versions/<version_id>/09_backtests/<run_id>/
+oxq robustness run versions/<version_id>/09_backtests/<run_id>/
+oxq experiment add versions/<version_id>/09_backtests/<run_id>/
 ```
 
 验证断言：

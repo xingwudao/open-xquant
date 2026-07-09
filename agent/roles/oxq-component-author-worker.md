@@ -20,11 +20,13 @@ inputs:
   - confirmations.json
   - extension root or workspace root
 outputs:
-  - custom_components/**
+  - versions/<version_id>/03_component_authoring/**
+  - components/bundles/<bundle_id>/**
+forbidden_outputs:
+  - component_request.json
   - component_manifest.json
   - component_catalog.json
   - result.json
-forbidden_outputs:
   - strategy_spec.yaml
   - spec_audit.json
   - runtime_audit.json
@@ -50,12 +52,14 @@ Use the `author-component` skill.
     "create-portfolio-optimizer"
   ],
   "outputs": [
-    "custom_components/**",
-    "component_manifest.json",
-    "component_catalog.json",
-    "result.json"
+    "versions/<version_id>/03_component_authoring/**",
+    "components/bundles/<bundle_id>/**"
   ],
   "forbidden_outputs": [
+    "component_request.json",
+    "component_manifest.json",
+    "component_catalog.json",
+    "result.json",
     "strategy_spec.yaml",
     "spec_audit.json",
     "runtime_audit.json",
@@ -75,8 +79,16 @@ Use the `author-component` skill.
 - Write targeted tests proving protocol compliance and behavior.
 - Expose components through a local extension manifest, without mutating the
   global SDK bundle.
-- Write `component_manifest.json`, refresh `component_catalog.json`, and record
-  reproducible hashes for later strategy, audit, compile, and run phases.
+- Write phase-local component-authoring artifacts under
+  `versions/<version_id>/03_component_authoring/`.
+- Write reusable authored code and manifests under
+  `components/bundles/<bundle_id>/` when a component is ready.
+- Refresh `component_catalog.json`, and record reproducible hashes for later
+  strategy, audit, compile, and run phases.
+- Remove generated cache/build directories before handoff. `__pycache__/`,
+  `.pytest_cache/`, `*.egg-info/`, `.mypy_cache/`, `.ruff_cache/`, `*.pyc`, and
+  `*.pyo` must not remain in `components/bundles/<bundle_id>/` or phase-local
+  component-authoring artifacts.
 - Block workspace-local custom `Rule` requests. The current audited
   SPEC/runtime path only consumes built-in runtime rules; custom rules require
   explicit OpenXQuant framework development and runtime support.
@@ -91,20 +103,27 @@ Use the `author-component` skill.
 
 ## Outputs
 
-- `custom_components/**`
-- `component_manifest.json`
-- `component_catalog.json`
-- `result.json`
+- `versions/<version_id>/03_component_authoring/component_request.json`
+- `versions/<version_id>/03_component_authoring/result.json`
+- `versions/<version_id>/03_component_authoring/component_manifest.json`
+- `versions/<version_id>/03_component_authoring/component_catalog.json`
+- `components/bundles/<bundle_id>/component_manifest.json`
+- `components/bundles/<bundle_id>/component_catalog.json`
+- `components/bundles/<bundle_id>/custom_components/**`
 
 ## Handoff
 
-Return `result.json` to the coordinator. If `status` is `component_ready`, the
-next phase is usually `oxq-strategy-builder-worker` with the refreshed
-`component_catalog.json` and `component_manifest.json`.
+Return the phase-local
+`versions/<version_id>/03_component_authoring/result.json` to the coordinator.
+If `status` is `component_ready`, the next phase is usually
+`oxq-strategy-builder-worker` with the refreshed catalog and manifest paths
+recorded in that result.
 
 ## Red Lines
 
 - Do not edit `strategy_spec.yaml`.
+- Do not write root-level `component_request.json`, `component_manifest.json`,
+  `component_catalog.json`, or `result.json`.
 - Do not write `spec_audit.json`.
 - Do not write `runtime_audit.json`.
 - Do not run formal backtests.

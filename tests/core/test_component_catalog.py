@@ -23,6 +23,8 @@ def test_component_catalog_contains_registered_components_and_recipes() -> None:
     assert "NdayReturn" in indicators
     assert "20日收益率" in indicators["NdayReturn"]["aliases"]
     assert "dependencies" in indicators["NdayReturn"]
+    assert "RPS" in indicators
+    assert "横截面强弱" in indicators["RPS"]["aliases"]
     assert "RollingVolatility" in indicators
     assert "Ratio" in indicators
     assert indicators["Ratio"]["params"]["col_a"]["required"] is True
@@ -32,9 +34,22 @@ def test_component_catalog_contains_registered_components_and_recipes() -> None:
     assert signals["Composite"]["params"]["signals"]["semantic_required"] is True
     assert "TopNRanking" in portfolios
     assert "roc_timing" in recipes
+    assert "rps_top_n_rotation" in recipes
     assert "sma_golden_cross" in recipes
+    assert "threshold_then_rank_top_n" in recipes
     assert "top_n_positive_momentum_rotation" in recipes
     assert "top_n_normalized_weights" in recipes
+    threshold_recipe = recipes["threshold_then_rank_top_n"]
+    assert threshold_recipe["required_components"]["signals"] == ["Threshold"]
+    assert threshold_recipe["required_components"]["portfolios"] == ["TopNRanking"]
+    assert (
+        threshold_recipe["canonical_spec"]["signal"]["rules"]["threshold_filter"]["params"]["column"]
+        == "$filter_col"
+    )
+    assert threshold_recipe["canonical_spec"]["portfolio"]["params"]["pre_filter_signal"] == "threshold_filter"
+    assert threshold_recipe["canonical_spec"]["portfolio"]["params"]["weighting"] == "$weighting"
+    rps_recipe = recipes["rps_top_n_rotation"]
+    assert rps_recipe["canonical_spec"]["signal"]["indicators"]["rps_n"]["type"] == "RPS"
     assert recipes["volatility_adjusted_momentum"]["canonical_spec"]["signal"]["indicators"]["vol_adj_momentum"]["type"] == "Ratio"
 
 

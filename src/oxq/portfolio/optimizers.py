@@ -115,11 +115,17 @@ class TopNRankingOptimizer:
         n: int = 5,
         filter_negative: bool = True,
         max_weight: float = 1.0,
+        pre_filter_signal: str = "",
+        weighting: str = "score",
+        ascending: bool = False,
     ) -> None:
         self.score_col = score_col
         self.n = n
         self.filter_negative = filter_negative
         self.max_weight = max_weight
+        self.pre_filter_signal = pre_filter_signal
+        self.weighting = weighting
+        self.ascending = ascending
 
     def optimize(
         self,
@@ -128,6 +134,8 @@ class TopNRankingOptimizer:
     ) -> dict[str, float]:
         scores: dict[str, float] = {}
         for symbol, df in indicators.items():
+            if self.pre_filter_signal and not _latest_signal_truthy(signals.get(symbol), self.pre_filter_signal):
+                continue
             if self.score_col not in df.columns:
                 continue
             val = float(df[self.score_col].iloc[-1])
@@ -140,8 +148,23 @@ class TopNRankingOptimizer:
         if not scores:
             return {"CASH": 1.0}
 
-        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+        ranked = sorted(scores.items(), key=lambda x: x[1], reverse=not self.ascending)
         top = ranked[: self.n]
+
+        if self.weighting == "equal":
+            weight = 1.0 / len(top)
+            weights = {}
+            cash = 0.0
+            for symbol, _value in top:
+                capped = min(weight, self.max_weight)
+                cash += weight - capped
+                weights[symbol] = capped
+            if cash > 0:
+                weights["CASH"] = cash
+            return weights if weights else {"CASH": 1.0}
+
+        if self.weighting != "score":
+            return {"CASH": 1.0}
 
         total = sum(v for _, v in top)
         if total <= 0:
@@ -160,6 +183,22 @@ class TopNRankingOptimizer:
             weights["CASH"] = cash
 
         return weights if weights else {"CASH": 1.0}
+
+
+def _latest_signal_truthy(frame: pd.DataFrame | None, column: str) -> bool:
+    if frame is None or column not in frame.columns or frame.empty:
+        return False
+    value = frame[column].iloc[-1]
+    if pd.isna(value):
+        return False
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "t", "yes", "y", "buy"}
+    if isinstance(value, bool):
+        return bool(value)
+    try:
+        return float(value) > 0.0
+    except (TypeError, ValueError):
+        return bool(value)
 
 
 class PctEquityOptimizer:

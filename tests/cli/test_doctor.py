@@ -171,6 +171,292 @@ def test_doctor_warns_when_configured_comparison_registry_is_missing(monkeypatch
     assert str(work / "comparisons" / "comparisons.jsonl") in result["missing"]
 
 
+def test_doctor_warns_when_version_governed_workspace_has_no_active_version(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  conversations_dir: conversations",
+                "  components_dir: components",
+                "  governance_dir: governance",
+                "  runs_dir: runs",
+                "  final_dir: final",
+                "  comparisons_dir: comparisons",
+                "  current_manifest: current.json",
+                "  lineage_manifest: lineage.json",
+                "  workflow_manifest: workflow_manifest.json",
+                "  experiment_registry: experiments.jsonl",
+                "  comparison_registry: comparisons/comparisons.jsonl",
+                "workflow:",
+                "  layout: version_governed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for dirname in ("versions", "conversations", "components", "governance", "runs", "final", "comparisons"):
+        (work / dirname).mkdir()
+    (work / "current.json").write_text(
+        json.dumps({"schema_version": 1, "strategy_family_id": "work", "active_version": "", "active_phase": "", "active_run": ""}),
+        encoding="utf-8",
+    )
+    (work / "lineage.json").write_text(
+        json.dumps({"schema_version": 1, "strategy_family_id": "work", "versions": []}),
+        encoding="utf-8",
+    )
+    (work / "workflow_manifest.json").write_text(
+        json.dumps({"schema_version": 1, "layout": "version_governed", "strategy_family_id": "work"}),
+        encoding="utf-8",
+    )
+    (work / "experiments.jsonl").write_text("", encoding="utf-8")
+    (work / "comparisons" / "comparisons.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert "active_version_missing" in result["governance_warnings"]
+    assert "lineage_versions_empty" in result["governance_warnings"]
+
+
+def test_doctor_warns_when_version_governed_workspace_uses_hidden_root_manifests(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  current_manifest: .open-xquant/current.json",
+                "  lineage_manifest: lineage.json",
+                "  workflow_manifest: workflow_manifest.json",
+                "workflow:",
+                "  layout: version_governed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (work / "versions" / "v001").mkdir(parents=True)
+    (work / ".open-xquant" / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v001", "active_phase": "04_spec_build"}),
+        encoding="utf-8",
+    )
+    (work / "lineage.json").write_text(
+        json.dumps({"schema_version": 1, "versions": [{"version_id": "v001", "status": "active"}]}),
+        encoding="utf-8",
+    )
+    (work / "workflow_manifest.json").write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert "root_manifest_path_invalid:current_manifest" in result["governance_warnings"]
+
+
+def test_doctor_warns_when_active_version_is_not_path_safe(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  current_manifest: current.json",
+                "  lineage_manifest: lineage.json",
+                "  workflow_manifest: workflow_manifest.json",
+                "workflow:",
+                "  layout: version_governed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (work / "versions").mkdir()
+    (work / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "../escape", "active_phase": "04_spec_build"}),
+        encoding="utf-8",
+    )
+    (work / "lineage.json").write_text(
+        json.dumps({"schema_version": 1, "versions": [{"version_id": "../escape", "status": "active"}]}),
+        encoding="utf-8",
+    )
+    (work / "workflow_manifest.json").write_text(json.dumps({"schema_version": 1}), encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert "active_version_invalid" in result["governance_warnings"]
+
+
+def test_doctor_warns_when_version_governed_workspace_has_root_phase_artifacts(
+    monkeypatch, tmp_path
+) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  conversations_dir: conversations",
+                "  components_dir: components",
+                "  governance_dir: governance",
+                "  runs_dir: runs",
+                "  final_dir: final",
+                "  comparisons_dir: comparisons",
+                "  current_manifest: current.json",
+                "  lineage_manifest: lineage.json",
+                "  workflow_manifest: workflow_manifest.json",
+                "  experiment_registry: experiments.jsonl",
+                "  comparison_registry: comparisons/comparisons.jsonl",
+                "workflow:",
+                "  layout: version_governed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for dirname in ("versions", "conversations", "components", "governance", "runs", "final", "comparisons"):
+        (work / dirname).mkdir()
+    (work / "versions" / "v001").mkdir()
+    (work / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "strategy_family_id": "work",
+                "active_version": "v001",
+                "active_phase": "04_spec_build",
+                "active_run": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "lineage.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "strategy_family_id": "work",
+                "versions": [{"version_id": "v001", "status": "active"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "workflow_manifest.json").write_text(
+        json.dumps({"schema_version": 1, "layout": "version_governed", "strategy_family_id": "work"}),
+        encoding="utf-8",
+    )
+    (work / "experiments.jsonl").write_text("", encoding="utf-8")
+    (work / "comparisons" / "comparisons.jsonl").write_text("", encoding="utf-8")
+    (work / "strategy_spec.yaml").write_text("strategy_id: polluted\n", encoding="utf-8")
+    (work / "spec_mapping_contract.json").write_text("{}\n", encoding="utf-8")
+    (work / "component_manifest.json").write_text("{}\n", encoding="utf-8")
+    (work / "compile_preview").mkdir()
+    (work / "result.json").write_text("{}\n", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert "root_phase_artifact:strategy_spec.yaml" in result["governance_warnings"]
+    assert "root_phase_artifact:spec_mapping_contract.json" in result["governance_warnings"]
+    assert "root_phase_artifact:component_manifest.json" in result["governance_warnings"]
+    assert "root_phase_artifact:compile_preview" in result["governance_warnings"]
+    assert "root_phase_artifact:result.json" in result["governance_warnings"]
+
+
+def test_doctor_warns_when_report_review_passes_but_active_phase_is_stale(
+    monkeypatch, tmp_path
+) -> None:
+    work = tmp_path / "work"
+    (work / ".open-xquant").mkdir(parents=True)
+    (work / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  versions_dir: versions",
+                "  conversations_dir: conversations",
+                "  components_dir: components",
+                "  governance_dir: governance",
+                "  runs_dir: runs",
+                "  final_dir: final",
+                "  comparisons_dir: comparisons",
+                "  current_manifest: current.json",
+                "  lineage_manifest: lineage.json",
+                "  workflow_manifest: workflow_manifest.json",
+                "  experiment_registry: experiments.jsonl",
+                "  comparison_registry: comparisons/comparisons.jsonl",
+                "workflow:",
+                "  layout: version_governed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for dirname in ("versions", "conversations", "components", "governance", "runs", "final", "comparisons"):
+        (work / dirname).mkdir()
+    version = work / "versions" / "v001"
+    (version / "10_reports" / "run-1").mkdir(parents=True)
+    (version / "phase_state.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "version_id": "v001",
+                "current_phase": "01_brainstorm",
+                "completed_phases": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (version / "version_manifest.json").write_text(
+        json.dumps({"schema_version": 1, "version_id": "v001", "active_phase": "01_brainstorm"}),
+        encoding="utf-8",
+    )
+    (version / "10_reports" / "run-1" / "report_review.json").write_text(
+        json.dumps({"status": "pass", "verdict": "consistent"}),
+        encoding="utf-8",
+    )
+    (work / "current.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "strategy_family_id": "work",
+                "active_version": "v001",
+                "active_phase": "01_brainstorm",
+                "active_run": "run-1",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "lineage.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "strategy_family_id": "work",
+                "versions": [{"version_id": "v001", "status": "active"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "workflow_manifest.json").write_text(
+        json.dumps({"schema_version": 1, "layout": "version_governed", "strategy_family_id": "work"}),
+        encoding="utf-8",
+    )
+    (work / "experiments.jsonl").write_text("", encoding="utf-8")
+    (work / "comparisons" / "comparisons.jsonl").write_text("", encoding="utf-8")
+    monkeypatch.chdir(work)
+
+    result = _check_workspace()
+
+    assert result["status"] == "warn"
+    assert "active_phase_stale:report_review_passed" in result["governance_warnings"]
+
+
 def test_doctor_json_reports_malformed_workspace_config(monkeypatch, tmp_path) -> None:
     work = tmp_path / "work"
     (work / ".open-xquant").mkdir(parents=True)

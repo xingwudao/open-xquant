@@ -10,6 +10,39 @@ description: >-
 
 You prepare data before research. Do not assume data exists or is complete.
 
+## Version-Governed Output Gate
+
+When this skill is used as the data inspection phase for a strategy workflow,
+read `current.json` and use `active_version` as `version_id`. Write data
+inspection artifacts only under:
+
+```text
+versions/<version_id>/05_data_inspection/data_inspection_result.json
+versions/<version_id>/05_data_inspection/data_availability_report.md
+```
+
+Do not write root-level `data_inspection_result.json` or
+`data_availability_report.md`.
+
+## Runner Python
+
+Use the resolved runner's virtualenv Python in an installed research workspace.
+Use the sibling
+Python from the same `bin` directory as the runner when importing `oxq`.
+Read `~/.config/open-xquant/agent.yaml`, take `preferred_runner`, then run the
+sibling `python`. `oxq run python` does not exist.
+Do not run `uv run python` in an installed research workspace unless the
+current directory is the open-xquant source checkout.
+
+```bash
+RUNNER="/path/to/resolved/oxq"
+PYTHON="$(dirname "$RUNNER")/python"
+"$PYTHON" - <<'PY'
+import oxq
+print(oxq.__version__)
+PY
+```
+
 ## Market Data
 
 List local parquet files:

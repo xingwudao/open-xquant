@@ -24,6 +24,27 @@ If the Agent recognizes that this skill applies and starts to think "I can just
 write the report directly", stop. Continue from this skill and follow its input,
 structure, fact, and red-line rules before writing the report.
 
+## Version-Governed Report Package
+
+Before writing any report artifact, read `current.json` and use
+`active_version` as `version_id`. The source run package is:
+
+```text
+versions/<version_id>/09_backtests/<run_id>/
+```
+
+Write final report artifacts only under:
+
+```text
+versions/<version_id>/10_reports/<run_id>/research_report.md
+versions/<version_id>/10_reports/<run_id>/research_report.html
+versions/<version_id>/10_reports/<run_id>/writer_result.json
+versions/<version_id>/10_reports/<run_id>/report_assets/
+```
+
+Do not write root-level `research_report.md`, `research_report.html`,
+`writer_result.json`, or `report_assets/`.
+
 ## Language Parameter Gate
 
 Before drafting or deciding whether to block for chart generation, set a
@@ -81,10 +102,20 @@ Read:
 - `report_assets/manifest.json` and registered figures
 - `equity_curve.csv`, `benchmark_curve.csv`, `trades.csv`, `positions.csv`,
   and `target_weights.csv` only when needed to verify a claim
-- facts from `oxq.report.facts.build_report_facts(RunArtifacts.load(run_dir))`
-  when monthly returns, trade contribution, positive/negative month counts,
-  OOS trade counts, configured end date, or effective last trading day are
-  discussed
+- facts from `build_report_facts(RunArtifacts.load(run_dir))` when monthly
+  returns, trade contribution, positive/negative month counts, OOS trade counts,
+  configured end date, or effective last trading day are discussed. Use the
+  installed package API exactly:
+
+  ```python
+  from oxq.report.artifacts import RunArtifacts
+  from oxq.report.facts import build_report_facts
+
+  facts = build_report_facts(RunArtifacts.load(run_dir))
+  ```
+
+  Do not import `RunArtifacts` from `oxq.api`. Do not import `RunArtifacts`
+  from `oxq.run.artifacts`; those are not the report artifact API.
 
 Do not call a report-writing CLI or tool. The final report narrative must be
 written by the Agent using this skill, then saved to `research_report.md`.
@@ -155,6 +186,12 @@ Write `research_report.md` with:
    - Summarize strategy, universe, signal, execution assumptions, cost model,
      benchmark, and metrics profile.
    - Disclose configured end date and effective last trading day.
+     Use deterministic QA-recognized labels exactly:
+     `配置结束日：YYYY-MM-DD` and `有效数据最后交易日：YYYY-MM-DD` for
+     Chinese reports, or `Configured end date: YYYY-MM-DD` and
+     `Effective last trading day: YYYY-MM-DD` for English reports.
+     Do not use label variants such as `配置的回测结束日期`,
+     `有效最后交易日`, or English fallback labels inside a Chinese report.
    - Cite `spec_audit.json` for field provenance, unconfirmed defaults,
      selected canonical recipes, catalog hash status, and component provenance
      warnings.
@@ -191,6 +228,10 @@ Write `research_report.md` with:
 - trade contribution must come from artifact or facts API calculations. If the
   current artifacts do not support round-trip PnL attribution, say it is not
   available instead of estimating it.
+- maximum drawdown peak/trough dates and equity values must be computed from
+  `equity_curve.csv` or an artifact-backed facts calculation. If the exact
+  peak/trough period cannot be verified, omit the peak/trough dates and equity values
+  and state only the artifact-backed `max_drawdown` metric.
 - Do not hand-write or eyeball any of the above values from charts.
 - When using facts API values, keep the wording human-readable and cite the
   source artifact or fact group in nearby text.
@@ -201,6 +242,11 @@ Write `research_report.md` with:
   `execution_assumptions.json`. If those artifacts contradict
   `strategy_spec.yaml` or `spec_audit.json`, stop and return the run to
   `monitor-strategy-run` instead of writing a successful report.
+- Do not write raw `<` or `>` comparison text in Markdown prose or tables.
+  Markdown/HTML report QA strips HTML tags before checking dates and numeric
+  claims, so a sentence like "trade count < threshold" can accidentally swallow
+  nearby labels. Use words such as "低于" / "高于" or code formatting for literal
+  operators.
 
 ## HTML Output
 
@@ -211,12 +257,18 @@ known language names to valid HTML language tags, preserve explicit language
 codes, and use `und` only when the requested language cannot be expressed as a
 safe language tag.
 
+Use the resolved runner's virtualenv Python from
+`~/.config/open-xquant/agent.yaml` or `~/.config/open-xquant/agent-install.json`
+when the workspace is using an installed SDK bundle. `oxq python` does not
+exist. Do not run `uv run python` in an installed research workspace unless the
+current directory is the open-xquant source worktree being developed.
+
 ```bash
-uv run python - <<'PY'
+<runner-python> - <<'PY'
 from pathlib import Path
 from oxq.report.html import render_markdown_html_report
 
-run_dir = Path("runs/<run_id>")
+report_dir = Path("versions/<version_id>/10_reports/<run_id>")
 report_language = "中文"  # Use the resolved report_language value from this phase.
 
 def language_to_html_lang(language: str) -> str:
@@ -245,10 +297,10 @@ def language_to_html_lang(language: str) -> str:
         return normalized
     return "und"
 
-markdown = (run_dir / "research_report.md").read_text(encoding="utf-8")
+markdown = (report_dir / "research_report.md").read_text(encoding="utf-8")
 html_lang = language_to_html_lang(report_language)
 html = render_markdown_html_report(markdown, lang=html_lang)
-(run_dir / "research_report.html").write_text(html, encoding="utf-8")
+(report_dir / "research_report.html").write_text(html, encoding="utf-8")
 PY
 ```
 
@@ -285,9 +337,13 @@ Write `writer_result.json` after this phase:
 ```json
 {
   "status": "pass | blocked | fail",
+  "version_id": "<version_id>",
+  "run_id": "<run_id>",
+  "strategy_id": "<strategy_id>",
+  "source_run_dir": "versions/<version_id>/09_backtests/<run_id>",
   "language": "中文",
-  "report_markdown": "research_report.md",
-  "report_html": "research_report.html",
+  "report_markdown": "versions/<version_id>/10_reports/<run_id>/research_report.md",
+  "report_html": "versions/<version_id>/10_reports/<run_id>/research_report.html",
   "blocking_reason": "",
   "next_required_phase": "report_review",
   "errors": []

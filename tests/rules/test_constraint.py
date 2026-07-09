@@ -5,8 +5,7 @@ from decimal import Decimal
 import pandas as pd
 
 from oxq.core.types import Portfolio, Position, RuleResult
-from oxq.rules.constraint import BlacklistRule, MaxHoldingsRule, RebalanceFrequencyRule
-
+from oxq.rules.constraint import BlacklistRule, CalendarRebalanceRule, MaxHoldingsRule, RebalanceFrequencyRule
 
 # ---------------------------------------------------------------------------
 # BlacklistRule
@@ -183,3 +182,23 @@ class TestRebalanceFrequencyRuleTradingDays:
         r3b = rule.evaluate("B", pd.Series({"close": 1.0}, name=d3), portfolio)
         assert r3a.hold is False
         assert r3b.hold is False
+
+
+# ---------------------------------------------------------------------------
+# CalendarRebalanceRule
+# ---------------------------------------------------------------------------
+
+
+def test_calendar_rebalance_allows_first_observed_bar_of_month() -> None:
+    rule = CalendarRebalanceRule(schedule="month_start")
+    portfolio = Portfolio(cash=Decimal("100000"))
+
+    first = pd.Series({"close": 100.0}, name=pd.Timestamp("2024-01-02"))
+    same_bar_other_symbol = pd.Series({"close": 100.0}, name=pd.Timestamp("2024-01-02"))
+    next_day = pd.Series({"close": 101.0}, name=pd.Timestamp("2024-01-03"))
+    next_month = pd.Series({"close": 102.0}, name=pd.Timestamp("2024-02-01"))
+
+    assert rule.evaluate("AAA", first, portfolio).hold is False
+    assert rule.evaluate("BBB", same_bar_other_symbol, portfolio).hold is False
+    assert rule.evaluate("AAA", next_day, portfolio).hold is True
+    assert rule.evaluate("AAA", next_month, portfolio).hold is False

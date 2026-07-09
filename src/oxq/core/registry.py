@@ -194,6 +194,7 @@ def _load_builtins() -> None:
         PE,
         PPO,
         ROC,
+        RPS,
         RSI,
         SMA,
         TEMA,
@@ -236,7 +237,7 @@ def _load_builtins() -> None:
         IchimokuSenkouA, IchimokuSenkouB, IchimokuTenkan, LogReturn,
         MACDHistogram, MACDLine, MACDSignal, MFI, MarketCap, Momentum,
         NdayReturn, NetProfitMargin, OBV, PB, PE, PPO, PowerRatio, ROC,
-        ROEChange, RSI, Ratio, RollingMDD, RollingVolatility, SMA,
+        ROEChange, RSI, Ratio, RollingMDD, RollingVolatility, RPS, SMA,
         SimpleMomentum, StochK, TEMA, TurnoverRate, VWAP, WMA,
     ):
         _register(cls, Indicator, _INDICATOR_REGISTRY)
@@ -279,6 +280,7 @@ def _load_builtins() -> None:
     # -- Rules ---------------------------------------------------------------
     from oxq.rules import (
         BlacklistRule,
+        CalendarRebalanceRule,
         DailyLossLimitRisk,
         ExitRule,
         MaxDrawdownRisk,
@@ -291,6 +293,7 @@ def _load_builtins() -> None:
 
     for cls in (
         BlacklistRule,
+        CalendarRebalanceRule,
         DailyLossLimitRisk,
         ExitRule,
         MaxDrawdownRisk,
@@ -323,6 +326,7 @@ def _load_builtins() -> None:
         ("NdayReturn", "N-day percentage return.", "momentum", "compute"),
         ("LogReturn", "Logarithmic return.", "momentum", "compute"),
         ("SimpleMomentum", "Simple momentum factor.", "momentum", "compute"),
+        ("RPS", "Relative Price Strength cross-sectional percentile rank.", "momentum", "compute_cross_section"),
         ("StochK", "Stochastic %K oscillator.", "momentum", "compute"),
         # MACD
         ("MACDLine", "MACD line (fast EMA - slow EMA).", "macd", "compute"),

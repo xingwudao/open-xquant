@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 from contextlib import redirect_stdout
 from io import StringIO
@@ -15,6 +16,8 @@ import click
 from oxq.cli.agent import manifest_path
 from oxq.cli.agent_manifest import read_json_file, read_yaml_file
 from oxq.cli.research import initialize_workspace
+
+_WORKSPACE_VERSION_RE = re.compile(r"^v[0-9][A-Za-z0-9_-]*$")
 
 
 @click.command()
@@ -114,35 +117,199 @@ def _check_workspace() -> dict[str, Any]:
         for path in configured_paths
         if not path.exists()
     ]
-    return {"status": "ok" if not missing else "warn", "missing": missing}
+    governance_warnings = _workspace_governance_warnings(config)
+    return {
+        "status": "ok" if not missing and not governance_warnings else "warn",
+        "missing": missing,
+        "governance_warnings": governance_warnings,
+    }
 
 
 def _workspace_required_paths(config: dict[str, Any]) -> list[Path]:
     paths = config.get("paths")
     if not isinstance(paths, dict):
         paths = {}
+    optional_keys: set[str] = set()
+    if _uses_version_local_backtest_output(config):
+        optional_keys.add("runs_dir")
     required_keys = (
         "specs_dir",
+        "versions_dir",
+        "conversations_dir",
+        "components_dir",
+        "governance_dir",
         "runs_dir",
         "reports_dir",
         "final_dir",
         "comparisons_dir",
+        "current_manifest",
+        "lineage_manifest",
+        "workflow_manifest",
         "experiment_registry",
         "comparison_registry",
     )
     configured = [
         Path.cwd() / value
         for key in required_keys
+        if key not in optional_keys
         if isinstance((value := paths.get(key)), str) and value
     ]
     if configured:
         return configured
     return [
-        Path.cwd() / "runs",
-        Path.cwd() / "runs" / "final",
+        Path.cwd() / "versions",
+        Path.cwd() / "conversations",
+        Path.cwd() / "components",
+        Path.cwd() / "governance",
+        Path.cwd() / "final",
         Path.cwd() / "comparisons",
+        Path.cwd() / "current.json",
+        Path.cwd() / "lineage.json",
+        Path.cwd() / "workflow_manifest.json",
         Path.cwd() / "experiments.jsonl",
     ]
+
+
+def _uses_version_local_backtest_output(config: dict[str, Any]) -> bool:
+    workflow = config.get("workflow")
+    if not isinstance(workflow, dict):
+        return False
+    return (
+        workflow.get("layout") == "version_governed"
+        and workflow.get("default_output_dir") == "versions/{active_version}/09_backtests"
+    )
+
+
+def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
+    workflow = config.get("workflow")
+    paths = config.get("paths")
+    if not isinstance(workflow, dict) or workflow.get("layout") != "version_governed":
+        return []
+    if not isinstance(paths, dict):
+        paths = {}
+
+    warnings: list[str] = []
+    warnings.extend(_root_manifest_path_warnings(paths))
+    current_path = Path.cwd() / str(paths.get("current_manifest", "current.json"))
+    lineage_path = Path.cwd() / str(paths.get("lineage_manifest", "lineage.json"))
+
+    current = _read_json_object(current_path)
+    lineage = _read_json_object(lineage_path)
+
+    active_version = current.get("active_version")
+    active_phase = current.get("active_phase")
+    if not isinstance(active_version, str) or not active_version:
+        warnings.append("active_version_missing")
+    elif not _WORKSPACE_VERSION_RE.fullmatch(active_version):
+        warnings.append("active_version_invalid")
+    if not isinstance(active_phase, str) or not active_phase:
+        warnings.append("active_phase_missing")
+
+    versions = lineage.get("versions")
+    if not isinstance(versions, list) or not versions:
+        warnings.append("lineage_versions_empty")
+
+    if isinstance(active_version, str) and active_version and _WORKSPACE_VERSION_RE.fullmatch(active_version):
+        version_dir = Path.cwd() / str(paths.get("versions_dir", "versions")) / active_version
+        if not version_dir.exists():
+            warnings.append("active_version_dir_missing")
+        if versions and isinstance(versions, list) and not any(
+            isinstance(item, dict) and item.get("version_id") == active_version for item in versions
+        ):
+            warnings.append("active_version_not_in_lineage")
+        if version_dir.exists():
+            phase_state = _read_json_object(version_dir / "phase_state.json")
+            version_manifest = _read_json_object(version_dir / "version_manifest.json")
+            phase_state_phase = phase_state.get("current_phase")
+            version_manifest_phase = version_manifest.get("active_phase")
+            if isinstance(phase_state_phase, str) and phase_state_phase and phase_state_phase != active_phase:
+                warnings.append("active_phase_mismatch:phase_state")
+            if (
+                isinstance(version_manifest_phase, str)
+                and version_manifest_phase
+                and version_manifest_phase != active_phase
+            ):
+                warnings.append("active_phase_mismatch:version_manifest")
+            if _has_passing_report_review(version_dir):
+                if active_phase != "10_reports":
+                    warnings.append("active_phase_stale:report_review_passed")
+                if phase_state_phase != "10_reports":
+                    warnings.append("phase_state_stale:report_review_passed")
+                if version_manifest_phase != "10_reports":
+                    warnings.append("version_manifest_phase_stale:report_review_passed")
+
+    for artifact in ROOT_PHASE_ARTIFACTS:
+        if (Path.cwd() / artifact).exists():
+            warnings.append(f"root_phase_artifact:{artifact}")
+
+    return warnings
+
+
+def _root_manifest_path_warnings(paths: dict[str, Any]) -> list[str]:
+    warnings: list[str] = []
+    for key, filename in (
+        ("current_manifest", "current.json"),
+        ("lineage_manifest", "lineage.json"),
+        ("workflow_manifest", "workflow_manifest.json"),
+    ):
+        raw_value = paths.get(key, filename)
+        if not isinstance(raw_value, str) or not raw_value:
+            raw_value = filename
+        path = Path(raw_value)
+        if path.is_absolute() or len(path.parts) != 1 or path.name != filename:
+            warnings.append(f"root_manifest_path_invalid:{key}")
+    return warnings
+
+
+def _has_passing_report_review(version_dir: Path) -> bool:
+    reports_dir = version_dir / "10_reports"
+    if not reports_dir.exists():
+        return False
+    for review_path in reports_dir.glob("*/report_review.json"):
+        review = _read_json_object(review_path)
+        if review.get("status") == "pass":
+            return True
+    return False
+
+
+def _read_json_object(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+ROOT_PHASE_ARTIFACTS = (
+    "strategy_idea_brief.json",
+    "strategy_idea_audit.json",
+    "data_inspection_result.json",
+    "data_availability_report.md",
+    "strategy_spec.yaml",
+    "component_request.json",
+    "component_manifest.json",
+    "component_catalog.json",
+    "spec_build_notes.md",
+    "spec_mapping_notes.md",
+    "spec_mapping_contract.json",
+    "builder_phase_result.json",
+    "spec_audit.json",
+    "audit_notes.md",
+    "spec_confirmation_table.md",
+    "compile_preview",
+    "runtime_audit.json",
+    "compiled_plan.json",
+    "backtest_authorization.json",
+    "runner_result.json",
+    "result.json",
+    "research_report.md",
+    "research_report.html",
+    "writer_result.json",
+    "report_review.json",
+    "report_assets",
+)
 
 
 def _check_data() -> dict[str, Any]:

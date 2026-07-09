@@ -14,8 +14,8 @@ inputs:
   - workspace.yaml
   - data directory
 outputs:
-  - data_inspection_result.json
-  - data_availability_report.md
+  - versions/<version_id>/05_data_inspection/data_inspection_result.json
+  - versions/<version_id>/05_data_inspection/data_availability_report.md
 forbidden_outputs:
   - strategy_spec.yaml
   - spec_audit.json
@@ -35,8 +35,8 @@ Use the `explore-data` skill.
   "default_agent": "oxq-data-inspection-worker",
   "required_skills": ["open-xquant", "explore-data"],
   "outputs": [
-    "data_inspection_result.json",
-    "data_availability_report.md"
+    "versions/<version_id>/05_data_inspection/data_inspection_result.json",
+    "versions/<version_id>/05_data_inspection/data_availability_report.md"
   ],
   "forbidden_outputs": [
     "strategy_spec.yaml",
@@ -53,6 +53,9 @@ Use the `explore-data` skill.
 
 - Resolve the intended market data directory from the workspace, task inputs,
   or explicit coordinator handoff.
+- Use the resolved runner's virtualenv Python for SDK imports in installed
+  research workspaces. `oxq run python` does not exist, and `uv run python`
+  must not be assumed outside the source checkout.
 - Inspect required symbols, date coverage, timezone/index shape, and required
   columns before any formal backtest.
 - Check whether data history covers indicator warmup, requested backtest
@@ -63,6 +66,10 @@ Use the `explore-data` skill.
   require an unapproved provider.
 - Record the inspected data directory, symbols, date ranges, provider source,
   and any blocking gaps.
+- Read `current.json` and write only
+  `versions/<version_id>/05_data_inspection/data_inspection_result.json` and
+  `versions/<version_id>/05_data_inspection/data_availability_report.md`.
+- Do not write root-level `data_inspection_result.json`.
 
 ## Inputs
 
@@ -73,8 +80,8 @@ Use the `explore-data` skill.
 
 ## Outputs
 
-- `data_inspection_result.json`
-- `data_availability_report.md`
+- `versions/<version_id>/05_data_inspection/data_inspection_result.json`
+- `versions/<version_id>/05_data_inspection/data_availability_report.md`
 
 ## Handoff
 

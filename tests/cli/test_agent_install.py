@@ -244,9 +244,17 @@ def test_agent_install_real_source_installs_open_xquant_router(monkeypatch, tmp_
     roles = {record["name"] for record in manifest["targets"]["opencode"]["agent_roles"]}
     assert roles == {
         "oxq-coordinator",
+        "oxq-artifact-governor-worker",
         "oxq-component-author-worker",
         "oxq-data-inspection-worker",
+        "oxq-experiment-comparator-worker",
+        "oxq-final-selector-worker",
+        "oxq-lineage-auditor-worker",
+        "oxq-monitor-worker",
+        "oxq-strategy-brainstorm-worker",
+        "oxq-strategy-idea-auditor-worker",
         "oxq-strategy-builder-worker",
+        "oxq-version-manager-worker",
         "oxq-spec-auditor-worker",
         "oxq-runtime-auditor-worker",
         "oxq-runner-worker",
@@ -436,8 +444,13 @@ def test_agent_install_real_source_writes_codex_agent_roles(monkeypatch, tmp_pat
     assert runner.exists()
     coordinator_payload = tomllib.loads(coordinator.read_text(encoding="utf-8"))
     assert coordinator_payload["name"] == "oxq-coordinator"
+    assert "oxq-strategy-brainstorm-worker" in coordinator_payload["developer_instructions"]
+    assert "oxq-strategy-idea-auditor-worker" in coordinator_payload["developer_instructions"]
     assert "oxq-strategy-builder-worker" in coordinator_payload["developer_instructions"]
     assert "oxq-data-inspection-worker" in coordinator_payload["developer_instructions"]
+    assert "oxq-version-manager-worker" in coordinator_payload["developer_instructions"]
+    assert "oxq-artifact-governor-worker" in coordinator_payload["developer_instructions"]
+    assert "oxq-final-selector-worker" in coordinator_payload["developer_instructions"]
     assert "open-xquant SubAgent workflow" in coordinator_payload["developer_instructions"]
     assert "Main agent only coordinates" in coordinator_payload["developer_instructions"]
     runner_payload = tomllib.loads(runner.read_text(encoding="utf-8"))

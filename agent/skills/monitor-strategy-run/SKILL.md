@@ -10,6 +10,33 @@ description: >-
 
 You inspect completed run directories and preserve the audit trail.
 
+## Version-Governed Run Package
+
+The valid monitored run path is:
+
+```text
+versions/<version_id>/09_backtests/<run_id>/
+```
+
+Write or verify post-run audit outputs inside that run package, including:
+
+```text
+versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json
+versions/<version_id>/09_backtests/<run_id>/research_bias_audit.json
+versions/<version_id>/09_backtests/<run_id>/robustness.json
+```
+
+Append experiment registry rows with `version_id`, `run_id`, `run_path`,
+`run_role`, audit status, and decision. Do not write monitor artifacts at the
+workspace root.
+
+Monitoring is not a separate version phase name in the workspace manifest.
+Monitor outputs live inside `versions/<version_id>/09_backtests/<run_id>/`.
+Do not set `current.json.active_phase`,
+`versions/<version_id>/phase_state.json.current_phase`, or
+`version_manifest.json.active_phase` to `monitor`. Keep the active phase at
+`09_backtests` until the report package is written under `10_reports`.
+
 ## Required Run Directory
 
 A valid CLI run should contain:
@@ -41,7 +68,7 @@ artifact set.
 Before interpreting performance, validate the semantic audit artifact shape:
 
 ```bash
-uv run oxq spec-audit validate runs/<run_id>/spec_audit.json
+uv run oxq spec-audit validate versions/<version_id>/09_backtests/<run_id>/spec_audit.json
 ```
 
 This validation is deterministic schema validation only. Still read
@@ -60,9 +87,15 @@ the runtime audit here; route that phase back to `audit-runtime-semantics`.
 ## Audit
 
 ```bash
-uv run oxq audit reproducibility runs/<run_id>/
-uv run oxq audit research runs/<run_id>/
+uv run oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/ --json \
+  > versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json
+uv run oxq audit research versions/<version_id>/09_backtests/<run_id>/ --json \
+  > versions/<version_id>/09_backtests/<run_id>/research_bias_audit.json
 ```
+
+stdout-only audit output is not sufficient. After each command, verify that the
+JSON file exists, is non-empty, and parses as a JSON object before report
+handoff.
 
 Interpretation:
 
@@ -82,16 +115,20 @@ data ratio, parameter count, benchmark gaps, and drawdown tail risk.
 ## Robustness
 
 ```bash
-uv run oxq robustness run runs/<run_id>/
+uv run oxq robustness run versions/<version_id>/09_backtests/<run_id>/ --json \
+  > versions/<version_id>/09_backtests/<run_id>/robustness.json
 ```
 
 `WARN` can mean robustness is incomplete, not that the command failed. Preserve
 warnings such as missing parameter perturbation or regime analysis.
+Verify that `robustness.json` exists, is non-empty, and parses as a JSON object
+before handing the run to report writing.
 
-After the command finishes, inspect `runs/` and explicitly tell the user when a
-created sub-run directory such as `<run_id>_cost_x2` appears. That `_cost_x2`
-directory is a parallel cost-stress backtest and should be referenced as a
-robustness artifact, not mistaken for an unrelated experiment.
+After the command finishes, inspect `versions/<version_id>/09_backtests/` and
+explicitly tell the user when a created sub-run directory such as
+`<run_id>_cost_x2` appears. That `_cost_x2` directory is a parallel cost-stress
+backtest and should be referenced as a robustness artifact, not mistaken for
+an unrelated experiment.
 
 When `robustness.json` exists, inspect and report:
 
@@ -107,7 +144,7 @@ reproducibility checks.
 ## Report And Experiment Log
 
 ```bash
-uv run oxq experiment add runs/<run_id>/
+uv run oxq experiment add versions/<version_id>/09_backtests/<run_id>/
 ```
 
 Use `write-research-report` to write `research_report.md` from verified run

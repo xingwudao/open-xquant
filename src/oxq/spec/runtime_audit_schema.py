@@ -13,6 +13,7 @@ REQUIRED_TOP_LEVEL_FIELDS = {
     "schema_version",
     "status",
     "runtime_semantics_pass",
+    "strategy_source_printed",
     "spec_hash",
     "spec_audit_hash",
     "compiled_plan_hash",
@@ -60,6 +61,10 @@ def validate_runtime_audit(payload: Any) -> dict[str, Any]:
         errors.append({"path": "runtime_semantics_pass", "message": "must be a boolean"})
     if status == "pass" and payload.get("runtime_semantics_pass") is not True:
         errors.append({"path": "runtime_semantics_pass", "message": "must be true when status is pass"})
+    if "strategy_source_printed" in payload and not isinstance(payload["strategy_source_printed"], bool):
+        errors.append({"path": "strategy_source_printed", "message": "must be a boolean"})
+    if status == "pass" and payload.get("strategy_source_printed") is not True:
+        errors.append({"path": "strategy_source_printed", "message": "must be true when status is pass"})
 
     for field in ("spec_hash", "spec_audit_hash", "compiled_plan_hash"):
         value = payload.get(field)

@@ -23,6 +23,7 @@ _COMPONENT_ALIASES: dict[str, dict[str, list[str]]] = {
     "indicators": {
         "NdayReturn": ["n-day return", "20日收益率", "动量收益率", "N日收益率", "收益率动量"],
         "RollingVolatility": ["rolling volatility", "20日波动率", "N日波动率", "滚动波动率"],
+        "RPS": ["RPS", "relative price strength", "相对强弱", "横截面强弱", "横截面排名"],
         "Ratio": ["ratio", "比值", "相除", "除以"],
         "ROC": ["rate of change", "变动率", "价格变化率"],
         "SMA": ["simple moving average", "moving average", "均线", "简单移动平均"],
@@ -41,6 +42,7 @@ _COMPONENT_ALIASES: dict[str, dict[str, list[str]]] = {
         "StopLossRule": ["stop loss", "止损"],
         "TakeProfitRule": ["take profit", "止盈"],
         "RebalanceFrequencyRule": ["rebalance frequency", "调仓频率"],
+        "CalendarRebalanceRule": ["calendar rebalance", "月初调仓", "周初调仓"],
         "MaxHoldingsRule": ["max holdings", "最大持仓数"],
     },
 }
@@ -49,8 +51,11 @@ _COMPONENT_ALIASES: dict[str, dict[str, list[str]]] = {
 _COMPONENT_FORMULAS: dict[str, dict[str, str]] = {
     "portfolios": {
         "EqualWeight": "Assign equal weight to each symbol passing boolean signal filters.",
-        "TopNRanking": "Rank symbols by score_col, select top n, and normalize selected scores into target weights.",
+        "TopNRanking": "Optionally pre-filter by boolean signal, rank by score_col, select top n, then allocate by score or equal weights.",
         "SignalToPosition": "Map categorical BUY/SELL/HOLD signal values to target weights with HOLD maintaining state.",
+    },
+    "indicators": {
+        "RPS": "rank_cross(close / close.shift(period) - 1, pct=True) * scale",
     },
     "signals": {
         "Crossover": "fast.shift(1) <= slow.shift(1) and fast > slow",
@@ -61,6 +66,7 @@ _COMPONENT_FORMULAS: dict[str, dict[str, str]] = {
         "StopLossRule": "Exit when unrealized loss exceeds threshold.",
         "TakeProfitRule": "Exit when unrealized profit exceeds threshold.",
         "RebalanceFrequencyRule": "Permit rebalancing only every interval_days trading sessions.",
+        "CalendarRebalanceRule": "Permit rebalancing on the first observed bar of each configured calendar period.",
         "MaxHoldingsRule": "Limit the number of simultaneously held positions.",
     },
 }
@@ -92,6 +98,7 @@ _COMPONENT_CATEGORIES: dict[str, dict[str, str]] = {
         "MaxDrawdownRisk": "risk",
         "MaxHoldingsRule": "constraint",
         "RebalanceFrequencyRule": "constraint",
+        "CalendarRebalanceRule": "constraint",
         "StopLossRule": "exit",
         "TakeProfitRule": "exit",
         "TrailingStopRule": "exit",
@@ -198,6 +205,86 @@ CANONICAL_RECIPES: list[dict[str, Any]] = [
                     "n": "$n",
                     "filter_negative": True,
                     "max_weight": 1.0,
+                },
+            },
+        },
+    },
+    {
+        "name": "threshold_then_rank_top_n",
+        "aliases": [
+            "threshold then rank top n",
+            "先阈值过滤再TopN",
+            "阈值过滤后排名取TopN",
+            "threshold_then_rank",
+        ],
+        "definition": "Apply a Threshold signal as a pre-filter, then rank remaining symbols by score_col and allocate with TopNRanking.",
+        "required_components": {
+            "indicators": [],
+            "signals": ["Threshold"],
+            "portfolios": ["TopNRanking"],
+            "rules": [],
+        },
+        "canonical_spec": {
+            "signal": {
+                "rules": {
+                    "threshold_filter": {
+                        "type": "Threshold",
+                        "params": {
+                            "column": "$filter_col",
+                            "threshold": "$threshold",
+                            "relationship": "$relationship",
+                        },
+                    }
+                }
+            },
+            "portfolio": {
+                "type": "TopNRanking",
+                "params": {
+                    "score_col": "$score_col",
+                    "n": "$n",
+                    "filter_negative": "$filter_negative",
+                    "max_weight": "$max_weight",
+                    "pre_filter_signal": "threshold_filter",
+                    "weighting": "$weighting",
+                    "ascending": "$ascending",
+                },
+            },
+        },
+    },
+    {
+        "name": "rps_top_n_rotation",
+        "aliases": ["RPS TopN rotation", "RPS轮动", "相对强弱TopN", "横截面强弱排名轮动"],
+        "definition": "RPS(period=n) computes cross-sectional relative strength, then TopNRanking selects the strongest symbols.",
+        "required_components": {
+            "indicators": ["RPS"],
+            "signals": [],
+            "portfolios": ["TopNRanking"],
+            "rules": [],
+        },
+        "canonical_spec": {
+            "signal": {
+                "indicators": {
+                    "rps_n": {
+                        "type": "RPS",
+                        "lag_bars": "$lag_bars",
+                        "params": {
+                            "column": "close",
+                            "period": "$period",
+                            "scale": 100.0,
+                            "min_symbols": "$min_symbols",
+                        },
+                    }
+                }
+            },
+            "portfolio": {
+                "type": "TopNRanking",
+                "params": {
+                    "score_col": "rps_n",
+                    "n": "$n",
+                    "filter_negative": False,
+                    "max_weight": "$max_weight",
+                    "weighting": "$weighting",
+                    "ascending": False,
                 },
             },
         },

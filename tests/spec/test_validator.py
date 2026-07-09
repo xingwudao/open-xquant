@@ -13,6 +13,16 @@ def _finding(findings: list[dict], check: str) -> dict:
     return next(finding for finding in findings if finding["check"] == check)
 
 
+def test_validate_rejects_non_string_spec_schema_version() -> None:
+    spec = StrategySpec.template(strategy_id="bad_schema_version", hypothesis="schema version must be explicit")
+    spec.schema_version = 1
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "schema_version_invalid" for error in result.errors)
+
+
 def test_validate_accepts_supported_metrics_profile(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(
@@ -142,6 +152,106 @@ def test_validate_rejects_negative_costs() -> None:
     checks = {error["check"] for error in result.errors}
     assert "cost_model_missing" in checks
     assert "fee_min_negative" in checks
+
+
+def test_validate_accepts_data_filters_and_side_specific_costs(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: filters_and_side_costs
+research:
+  hypothesis: A-share data filters and sell tax should be auditable
+universe:
+  type: static
+  symbols: ["600519.SH"]
+  point_in_time: true
+data:
+  required_columns: [open, high, low, close, volume, is_st, is_suspended, listed_days, is_limit_up, is_limit_down]
+  filters:
+    exclude_st: true
+    exclude_suspended: true
+    exclude_new_listed_days: 60
+    limit_up_policy: exclude_buy
+    limit_down_policy: exclude_sell
+    lookahead_policy: point_in_time_required
+execution:
+  lot_size: 100
+  lot_size_config:
+    default: 100
+cost:
+  fee_rate: 0.0003
+  buy_fee_rate: 0.0003
+  sell_fee_rate: 0.0003
+  sell_tax_rate: 0.001
+  stamp_tax: 0.001
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    result = validate(spec)
+
+    assert result.status == "pass"
+    assert spec.data.filters.exclude_st is True
+    assert spec.data.filters.limit_up_policy == "exclude_buy"
+    assert spec.cost.sell_tax_rate == 0.001
+    assert spec.cost.stamp_tax == 0.001
+
+
+def test_validate_rejects_point_in_time_required_without_pit_universe() -> None:
+    spec = StrategySpec.template(
+        strategy_id="pit_required_without_pit_universe",
+        hypothesis="point-in-time policy must be backed by a PIT universe",
+    )
+    spec.data.filters.lookahead_policy = "point_in_time_required"
+    spec.universe.point_in_time = False
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "data_filter_point_in_time_required" for error in result.errors)
+
+
+def test_validate_accepts_cross_sectional_rps_indicator_dry_run() -> None:
+    spec = StrategySpec.template(
+        strategy_id="rps_dry_run",
+        hypothesis="cross-sectional indicators must validate through compute_cross_section",
+    )
+    spec.universe.symbols = ["AAA", "BBB"]
+    spec.signal.indicators = {
+        "rps_1": IndicatorDef(type="RPS", params={"column": "close", "period": 1, "min_symbols": 1})
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "rps_1", "n": 1}
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_rejects_data_filter_without_required_column() -> None:
+    spec = StrategySpec.template(strategy_id="filter_missing_col", hypothesis="filter columns must be declared")
+    spec.data.filters.exclude_st = True
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "data_filter_column_missing" for error in result.errors)
+
+
+def test_validate_rejects_bad_suspension_policy() -> None:
+    spec = StrategySpec.template(strategy_id="bad_suspension_policy", hypothesis="tradability policies must be explicit")
+    spec.data.required_columns.append("is_suspended")
+    spec.data.filters.exclude_suspended = True
+    spec.data.filters.suspension_policy = "defer_to_next_rebalance"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "data_filter_invalid" for error in result.errors)
 
 
 def test_from_yaml_rejects_scalar_universe_symbols(tmp_path) -> None:
@@ -285,6 +395,52 @@ def test_validate_rejects_unsafe_universe_symbols() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "universe_symbol_unsafe" for error in result.errors)
+
+
+def test_validate_accepts_index_universe_with_local_constituent_snapshot(tmp_path) -> None:
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(
+        """
+strategy_id: index_snapshot
+research:
+  hypothesis: index membership snapshot can define the local universe
+market:
+  calendar: XSHG
+universe:
+  type: index
+  index_key: csi300
+  index_code: "000300"
+  symbols: ["600519.SH", "000001.SZ"]
+  point_in_time: true
+  survivorship_bias_policy: snapshot
+cost:
+  fee_rate: 0.0003
+  slippage_rate: 0.001
+validation:
+  test_period: ["2024-01-01", "2024-12-31"]
+""",
+        encoding="utf-8",
+    )
+
+    spec = StrategySpec.from_yaml(spec_path)
+    result = validate(spec)
+
+    assert result.status == "pass"
+    assert spec.universe.type == "index"
+    assert spec.universe.index_key == "csi300"
+    assert spec.universe.index_code == "000300"
+
+
+def test_validate_rejects_index_universe_without_local_snapshot() -> None:
+    spec = StrategySpec.template(strategy_id="index_no_snapshot", hypothesis="index specs need local constituents")
+    spec.universe.type = "index"
+    spec.universe.symbols = []
+    spec.universe.index_key = "csi300"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "index_universe_snapshot_missing" for error in result.errors)
 
 
 def test_from_yaml_coerces_quoted_decision_policy_thresholds(tmp_path) -> None:
@@ -513,6 +669,74 @@ def test_validate_rejects_unsupported_rebalance_rule_params() -> None:
 
     assert result.status == "fail"
     assert any(error["check"] == "portfolio_rebalance_params_unsupported" for error in result.errors)
+
+
+def test_validate_accepts_calendar_rebalance_schedule() -> None:
+    spec = StrategySpec.template(strategy_id="monthly_rebalance", hypothesis="calendar rebalance is explicit")
+    spec.execution.rebalance.frequency = "monthly"
+    spec.execution.rebalance.schedule = "month_start"
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_accepts_supported_exit_and_risk_portfolio_rules() -> None:
+    spec = StrategySpec.template(strategy_id="supported_risk_rules", hypothesis="supported runtime rules compile from SPEC")
+    spec.portfolio.rules["stop_loss"] = PortfolioRuleDef(type="StopLossRule", params={"threshold": 0.05})
+    spec.portfolio.rules["take_profit"] = PortfolioRuleDef(type="TakeProfitRule", params={"threshold": 0.2})
+    spec.portfolio.rules["trailing_stop"] = PortfolioRuleDef(type="TrailingStopRule", params={"trail_pct": 0.08})
+    spec.portfolio.rules["max_drawdown"] = PortfolioRuleDef(type="MaxDrawdownRisk", params={"max_drawdown": 0.15})
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_rejects_supported_rule_without_explicit_required_param() -> None:
+    spec = StrategySpec.template(strategy_id="rule_default_blocked", hypothesis="SPEC rules must not rely on runtime defaults")
+    spec.portfolio.rules["stop_loss"] = PortfolioRuleDef(type="StopLossRule", params={})
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "portfolio_rule_param_invalid" for error in result.errors)
+
+
+def test_validate_accepts_portfolio_constraints() -> None:
+    spec = StrategySpec.template(strategy_id="portfolio_constraints", hypothesis="portfolio constraints are material")
+    spec.portfolio.constraints.max_weight = 0.4
+    spec.portfolio.constraints.min_weight = 0.05
+    spec.portfolio.constraints.max_holdings = 3
+    spec.portfolio.constraints.cash_reserve = 0.1
+
+    result = validate(spec)
+
+    assert result.status == "pass"
+
+
+def test_validate_rejects_invalid_portfolio_constraints() -> None:
+    spec = StrategySpec.template(strategy_id="bad_portfolio_constraints", hypothesis="invalid constraints fail")
+    spec.portfolio.constraints.max_weight = 1.5
+    spec.portfolio.constraints.cash_reserve = -0.1
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "portfolio_constraint_invalid" for error in result.errors)
+
+
+def test_validate_rejects_unexecutable_min_position_value_constraint() -> None:
+    spec = StrategySpec.template(
+        strategy_id="min_position_value_unsupported",
+        hypothesis="constraints must be executable before validation can pass",
+    )
+    spec.portfolio.constraints.min_position_value = 1000.0
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "portfolio_constraint_unsupported" for error in result.errors)
 
 
 def test_validate_rejects_explicit_daily_rebalance_rule_conflict(tmp_path) -> None:
@@ -1422,6 +1646,26 @@ def test_validate_rejects_invalid_top_n_ranking_params() -> None:
     assert result.status == "fail"
     errors = [error for error in result.errors if error["check"] == "optimizer_param_invalid"]
     assert len(errors) == 2
+
+
+def test_validate_accepts_top_n_pre_filter_signal() -> None:
+    spec = StrategySpec.template(strategy_id="topn_prefilter", hypothesis="positive momentum can pre-filter ranking")
+    spec.signal.indicators = {"score": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 20})}
+    spec.signal.rules = {
+        "positive": SignalRuleDef(type="Threshold", params={"column": "score", "threshold": 0.0, "relationship": "gt"})
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {
+        "score_col": "score",
+        "n": 3,
+        "pre_filter_signal": "positive",
+        "weighting": "equal",
+        "ascending": False,
+    }
+
+    result = validate(spec)
+
+    assert result.status == "pass"
 
 
 def test_validate_rejects_risk_parity_missing_volatility_col() -> None:

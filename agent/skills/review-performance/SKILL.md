@@ -12,9 +12,11 @@ You explain results after artifacts and audits exist.
 
 ## Read Artifacts First
 
-If `runs/<run_id>/research_report.md` exists, read it. If it does not exist,
-read the run artifacts directly and use `write-research-report` before
-presenting a final decision.
+Resolve the run under the active version first:
+`versions/<version_id>/09_backtests/<run_id>/`. If
+`versions/<version_id>/10_reports/<run_id>/research_report.md` exists, read it.
+If it does not exist, read the run artifacts directly and use
+`write-research-report` before presenting a final decision.
 Do not replace the missing report with an ad hoc final decision; route through
 `write-research-report` first.
 
@@ -25,7 +27,7 @@ uv run python - <<'PY'
 import json
 from pathlib import Path
 
-run_dir = Path("runs/<run_id>")
+run_dir = Path("versions/<version_id>/09_backtests/<run_id>")
 metrics = json.loads((run_dir / "metrics.json").read_text())
 for key in ["total_return", "sharpe_ratio", "max_drawdown", "trade_count"]:
     print(key, metrics.get(key))

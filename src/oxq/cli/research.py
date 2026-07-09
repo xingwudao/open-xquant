@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -20,7 +21,30 @@ SDK, and live trading tasks, use the installed `open-xquant` skill first.
 Do not run `oxq`, SDK code, scripts, or write report files until that router
 skill has selected the specific open-xquant skill for the task.
 
-Use `.open-xquant/workspace.yaml` for local paths."""
+Use `.open-xquant/workspace.yaml` for local paths.
+
+## Version-Governed Artifact Contract
+
+This workspace uses version-governed research artifacts. Read `current.json`
+before writing any research artifact. The active version starts as `v001`.
+
+Write phase artifacts only under the active version:
+
+- `versions/v001/01_brainstorm/strategy_idea_brief.json`
+- `versions/v001/02_idea_audit/strategy_idea_audit.json`
+- `versions/v001/04_spec_build/strategy_spec.yaml`
+- `versions/v001/06_spec_audit/spec_confirmation_table.md`
+- `versions/v001/07_compile_preview/compiled_plan.json`
+- `versions/v001/08_runtime_audit/runtime_audit.json`
+- `versions/v001/09_backtests/<run_id>/strategy_spec.yaml`
+- `versions/v001/10_reports/<run_id>/research_report.md`
+
+Do not write root-level `strategy_idea_brief.json`,
+`strategy_idea_audit.json`, `strategy_spec.yaml`, `spec_audit.json`,
+`runtime_audit.json`, `research_report.md`, or `research_report.html`.
+Do not write root-level `strategy_spec.yaml`.
+Root-level phase artifacts are layout pollution, even if `oxq doctor` says the
+workspace skeleton is OK."""
 
 
 SUBAGENT_POLICY_BLOCK = """## SubAgent policy
@@ -33,12 +57,18 @@ SUBAGENT_POLICY_BLOCK = """## SubAgent policy
 - If SubAgent tools are unavailable, explicitly say so before continuing in
   the main thread.
 - Delegate independent phases to workers:
+  - version manager worker
+  - artifact governor worker
+  - strategy brainstorm worker
+  - strategy idea audit worker
   - strategy builder worker
   - data inspection worker
   - spec audit worker
   - runtime audit worker
   - backtest runner worker
-  - monitor/report worker
+  - monitor worker
+  - report writer/reviewer worker
+  - comparison/final selection worker
 - Do not force parallel execution when phases are strictly dependent. Use
   sequential SubAgents with artifact handoff instead."""
 
@@ -96,6 +126,9 @@ def initialize_workspace(
         click.echo(f"Workspace config written to {workspace_file}")
 
     workspace_config = workspace_config or {}
+    if _normalize_root_manifest_paths(workspace_config):
+        write_yaml_file(workspace_file, workspace_config)
+        click.echo(f"Workspace manifest paths normalized in {workspace_file}")
     if not minimal:
         _create_configured_workspace_dirs(cwd, workspace_config)
     experiments = _configured_path(cwd, workspace_config, "experiment_registry") or (cwd / "experiments.jsonl")
@@ -106,6 +139,8 @@ def initialize_workspace(
         comparison_registry = cwd / "comparisons" / "comparisons.jsonl"
     if not minimal and comparison_registry is not None and not comparison_registry.exists():
         write_text_file(comparison_registry, "")
+    if not minimal:
+        _create_default_governance_manifests(cwd, workspace_config)
     upsert_marker_block(cwd / "AGENTS.md", "open-xquant-workspace", WORKSPACE_BLOCK)
     if _installed_agent_profile() == AGENT_PROFILE_STANDALONE:
         remove_marker_block(cwd / "AGENTS.md", "open-xquant-subagents")
@@ -118,10 +153,16 @@ def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state:
         "schema_version": 1,
         "name": name or cwd.name,
         "paths": {
-            "current_spec": "strategy_spec.yaml",
+            "versions_dir": "versions",
+            "conversations_dir": "conversations",
+            "components_dir": "components",
+            "governance_dir": "governance",
             "runs_dir": "runs",
-            "final_dir": "runs/final",
+            "final_dir": "final",
             "comparisons_dir": "comparisons",
+            "current_manifest": "current.json",
+            "lineage_manifest": "lineage.json",
+            "workflow_manifest": "workflow_manifest.json",
             "experiment_registry": "experiments.jsonl",
             "comparison_registry": "comparisons/comparisons.jsonl",
         },
@@ -130,9 +171,10 @@ def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state:
             "provider": "local",
         },
         "workflow": {
+            "layout": "version_governed",
             "require_validate_before_backtest": True,
             "require_audit_before_report": True,
-            "default_output_dir": "runs/auto",
+            "default_output_dir": "versions/{active_version}/09_backtests",
         },
     }
     if sdk_state is not None:
@@ -142,14 +184,148 @@ def _workspace_payload(cwd: Path, name: str | None, data_dir: str, *, sdk_state:
 
 def _create_configured_workspace_dirs(cwd: Path, workspace: dict[str, object]) -> None:
     created_configured_dir = False
-    for key in ("specs_dir", "runs_dir", "reports_dir", "final_dir", "comparisons_dir"):
+    for key in (
+        "specs_dir",
+        "versions_dir",
+        "conversations_dir",
+        "components_dir",
+        "governance_dir",
+        "runs_dir",
+        "reports_dir",
+        "final_dir",
+        "comparisons_dir",
+    ):
+        if key == "runs_dir" and _uses_version_local_backtest_output(workspace):
+            continue
         path = _configured_path(cwd, workspace, key)
         if path is not None:
             path.mkdir(parents=True, exist_ok=True)
             created_configured_dir = True
     if not created_configured_dir:
-        (cwd / "runs" / "final").mkdir(parents=True, exist_ok=True)
+        (cwd / "versions").mkdir(exist_ok=True)
+        (cwd / "conversations").mkdir(exist_ok=True)
+        (cwd / "components").mkdir(exist_ok=True)
+        (cwd / "governance").mkdir(exist_ok=True)
+        if not _uses_version_local_backtest_output(workspace):
+            (cwd / "runs").mkdir(exist_ok=True)
+        (cwd / "final").mkdir(exist_ok=True)
         (cwd / "comparisons").mkdir(exist_ok=True)
+
+
+def _create_default_governance_manifests(cwd: Path, workspace: dict[str, object]) -> None:
+    if not _is_version_governed_workspace(workspace):
+        return
+    name = str(workspace.get("name") or cwd.name)
+    paths = workspace.get("paths") if isinstance(workspace.get("paths"), dict) else {}
+    version_id = "v001"
+    version_dir = (_configured_path(cwd, workspace, "versions_dir") or (cwd / "versions")) / version_id
+    _create_version_phase_dirs(version_dir)
+
+    workflow_path = _configured_root_manifest_path(cwd, workspace, "workflow_manifest", "workflow_manifest.json")
+    if workflow_path is not None and not workflow_path.exists():
+        write_text_file(
+            workflow_path,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "layout": "version_governed",
+                    "strategy_family_id": name,
+                    "paths": paths,
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+
+    current_path = _configured_root_manifest_path(cwd, workspace, "current_manifest", "current.json")
+    current_payload = _read_json_object(current_path)
+    if not current_payload.get("active_version"):
+        write_text_file(
+            current_path,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "strategy_family_id": name,
+                    "active_version": version_id,
+                    "active_phase": "01_brainstorm",
+                    "active_run": "",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+
+    lineage_path = _configured_root_manifest_path(cwd, workspace, "lineage_manifest", "lineage.json")
+    lineage_payload = _read_json_object(lineage_path)
+    versions = lineage_payload.get("versions")
+    if not isinstance(versions, list) or not any(
+        isinstance(item, dict) and item.get("version_id") == version_id for item in versions
+    ):
+        write_text_file(
+            lineage_path,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "strategy_family_id": name,
+                    "versions": [
+                        {
+                            "version_id": version_id,
+                            "parent_version_id": "",
+                            "created_reason": "initial_strategy_version",
+                            "status": "active",
+                        }
+                    ],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+
+    version_manifest = version_dir / "version_manifest.json"
+    if not version_manifest.exists():
+        write_text_file(
+            version_manifest,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "version_id": version_id,
+                    "strategy_family_id": name,
+                    "parent_version_id": "",
+                    "created_reason": "initial_strategy_version",
+                    "status": "active",
+                    "active_phase": "01_brainstorm",
+                    "source_conversation": "",
+                    "phase_paths": {
+                        phase: f"versions/{version_id}/{phase}" for phase in VERSION_PHASE_DIRS
+                    },
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
+
+    phase_state = version_dir / "phase_state.json"
+    if not phase_state.exists():
+        write_text_file(
+            phase_state,
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "version_id": version_id,
+                    "current_phase": "01_brainstorm",
+                    "status": "active",
+                    "completed_phases": [],
+                    "blocked_phase": "",
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+            + "\n",
+        )
 
 
 def _configured_path(cwd: Path, workspace: dict[str, object], key: str) -> Path | None:
@@ -160,6 +336,86 @@ def _configured_path(cwd: Path, workspace: dict[str, object], key: str) -> Path 
     if not isinstance(value, str) or not value:
         return None
     return cwd / value
+
+
+def _configured_root_manifest_path(cwd: Path, workspace: dict[str, object], key: str, filename: str) -> Path:
+    paths = workspace.get("paths")
+    if not isinstance(paths, dict):
+        return cwd / filename
+    value = paths.get(key)
+    if not isinstance(value, str) or not value:
+        return cwd / filename
+    path = Path(value)
+    if path.is_absolute() or len(path.parts) != 1 or path.name != filename:
+        return cwd / filename
+    return cwd / value
+
+
+def _normalize_root_manifest_paths(workspace: dict[str, object]) -> bool:
+    if not _is_version_governed_workspace(workspace):
+        return False
+    paths = workspace.get("paths")
+    if not isinstance(paths, dict):
+        paths = {}
+        workspace["paths"] = paths
+    changed = False
+    for key, filename in (
+        ("current_manifest", "current.json"),
+        ("lineage_manifest", "lineage.json"),
+        ("workflow_manifest", "workflow_manifest.json"),
+    ):
+        if paths.get(key) != filename:
+            paths[key] = filename
+            changed = True
+    return changed
+
+
+VERSION_PHASE_DIRS = (
+    "01_brainstorm",
+    "02_idea_audit",
+    "03_component_authoring",
+    "04_spec_build",
+    "05_data_inspection",
+    "06_spec_audit",
+    "07_compile_preview",
+    "08_runtime_audit",
+    "09_backtests",
+    "10_reports",
+)
+
+
+def _is_version_governed_workspace(workspace: dict[str, object]) -> bool:
+    workflow = workspace.get("workflow")
+    if isinstance(workflow, dict) and workflow.get("layout") == "version_governed":
+        return True
+    paths = workspace.get("paths")
+    return isinstance(paths, dict) and "versions_dir" in paths
+
+
+def _uses_version_local_backtest_output(workspace: dict[str, object]) -> bool:
+    workflow = workspace.get("workflow")
+    if not isinstance(workflow, dict):
+        return False
+    return (
+        workflow.get("layout") == "version_governed"
+        and workflow.get("default_output_dir") == "versions/{active_version}/09_backtests"
+    )
+
+
+def _create_version_phase_dirs(version_dir: Path) -> None:
+    version_dir.mkdir(parents=True, exist_ok=True)
+    for phase in VERSION_PHASE_DIRS:
+        (version_dir / phase).mkdir(parents=True, exist_ok=True)
+
+
+def _read_json_object(path: Path | None) -> dict[str, object]:
+    if path is None or not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def _resolve_sdk_venv(cwd: Path, raw_path: str) -> Path:

@@ -1,4 +1,4 @@
-"""Pre-trade constraint rules — blacklist, max holdings, rebalance frequency."""
+"""Pre-trade constraint rules — blacklist, holdings limits, rebalance cadence."""
 
 from __future__ import annotations
 
@@ -112,3 +112,51 @@ class RebalanceFrequencyRule:
                 f" < {self.interval_days} bars"
             ),
         )
+
+
+class CalendarRebalanceRule:
+    """Allow rebalancing on the first observed bar of a calendar period."""
+
+    name = "CalendarRebalanceRule"
+
+    def __init__(self, schedule: str = "month_start") -> None:
+        if schedule not in {"week_start", "month_start"}:
+            raise ValueError("schedule must be week_start or month_start")
+        self.schedule = schedule
+        self._last_evaluated_date: pd.Timestamp | None = None
+        self._allowed_date: pd.Timestamp | None = None
+        self._allowed_period: tuple[int, ...] | None = None
+
+    def evaluate(
+        self,
+        symbol: str,
+        row: pd.Series,
+        portfolio: Portfolio,
+        prices: dict[str, Decimal] | None = None,
+    ) -> RuleResult:
+        del symbol, portfolio, prices
+        bar_date = row.name if hasattr(row, "name") else None
+        if bar_date is None:
+            return RuleResult()
+        timestamp = pd.Timestamp(bar_date)
+        period = self._period_key(timestamp)
+
+        if timestamp != self._last_evaluated_date:
+            self._last_evaluated_date = timestamp
+            if period != self._allowed_period:
+                self._allowed_period = period
+                self._allowed_date = timestamp
+
+        if timestamp == self._allowed_date:
+            return RuleResult()
+
+        return RuleResult(
+            hold=True,
+            reason=f"{self.schedule} rebalance only",
+        )
+
+    def _period_key(self, timestamp: pd.Timestamp) -> tuple[int, ...]:
+        if self.schedule == "week_start":
+            iso = timestamp.isocalendar()
+            return int(iso.year), int(iso.week)
+        return int(timestamp.year), int(timestamp.month)

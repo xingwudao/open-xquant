@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import shutil
 from decimal import Decimal
 from pathlib import Path
 
@@ -17,6 +19,16 @@ from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
 from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, _write_artifacts
 from oxq.spec.schema import StrategySpec
+
+
+def _spec_audit_context() -> dict[str, object]:
+    return {
+        "strategy_idea_brief": "versions/v001/01_brainstorm/strategy_idea_brief.json",
+        "strategy_idea_audit": "versions/v001/02_idea_audit/strategy_idea_audit.json",
+        "strategy_idea_brief_hash": "sha256:" + "5" * 16,
+        "strategy_idea_audit_hash": "sha256:" + "6" * 16,
+        "unsupported_mappings": [],
+    }
 
 
 def test_robustness_run_exits_nonzero_for_error(monkeypatch, tmp_path) -> None:
@@ -60,7 +72,43 @@ def test_spec_init_generates_path_safe_strategy_id(tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     spec = yaml.safe_load(out.read_text(encoding="utf-8"))
+    template = StrategySpec.template()
+    assert spec["schema_version"] == "0.1"
     assert spec["strategy_id"] == "sma_rsi_crossover"
+    assert spec["required_oxq_version"] == template.required_oxq_version
+    assert spec["required_oxq_version"] != spec["schema_version"]
+
+
+def test_spec_init_can_generate_china_a_share_candidate_template(tmp_path) -> None:
+    out = tmp_path / "strategy_spec.yaml"
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "spec",
+            "init",
+            "A-share momentum TopN",
+            "--market-preset",
+            "cn_a_share",
+            "--out",
+            str(out),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    spec = yaml.safe_load(out.read_text(encoding="utf-8"))
+    assert spec["market"] == {
+        "asset_class": "equity",
+        "region": "cn",
+        "currency": "CNY",
+        "calendar": "XSHG",
+    }
+    assert spec["universe"]["type"] == "static"
+    assert spec["universe"]["symbols"] == ["600519.SH", "000001.SZ"]
+    assert spec["benchmark"]["symbols"] == ["000300.SH"]
+    assert spec["execution"]["lot_size"] == 100
+    assert spec["execution"]["lot_size_config"]["default"] == 100
+    assert "candidate values; Agent workflows must still collect user confirmation" in result.output
 
 
 def test_registry_export_writes_component_catalog(tmp_path) -> None:
@@ -76,6 +124,7 @@ def test_registry_export_writes_component_catalog(tmp_path) -> None:
     assert {item["name"] for item in payload["recipes"]} >= {
         "roc_timing",
         "sma_golden_cross",
+        "threshold_then_rank_top_n",
         "top_n_normalized_weights",
         "top_n_positive_momentum_rotation",
         "volatility_adjusted_momentum",
@@ -673,6 +722,14 @@ def _write_custom_indicator_extension(tmp_path):
     return manifest
 
 
+def _write_hashed_custom_indicator_extension(tmp_path) -> Path:
+    manifest = _write_custom_indicator_extension(tmp_path)
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    payload["bundle_hash"] = compute_component_bundle_hash(manifest)
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return manifest
+
+
 def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compile_preview", hypothesis="compile preview should be auditable")
     spec.data.data_dir = "data"
@@ -701,6 +758,7 @@ def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
 
     assert result.exit_code == 0, result.output
     compiled_plan = json.loads((out_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    assert compiled_plan["open_xquant_version"]
     assert compiled_plan["execution"]["rebalance"]["interval_days"] == 10
     assert compiled_plan["execution"]["rebalance"]["source"] == "portfolio.rules.rebalance"
     assert compiled_plan["data"]["spec_data_dir"] == "data"
@@ -710,14 +768,236 @@ def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
     assert "included in compiled_plan.json and its hash" in result.output
 
 
+def test_strategy_compile_preview_writes_strategy_py_for_user_review(tmp_path, monkeypatch) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_strategy_py",
+        hypothesis="compile preview should produce source code for user review",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "compile_preview"
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "strategy",
+            "compile",
+            "strategy_spec.yaml",
+            "--out",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    strategy_py = (out_dir / "strategy.py").read_text(encoding="utf-8")
+    assert (out_dir / "strategy_spec.yaml").read_text(encoding="utf-8") == spec_path.read_text(encoding="utf-8")
+    assert "def define_strategy() -> StrategySpec:" in strategy_py
+    assert "def run_backtest(" in strategy_py
+    assert "def main(dry_run: bool = False)" in strategy_py
+    assert "Python source preview:" in result.output
+    module_spec = importlib.util.spec_from_file_location("compiled_strategy_preview", out_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    preview = module.main(dry_run=True)
+    assert preview["status"] == "dry_run"
+    assert preview["strategy"]["strategy_id"] == "compile_preview_strategy_py"
+
+
+def test_strategy_compile_preview_archives_workspace_component_manifest(tmp_path, monkeypatch) -> None:
+    manifest = _write_hashed_custom_indicator_extension(tmp_path)
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_custom_component",
+        hypothesis="compile preview should carry custom component source",
+    )
+    spec.signal.indicators = {
+        "custom_score": {
+            "type": "WorkspaceConstantIndicator",
+            "params": {"value": 2.0},
+        }
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "custom_score", "n": 1}
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "compile_preview"
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "strategy",
+            "compile",
+            "strategy_spec.yaml",
+            "--component-manifest",
+            str(manifest),
+            "--out",
+            str(out_dir),
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert (out_dir / "component_manifests.json").exists()
+    assert list(
+        out_dir.glob("component_extensions/*/custom_components/oxq_components/indicators/workspace_constant_indicator.py")
+    )
+    shutil.rmtree(tmp_path / "custom_components")
+    manifest.unlink()
+
+    module_spec = importlib.util.spec_from_file_location("compiled_strategy_preview_custom", out_dir / "strategy.py")
+    assert module_spec is not None
+    assert module_spec.loader is not None
+    module = importlib.util.module_from_spec(module_spec)
+    module_spec.loader.exec_module(module)
+    preview = module.main(dry_run=True)
+    assert preview["status"] == "dry_run"
+    assert preview["indicators"]["custom_score"]["type"] == "WorkspaceConstantIndicator"
+
+
+def test_backtest_default_out_uses_version_governed_workspace_default(monkeypatch, tmp_path) -> None:
+    (tmp_path / ".open-xquant").mkdir()
+    (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  current_manifest: current.json",
+                "workflow:",
+                "  layout: version_governed",
+                "  default_output_dir: versions/{active_version}/09_backtests",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v001", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec_dir = tmp_path / "versions" / "v001" / "04_spec_build"
+    spec_dir.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="version_default_out",
+        hypothesis="workspace default output directory should be version-governed",
+    )
+    spec_path = spec_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    captured: dict[str, str | None] = {}
+
+    def fake_compile_run(spec, data_dir=None, out_dir=None):
+        captured["out_dir"] = out_dir
+        run_dir = Path(str(out_dir)) / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+        return object(), run_dir
+
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["out_dir"] == "versions/v001/09_backtests"
+    payload = json.loads(result.output)
+    assert payload["run_dir"] == "versions/v001/09_backtests/run_001"
+
+
+def test_backtest_default_out_rejects_unsafe_active_version(monkeypatch, tmp_path) -> None:
+    (tmp_path / ".open-xquant").mkdir()
+    (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  current_manifest: current.json",
+                "workflow:",
+                "  layout: version_governed",
+                "  default_output_dir: versions/{active_version}/09_backtests",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "../escape", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec_dir = tmp_path / "versions" / "v001" / "04_spec_build"
+    spec_dir.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="unsafe_active_version",
+        hypothesis="workspace active version must be path safe",
+    )
+    spec_path = spec_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "output_dir_failed"
+    assert "active_version is unsafe" in payload["errors"][0]["message"]
+
+
+def test_backtest_default_out_rejects_hidden_current_manifest_path(monkeypatch, tmp_path) -> None:
+    (tmp_path / ".open-xquant").mkdir()
+    (tmp_path / ".open-xquant" / "workspace.yaml").write_text(
+        "\n".join(
+            [
+                "schema_version: 1",
+                "paths:",
+                "  current_manifest: .open-xquant/current.json",
+                "workflow:",
+                "  layout: version_governed",
+                "  default_output_dir: versions/{active_version}/09_backtests",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".open-xquant" / "current.json").write_text(
+        json.dumps({"schema_version": 1, "active_version": "v001", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    spec_dir = tmp_path / "versions" / "v001" / "04_spec_build"
+    spec_dir.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="hidden_current_manifest",
+        hypothesis="workspace current manifest must be root-local",
+    )
+    spec_path = spec_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "output_dir_failed"
+    assert "paths.current_manifest must be current.json" in payload["errors"][0]["message"]
+
+
 def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
     audit = {
         "schema_version": 3,
         "status": "block",
+        "audit_conclusion": "blocked",
+        "user_confirmation_status": "pending",
+        "spec_confirmation_table": None,
         "spec_provenance_pass": False,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [
             {
                 "recipe": "sma_golden_cross",
@@ -727,13 +1007,14 @@ def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
             }
         ],
         "field_audits": [
-            {
-                "field_path": "portfolio.type",
-                "spec_value": "EqualWeight",
-                "status": "confirmed",
-                "evidence": [],
-                "blocking": False,
-            }
+                {
+                    "field_path": "portfolio.type",
+                    "spec_value": "EqualWeight",
+                    "status": "confirmed",
+                    "material_category": "portfolio_construction",
+                    "evidence": [],
+                    "blocking": False,
+                }
         ],
         "component_audits": [
             {
@@ -748,6 +1029,49 @@ def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
         "agent_added_fields": [],
         "contradictions": [],
         "blocking_findings": [{"message": "confirm cost assumptions"}],
+    }
+    path = tmp_path / "spec_audit.json"
+    path.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(main, ["spec-audit", "validate", str(path), "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output)["status"] == "pass"
+
+
+def test_spec_audit_validate_accepts_blocked_audit_without_confirmation_table(tmp_path) -> None:
+    audit = {
+        "schema_version": 3,
+        "status": "block",
+        "audit_conclusion": "blocked",
+        "user_confirmation_status": "pending",
+        "spec_provenance_pass": False,
+        "spec_hash": "sha256:" + "1" * 16,
+        "conversation_hash": "sha256:" + "2" * 16,
+        "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
+        "recipe_matches": [],
+        "field_audits": [
+                {
+                    "field_path": "execution.initial_cash",
+                    "spec_value": 100000,
+                    "status": "contradiction",
+                    "material_category": "execution_assumption",
+                    "evidence": ["Builder mapped confirmed initial cash to a non-operative YAML field."],
+                    "blocking": True,
+                }
+        ],
+        "component_audits": [],
+        "unsupported_mappings": [],
+        "missing_user_requirements": [],
+        "agent_added_fields": [],
+        "contradictions": [
+            {
+                "field_path": "execution.initial_cash",
+                "message": "effective StrategySpec value differs from user-confirmed source value",
+            }
+        ],
+        "blocking_findings": [{"message": "return to build; do not show a placeholder confirmation table"}],
     }
     path = tmp_path / "spec_audit.json"
     path.write_text(json.dumps(audit), encoding="utf-8")
@@ -776,10 +1100,18 @@ def test_spec_audit_validate_rejects_legacy_v1_after_gate_breaking_change(tmp_pa
     audit = {
         "schema_version": 1,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [],
         "component_audits": [],
@@ -802,10 +1134,14 @@ def test_spec_audit_validate_rejects_malformed_entries(tmp_path) -> None:
     audit = {
         "schema_version": 3,
         "status": "blocked",
+        "audit_conclusion": "blocked",
+        "user_confirmation_status": "pending",
+        "spec_confirmation_table": None,
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": ["volatility_adjusted_momentum"],
         "field_audits": [{"field_path": "portfolio.type", "status": "ok", "evidence": []}],
         "component_audits": [{"component_path": "portfolio.type", "component_type": "EqualWeight", "status": "unknown"}],
@@ -833,10 +1169,18 @@ def test_spec_audit_validate_rejects_confirmed_when_evidence_denies_user_confirm
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
@@ -868,10 +1212,18 @@ def test_spec_audit_validate_rejects_confirmed_when_same_evidence_denies_field_c
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
@@ -903,10 +1255,18 @@ def test_spec_audit_validate_rejects_confirmation_for_other_field_before_denial(
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
@@ -938,16 +1298,25 @@ def test_spec_audit_validate_allows_confirmed_after_later_confirmation(tmp_path)
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
                 "field_path": "validation.train_period",
                 "spec_value": ["2025-01-01", "2025-12-31"],
                 "status": "confirmed",
+                "material_category": "validation_assumption",
                 "evidence": ["The split was initially not specified; user confirmed it in turn 5."],
                 "blocking": False,
             }
@@ -971,16 +1340,25 @@ def test_spec_audit_validate_allows_later_confirmation_in_separate_evidence_entr
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
                 "field_path": "validation.train_period",
                 "spec_value": ["2025-01-01", "2025-12-31"],
                 "status": "confirmed",
+                "material_category": "validation_assumption",
                 "evidence": ["initially not specified", "user confirmed it in turn 5"],
                 "blocking": False,
             }
@@ -1004,16 +1382,25 @@ def test_spec_audit_validate_allows_confirmation_before_historical_negative_cont
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [
             {
                 "field_path": "validation.train_period",
                 "spec_value": ["2025-01-01", "2025-12-31"],
                 "status": "confirmed",
+                "material_category": "validation_assumption",
                 "evidence": ["User confirmed in turn 5 after it was initially not specified."],
                 "blocking": False,
             }
@@ -1036,10 +1423,18 @@ def test_spec_audit_validate_rejects_pass_with_false_provenance_gate(tmp_path) -
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+            "hash": "sha256:" + "4" * 16,
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": False,
         "spec_hash": "sha256:" + "1" * 16,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": "sha256:" + "3" * 16,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": [],
         "component_audits": [],
@@ -1065,10 +1460,18 @@ def test_spec_audit_validate_strict_confirmed_requires_spec(tmp_path) -> None:
             {
                 "schema_version": 3,
                 "status": "pass",
+                "audit_conclusion": "all_pass",
+                "user_confirmation_status": "confirmed",
+                "spec_confirmation_table": {
+                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+                    "hash": "sha256:" + "4" * 16,
+                    "hash_type": "sha256",
+                },
                 "spec_provenance_pass": True,
                 "spec_hash": "sha256:" + "1" * 16,
                 "conversation_hash": "sha256:" + "2" * 16,
                 "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
                 "recipe_matches": [],
                 "field_audits": [],
                 "component_audits": [],
@@ -1088,6 +1491,192 @@ def test_spec_audit_validate_strict_confirmed_requires_spec(tmp_path) -> None:
     assert any(error["path"] == "spec" for error in payload["errors"])
 
 
+def test_spec_audit_validate_checks_mapping_contract(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "status": "block",
+                "audit_conclusion": "blocked",
+                "user_confirmation_status": "pending",
+                "spec_confirmation_table": None,
+                "spec_provenance_pass": False,
+                "spec_hash": "sha256:" + "1" * 16,
+                "conversation_hash": "sha256:" + "2" * 16,
+                "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
+                "recipe_matches": [],
+                "field_audits": [],
+                "component_audits": [],
+                "missing_user_requirements": [],
+                "agent_added_fields": [],
+                "contradictions": [],
+                "blocking_findings": [{"message": "builder contract is invalid"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_path = tmp_path / "spec_mapping_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_format": "ebacktestcraft_yaml",
+                "field_mappings": [
+                    {
+                        "source_field": "rebalance.day",
+                        "target_field": "",
+                        "semantic": "strategy",
+                        "status": "unsupported",
+                        "confirmation_required": False,
+                        "blocking": False,
+                        "reason": "Calendar-aware week-end rebalance is not executable.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["spec-audit", "validate", str(audit_path), "--mapping-contract", str(contract_path), "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert any(error["path"] == "mapping_contract.field_mappings[0].blocking" for error in payload["errors"])
+
+
+def test_spec_audit_validate_rejects_pass_with_blocked_strategy_mapping(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "status": "pass",
+                "audit_conclusion": "all_pass",
+                "user_confirmation_status": "pending",
+                "spec_confirmation_table": {
+                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+                    "hash": "sha256:" + "4" * 16,
+                    "hash_type": "sha256",
+                },
+                "spec_provenance_pass": True,
+                "spec_hash": "sha256:" + "1" * 16,
+                "conversation_hash": "sha256:" + "2" * 16,
+                "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
+                "recipe_matches": [],
+                "field_audits": [],
+                "component_audits": [],
+                "missing_user_requirements": [],
+                "agent_added_fields": [],
+                "contradictions": [],
+                "blocking_findings": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_path = tmp_path / "spec_mapping_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_format": "ebacktestcraft_yaml",
+                "field_mappings": [
+                    {
+                        "source_field": "market.cross_calendar_policy",
+                        "target_field": "",
+                        "semantic": "strategy",
+                        "status": "blocked",
+                        "confirmation_required": False,
+                        "blocking": True,
+                        "reason": "Mixed-calendar execution still needs runtime support confirmation.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["spec-audit", "validate", str(audit_path), "--mapping-contract", str(contract_path), "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert any(
+        error["path"] == "mapping_contract.builder_pass.field_mappings[0].status"
+        and "builder pass requires strategy mappings to be mapped and non-blocking" in error["message"]
+        for error in payload["errors"]
+    )
+
+
+def test_spec_audit_validate_checks_strategy_confirmation_blocking(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 3,
+                "status": "block",
+                "audit_conclusion": "blocked",
+                "user_confirmation_status": "pending",
+                "spec_confirmation_table": None,
+                "spec_provenance_pass": False,
+                "spec_hash": "sha256:" + "1" * 16,
+                "conversation_hash": "sha256:" + "2" * 16,
+                "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
+                "recipe_matches": [],
+                "field_audits": [],
+                "component_audits": [],
+                "missing_user_requirements": [],
+                "agent_added_fields": [],
+                "contradictions": [],
+                "blocking_findings": [{"message": "builder contract is invalid"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_path = tmp_path / "spec_mapping_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_format": "ebacktestcraft_yaml",
+                "field_mappings": [
+                    {
+                        "source_field": "market.calendar_mixed_regions",
+                        "target_field": "market.calendar",
+                        "semantic": "strategy",
+                        "status": "needs_user_confirmation",
+                        "confirmation_required": True,
+                        "blocking": False,
+                        "reason": "Single-calendar execution needs user confirmation.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["spec-audit", "validate", str(audit_path), "--mapping-contract", str(contract_path), "--json"],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert any(
+        error["path"] == "mapping_contract.field_mappings[0].blocking"
+        and "strategy semantics needing user confirmation require blocking=true" in error["message"]
+        for error in payload["errors"]
+    )
+
+
 def test_spec_audit_validate_strict_confirmed_rejects_missing_effective_fields(tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="strict_audit", hypothesis="strict audit")
     spec_path = tmp_path / "strategy_spec.yaml"
@@ -1098,10 +1687,18 @@ def test_spec_audit_validate_strict_confirmed_rejects_missing_effective_fields(t
             {
                 "schema_version": 3,
                 "status": "pass",
+                "audit_conclusion": "all_pass",
+                "user_confirmation_status": "confirmed",
+                "spec_confirmation_table": {
+                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+                    "hash": "sha256:" + "4" * 16,
+                    "hash_type": "sha256",
+                },
                 "spec_provenance_pass": True,
                 "spec_hash": spec.compute_hash(),
                 "conversation_hash": "sha256:" + "2" * 16,
                 "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
                 "recipe_matches": [],
                 "field_audits": [],
                 "component_audits": [],
@@ -1141,10 +1738,18 @@ def test_spec_audit_validate_strict_confirmed_rejects_default_status(tmp_path) -
             {
                 "schema_version": 3,
                 "status": "pass",
+                "audit_conclusion": "all_pass",
+                "user_confirmation_status": "confirmed",
+                "spec_confirmation_table": {
+                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+                    "hash": "sha256:" + "4" * 16,
+                    "hash_type": "sha256",
+                },
                 "spec_provenance_pass": True,
                 "spec_hash": spec.compute_hash(),
                 "conversation_hash": "sha256:" + "2" * 16,
                 "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
                 "recipe_matches": [],
                 "field_audits": field_audits,
                 "component_audits": [],
@@ -1177,10 +1782,18 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
             {
                 "schema_version": 3,
                 "status": "pass",
+                "audit_conclusion": "all_pass",
+                "user_confirmation_status": "confirmed",
+                "spec_confirmation_table": {
+                    "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+                    "hash": "sha256:" + "4" * 16,
+                    "hash_type": "sha256",
+                },
                 "spec_provenance_pass": True,
                 "spec_hash": spec.compute_hash(),
                 "conversation_hash": "sha256:" + "2" * 16,
                 "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
                 "recipe_matches": [],
                 "field_audits": _confirmed_field_audits(spec_path),
                 "component_audits": [],
@@ -1207,6 +1820,7 @@ def test_runtime_audit_validate_accepts_required_schema(tmp_path) -> None:
         "schema_version": 1,
         "status": "pass",
         "runtime_semantics_pass": True,
+        "strategy_source_printed": True,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -1239,6 +1853,7 @@ def test_runtime_audit_validate_rejects_pass_with_false_runtime_gate(tmp_path) -
         "schema_version": 1,
         "status": "pass",
         "runtime_semantics_pass": False,
+        "strategy_source_printed": True,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -1261,6 +1876,7 @@ def test_runtime_audit_validate_rejects_invalid_component_bundle_hashes(tmp_path
         "schema_version": 1,
         "status": "pass",
         "runtime_semantics_pass": True,
+        "strategy_source_printed": True,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -1289,6 +1905,7 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
         catalog["catalog_hash"],
         spec_path=run_dir / "strategy_spec.yaml",
     )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
     audit = json.loads(spec_audit.read_text(encoding="utf-8"))
 
     result = CliRunner().invoke(
@@ -1299,6 +1916,8 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
             "--json",
@@ -1316,6 +1935,170 @@ def test_backtest_attach_provenance_preserves_run_digest(tmp_path) -> None:
     assert (run_dir / "conversation_hash.txt").read_text(encoding="utf-8").strip() == audit["conversation_hash"]
     assert last_digest["run_id"] == run_dir.name
     assert last_digest["artifact_hashes"] == payload["artifact_hashes_digest"]
+
+
+def test_backtest_attach_provenance_accepts_full_spec_confirmation_table_hash(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    audit = json.loads(spec_audit.read_text(encoding="utf-8"))
+    table_path = Path(audit["spec_confirmation_table"]["path"])
+    audit["spec_confirmation_table"]["hash"] = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "pass"
+
+
+def test_backtest_attach_provenance_rejects_missing_runtime_audit(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "runtime_audit_missing"
+    assert "runtime_audit.json is required" in payload["errors"][0]["message"]
+
+
+def test_backtest_attach_provenance_rejects_spec_audit_without_user_confirmation(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    audit = json.loads(spec_audit.read_text(encoding="utf-8"))
+    audit["user_confirmation_status"] = "pending"
+    spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "user_confirmation_status" in result.output
+
+
+def test_backtest_attach_provenance_rejects_tampered_spec_confirmation_table(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    audit = json.loads(spec_audit.read_text(encoding="utf-8"))
+    table_path = Path(audit["spec_confirmation_table"]["path"])
+    table_path.write_text(table_path.read_text(encoding="utf-8") + "\n| tampered | yes |\n", encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "spec confirmation table hash mismatch" in result.output
+
+
+def test_backtest_attach_provenance_rejects_runtime_audit_without_printed_source(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    payload["strategy_source_printed"] = False
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "strategy_source_printed" in result.output
 
 
 def test_backtest_attach_provenance_rejects_blocking_runtime_audit(tmp_path) -> None:
@@ -1470,7 +2253,7 @@ def test_backtest_attach_provenance_rejects_runtime_audit_component_bundle_misma
 def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
-    _attach_component_bundle_artifacts(run_dir)
+    run_bundle_hash = _attach_component_bundle_artifacts(run_dir)
     catalog = build_component_catalog(
         [
             {
@@ -1496,6 +2279,7 @@ def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_
         catalog["catalog_hash"],
         spec_path=run_dir / "strategy_spec.yaml",
     )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit, component_bundle_hashes=[run_bundle_hash])
 
     result = CliRunner().invoke(
         main,
@@ -1505,6 +2289,8 @@ def test_backtest_attach_provenance_rejects_component_bundle_not_in_catalog(tmp_
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -1556,6 +2342,7 @@ def test_backtest_attach_provenance_allows_catalog_component_bundle_superset(tmp
         catalog["catalog_hash"],
         spec_path=run_dir / "strategy_spec.yaml",
     )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit, component_bundle_hashes=[run_bundle_hash])
 
     result = CliRunner().invoke(
         main,
@@ -1565,6 +2352,8 @@ def test_backtest_attach_provenance_allows_catalog_component_bundle_superset(tmp
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -1586,6 +2375,9 @@ def test_backtest_attach_provenance_rejects_blocking_audit(tmp_path) -> None:
     )
     audit = json.loads(spec_audit.read_text(encoding="utf-8"))
     audit["status"] = "block"
+    audit["audit_conclusion"] = "blocked"
+    audit["user_confirmation_status"] = "rejected"
+    audit["spec_confirmation_table"] = None
     audit["spec_provenance_pass"] = False
     audit["blocking_findings"] = [{"message": "confirm allocation"}]
     spec_audit.write_text(json.dumps(audit), encoding="utf-8")
@@ -1638,11 +2430,13 @@ def test_backtest_attach_provenance_rejects_hash_mismatch(tmp_path) -> None:
     )
 
     assert result.exit_code == 1
-    assert "spec audit hash mismatch" in result.output
+    assert "invalid spec audit" in result.output
+    assert "must match strategy spec hash" in result.output
 
     audit["spec_hash"] = spec_hash
     audit["catalog_hash"] = "sha256:" + "9" * 64
     spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
 
     catalog_result = CliRunner().invoke(
         main,
@@ -1652,6 +2446,8 @@ def test_backtest_attach_provenance_rejects_hash_mismatch(tmp_path) -> None:
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -1708,6 +2504,7 @@ def test_backtest_attach_provenance_rejects_tampered_catalog_body(tmp_path) -> N
         catalog["catalog_hash"],
         spec_path=run_dir / "strategy_spec.yaml",
     )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
     tampered_catalog = dict(catalog)
     tampered_catalog["recipes"] = []
     component_catalog.write_text(json.dumps(tampered_catalog), encoding="utf-8")
@@ -1720,6 +2517,8 @@ def test_backtest_attach_provenance_rejects_tampered_catalog_body(tmp_path) -> N
             str(run_dir),
             "--spec-audit",
             str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
             "--component-catalog",
             str(component_catalog),
         ],
@@ -1733,30 +2532,12 @@ def test_backtest_attach_provenance_rejects_non_reproducible_run(tmp_path) -> No
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
-    audit = {
-        "schema_version": 3,
-        "status": "pass",
-        "spec_provenance_pass": True,
-        "spec_hash": spec_hash,
-        "conversation_hash": "sha256:" + "2" * 16,
-        "catalog_hash": catalog["catalog_hash"],
-        "recipe_matches": [],
-        "field_audits": [
-            {
-                "field_path": "portfolio.type",
-                "spec_value": "EqualWeight",
-                "status": "confirmed",
-                "evidence": [],
-            }
-        ],
-        "component_audits": [],
-        "missing_user_requirements": [],
-        "agent_added_fields": [],
-        "contradictions": [],
-        "blocking_findings": [],
-    }
-    spec_audit = tmp_path / "spec_audit.json"
-    spec_audit.write_text(json.dumps(audit), encoding="utf-8")
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
     metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
     metrics["total_return"] = 999
     (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
@@ -1815,13 +2596,26 @@ def _write_pass_spec_audit(
     *,
     spec_path: Path | None = None,
 ) -> Path:
+    confirmation_table = tmp_path / "spec_confirmation_table.md"
+    confirmation_table.write_text(
+        "| Field | Confirmed Value |\n| --- | --- |\n| spec_hash | confirmed |\n",
+        encoding="utf-8",
+    )
     audit = {
         "schema_version": 3,
         "status": "pass",
+        "audit_conclusion": "all_pass",
+        "user_confirmation_status": "confirmed",
+        "spec_confirmation_table": {
+            "path": str(confirmation_table),
+            "hash": _hash_file(confirmation_table),
+            "hash_type": "sha256",
+        },
         "spec_provenance_pass": True,
         "spec_hash": spec_hash,
         "conversation_hash": "sha256:" + "2" * 16,
         "catalog_hash": catalog_hash,
+        **_spec_audit_context(),
         "recipe_matches": [],
         "field_audits": _confirmed_field_audits(spec_path) if spec_path is not None else [],
         "component_audits": [],
@@ -1842,11 +2636,34 @@ def _confirmed_field_audits(spec_path: Path) -> list[dict]:
             "field_path": field_path,
             "spec_value": value,
             "status": "confirmed",
+            "material_category": _material_category_for_field_path(field_path),
             "evidence": [f"user confirmed {field_path} = {json.dumps(value, sort_keys=True, default=str)}"],
             "blocking": False,
         }
         for field_path, value in _flatten_effective_fields(spec.to_effective_dict())
     ]
+
+
+def _material_category_for_field_path(field_path: str) -> str:
+    if field_path.startswith(("signal.", "rules.")):
+        return "strategy_logic"
+    if field_path.startswith("portfolio."):
+        return "portfolio_construction"
+    if field_path.startswith("execution."):
+        return "execution_assumption"
+    if field_path.startswith("cost."):
+        return "cost_assumption"
+    if field_path.startswith(("data.", "universe.", "market.", "benchmark.")):
+        return "data_assumption"
+    if field_path.startswith("validation."):
+        return "validation_assumption"
+    if field_path.startswith(("metrics.", "decision_policy.")):
+        return "metric_assumption"
+    if field_path.startswith(("robustness.", "risk.")):
+        return "risk_assumption"
+    if field_path == "required_oxq_version":
+        return "system_provenance"
+    return "backtest_assumption"
 
 
 def _flatten_effective_fields(value: object, prefix: str = "") -> list[tuple[str, object]]:
@@ -1874,6 +2691,7 @@ def _write_pass_runtime_audit(
         "schema_version": 1,
         "status": "pass",
         "runtime_semantics_pass": True,
+        "strategy_source_printed": True,
         "spec_hash": spec_hash,
         "spec_audit_hash": _hash_json_file(spec_audit),
         "compiled_plan_hash": _hash_json_file(run_dir / "compiled_plan.json"),

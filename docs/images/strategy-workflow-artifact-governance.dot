@@ -1,0 +1,266 @@
+digraph StrategyWorkflowArtifactGovernance {
+  graph [
+    rankdir=TB,
+    bgcolor="white",
+    pad="0.35",
+    nodesep="0.45",
+    ranksep="0.65",
+    splines=true,
+    newrank=true,
+    fontname="Helvetica",
+    label="OpenXQuant Strategy Workflow Artifact Governance",
+    labelloc=t,
+    fontsize=24
+  ];
+
+  node [
+    shape=box,
+    style="rounded,filled",
+    fontname="Helvetica",
+    fontsize=12,
+    margin="0.08,0.06",
+    color="#334155",
+    fillcolor="#f8fafc",
+    penwidth=1.2
+  ];
+
+  edge [
+    fontname="Helvetica",
+    fontsize=10,
+    color="#475569",
+    arrowsize=0.7
+  ];
+
+  User [
+    label="User",
+    shape=oval,
+    fillcolor="#fef3c7",
+    color="#b45309"
+  ];
+
+  Coordinator [
+    label="Coordinator\nopen-xquant",
+    fillcolor="#e0f2fe",
+    color="#0369a1"
+  ];
+
+  subgraph cluster_governance {
+    label="Workspace Governance";
+    color="#94a3b8";
+    style="rounded,dashed";
+    fontname="Helvetica";
+    fontsize=16;
+
+    VersionManager [
+      label="Version Manager\nmanage-strategy-version",
+      fillcolor="#ecfeff",
+      color="#0891b2"
+    ];
+
+    ArtifactGovernor [
+      label="Artifact Governor\ngovern-research-workspace",
+      fillcolor="#ecfeff",
+      color="#0891b2"
+    ];
+
+    LineageAudit [
+      label="Lineage Auditor\naudit-artifact-lineage",
+      fillcolor="#ecfeff",
+      color="#0891b2"
+    ];
+
+    CurrentManifest [
+      label="current.json\nlineage.json\nworkflow_manifest.json",
+      shape=note,
+      fillcolor="#f1f5f9",
+      color="#64748b"
+    ];
+  }
+
+  subgraph cluster_version {
+    label="Strategy Version vNNN";
+    color="#94a3b8";
+    style="rounded,dashed";
+    fontname="Helvetica";
+    fontsize=16;
+
+    Brainstorm [
+      label="Brainstorm Worker\nbrainstorm-strategy-idea",
+      fillcolor="#f0fdf4",
+      color="#15803d"
+    ];
+
+    IdeaAudit [
+      label="Idea Auditor\naudit-strategy-idea",
+      fillcolor="#fff7ed",
+      color="#c2410c"
+    ];
+
+    Builder [
+      label="Strategy Builder\nbuild-strategy-spec",
+      fillcolor="#f0fdf4",
+      color="#15803d"
+    ];
+
+    ComponentAuthor [
+      label="Component Author\nauthor-component",
+      fillcolor="#f5f3ff",
+      color="#7c3aed"
+    ];
+
+    DataInspection [
+      label="Data Inspector\nexplore-data",
+      fillcolor="#f5f3ff",
+      color="#7c3aed"
+    ];
+
+    SpecAudit [
+      label="Spec Auditor\naudit-strategy-spec",
+      fillcolor="#fff7ed",
+      color="#c2410c"
+    ];
+
+    UserConfirm [
+      label="User Confirms\nFull SPEC Table",
+      shape=diamond,
+      fillcolor="#fef3c7",
+      color="#b45309"
+    ];
+
+    RuntimeAudit [
+      label="Runtime Auditor\naudit-runtime-semantics",
+      fillcolor="#fff7ed",
+      color="#c2410c"
+    ];
+
+    Runner [
+      label="Runner\nrun-authorized-backtest",
+      fillcolor="#eef2ff",
+      color="#4f46e5"
+    ];
+
+    Monitor [
+      label="Monitor\nmonitor-strategy-run",
+      fillcolor="#eef2ff",
+      color="#4f46e5"
+    ];
+
+    ReportWriter [
+      label="Report Writer\nwrite-research-report\nbuild-report-charts",
+      fillcolor="#f0f9ff",
+      color="#0284c7"
+    ];
+
+    ReportReview [
+      label="Report Reviewer\nreview-research-report",
+      fillcolor="#fff7ed",
+      color="#c2410c"
+    ];
+
+    VersionArtifacts [
+      label="Version Artifacts\n01_brainstorm ... 10_reports",
+      shape=folder,
+      fillcolor="#f8fafc",
+      color="#64748b"
+    ];
+  }
+
+  subgraph cluster_cross_version {
+    label="Cross-Version Governance";
+    color="#94a3b8";
+    style="rounded,dashed";
+    fontname="Helvetica";
+    fontsize=16;
+
+    Experiments [
+      label="experiments.jsonl\nversion_id + run_id",
+      shape=note,
+      fillcolor="#f1f5f9",
+      color="#64748b"
+    ];
+
+    Comparator [
+      label="Experiment Comparator\ncompare-strategy-versions\ncompare-experiments",
+      fillcolor="#fdf2f8",
+      color="#db2777"
+    ];
+
+    Comparisons [
+      label="comparisons/<id>/\nspec diff + metrics + report",
+      shape=folder,
+      fillcolor="#f8fafc",
+      color="#64748b"
+    ];
+
+    FinalSelector [
+      label="Final Selector\nselect-final-version",
+      fillcolor="#fdf2f8",
+      color="#db2777"
+    ];
+
+    FinalArtifacts [
+      label="final/current_final.json\nfinal/selection_<ts>/",
+      shape=folder,
+      fillcolor="#f8fafc",
+      color="#64748b"
+    ];
+  }
+
+  User -> Coordinator [label="research request"];
+  Coordinator -> VersionManager [label="new idea or semantic change"];
+  VersionManager -> CurrentManifest [label="create/update"];
+  VersionManager -> Brainstorm [label="active version"];
+
+  Brainstorm -> IdeaAudit [label="idea brief complete"];
+  IdeaAudit -> Brainstorm [label="block", color="#dc2626", style=dashed];
+  IdeaAudit -> Builder [label="pass"];
+
+  Builder -> ComponentAuthor [label="custom component needed"];
+  ComponentAuthor -> Builder [label="component ready"];
+  Builder -> DataInspection [label="data assumptions need check"];
+  DataInspection -> Builder [label="data affects SPEC"];
+  DataInspection -> SpecAudit [label="data ready"];
+  Builder -> SpecAudit [label="validated SPEC"];
+
+  SpecAudit -> Brainstorm [label="idea gap", color="#dc2626", style=dashed];
+  SpecAudit -> Builder [label="translation gap", color="#dc2626", style=dashed];
+  SpecAudit -> UserConfirm [label="all_pass + pending"];
+  UserConfirm -> SpecAudit [label="confirmed"];
+  SpecAudit -> RuntimeAudit [label="all_pass + confirmed"];
+
+  RuntimeAudit -> Builder [label="runtime mismatch", color="#dc2626", style=dashed];
+  RuntimeAudit -> Runner [label="runtime pass"];
+  Runner -> Monitor [label="run complete"];
+  Monitor -> ReportWriter [label="audits + robustness"];
+  ReportWriter -> ReportReview [label="report package"];
+  ReportReview -> ReportWriter [label="revision required", color="#dc2626", style=dashed];
+
+  Brainstorm -> VersionArtifacts [style=dotted, label="phase writes"];
+  IdeaAudit -> VersionArtifacts [style=dotted, label="phase writes"];
+  Builder -> VersionArtifacts [style=dotted, label="phase writes"];
+  SpecAudit -> VersionArtifacts [style=dotted, label="phase writes"];
+  Runner -> VersionArtifacts [style=dotted, label="run package"];
+  ReportReview -> VersionArtifacts [style=dotted, label="review package"];
+
+  Monitor -> Experiments [label="append"];
+  ReportReview -> Experiments [label="eligible run"];
+  Experiments -> Comparator [label="compare candidates"];
+  Comparator -> Comparisons [label="write"];
+  Comparisons -> FinalSelector [label="evidence"];
+  Experiments -> FinalSelector [label="candidate set"];
+  User -> FinalSelector [label="confirm selection policy"];
+  FinalSelector -> FinalArtifacts [label="write"];
+  FinalSelector -> CurrentManifest [label="update pointer"];
+
+  ArtifactGovernor -> CurrentManifest [label="validate"];
+  ArtifactGovernor -> VersionArtifacts [label="validate"];
+  LineageAudit -> VersionArtifacts [label="audit chain"];
+  LineageAudit -> FinalArtifacts [label="audit final refs"];
+  Coordinator -> ArtifactGovernor [label="before handoff or cleanup"];
+  Coordinator -> LineageAudit [label="before compare/final"];
+
+  { rank=same; User; Coordinator; }
+  { rank=same; VersionManager; ArtifactGovernor; LineageAudit; }
+  { rank=same; ComponentAuthor; DataInspection; }
+  { rank=same; Experiments; Comparator; Comparisons; FinalSelector; FinalArtifacts; }
+}

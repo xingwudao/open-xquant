@@ -3,13 +3,16 @@
 from decimal import Decimal
 
 import pandas as pd
+import pytest
 
-from oxq.core.engine import Engine, _apply_fill
+from oxq.core.engine import Engine, _apply_fill, _apply_limit_trade_policies
 from oxq.core.strategy import Strategy
 from oxq.core.types import Fill, Order, Portfolio, Position, RuleResult
+from oxq.indicators.rps import RPS
 from oxq.indicators.sma import SMA
 from oxq.portfolio.optimizers import EqualWeightOptimizer, SignalToPositionOptimizer
 from oxq.signals.crossover import Crossover
+from oxq.spec.schema import DataFilterSection
 from oxq.trade.sim_broker import FillPriceMode, SimBroker
 from oxq.universe.static import StaticUniverse
 
@@ -116,6 +119,101 @@ def test_engine_run_accepts_universe_separate_from_strategy() -> None:
     )
 
     assert set(result.mktdata) == {"MSFT"}
+
+
+def test_engine_computes_cross_sectional_rps_indicator() -> None:
+    dates = pd.bdate_range("2024-01-01", periods=4, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [1, 1, 1, 1],
+                "high": [1, 1, 1, 1],
+                "low": [1, 1, 1, 1],
+                "close": [100.0, 100.0, 121.0, 133.1],
+                "volume": [1, 1, 1, 1],
+            },
+            index=dates,
+        ),
+        "BBB": pd.DataFrame(
+            {"open": [1, 1, 1, 1], "high": [1, 1, 1, 1], "low": [1, 1, 1, 1], "close": [100.0, 100.0, 90.0, 81.0], "volume": [1, 1, 1, 1]},
+            index=dates,
+        ),
+        "CCC": pd.DataFrame(
+            {
+                "open": [1, 1, 1, 1],
+                "high": [1, 1, 1, 1],
+                "low": [1, 1, 1, 1],
+                "close": [100.0, 100.0, 110.0, 121.0],
+                "volume": [1, 1, 1, 1],
+            },
+            index=dates,
+        ),
+    }
+    optimizer = EqualWeightOptimizer()
+    optimizer.required_indicators = {"rps_2": (RPS(), {"column": "close", "period": 2})}  # type: ignore[attr-defined]
+    strategy = Strategy(
+        name="rps_engine",
+        universe=StaticUniverse(("AAA", "BBB", "CCC")),
+        signals={},
+        portfolio=optimizer,
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-01",
+        end="2024-01-04",
+        run_through="indicator",
+    )
+
+    assert result.mktdata["AAA"]["rps_2"].iloc[2] == 100.0
+    assert result.mktdata["CCC"]["rps_2"].iloc[2] == pytest.approx(200.0 / 3.0)
+    assert result.mktdata["BBB"]["rps_2"].iloc[2] == pytest.approx(100.0 / 3.0)
+
+
+def test_tradability_policy_preserves_suspended_existing_position_weight() -> None:
+    portfolio = Portfolio(cash=Decimal("0"), positions={"AAA": Position("AAA", shares=10, avg_cost=Decimal("10"))})
+    prices = {"AAA": Decimal("10")}
+    date = pd.Timestamp("2024-01-02", tz="UTC")
+    mktdata = {"AAA": pd.DataFrame({"is_suspended": [True]}, index=[date])}
+    filters = DataFilterSection(exclude_suspended=True, suspension_policy="hold_existing")
+
+    result = _apply_limit_trade_policies(
+        {"AAA": 0.0, "CASH": 1.0},
+        filters=filters,
+        mktdata=mktdata,
+        date=date,
+        portfolio=portfolio,
+        prices=prices,
+    )
+
+    assert result["AAA"] == 1.0
+    assert result["CASH"] == 0.0
+
+
+def test_tradability_policy_scales_new_targets_around_locked_positions() -> None:
+    portfolio = Portfolio(cash=Decimal("20"), positions={"AAA": Position("AAA", shares=80, avg_cost=Decimal("1"))})
+    prices = {"AAA": Decimal("1"), "BBB": Decimal("1")}
+    date = pd.Timestamp("2024-01-02", tz="UTC")
+    mktdata = {
+        "AAA": pd.DataFrame({"is_suspended": [True]}, index=[date]),
+        "BBB": pd.DataFrame({"is_suspended": [False]}, index=[date]),
+    }
+    filters = DataFilterSection(exclude_suspended=True, suspension_policy="hold_existing")
+
+    result = _apply_limit_trade_policies(
+        {"AAA": 0.8, "BBB": 1.0},
+        filters=filters,
+        mktdata=mktdata,
+        date=date,
+        portfolio=portfolio,
+        prices=prices,
+    )
+
+    assert result["AAA"] == 0.8
+    assert result["BBB"] == pytest.approx(0.2)
+    assert result["CASH"] == pytest.approx(0.0)
 
 
 def test_engine_run_uses_strategy_rules_by_default() -> None:
@@ -1023,6 +1121,112 @@ def test_signal_to_position_hold_rule_override_buy_uses_cash_budget() -> None:
 
     assert ccc_orders == []
     assert result.snapshots[1].rule_reasons == {"CCC": "add_ccc"}
+
+
+def test_tradability_policy_blocks_pre_trade_rule_weight_sell() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+                "is_suspended": [False, True],
+            },
+            index=dates,
+        ),
+    }
+
+    class SellSecondBarRule:
+        name = "SellSecondBar"
+
+        def evaluate(
+            self,
+            symbol: str,
+            row: pd.Series,
+            portfolio: Portfolio,
+            prices: dict[str, Decimal] | None = None,
+        ) -> RuleResult:
+            if row.name == dates[1]:
+                return RuleResult(weights={symbol: 0.0}, reason="rule_sell")
+            return RuleResult()
+
+    strategy = Strategy(
+        name="tradability_blocks_pre_trade_rule_sell",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        data_filters=DataFilterSection(exclude_suspended=True, suspension_policy="hold_existing"),
+        rules=[SellSecondBarRule()],
+    )
+
+    assert [trade.order.side for trade in result.trades] == ["BUY"]
+    assert "AAA" in result.snapshots[1].positions
+    assert result.snapshots[1].adjusted_weights["AAA"] == pytest.approx(1.0)
+    assert result.snapshots[1].rule_reasons == {"AAA": "rule_sell"}
+
+
+def test_tradability_policy_blocks_post_trade_exit_sell() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        "AAA": pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+                "is_limit_down": [False, True],
+            },
+            index=dates,
+        ),
+    }
+
+    class ExitSecondBarRule:
+        name = "ExitSecondBar"
+
+        def evaluate(
+            self,
+            symbol: str,
+            row: pd.Series,
+            portfolio: Portfolio,
+            prices: dict[str, Decimal] | None = None,
+        ) -> RuleResult:
+            if row.name == dates[1] and symbol in portfolio.positions:
+                return RuleResult(target_positions={symbol: 0.0}, reason="exit_sell")
+            return RuleResult()
+
+    strategy = Strategy(
+        name="tradability_blocks_post_trade_exit_sell",
+        universe=StaticUniverse(("AAA",)),
+        signals={},
+        portfolio=AlwaysBuyOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(),
+        start="2024-01-02",
+        end="2024-01-03",
+        data_filters=DataFilterSection(limit_down_policy="exclude_sell"),
+        rules=[ExitSecondBarRule()],
+    )
+
+    assert [trade.order.side for trade in result.trades] == ["BUY"]
+    assert "AAA" in result.snapshots[1].positions
+    assert result.snapshots[1].adjusted_weights["AAA"] == pytest.approx(1.0)
+    assert result.snapshots[1].rule_reasons == {"AAA": "exit_sell"}
 
 
 def test_signal_to_position_mixed_hold_does_not_rebalance_held_symbol() -> None:

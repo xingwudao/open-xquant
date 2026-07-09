@@ -58,6 +58,9 @@ def add_experiment(
 
         entry = {
             "experiment_id": f"exp_{datetime.now(UTC).strftime('%Y%m%d_%H%M%S_%f')}",
+            "version_id": _infer_version_id(run_path),
+            "run_path": _display_run_path(run_path),
+            "run_role": _infer_run_role(run_path),
             "strategy_id": metrics.get("strategy_id", ""),
             "spec_hash": spec_hash,
             "run_id": metrics.get("run_id", ""),
@@ -90,6 +93,34 @@ def list_experiments(registry_path: str | Path = DEFAULT_REGISTRY_PATH) -> list[
             if line:
                 entries.append(json.loads(line))
     return entries
+
+
+def _infer_version_id(run_path: Path) -> str:
+    parts = run_path.parts
+    try:
+        version_index = parts.index("versions")
+    except ValueError:
+        return ""
+    if version_index + 1 >= len(parts):
+        return ""
+    return parts[version_index + 1]
+
+
+def _infer_run_role(run_path: Path) -> str:
+    parts = run_path.parts
+    if "09_backtests" not in parts:
+        return "primary"
+    backtest_index = parts.index("09_backtests")
+    if backtest_index + 2 < len(parts) and parts[backtest_index + 1].endswith("_cost_x2"):
+        return "robustness_cost_x2"
+    return "primary"
+
+
+def _display_run_path(run_path: Path) -> str:
+    try:
+        return run_path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        return run_path.as_posix()
 
 
 class _FileLock:

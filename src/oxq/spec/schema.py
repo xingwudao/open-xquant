@@ -16,6 +16,16 @@ import yaml
 _UNSET = object()
 
 
+def _get_open_xquant_version() -> str:
+    """Return the installed open-xquant package version for spec provenance."""
+    try:
+        from importlib.metadata import version
+
+        return version("open-xquant")
+    except Exception:
+        return "0.1.0"
+
+
 def make_strategy_id(description: str, max_length: int = 50) -> str:
     """Create a validator-safe strategy_id from free-form text."""
     slug = description.lower()
@@ -44,8 +54,21 @@ class MarketSection:
 class UniverseSection:
     type: str = "static"
     symbols: list[str] = field(default_factory=list)
+    index_key: str = ""
+    index_code: str = ""
     point_in_time: bool = False
     survivorship_bias_policy: str = "warn"
+
+
+@dataclass
+class DataFilterSection:
+    exclude_st: bool = False
+    exclude_suspended: bool = False
+    exclude_new_listed_days: int = 0
+    limit_up_policy: str = "none"
+    limit_down_policy: str = "none"
+    suspension_policy: str = "none"
+    lookahead_policy: str = ""
 
 
 @dataclass
@@ -55,12 +78,14 @@ class DataSection:
     price_adjustment: str = "adjusted"
     required_columns: list[str] = field(default_factory=lambda: ["open", "high", "low", "close", "volume"])
     min_start_date: str = ""
+    filters: DataFilterSection = field(default_factory=DataFilterSection)
 
 
 @dataclass
 class IndicatorDef:
     type: str
     params: dict[str, Any] = field(default_factory=dict)
+    lag_bars: int = 0
 
 
 @dataclass
@@ -84,25 +109,38 @@ class PortfolioRuleDef:
 
 
 @dataclass
+class PortfolioConstraints:
+    max_weight: float | None = None
+    min_weight: float | None = None
+    max_holdings: int | None = None
+    min_position_value: float | None = None
+    cash_reserve: float = 0.0
+
+
+@dataclass
 class PortfolioSection:
     type: str = "EqualWeight"
     params: dict[str, Any] = field(default_factory=dict)
     rules: dict[str, PortfolioRuleDef] = field(default_factory=dict)
+    constraints: PortfolioConstraints = field(default_factory=PortfolioConstraints)
 
 
 @dataclass(init=False)
 class RebalanceDef:
     frequency: str = "daily"
     interval_days: int = 1
+    schedule: str = ""
     _interval_days_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
 
     def __init__(
         self,
         frequency: str = "daily",
         interval_days: Any = _UNSET,
+        schedule: str = "",
         _interval_days_explicit: bool | None = None,
     ) -> None:
         object.__setattr__(self, "frequency", frequency)
+        object.__setattr__(self, "schedule", schedule)
         if interval_days is _UNSET:
             object.__setattr__(self, "interval_days", 1)
             object.__setattr__(self, "_interval_days_explicit", bool(_interval_days_explicit))
@@ -149,6 +187,10 @@ class ExecutionSection:
 class CostSection:
     fee_rate: float = 0.0
     fee_min: float = 0.0
+    buy_fee_rate: float | None = None
+    sell_fee_rate: float | None = None
+    sell_tax_rate: float = 0.0
+    stamp_tax: float = 0.0
     slippage_rate: float = 0.0
 
 
@@ -320,12 +362,44 @@ class StrategySpec:
         )
 
     @classmethod
-    def template(cls, strategy_id: str = "", hypothesis: str = "") -> StrategySpec:
-        """Create a minimal valid template spec."""
+    def template(cls, strategy_id: str = "", hypothesis: str = "", market_preset: str = "us_equity") -> StrategySpec:
+        """Create a minimal valid template spec for an explicit market preset."""
+        if market_preset not in {"us_equity", "cn_a_share"}:
+            raise ValueError(f"Unsupported market_preset: {market_preset}")
+
+        if market_preset == "cn_a_share":
+            return cls(
+                schema_version="0.1",
+                strategy_id=strategy_id,
+                name=strategy_id.replace("_", " ").title(),
+                required_oxq_version=_get_open_xquant_version(),
+                research=ResearchSection(hypothesis=hypothesis),
+                market=MarketSection(asset_class="equity", region="cn", currency="CNY", calendar="XSHG"),
+                universe=UniverseSection(type="static", symbols=["600519.SH", "000001.SZ"]),
+                data=DataSection(price_adjustment="adjusted"),
+                signal=SignalSection(signal_time="close_t"),
+                portfolio=PortfolioSection(type="EqualWeight"),
+                execution=ExecutionSection(
+                    trade_time="next_open",
+                    fill_price_mode="next_open",
+                    lot_size=100,
+                    lot_size_config=LotSizeConfig(default=100),
+                ),
+                cost=CostSection(fee_rate=0.0003, slippage_rate=0.001),
+                benchmark=BenchmarkSection(symbols=["000300.SH"]),
+                validation=ValidationSection(
+                    train_period=["2018-01-01", "2021-12-31"],
+                    test_period=["2022-01-01", "2025-12-31"],
+                    required_oos=True,
+                ),
+                metrics=MetricsSection(),
+            )
+
         return cls(
             schema_version="0.1",
             strategy_id=strategy_id,
             name=strategy_id.replace("_", " ").title(),
+            required_oxq_version=_get_open_xquant_version(),
             research=ResearchSection(hypothesis=hypothesis),
             market=MarketSection(),
             universe=UniverseSection(type="static", symbols=["SPY"]),
@@ -369,6 +443,8 @@ def _parse_universe(raw: dict) -> UniverseSection:
     return UniverseSection(
         type=raw.get("type", "static"),
         symbols=_parse_str_list(raw.get("symbols", []), "universe.symbols"),
+        index_key=_parse_str(raw.get("index_key", ""), "universe.index_key"),
+        index_code=_parse_str(raw.get("index_code", ""), "universe.index_code"),
         point_in_time=_parse_bool(raw.get("point_in_time", False), "universe.point_in_time"),
         survivorship_bias_policy=raw.get("survivorship_bias_policy", "warn"),
     )
@@ -381,6 +457,26 @@ def _parse_data(raw: dict) -> DataSection:
         price_adjustment=raw.get("price_adjustment", "adjusted"),
         required_columns=_parse_str_list(raw.get("required_columns", ["open", "high", "low", "close", "volume"]), "data.required_columns"),
         min_start_date=raw.get("min_start_date", ""),
+        filters=_parse_data_filters(raw.get("filters", {})),
+    )
+
+
+def _parse_data_filters(raw: object) -> DataFilterSection:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("data.filters must be a mapping")
+    return DataFilterSection(
+        exclude_st=_parse_bool(raw.get("exclude_st", False), "data.filters.exclude_st"),
+        exclude_suspended=_parse_bool(raw.get("exclude_suspended", False), "data.filters.exclude_suspended"),
+        exclude_new_listed_days=_parse_int(
+            raw.get("exclude_new_listed_days", 0),
+            "data.filters.exclude_new_listed_days",
+        ),
+        limit_up_policy=_parse_str(raw.get("limit_up_policy", "none"), "data.filters.limit_up_policy"),
+        limit_down_policy=_parse_str(raw.get("limit_down_policy", "none"), "data.filters.limit_down_policy"),
+        suspension_policy=_parse_str(raw.get("suspension_policy", "none"), "data.filters.suspension_policy"),
+        lookahead_policy=_parse_str(raw.get("lookahead_policy", ""), "data.filters.lookahead_policy"),
     )
 
 
@@ -390,6 +486,7 @@ def _parse_signal(raw: dict) -> SignalSection:
         indicators[name] = IndicatorDef(
             type=defn.get("type", ""),
             params=_parse_params(defn.get("params", {}), f"signal.indicators.{name}.params"),
+            lag_bars=_parse_int(defn.get("lag_bars", 0), f"signal.indicators.{name}.lag_bars"),
         )
     rules = {}
     for name, defn in raw.get("rules", {}).items():
@@ -429,6 +526,24 @@ def _parse_portfolio(raw: dict) -> PortfolioSection:
         type=raw.get("type", "EqualWeight"),
         params=_parse_params(raw.get("params", {}), "portfolio.params"),
         rules=rules,
+        constraints=_parse_portfolio_constraints(raw.get("constraints", {})),
+    )
+
+
+def _parse_portfolio_constraints(raw: object) -> PortfolioConstraints:
+    if raw is None:
+        raw = {}
+    if not isinstance(raw, dict):
+        raise ValueError("portfolio.constraints must be a mapping")
+    return PortfolioConstraints(
+        max_weight=_parse_optional_float(raw.get("max_weight"), "portfolio.constraints.max_weight"),
+        min_weight=_parse_optional_float(raw.get("min_weight"), "portfolio.constraints.min_weight"),
+        max_holdings=_parse_optional_int(raw.get("max_holdings"), "portfolio.constraints.max_holdings"),
+        min_position_value=_parse_optional_float(
+            raw.get("min_position_value"),
+            "portfolio.constraints.min_position_value",
+        ),
+        cash_reserve=_parse_float(raw.get("cash_reserve", 0.0), "portfolio.constraints.cash_reserve"),
     )
 
 
@@ -452,6 +567,7 @@ def _parse_execution(raw: dict) -> ExecutionSection:
         fill_price_mode=fill_price_mode,
         rebalance=RebalanceDef(
             frequency=rebalance_frequency,
+            schedule=_parse_str(rebalance_raw.get("schedule", ""), "execution.rebalance.schedule"),
             interval_days=_parse_int(
                 rebalance_raw.get("interval_days", 1),
                 "execution.rebalance.interval_days",
@@ -489,6 +605,10 @@ def _parse_cost(raw: dict) -> CostSection:
     return CostSection(
         fee_rate=_parse_float(raw.get("fee_rate", 0.0), "cost.fee_rate"),
         fee_min=_parse_float(raw.get("fee_min", 0.0), "cost.fee_min"),
+        buy_fee_rate=_parse_optional_float(raw.get("buy_fee_rate"), "cost.buy_fee_rate"),
+        sell_fee_rate=_parse_optional_float(raw.get("sell_fee_rate"), "cost.sell_fee_rate"),
+        sell_tax_rate=_parse_float(raw.get("sell_tax_rate", 0.0), "cost.sell_tax_rate"),
+        stamp_tax=_parse_float(raw.get("stamp_tax", 0.0), "cost.stamp_tax"),
         slippage_rate=_parse_float(raw.get("slippage_rate", 0.0), "cost.slippage_rate"),
     )
 
@@ -625,6 +745,12 @@ def _parse_float(value: object, field_name: str) -> float:
     return parsed
 
 
+def _parse_optional_float(value: object, field_name: str) -> float | None:
+    if value is None:
+        return None
+    return _parse_float(value, field_name)
+
+
 def _parse_int(value: object, field_name: str) -> int:
     if isinstance(value, bool):
         raise ValueError(f"{field_name} must be an integer")
@@ -639,6 +765,12 @@ def _parse_int(value: object, field_name: str) -> int:
         if digits.isdigit():
             return int(stripped)
     raise ValueError(f"{field_name} must be an integer")
+
+
+def _parse_optional_int(value: object, field_name: str) -> int | None:
+    if value is None:
+        return None
+    return _parse_int(value, field_name)
 
 
 def _parse_bool(value: object, field_name: str) -> bool:
@@ -676,16 +808,26 @@ def _dataclass_to_dict(obj: Any) -> Any:
                     and f.name == "fill_price_mode"
                     and obj._fill_price_mode_explicit
                 )
+                preserve_core_version = isinstance(obj, StrategySpec) and f.name in {
+                    "schema_version",
+                    "required_oxq_version",
+                }
                 if (
                     f.default is not MISSING
                     and value == f.default
                     and not preserve_explicit_rebalance
                     and not preserve_explicit_fill_price_mode
+                    and not preserve_core_version
                 ):
                     continue
                 if f.default_factory is not MISSING:
                     try:
-                        if value == f.default_factory() and not preserve_explicit_rebalance and not preserve_explicit_fill_price_mode:
+                        if (
+                            value == f.default_factory()
+                            and not preserve_explicit_rebalance
+                            and not preserve_explicit_fill_price_mode
+                            and not preserve_core_version
+                        ):
                             continue
                     except TypeError:
                         pass

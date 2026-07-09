@@ -12,6 +12,26 @@ report. The Agent should discuss chart requirements, write plotting Python when
 needed, save generated figures as experiment assets, and register them before
 handing the final narrative to `write-research-report`.
 
+## Version-Governed Chart Package
+
+Before writing chart artifacts, read `current.json` and use `active_version` as
+`version_id`. Read source run artifacts from:
+
+```text
+versions/<version_id>/09_backtests/<run_id>/
+```
+
+Write chart assets for the final report under:
+
+```text
+versions/<version_id>/10_reports/<run_id>/report_assets/manifest.json
+versions/<version_id>/10_reports/<run_id>/report_assets/figures/<figure>.png
+versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py
+```
+
+Do not write root-level `report_assets/`. Do not place final report assets
+outside the version's `10_reports/<run_id>/` package.
+
 ## Workflow
 
 1. Confirm the run directory and required artifacts exist.
@@ -47,7 +67,7 @@ handing the final narrative to `write-research-report`.
      as an environment problem and fix the chart environment or block with a
      clear message; do not silently downgrade to arbitrary Matplotlib defaults.
    - In a source worktree, run plotting scripts with
-     `uv run --extra chart python runs/<run_id>/report_assets/scripts/<script>.py`
+     `uv run --extra chart python versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py`
      so the `chart` extra is active. In an installed SDK bundle, verify
      `import seaborn` works in the runner environment before plotting.
    - Use the OpenXQuant Report Chart Style below in every generated script
@@ -131,13 +151,14 @@ def market_return_colors(market_region: str) -> tuple[str, str]:
 For one asset, use `asset add`:
 
 ```bash
-oxq report asset add runs/<run_id>/ runs/<run_id>/report_assets/figures/<figure>.png \
+oxq report asset add versions/<version_id>/10_reports/<run_id>/ \
+  versions/<version_id>/10_reports/<run_id>/report_assets/figures/<figure>.png \
   --id <stable_id> \
   --title "<human title>" \
   --caption "<data source and interpretation limits>" \
   --section results \
   --order 10 \
-  --source-script runs/<run_id>/report_assets/scripts/<script>.py \
+  --source-script versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py \
   --source-artifact equity_curve.csv
 ```
 
@@ -151,39 +172,40 @@ the default report language is `中文`:
 [
   {
     "id": "equity_curve",
-    "file_path": "runs/<run_id>/report_assets/figures/equity_curve.png",
+    "file_path": "versions/<version_id>/10_reports/<run_id>/report_assets/figures/equity_curve.png",
     "title": "策略净值与基准对比",
     "caption": "来自 equity_curve.csv 和 benchmark_curve.csv；用于比较策略与基准净值走势。",
     "section": "results",
     "order": 10,
-    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_script": "versions/<version_id>/10_reports/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv", "benchmark_curve.csv"]
   },
   {
     "id": "drawdown",
-    "file_path": "runs/<run_id>/report_assets/figures/drawdown.png",
+    "file_path": "versions/<version_id>/10_reports/<run_id>/report_assets/figures/drawdown.png",
     "title": "回撤曲线",
     "caption": "来自 equity_curve.csv；展示回撤深度与恢复过程。",
     "section": "results",
     "order": 20,
-    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_script": "versions/<version_id>/10_reports/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv"]
   },
   {
     "id": "trade_curve",
-    "file_path": "runs/<run_id>/report_assets/figures/trade_curve.png",
+    "file_path": "versions/<version_id>/10_reports/<run_id>/report_assets/figures/trade_curve.png",
     "title": "交易曲线",
     "caption": "来自 equity_curve.csv 和 trades.csv；标记展示成交记录，不代表日内路径。",
     "section": "results",
     "order": 30,
-    "source_script": "runs/<run_id>/report_assets/scripts/plot_report_charts.py",
+    "source_script": "versions/<version_id>/10_reports/<run_id>/report_assets/scripts/plot_report_charts.py",
     "source_artifacts": ["equity_curve.csv", "trades.csv"]
   }
 ]
 ```
 
 ```bash
-oxq report asset add-batch runs/<run_id>/ runs/<run_id>/report_assets/assets.json
+oxq report asset add-batch versions/<version_id>/10_reports/<run_id>/ \
+  versions/<version_id>/10_reports/<run_id>/report_assets/assets.json
 ```
 
 After registration, verify every generated figure:
@@ -199,11 +221,14 @@ After registration, verify every generated figure:
 - The chart is not blank or visually empty.
 - The caption names the source artifact and the interpretation limit.
 
-Use `oxq report qa runs/<run_id>/` after final Markdown and HTML exist to
-re-check deterministic report artifacts: image references, dates, and manifest
-state. Numeric claim review is semantic/advisory; route it through
-`review-research-report` or an explicitly advisory QA pass rather than
-treating the CLI command as proof that all numeric claims are sourced.
+Run deterministic report QA only with a command or wrapper that checks the
+split report package
+`versions/<version_id>/10_reports/<run_id>/` against the source run package
+`versions/<version_id>/09_backtests/<run_id>/`. Do not run old run-directory QA
+against an empty report package. Numeric claim review is semantic/advisory;
+route it through `review-research-report` or an explicitly advisory QA pass
+rather than treating the CLI command as proof that all numeric claims are
+sourced.
 
 5. Hand off final writing to `write-research-report`.
 

@@ -24,6 +24,41 @@ Read:
 - `confirmations.json` when present
 - workspace root or explicit extension root
 
+## Version-Governed Output Gate
+
+Before reading or writing component-authoring artifacts in a research
+workspace, read `current.json` and use `active_version` as `version_id`. If no
+active version exists, block and return to `manage-strategy-version`.
+
+Formal component-authoring phase artifacts live only under:
+
+```text
+versions/<version_id>/03_component_authoring/component_request.json
+versions/<version_id>/03_component_authoring/result.json
+versions/<version_id>/03_component_authoring/component_manifest.json
+versions/<version_id>/03_component_authoring/component_catalog.json
+```
+
+Do not write root-level `component_request.json`, root-level `result.json`,
+root-level `component_manifest.json`, or root-level `component_catalog.json` as
+formal outputs in a version-governed workspace.
+Do not write root-level `result.json`.
+
+Reusable workspace-local code bundles, when a component is actually authored,
+live under:
+
+```text
+components/bundles/<bundle_id>/
+  component_manifest.json
+  component_catalog.json
+  custom_components/
+```
+
+The phase-local `result.json` must point to the reusable bundle paths. If the
+request is blocked, still write the phase-local `component_request.json` and
+`result.json` so the `03_component_authoring/` stage is auditable without
+creating an empty directory.
+
 If `component_request.json` does not identify exactly one component kind from
 `Indicator`, `Signal`, `Rule`, or `PortfolioOptimizer`, stop with a blocked
 result. Do not guess. Workspace-local `Rule` authoring is currently blocked:
@@ -33,25 +68,51 @@ by formal compile/backtest semantics.
 
 ## Output Layout
 
-Default to a workspace-local extension:
+Default authored component code to a workspace-local reusable bundle:
 
 ```text
-custom_components/
-  pyproject.toml
-  oxq_components/
-    __init__.py
-    indicators/
-    signals/
-    rules/
-    portfolio/
-  tests/
-component_manifest.json
-component_catalog.json
-result.json
+components/bundles/<bundle_id>/
+  component_manifest.json
+  component_catalog.json
+  custom_components/
+    pyproject.toml
+    oxq_components/
+      __init__.py
+      indicators/
+      signals/
+      portfolio/
+    tests/
+
+versions/<version_id>/03_component_authoring/
+  component_request.json
+  component_manifest.json
+  component_catalog.json
+  result.json
 ```
 
-Do not write outside this workspace-local extension root unless the coordinator
-explicitly provides another task-local root.
+Task-local scratch files may live inside the phase directory while authoring,
+but formal reusable code belongs under `components/bundles/<bundle_id>/`.
+Do not write outside these boundaries unless the coordinator explicitly
+provides another task-local root.
+
+## Generated Cache Cleanup
+
+Before returning a handoff result, remove generated test/build/cache directories
+from `components/bundles/<bundle_id>/` and from the phase-local
+`03_component_authoring/` scratch area. These paths must not remain in authored
+component bundles or phase artifacts:
+
+- `__pycache__/`
+- `.pytest_cache/`
+- `*.egg-info/`
+- `.mypy_cache/`
+- `.ruff_cache/`
+- `*.pyc`
+- `*.pyo`
+
+Do not list these generated cache paths as formal artifacts in `result.json`.
+If cleanup fails, mark the result `failed` or `blocked` instead of handing off a
+dirty component bundle.
 
 ## Workflow
 
@@ -59,7 +120,8 @@ explicitly provides another task-local root.
 2. Re-check the current registry and recipe catalog. Use:
 
    ```bash
-   uv run oxq registry export --out component_catalog.json
+   uv run oxq registry export \
+     --out versions/<version_id>/03_component_authoring/component_catalog.json
    ```
 
 3. If an existing component or recipe satisfies the request, write a blocked
@@ -78,28 +140,61 @@ explicitly provides another task-local root.
    Use an extension module namespace such as `oxq_components.*`; do not declare
    workspace components under `oxq.*`.
 10. Run targeted tests.
-11. Write `component_manifest.json` without `bundle_hash`, compute it with:
+11. Write `components/bundles/<bundle_id>/component_manifest.json` without
+    `bundle_hash`, compute it with:
 
     ```bash
-    uv run oxq component-manifest hash component_manifest.json
+    uv run oxq component-manifest hash components/bundles/<bundle_id>/component_manifest.json
     ```
 
-12. Update `component_manifest.json` with the returned `bundle_hash`.
+12. Update `components/bundles/<bundle_id>/component_manifest.json` with the
+    returned `bundle_hash`.
 13. Validate importability and hash:
 
     ```bash
-    uv run oxq component-manifest validate component_manifest.json
+    uv run oxq component-manifest validate components/bundles/<bundle_id>/component_manifest.json
     ```
 
 14. Refresh the catalog with:
 
     ```bash
     uv run oxq registry export \
-      --component-manifest component_manifest.json \
-      --out component_catalog.json
+      --component-manifest components/bundles/<bundle_id>/component_manifest.json \
+      --out components/bundles/<bundle_id>/component_catalog.json
     ```
 
-15. Write `result.json`.
+15. Copy or reference the bundle manifest and catalog from the phase-local
+    `versions/<version_id>/03_component_authoring/` artifacts.
+16. Remove generated cache/build artifacts that must not remain.
+17. Write `versions/<version_id>/03_component_authoring/result.json`.
+
+## Cross-Sectional Component Feasibility
+
+When `component_request.json` describes cross-sectional logic, do not treat the
+requested component kind as final until the runtime input requirements are
+checked. Cross-sectional logic includes same-date winsorization, ranking,
+z-score, percentile rank, neutralization, or clipping across multiple symbols.
+
+Use `PortfolioOptimizer first` as a feasibility preference because current
+`PortfolioOptimizer.optimize()` receives all-symbol same-date inputs through
+`dict[str, DataFrame]`. This preference is not a guarantee:
+
+- If the request says `Indicator` but the behavior requires all-symbol same-date input,
+  do not implement it as an `Indicator`.
+- reclassify the candidate kind to `PortfolioOptimizer` only when the behavior
+  can be implemented inside allocation from existing columns, with documented
+  output weights and no hidden factor column claim.
+- If the optimizer cannot faithfully implement the requested behavior, do not force `PortfolioOptimizer`;
+  write `status: blocked` with `blocked_reason`
+  containing `framework_unsupported`.
+- If the request requires a reusable cross-sectional factor column, a distinct
+  pre-portfolio factor transform, or runtime artifacts that the current
+  framework cannot represent, block and explain that first-class
+  cross-sectional framework support is required.
+
+Do not silently downgrade a cross-sectional transform into a per-symbol
+`Indicator`, and do not claim that `TopNRanking.max_weight` is the same as
+score winsorization.
 
 ## Component Requirements
 
@@ -153,7 +248,7 @@ The result artifact must include commands and pass/fail status.
 
 ## Manifest
 
-Write `component_manifest.json` with:
+Write `components/bundles/<bundle_id>/component_manifest.json` with:
 
 ```json
 {
@@ -189,7 +284,7 @@ The `bundle_hash` must be computed by OpenXQuant, not invented by the worker.
 
 ## Result Artifact
 
-Write `result.json`:
+Write `versions/<version_id>/03_component_authoring/result.json`:
 
 ```json
 {
@@ -200,11 +295,13 @@ Write `result.json`:
   "component_kind": "Signal",
   "component_name": "RiskAdjustedTiming",
   "artifacts": {
-    "component_manifest": "component_manifest.json",
-    "component_catalog": "component_catalog.json",
-    "source_root": "custom_components/",
+    "component_manifest": "components/bundles/<bundle_id>/component_manifest.json",
+    "component_catalog": "components/bundles/<bundle_id>/component_catalog.json",
+    "source_root": "components/bundles/<bundle_id>/custom_components/",
+    "phase_component_manifest": "versions/<version_id>/03_component_authoring/component_manifest.json",
+    "phase_component_catalog": "versions/<version_id>/03_component_authoring/component_catalog.json",
     "tests": [
-      "custom_components/tests/test_risk_adjusted_timing.py"
+      "components/bundles/<bundle_id>/custom_components/tests/test_risk_adjusted_timing.py"
     ]
   },
   "hashes": {
@@ -213,7 +310,7 @@ Write `result.json`:
   },
   "tests": [
     {
-      "command": "pytest custom_components/tests/test_risk_adjusted_timing.py -q",
+      "command": "pytest components/bundles/<bundle_id>/custom_components/tests/test_risk_adjusted_timing.py -q",
       "status": "pass"
     }
   ],
