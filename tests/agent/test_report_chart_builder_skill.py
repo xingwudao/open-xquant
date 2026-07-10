@@ -404,6 +404,11 @@ def test_coordinator_role_documents_subagent_workflow() -> None:
     assert "phase completion" in text
     assert "active_phase" in text
     assert "10_reports" in text
+    assert "When `oxq-runner-worker` returns `status: pass`" in text
+    assert "immediately route `oxq-monitor-worker`" in text
+    assert "When `oxq-monitor-worker` returns `status: pass`" in text
+    assert "immediately route `oxq-report-writer-worker`" in text
+    assert "Do not stop after backtest completion" in text
 
 
 def test_workspace_governance_skills_are_canonical_sources() -> None:
@@ -1274,6 +1279,9 @@ def test_strategy_monitor_is_post_run_and_uses_runtime_audit() -> None:
     assert "Keep the active phase at\n`09_backtests`" in strategy_monitor
     assert "Monitoring is not a standalone active phase" in monitor_role
     assert "keep\n  `09_backtests` until report artifacts" in monitor_role
+    assert '"next_phase": "oxq-report-writer-worker"' in strategy_monitor
+    assert "The next phase is `oxq-report-writer-worker`" in monitor_role
+    assert "Do not stop after monitoring pass" in monitor_role
 
 
 def test_agent_guide_is_install_only_and_points_to_router_skill() -> None:

@@ -597,7 +597,11 @@ run 完成：
 
 - 使用 `monitor-strategy-run`。
 - 写或更新 `experiments.jsonl`。
-- 需要报告时使用 `write-research-report`。
+- monitor pass 后自动使用 `write-research-report`，不得停在 backtest 或
+  monitor 结果等待新提示。
+- 用户未要求图表且无报告策略强制图表时，Coordinator 传入
+  `chart_decision: no_charts_requested`，避免报告 writer 因缺少 chart
+  decision blocked。
 - 报告完成后使用 `review-research-report`。
 
 用户要求比较两个结果：

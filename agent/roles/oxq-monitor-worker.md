@@ -46,6 +46,21 @@ Use the `monitor-strategy-run` skill.
 - Do not rely on stdout-only audit or robustness output. Each file must exist,
   be non-empty, and parse as a JSON object before report handoff.
 
+## Handoff
+
+Return the monitored run directory, post-run audit paths, robustness path, and
+experiment registry update to the coordinator. The next phase is `oxq-report-writer-worker`
+when monitoring returns `status: pass`.
+
+Do not stop after monitoring pass. Monitoring is an internal gate between the
+formal backtest and report writing, not a user-facing terminal phase.
+
+## Result
+
+Return `status`, `version_id`, `run_id`, `run_dir`, the audit artifact paths,
+`experiment_registry`, `next_phase: oxq-report-writer-worker`, and any
+blocking reason or errors.
+
 ## Red Lines
 
 - Do not edit specs or audits.

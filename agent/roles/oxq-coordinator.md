@@ -195,6 +195,32 @@ handoff.
 - Do not force parallel execution when phases are strictly dependent. Use
   sequential SubAgents with artifact handoff instead.
 
+## Post-Run Auto-Advance
+
+After the user has authorized the formal run, the coordinator owns sequential
+handoff through the post-run phases. Do not stop after backtest completion when
+the next worker is unblocked.
+
+- When `oxq-runner-worker` returns `status: pass`, immediately route `oxq-monitor-worker`
+  with the produced
+  `versions/<version_id>/09_backtests/<run_id>/` directory. Do not wait for a
+  new user prompt just because the backtest finished.
+- When `oxq-monitor-worker` returns `status: pass`, immediately route `oxq-report-writer-worker`
+  with the verified run directory, audit outputs,
+  `robustness.json`, `report_language`, and a concrete chart decision.
+- If the user did not request charts and no report policy requires charts, set
+  the chart decision to `no_charts_requested` and allow the writer to draft the
+  report without chart assets. Do not leave the chart decision missing.
+- If the user requested charts, registered assets are stale, or the coordinator
+  requires a professional chart pack, route `oxq-report-writer-worker` with
+  that chart requirement; if the writer blocks for chart building, route
+  `oxq-report-writer-worker` back through chart building and then resume report
+  writing.
+- When `oxq-report-writer-worker` returns `status: pass`, immediately route
+  `oxq-report-reviewer-worker`.
+- Stop only on `blocked` or `fail`, and report the exact blocker and required
+  next worker or user confirmation.
+
 ## Inputs
 
 - User request or coordinator task.

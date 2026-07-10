@@ -157,6 +157,30 @@ handoff.
 Do not write the report directly from the artifacts inside this skill. The
 report narrative must be written through `write-research-report`.
 
+After reproducibility audit, research-bias audit, robustness, and experiment
+logging pass or produce non-fatal warnings, return a phase result with
+`next_phase: oxq-report-writer-worker`. Do not stop after monitoring pass. The
+coordinator should immediately hand the verified run package to report writing
+unless monitoring is blocked or failed.
+
+Write or return a monitor phase result:
+
+```json
+{
+  "status": "pass | blocked | fail",
+  "version_id": "<version_id>",
+  "run_id": "<run_id>",
+  "run_dir": "versions/<version_id>/09_backtests/<run_id>",
+  "reproducibility_audit": "versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json",
+  "research_bias_audit": "versions/<version_id>/09_backtests/<run_id>/research_bias_audit.json",
+  "robustness": "versions/<version_id>/09_backtests/<run_id>/robustness.json",
+  "experiment_registry": "experiments.jsonl",
+  "next_phase": "oxq-report-writer-worker",
+  "blocking_reason": "",
+  "errors": []
+}
+```
+
 ## SDK Monitoring
 
 Use SDK monitoring only when you have a `RunResult` object:
