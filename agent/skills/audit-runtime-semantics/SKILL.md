@@ -135,9 +135,15 @@ OpenXQuant package version than the SPEC requires is not a valid runtime gate.
 
 The compile preview must also include
 `versions/<version_id>/07_compile_preview/strategy.py`. After the
-user has confirmed the SPEC table and after this preview is generated, print the complete `strategy.py` source
-to the user in a fenced `python` block before summarizing runtime audit
-findings. Do not print only excerpts.
+user has confirmed the SPEC table and after this preview is generated, read
+the generated file and print the complete `strategy.py` source to the user in a
+fenced `python` block before summarizing runtime audit findings. Do not print
+only excerpts, and do not replace the source with only the file path.
+
+If this skill is running inside a subagent or worker role, return both the
+`strategy.py` path and the complete source text to the coordinator. Use a
+handoff field named `strategy_source_code` so the coordinator can relay the
+same fenced Python source block to the user. A path-only handoff is not enough.
 
 ## Material Runtime Fields
 
@@ -255,11 +261,17 @@ Report a compact summary:
 - compile preview path
 - path to `versions/<version_id>/07_compile_preview/strategy.py`
 - confirmation that the complete `strategy.py` source was printed to the user
+- `strategy_source_code` containing the complete source text when returning
+  through a worker or subagent handoff
 - `spec_hash`
 - material fields preserved
 - material fields missing or mismatched
 - path to `versions/<version_id>/08_runtime_audit/runtime_audit.json`
 - whether formal backtest remains blocked
+
+Return both the `strategy.py` path and the complete source text. The upstream
+coordinator must be able to show the user the source code itself, not only a
+file location.
 
 Do not run a formal backtest while `runtime_audit.json` is missing, blocked,
 failed, or mismatched.

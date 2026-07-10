@@ -814,6 +814,8 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
         assert field in runtime_skill
     assert "print the complete `strategy.py` source" in runtime_skill
+    assert "`strategy_source_code`" in runtime_skill
+    assert "Return both the `strategy.py` path and the complete source text" in runtime_skill
     assert "confirmed `spec_audit.json`" in runtime_role
     assert "`schema_version: 4`" in runtime_role
     assert "valid `confirmation_event`" in runtime_role
@@ -823,6 +825,11 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
         assert field in runtime_role
     assert "`spec_audit_path`" in runtime_role
     assert "`spec_audit_hash`" in runtime_role
+    assert "`strategy_source_code`" in runtime_role
+    assert "Do not return only the file path" in runtime_role
+    assert "When receiving the runtime auditor result" in coordinator_role
+    assert "relay the complete `strategy.py` source to the user" in coordinator_role
+    assert "Do not replace it with only a file path" in coordinator_role
     assert "conditionally writes `spec_confirmation_table.md` only" in normalized_coordinator
     assert "blocked audits omit it or set `spec_confirmation_table: null`" in normalized_coordinator
 

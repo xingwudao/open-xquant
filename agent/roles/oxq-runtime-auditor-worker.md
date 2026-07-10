@@ -63,6 +63,8 @@ Use the `audit-runtime-semantics` skill.
 - Compile the strategy before formal backtest authorization.
 - Print the complete `strategy.py` source to the user after compile preview
   generation and before runtime findings.
+- Read the generated `strategy.py` file and return its complete contents as
+  `strategy_source_code` in the worker result. Do not return only the file path.
 - Verify that `compiled_plan.json` preserves material execution semantics,
   including rebalance rules, costs, slippage, execution timing, validation
   settings, and runtime rules.
@@ -92,9 +94,10 @@ Use the `audit-runtime-semantics` skill.
 
 ## Handoff
 
-Return `runtime_audit.json` and the compile preview to the coordinator. The
-next phase is `oxq-runner-worker` only when `runtime_semantics_pass` is true
-and the coordinator writes `backtest_authorization.json`.
+Return `runtime_audit.json`, `compiled_plan.json`, the `strategy.py` path, and
+`strategy_source_code` to the coordinator. Do not return only the file path.
+The next phase is `oxq-runner-worker` only when `runtime_semantics_pass` is
+true and the coordinator writes `backtest_authorization.json`.
 
 ## Red Lines
 
@@ -108,4 +111,5 @@ and the coordinator writes `backtest_authorization.json`.
 ## Result
 
 Return the runtime audit status, compiled plan path, spec hash, compiled plan
-hash, material field mismatches, and blocking findings.
+hash, `strategy.py` path, `strategy_source_code`, material field mismatches,
+and blocking findings.

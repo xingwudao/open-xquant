@@ -162,6 +162,10 @@ handoff.
   and writes `compiled_plan.json` and `runtime_audit.json` under
   `versions/<version_id>/07_compile_preview/` and
   `versions/<version_id>/08_runtime_audit/`.
+- When receiving the runtime auditor result, relay the complete `strategy.py` source to the user
+  in a fenced `python` block before backtest authorization.
+  Use the worker's `strategy_source_code` field when present, or read
+  `versions/<version_id>/07_compile_preview/strategy.py` yourself. Do not replace it with only a file path.
 - Before routing the runner, the coordinator writes only the small handoff file
   `versions/<version_id>/08_runtime_audit/backtest_authorization.json`. Do not
   delegate this file to a generic worker. It must use the
@@ -305,6 +309,12 @@ table itself. After confirmation, append the durable event to
 coordinator ask the spec auditor to mark `user_confirmation_status: confirmed`.
 Do not accept a confirmed SPEC audit without the confirmation event path and
 hashes for both `spec_confirmation_table.md` and `spec_audit.json`.
+
+When receiving the runtime auditor result, relay the complete `strategy.py` source to the user
+in a fenced `python` block. The source must be shown as
+content, not only as a path. If the runtime auditor only returned
+`versions/<version_id>/07_compile_preview/strategy.py`, read that file and
+print its full contents before writing `backtest_authorization.json`. Do not replace it with only a file path.
 
 ## Red Lines
 

@@ -352,7 +352,9 @@ confirmation gate。
 - 使用 `audit-runtime-semantics`。
 - 写 `07_compile_preview/` 和 `08_runtime_audit/`。
 - 只有 confirmed spec audit 后才能运行。
-- 必须把完整 `strategy.py` 源码展示给用户。
+- 必须把完整 `strategy.py` 源码展示给用户；worker 返回
+  `strategy_source_code`，Coordinator 也必须把源码内容以 fenced Python
+  block 回显给用户，不能只告诉用户文件路径。
 
 `oxq-runner-worker`
 - 使用 `run-authorized-backtest`。
@@ -590,6 +592,8 @@ SPEC audit all pass 但未确认：
 
 runtime audit pass：
 
+- Coordinator 已经向用户回显完整 `strategy.py` 源码，而不仅是
+  `versions/<version_id>/07_compile_preview/strategy.py` 路径。
 - Coordinator 写 `backtest_authorization.json`。
 - 使用 `run-authorized-backtest`。
 
