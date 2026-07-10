@@ -610,6 +610,45 @@ def test_strict_spec_audit_file_accepts_bound_confirmation_event(tmp_path) -> No
     assert result["errors"] == []
 
 
+def test_strict_spec_audit_file_accepts_faithful_archived_run_copy(tmp_path, monkeypatch) -> None:
+    monkeypatch.chdir(tmp_path)
+    spec = {"execution": {"initial_cash": 100000}}
+    audit_dir = tmp_path / "versions/v001/06_spec_audit"
+    run_dir = tmp_path / "versions/v001/09_backtests/run1"
+    event_dir = tmp_path / "conversations/demo"
+    audit_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    event_dir.mkdir(parents=True)
+
+    table_path = audit_dir / "spec_confirmation_table.md"
+    table_path.write_text(_spec_confirmation_table(spec), encoding="utf-8")
+    table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
+    payload = _payload([_confirmed("execution.initial_cash", 100000)])
+    payload["spec_confirmation_table"] = {
+        "path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
+        "hash": table_hash,
+        "hash_type": "sha256",
+    }
+    payload["confirmation_event"] = _write_confirmation_event_line(
+        event_dir / "confirmations.jsonl",
+        artifact_path="versions/v001/06_spec_audit/spec_confirmation_table.md",
+        artifact_hash=table_hash,
+        spec_audit_path="versions/v001/06_spec_audit/spec_audit.json",
+        spec_audit_hash=_pre_confirmation_spec_audit_hash(payload),
+    )
+    original_audit_path = audit_dir / "spec_audit.json"
+    original_audit_path.write_text(json.dumps(payload), encoding="utf-8")
+    archived_audit_path = run_dir / "spec_audit.json"
+    archived_audit_path.write_text(original_audit_path.read_text(encoding="utf-8"), encoding="utf-8")
+
+    original_result = validate_spec_audit_file(original_audit_path, spec=spec, verify_confirmation_table=True)
+    archived_result = validate_spec_audit_file(archived_audit_path, spec=spec, verify_confirmation_table=True)
+
+    assert original_result["status"] == "pass"
+    assert archived_result["status"] == "pass"
+    assert archived_result["errors"] == []
+
+
 def test_strict_spec_audit_file_rejects_header_only_confirmation_table(tmp_path) -> None:
     spec = {"execution": {"initial_cash": 100000}}
     audit_path = tmp_path / "spec_audit.json"

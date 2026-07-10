@@ -126,6 +126,27 @@ def test_agent_install_all_targets_writes_managed_skills(monkeypatch, tmp_path) 
     assert payload["sdk_bundle"]["id"] == "bundle-test"
 
 
+def test_agent_install_copies_skill_references(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    home = tmp_path / "home"
+    codex_home = home / ".codex-profile"
+    _write_source(source)
+    reference_dir = source / "agent" / "skills" / "build-strategy-spec" / "references"
+    reference_dir.mkdir()
+    (reference_dir / "details.md").write_text("# Details\n\nReference body.\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("CODEX_HOME", str(codex_home))
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "codex", "--from-local", str(source), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    installed = codex_home / "skills/build-strategy-spec/references/details.md"
+    assert installed.read_text(encoding="utf-8") == "# Details\n\nReference body.\n"
+
+
 def test_agent_install_trae_writes_global_skills(monkeypatch, tmp_path) -> None:
     source = tmp_path / "source"
     home = tmp_path / "home"

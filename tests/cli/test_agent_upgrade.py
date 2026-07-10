@@ -93,6 +93,37 @@ def test_agent_upgrade_replaces_unmodified_managed_skill(monkeypatch, tmp_path) 
     assert "new workflow" in installed.read_text(encoding="utf-8")
 
 
+def test_agent_upgrade_syncs_skill_references(monkeypatch, tmp_path) -> None:
+    source_v1 = tmp_path / "source-v1"
+    source_v2 = tmp_path / "source-v2"
+    home = tmp_path / "home"
+    _write_source(source_v1, "old workflow")
+    _write_source(source_v2, "new workflow")
+    old_ref_dir = source_v1 / "agent/skills/build-strategy-spec/references"
+    new_ref_dir = source_v2 / "agent/skills/build-strategy-spec/references"
+    old_ref_dir.mkdir()
+    new_ref_dir.mkdir()
+    (old_ref_dir / "old.md").write_text("old reference\n", encoding="utf-8")
+    (new_ref_dir / "new.md").write_text("new reference\n", encoding="utf-8")
+    monkeypatch.setenv("HOME", str(home))
+
+    install = CliRunner().invoke(
+        main,
+        ["agent", "install", "--target", "cursor", "--from-local", str(source_v1), "--yes"],
+    )
+    assert install.exit_code == 0, install.output
+
+    result = CliRunner().invoke(
+        main,
+        ["agent", "upgrade", "--target", "cursor", "--from-local", str(source_v2), "--yes"],
+    )
+
+    assert result.exit_code == 0, result.output
+    installed_dir = home / ".cursor/skills/build-strategy-spec/references"
+    assert not (installed_dir / "old.md").exists()
+    assert (installed_dir / "new.md").read_text(encoding="utf-8") == "new reference\n"
+
+
 def test_agent_upgrade_skips_locally_modified_skill(monkeypatch, tmp_path) -> None:
     source_v1 = tmp_path / "source-v1"
     source_v2 = tmp_path / "source-v2"

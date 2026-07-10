@@ -6,6 +6,28 @@ from pathlib import Path
 import yaml
 
 
+def _skill_bundle_text(skill_name: str) -> str:
+    skill_dir = Path(f"agent/skills/{skill_name}")
+    parts = [skill_dir.joinpath("SKILL.md").read_text(encoding="utf-8")]
+    references = skill_dir / "references"
+    if references.exists():
+        parts.extend(path.read_text(encoding="utf-8") for path in sorted(references.glob("*.md")))
+    return "\n".join(parts)
+
+
+def test_strategy_skill_entrypoints_use_progressive_disclosure() -> None:
+    for skill_name in ["build-strategy-spec", "audit-strategy-spec"]:
+        skill_dir = Path(f"agent/skills/{skill_name}")
+        skill_text = skill_dir.joinpath("SKILL.md").read_text(encoding="utf-8")
+        line_count = len(skill_text.splitlines())
+        assert line_count <= 500
+
+        references = sorted(skill_dir.glob("references/*.md"))
+        assert references
+        for path in references:
+            assert path.relative_to(skill_dir).as_posix() in skill_text
+
+
 def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     skill = Path("agent/skills/build-report-charts/SKILL.md")
 
@@ -646,9 +668,9 @@ def test_component_author_skill_documents_workspace_extension_contract() -> None
 
 
 def test_cross_sectional_component_logic_prefers_optimizer_without_forcing_it() -> None:
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
     author = Path("agent/skills/author-component/SKILL.md").read_text(encoding="utf-8")
-    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    auditor = _skill_bundle_text("audit-strategy-spec")
 
     for text in (builder, author, auditor):
         assert "Cross-Sectional Component Feasibility" in text
@@ -672,8 +694,8 @@ def test_cross_sectional_component_logic_prefers_optimizer_without_forcing_it() 
 
 
 def test_builder_documents_tradability_lag_latest_and_timing_boundaries() -> None:
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
-    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
+    auditor = _skill_bundle_text("audit-strategy-spec")
     builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
     data_skill = Path("agent/skills/explore-data/SKILL.md").read_text(encoding="utf-8")
     data_role = Path("agent/roles/oxq-data-inspection-worker.md").read_text(encoding="utf-8")
@@ -716,9 +738,7 @@ def test_builder_documents_tradability_lag_latest_and_timing_boundaries() -> Non
 
 
 def test_spec_auditor_skill_documents_source_trace_gate() -> None:
-    skill = Path("agent/skills/audit-strategy-spec/SKILL.md")
-
-    text = skill.read_text(encoding="utf-8")
+    text = _skill_bundle_text("audit-strategy-spec")
 
     assert "name: audit-strategy-spec" in text
     assert "confirmed" in text
@@ -747,11 +767,12 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
 
 
 def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None:
-    spec_skill = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    spec_skill = _skill_bundle_text("audit-strategy-spec")
     runtime_skill = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
     spec_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
     runtime_role = Path("agent/roles/oxq-runtime-auditor-worker.md").read_text(encoding="utf-8")
     coordinator_role = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+    normalized_spec_skill = " ".join(spec_skill.split())
     normalized_spec_role = " ".join(spec_role.split())
     normalized_coordinator = " ".join(coordinator_role.split())
 
@@ -780,8 +801,23 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "spec_confirmation_table.hash" in spec_skill
     assert "from oxq.spec.compiler import _hash_file" in spec_skill
     assert "not with `shasum`" in spec_skill
+    assert "hash the body after that marker" in spec_skill
+    assert "`strategy_idea_brief.json.conversation_hash`" in spec_skill
+    assert "do not hash the entire transcript" in spec_skill
+    assert "without a nested `event_hash` field" in spec_skill
+    assert "raw JSONL line content" in spec_skill
+    assert "not the hash of the parsed JSON object" in normalized_spec_skill
+    assert "pre-confirmation audit payload" in spec_skill
+    assert "not the final\npost-confirmation `spec_audit.json` hash" in spec_skill
+    assert "Do not use the pending Full SPEC Confirmation Table itself as evidence" in spec_skill
+    assert "Field value included in full SPEC confirmation table for user approval" in spec_skill
     assert "Run `--strict-confirmed` before returning any\n`audit_conclusion: all_pass`" in spec_skill
     assert "including the user-confirmation-pending state" in spec_skill
+    assert "For a pending all-pass audit, `field_audits` must already satisfy strict-confirmed coverage" in spec_skill
+    assert "Do not leave any effective field row as `status: default`" in spec_skill
+    assert "Avoid evidence wording that says the user did not specify or confirm the field" in spec_skill
+    assert "Use the top-level effective field prefix as the `Section` value" in spec_skill
+    assert "Represent empty strings as an empty cell" in spec_skill
     assert "it is not downstream runtime or backtest authorization" in spec_skill
     assert "Do not create a placeholder `spec_confirmation_table.md`" in spec_skill
     assert "For `audit_conclusion: blocked`, omit\n`spec_confirmation_table` or set it to `null`" in spec_skill
@@ -817,6 +853,9 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "`confirmation_event` reference" in coordinator_role
     for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
         assert field in coordinator_role
+    assert "`phase: spec_confirmation`" in spec_skill
+    assert "`field_scope: full_spec_table`" in spec_skill
+    assert "json.dumps(candidate, sort_keys=True, default=str)" in spec_skill
     assert "Do not start `oxq-runtime-auditor-worker`" in coordinator_role
     assert "confirmed `spec_audit.json`" in runtime_skill
     assert "`confirmation_event` exists" in runtime_skill
@@ -825,6 +864,9 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "--strict-confirmed" in runtime_skill
     assert "--json" in runtime_skill
     assert "`spec_audit_path` plus `spec_audit_hash`" in runtime_skill
+    assert "Do not compare it with a nested\n`event_hash` field inside the JSONL payload" in runtime_skill
+    assert "canonical pre-confirmation audit hash" in runtime_skill
+    assert "not the current final\npost-confirmation `spec_audit.json` hash" in runtime_skill
     for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
         assert field in runtime_skill
     assert "print the complete `strategy.py` source" in runtime_skill
@@ -849,9 +891,9 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
 
 
 def test_spec_auditor_is_read_only_and_returns_mapping_errors_to_builder() -> None:
-    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    auditor = _skill_bundle_text("audit-strategy-spec")
     auditor_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
     builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
 
     assert "Read-Only SPEC Boundary" in auditor
@@ -1033,7 +1075,7 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
 
 
 def test_strategy_builder_is_build_only_for_multi_agent_systems() -> None:
-    text = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    text = _skill_bundle_text("build-strategy-spec")
 
     assert "multi-Agent systems" in text
     assert "Do not:" in text
@@ -1119,7 +1161,7 @@ def test_strategy_idea_auditor_skill_audits_brainstorm_process() -> None:
 
 
 def test_strategy_builder_requires_audited_idea_before_spec_work() -> None:
-    text = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    text = _skill_bundle_text("build-strategy-spec")
 
     assert "Audited Idea Input Gate" in text
     assert "strategy_idea_brief.json" in text
@@ -1136,7 +1178,7 @@ def test_strategy_builder_requires_audited_idea_before_spec_work() -> None:
 
 
 def test_strategy_builder_forbids_root_level_spec_initializer() -> None:
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
     builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
 
     assert "Never run `oxq spec init` without an explicit `--out` path" in builder
@@ -1155,8 +1197,8 @@ def test_strategy_builder_forbids_root_level_spec_initializer() -> None:
 
 
 def test_strategy_builder_records_required_open_xquant_version() -> None:
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
-    spec_auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
+    spec_auditor = _skill_bundle_text("audit-strategy-spec")
     runtime_auditor = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
     assert "OpenXQuant Version Provenance" in builder
@@ -1176,8 +1218,8 @@ def test_strategy_builder_records_required_open_xquant_version() -> None:
 
 
 def test_builder_and_spec_auditor_reject_unconfirmed_effective_defaults() -> None:
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
-    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
+    auditor = _skill_bundle_text("audit-strategy-spec")
 
     assert "`market.region: cn`" in builder
     assert "`market.currency: CNY`" in builder
@@ -1185,6 +1227,8 @@ def test_builder_and_spec_auditor_reject_unconfirmed_effective_defaults() -> Non
     assert "`execution.rebalance.frequency`" in builder
     assert "`decision_policy.promote_if`" in builder
     assert "`decision_policy.pass.conditions`" in builder
+    assert "`cost_multiplier: [2.0]`" in builder
+    assert "Do not write boolean\n  `true` for `cost_multiplier` or `parameter_perturbation`" in builder
 
     assert "Framework default" in auditor
     assert "`market.region: us`" in auditor
@@ -1194,8 +1238,8 @@ def test_builder_and_spec_auditor_reject_unconfirmed_effective_defaults() -> Non
 
 
 def test_builder_and_spec_auditor_require_unsupported_mapping_disclosure() -> None:
-    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
-    auditor = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    builder = _skill_bundle_text("build-strategy-spec")
+    auditor = _skill_bundle_text("audit-strategy-spec")
     builder_role = Path("agent/roles/oxq-strategy-builder-worker.md").read_text(encoding="utf-8")
     auditor_role = Path("agent/roles/oxq-spec-auditor-worker.md").read_text(encoding="utf-8")
 
@@ -1211,6 +1255,16 @@ def test_builder_and_spec_auditor_require_unsupported_mapping_disclosure() -> No
     assert "validate_mapping_contract_for_builder_pass_file" in builder
     assert "do not run `oxq spec validate_mapping_contract`" in builder.lower()
     assert "every `semantic: strategy` row must be mapped and non-blocking" in builder
+    assert "derive the\nallowed field paths from the effective StrategySpec" in builder
+    assert "StrategySpec.from_yaml(\"versions/<version_id>/04_spec_build/strategy_spec.yaml\").to_effective_dict()" in builder
+    assert "Do not use parent container paths\nlike `portfolio`" in builder
+    assert "conceptual absent paths like `execution.leverage.allowed`" in builder
+    assert "Every `field_mappings` row must have a non-empty `reason`" in builder
+    assert "Do not leave `reason` as an empty string" in builder
+    assert "Do not label run, report, studio, or metadata source fields as `semantic: strategy`" in builder
+    assert "Use `excluded_non_material` only with `semantic: run`, `report`, `studio`, or `metadata`" in builder
+    assert "`signal.indicators.<name>.lag_bars`, not `signal.indicators.<name>.params.lag_bars`" in builder
+    assert "Run both validators again after every mapping-contract edit" in builder
     assert "`status: blocked`, `status: unsupported`" in builder
     assert "Do not read the full catalog into the model context" in builder
     assert "jq -r '.catalog_hash'" in builder
@@ -1249,7 +1303,7 @@ def test_builder_and_spec_auditor_require_unsupported_mapping_disclosure() -> No
 
 
 def test_spec_auditor_requires_audited_idea_and_calibrates_spec() -> None:
-    text = Path("agent/skills/audit-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    text = _skill_bundle_text("audit-strategy-spec")
 
     assert "strategy_idea_brief.json" in text
     assert "strategy_idea_audit.json" in text

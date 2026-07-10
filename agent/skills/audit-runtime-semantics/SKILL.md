@@ -71,9 +71,17 @@ true:
   `conversations/<conversation_id>/confirmations.jsonl`, records the full
   SPEC table path/hash, and records `spec_audit_path` plus `spec_audit_hash`
   for the pre-confirmation `spec_audit.json`. The JSONL line must match the
-  audit reference for `path`, `event_id`, `line_number`, `event_hash`,
-	  `artifact_path`, `artifact_hash`, `spec_audit_path`, and
-	  `spec_audit_hash`.
+  audit reference for `path`, `event_id`, `line_number`, `artifact_path`,
+  `artifact_hash`, `spec_audit_path`, and `spec_audit_hash`.
+
+`confirmation_event.event_hash` is the SHA-256 hash of the raw JSONL line
+content referenced by `path` and `line_number`. Do not compare it with a nested
+`event_hash` field inside the JSONL payload if one exists; that payload field
+is not part of the formal gate. Likewise, `confirmation_event.spec_audit_hash`
+is the canonical pre-confirmation audit hash, not the current final
+post-confirmation `spec_audit.json` hash. The deterministic
+`spec-audit validate --strict-confirmed --json` command is the source of truth
+for confirmation-event binding.
 
 Before compiling, run deterministic validation and block unless it exits 0:
 

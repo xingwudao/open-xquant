@@ -641,6 +641,7 @@ def _install_target(
         if not dry_run:
             dest_dir.mkdir(parents=True, exist_ok=True)
             write_text_file(dest_file, content)
+            _sync_skill_resources(skill.path.parent, dest_dir)
             _write_managed_marker(
                 marker_file,
                 target_id=target.id,
@@ -767,6 +768,7 @@ def _upgrade_target(
         if not dry_run:
             dest.parent.mkdir(parents=True, exist_ok=True)
             write_text_file(dest, content)
+            _sync_skill_resources(source_skill.path.parent, dest.parent)
             _write_managed_marker(
                 dest.parent / MANAGED_MARKER,
                 target_id=target.id,
@@ -833,6 +835,29 @@ def _remove_managed_skill_dir(target_id: str, path: Path, dry_run: bool) -> bool
     if not dry_run:
         shutil.rmtree(path)
     return True
+
+
+def _sync_skill_resources(source_dir: Path, dest_dir: Path) -> None:
+    """Copy bundled skill resources such as references, scripts, and assets."""
+    for child in list(dest_dir.iterdir()):
+        if child.name in {"SKILL.md", MANAGED_MARKER}:
+            continue
+        if child.is_symlink():
+            raise click.ClickException(f"Refusing to remove symlinked skill resource: {child}")
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+    for child in source_dir.iterdir():
+        if child.name in {"SKILL.md", MANAGED_MARKER}:
+            continue
+        if child.is_symlink():
+            raise click.ClickException(f"Refusing symlinked skill resource: {child}")
+        dest = dest_dir / child.name
+        if child.is_dir():
+            shutil.copytree(child, dest)
+        elif child.is_file():
+            shutil.copy2(child, dest)
 
 
 def _remove_deprecated_managed_skill_dirs(target: AgentTarget, dry_run: bool) -> list[str]:

@@ -813,11 +813,15 @@ def _validate_confirmation_event_artifact(
     spec_audit_ref = value.get("spec_audit_path")
     if isinstance(spec_audit_ref, str) and spec_audit_ref:
         referenced_audit_path = _resolve_audit_artifact_path(spec_audit_ref, audit_path)
-        if referenced_audit_path.resolve() != audit_path.resolve():
+        references_current_audit = referenced_audit_path.resolve() == audit_path.resolve()
+        is_archived_copy = False
+        if not references_current_audit:
+            is_archived_copy = _is_faithful_archived_audit_copy(referenced_audit_path, audit_payload)
+        if not references_current_audit and not is_archived_copy:
             errors.append(
                 {
                     "path": "confirmation_event.spec_audit_path",
-                    "message": "must reference the current spec_audit.json",
+                    "message": "must reference the current spec_audit.json or an identical archived copy",
                 }
             )
     expected_pre_hashes = _pre_confirmation_spec_audit_hashes(audit_payload)
@@ -873,6 +877,14 @@ def _resolve_audit_artifact_path(raw_path: str, audit_path: Path) -> Path:
     if (audit_path.parent / path).exists():
         return audit_path.parent / path
     return Path.cwd() / path
+
+
+def _is_faithful_archived_audit_copy(referenced_audit_path: Path, audit_payload: dict[str, Any]) -> bool:
+    try:
+        referenced_payload = json.loads(referenced_audit_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    return referenced_payload == audit_payload
 
 
 def _validate_catalog_hash(payload: dict[str, Any], component_catalog: Any) -> list[dict[str, str]]:
