@@ -112,6 +112,8 @@ the upstream writer phase.
      not unexpectedly switch to an all-English report.
 
 5. Chart review.
+   - A final research report without registered chart assets is a blocker;
+     return the report to `build-report-charts` before approving it.
    - Inspect registered figures when they support key conclusions.
    - Check that charts are not blank, nearly blank, unreadable, mislabeled, or
      purely decorative.

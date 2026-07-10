@@ -1,16 +1,20 @@
 ---
 name: build-report-charts
 description: >-
-  Use when users want charts, figures, visual evidence, or notebook-like
-  report assets for an open-xquant experiment report.
+  Use when report chart assets, figures, visual evidence, plotting scripts, or
+  notebook-like assets are required for an open-xquant experiment report.
 ---
 
 # Report Chart Builder
 
-Use this skill after a run exists and the user wants charts in the experiment
-report. The Agent should discuss chart requirements, write plotting Python when
-needed, save generated figures as experiment assets, and register them before
-handing the final narrative to `write-research-report`.
+Use this skill after a run exists and the experiment report needs charts. Final
+research reports need charts by default: build the Default Professional Chart
+Pack automatically, save generated figures as experiment assets, and register
+them before handing the final narrative to `write-research-report`.
+
+For an explicit ad hoc chart request that is not part of final report writing,
+the Agent may discuss chart requirements before plotting. Do not use that
+interactive mode to delay or skip the default report chart pack.
 
 ## Version-Governed Chart Package
 
@@ -43,16 +47,25 @@ outside the version's `10_reports/<run_id>/` package.
    - Do not modify metrics.
    - Do not modify audit artifacts.
 
-2. Discuss chart requirements and recommend a chart set.
-   - Use the Chart Applicability Matrix below.
-   - Ask what decision the chart should support.
-   - Clarify chart type, time range, benchmark, grouping, and labels.
+2. Resolve chart mode and recommend a chart set.
+   - Default Report Mode: when invoked by `oxq-report-writer-worker`,
+     `write-research-report`, the coordinator's post-run auto-advance, or any
+     final report task without an explicit chart list, set
+     `chart_decision: default_professional_chart_pack` and build the Default Professional Chart Pack automatically.
+   - Do not ask the user to confirm the default report chart batch.
+   - Do not omit charts merely because the user did not request them.
+   - Use the Chart Applicability Matrix below to decide which default charts are
+     applicable from available artifacts.
    - List the recommended chart set sorted by rotation-strategy value and data
      availability.
-   - If the user does not give a chart list, propose the Default Professional
-     Chart Pack in the Canonical Report Chart Order, then ask whether to build
-     the full pack, a smaller subset, or a custom set.
-   - Ask the user to confirm the batch before generating charts.
+   - Skip an individual default chart only when its source artifact is missing,
+     empty, or structurally insufficient. Record the skipped chart and reason in
+     the chart result or manifest notes; do not treat the whole report as
+     chart-free.
+   - For explicit ad hoc chart tasks outside report auto-advance, discuss chart
+     requirements, ask what decision the chart should support, clarify chart
+     type, time range, benchmark, grouping, and labels, then ask the user to
+     confirm that custom batch before generating charts.
    - Explain when a useful or requested chart cannot be produced from available
      data.
 
@@ -278,8 +291,9 @@ same manifest `section` because report assets sort by `section`, `order`, then
 
 ## Default Professional Chart Pack
 
-Use this pack when the user wants a professional report but does not specify
-charts. Use this order unless the user explicitly requests a different order.
+Use this pack for final professional reports. Use this order unless the user explicitly requests a different order.
+Build the Default Professional Chart Pack automatically in Default Report Mode.
+Do not ask the user to confirm the default report chart batch. Do not omit charts merely because the user did not request them.
 Skip any chart whose source artifact is unavailable, and say why.
 
 - equity curve vs benchmark: source artifact `equity_curve.csv` and

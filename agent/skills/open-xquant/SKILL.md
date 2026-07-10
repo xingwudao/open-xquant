@@ -213,7 +213,7 @@ The installed skills are flat peer directories such as `open-xquant/`,
   `audit-strategy-spec` -> user confirmation of the full SPEC table ->
   `audit-runtime-semantics` ->
   `run-authorized-backtest` -> `monitor-strategy-run` ->
-  `build-report-charts` when chart assets are required ->
+  `build-report-charts` builds the default professional chart pack ->
   `write-research-report` ->
   `review-research-report`.
 - "Compare two experiments":
@@ -228,9 +228,10 @@ The installed skills are flat peer directories such as `open-xquant/`,
   `build-report-charts` -> update report through `write-research-report` ->
   run deterministic `oxq report qa` -> use `review-research-report`.
 - "Write the final report":
-  `write-research-report` reads the chart decision from task inputs and writes
-  a blocked result if chart assets are required but missing ->
-  `build-report-charts` when chart assets are required ->
+  `write-research-report` resolves missing chart decisions to
+  `chart_decision: default_professional_chart_pack` and writes a blocked result
+  if registered chart assets are missing or stale ->
+  `build-report-charts` builds the default professional chart pack; do not ask the user whether charts are needed ->
   resume `write-research-report` to draft or update `research_report.md` with
   registered assets -> render HTML from the same Markdown -> deterministic
   `oxq report qa` -> `review-research-report`.

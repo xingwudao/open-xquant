@@ -211,15 +211,15 @@ the next worker is unblocked.
   new user prompt just because the backtest finished.
 - When `oxq-monitor-worker` returns `status: pass`, immediately route `oxq-report-writer-worker`
   with the verified run directory, audit outputs,
-  `robustness.json`, `report_language`, and a concrete chart decision.
-- If the user did not request charts and no report policy requires charts, set
-  the chart decision to `no_charts_requested` and allow the writer to draft the
-  report without chart assets. Do not leave the chart decision missing.
-- If the user requested charts, registered assets are stale, or the coordinator
-  requires a professional chart pack, route `oxq-report-writer-worker` with
-  that chart requirement; if the writer blocks for chart building, route
-  `oxq-report-writer-worker` back through chart building and then resume report
-  writing.
+  `robustness.json`, `report_language`, and
+  `chart_decision: default_professional_chart_pack` unless the user requested a
+  richer or custom chart pack.
+- Do not set `chart_decision: no_charts_requested`. Do not ask the user whether to generate report charts.
+  Final research reports require chart assets by default.
+- If registered assets are missing or stale, route `oxq-report-writer-worker`
+  with the default chart requirement; if the writer blocks for chart building,
+  route `oxq-report-writer-worker` through chart building and then resume
+  report writing.
 - When `oxq-report-writer-worker` returns `status: pass`, immediately route
   `oxq-report-reviewer-worker`.
 - Stop only on `blocked` or `fail`, and report the exact blocker and required

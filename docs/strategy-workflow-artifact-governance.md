@@ -603,9 +603,9 @@ run 完成：
 - 写或更新 `experiments.jsonl`。
 - monitor pass 后自动使用 `write-research-report`，不得停在 backtest 或
   monitor 结果等待新提示。
-- 用户未要求图表且无报告策略强制图表时，Coordinator 传入
-  `chart_decision: no_charts_requested`，避免报告 writer 因缺少 chart
-  decision blocked。
+- Coordinator 传入 `chart_decision: default_professional_chart_pack`。
+- 报告默认必须先用 `build-report-charts` 生成并注册专业图表包，不询问用户
+  是否需要图表，也不得因为用户未主动要求图表就省略。
 - 报告完成后使用 `review-research-report`。
 
 用户要求比较两个结果：

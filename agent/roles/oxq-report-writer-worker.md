@@ -14,7 +14,7 @@ inputs:
   - spec_audit.json
   - runtime_audit.json
   - robustness outputs
-  - chart decision
+  - chart decision, defaulting to default_professional_chart_pack
   - report_language
 outputs:
   - versions/<version_id>/10_reports/<run_id>/report_assets/**
@@ -63,7 +63,15 @@ drafting.
   decisions supplied by the coordinator.
 - Resolve `report_language`; default to `中文` when the coordinator or user did
   not explicitly request another language.
-- Generate professional chart assets when requested or required.
+- If the coordinator omits a chart decision, set
+  `chart_decision: default_professional_chart_pack`.
+- Build the Default Professional Chart Pack by default before final report
+  writing.
+- Do not ask the user whether charts are needed.
+- Do not return a successful report without registered chart assets; if assets
+  are missing or stale, use `build-report-charts` before writing the report or
+  return a blocked `writer_result.json` with `next_required_phase:
+  chart_building`.
 - Write `research_report.md` and `research_report.html`.
 - Disclose audit warnings, unconfirmed defaults, recipe choices, runtime audit
   conclusions, and material limitations.
@@ -86,7 +94,8 @@ drafting.
 - `spec_audit.json`
 - `runtime_audit.json`
 - Robustness outputs when available.
-- Chart decision from the coordinator.
+- Chart decision from the coordinator, defaulting to
+  `chart_decision: default_professional_chart_pack`.
 - `report_language`, defaulting to `中文`.
 
 ## Outputs
@@ -110,8 +119,8 @@ next phase is `oxq-report-reviewer-worker`.
 - Do not modify run artifacts.
 - Do not modify spec or audit artifacts.
 - Do not ask the user directly from worker mode.
-- If a required chart decision is missing, write a blocked result for the
-  coordinator.
+- Do not skip chart generation because the user did not explicitly request
+  charts.
 
 ## Result
 

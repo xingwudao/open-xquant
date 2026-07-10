@@ -8,10 +8,11 @@ description: >-
 
 # Research Report Writer
 
-Use this skill after the run artifacts, audits, robustness checks, and optional
-chart assets exist. The program may generate metrics, audit findings,
-robustness outputs, chart files, and asset manifests, but the Agent must write
-the final report for human decision-making.
+Use this skill after the run artifacts, audits, robustness checks, and report
+chart assets exist. Final research reports require registered chart assets by
+default. The program may generate metrics, audit findings, robustness outputs,
+chart files, and asset manifests, but the Agent must write the final report for
+human decision-making.
 
 ## Mandatory Routing
 
@@ -70,21 +71,25 @@ blocked `writer_result.json` can hand the intended language to the chart phase.
 ## Chart Decision Gate
 
 After resolving `report_language`, inspect `report_assets/manifest.json` if it
-exists and inspect the invoking task inputs for an explicit chart decision.
+exists and inspect the invoking task inputs for a chart decision. Final report
+charts are required by default.
 
-- If the task explicitly requests charts and registered chart assets are
-  missing or stale, stop report writing and write `writer_result.json`
-  with `status: blocked`, `language`: `report_language`,
+- If the invoking task omits a chart decision, set
+  `chart_decision: default_professional_chart_pack`; do not ask the user
+  whether to build charts.
+- If registered chart assets for the required report pack already exist and the
+  task does not request a refresh, continue with the registered assets.
+- If registered chart assets are missing, stale, unreadable, unregistered, or
+  insufficient for the required pack, stop report writing and write
+  `writer_result.json` with `status: blocked`, `language`: `report_language`,
+  `chart_decision: default_professional_chart_pack`,
+  `blocking_reason: missing_required_report_charts`,
   `next_required_phase: chart_building`, and
   `next_skill: build-report-charts`.
-- If the task explicitly says no charts are needed, continue and state in the
-  report that no chart assets were requested.
-- If registered chart assets already exist and the task does not request a
-  refresh, continue with the registered assets.
-- If the chart decision is missing, do not ask the user directly from this
-  skill. Write `writer_result.json` with `status: blocked`,
-  `language`: `report_language`, and
-  `blocking_reason: missing_chart_decision`.
+- If the user requested a richer or custom chart pack, use that chart decision
+  as the required pack and apply the same missing/stale block.
+- Do not ask the user whether to build charts, and do not continue to a
+  successful final report without registered chart assets.
 
 ## Inputs
 

@@ -88,7 +88,7 @@ Agent loads open-xquant skill
   → oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
   → oxq audit research versions/<version_id>/09_backtests/<run_id>/
   → oxq robustness run versions/<version_id>/09_backtests/<run_id>/
-  → build-report-charts registers chart assets when needed
+  → build-report-charts registers the default professional chart pack
   → write-research-report writes research_report.md/html
   → oxq report qa versions/<version_id>/10_reports/<run_id>/
   → review-research-report reviews the final report
@@ -292,7 +292,7 @@ Agent loads the open-xquant skill
   → oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
   → oxq audit research versions/<version_id>/09_backtests/<run_id>/
   → oxq robustness run versions/<version_id>/09_backtests/<run_id>/
-  → build-report-charts registers chart assets when needed
+  → build-report-charts registers the default professional chart pack
   → write-research-report writes research_report.md/html
   → oxq report qa versions/<version_id>/10_reports/<run_id>/
   → review-research-report reviews the final report
