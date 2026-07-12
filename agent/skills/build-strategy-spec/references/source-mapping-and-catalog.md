@@ -15,7 +15,7 @@ decisions.
 
 Build from the audited idea as a source mapping exercise, not as a free-form
 YAML drafting task. Before completing the builder phase, write
-`versions/<version_id>/04_spec_build/spec_mapping_notes.md` with:
+`<phase_paths.04_spec_build>/spec_mapping_notes.md` with:
 
 - every audited idea or source config field that materially affected the SPEC
 - its target `strategy_spec.yaml` field path, selected component, or selected
@@ -51,11 +51,15 @@ is explicitly mapped and confirmed:
   implemented by a registered cross-sectional component or optimizer
 - any close-derived indicator missing the user-confirmed `lag_bars` policy
 
-Also write `versions/<version_id>/04_spec_build/spec_mapping_contract.json`
+Also write `<phase_paths.04_spec_build>/spec_mapping_contract.json`
 and validate it with the Python API `oxq.spec.validate_mapping_contract`. This
 is not a CLI command; do not run `oxq spec validate_mapping_contract`. The
-contract must include `schema_version: 1`, `source_format`, and
-`field_mappings`. Each mapping row must identify:
+contract must include `schema_version: 1`, `source_format`, a non-empty
+`source_fields` inventory, and `field_mappings`. Build `source_fields` by
+flattening every field present in the source artifact before mapping begins.
+Every inventory field must appear in exactly one mapping row, and every mapping
+row must name a field from that inventory. Missing, duplicate, or invented
+source fields block builder pass. Each mapping row must identify:
 
 - `source_field`
 - `semantic`: `strategy`, `run`, `report`, `studio`, `metadata`, or
@@ -86,7 +90,7 @@ paths:
 ```python
 from oxq.spec import StrategySpec
 
-effective = StrategySpec.from_yaml("versions/<version_id>/04_spec_build/strategy_spec.yaml").to_effective_dict()
+effective = StrategySpec.from_yaml("<phase_paths.04_spec_build>/strategy_spec.yaml").to_effective_dict()
 ```
 
 Flatten that effective dictionary and use only those field paths, such as
@@ -119,7 +123,7 @@ PYTHON="$(dirname "$RUNNER")/python"
 "$PYTHON" - <<'PY'
 from oxq.spec import validate_mapping_contract_file
 
-result = validate_mapping_contract_file("versions/<version_id>/04_spec_build/spec_mapping_contract.json")
+result = validate_mapping_contract_file("<phase_paths.04_spec_build>/spec_mapping_contract.json")
 print(result)
 raise SystemExit(0 if result["status"] == "pass" else 1)
 PY
@@ -134,7 +138,7 @@ PYTHON="$(dirname "$RUNNER")/python"
 "$PYTHON" - <<'PY'
 from oxq.spec import validate_mapping_contract_for_builder_pass_file
 
-result = validate_mapping_contract_for_builder_pass_file("versions/<version_id>/04_spec_build/spec_mapping_contract.json")
+result = validate_mapping_contract_for_builder_pass_file("<phase_paths.04_spec_build>/spec_mapping_contract.json")
 print(result)
 raise SystemExit(0 if result["status"] == "pass" else 1)
 PY
@@ -142,8 +146,9 @@ PY
 
 The base mapping contract validator checks structure and may allow
 `status: blocked` as a legal handoff state. The builder-pass gate is stricter:
-every `semantic: strategy` row must be mapped and non-blocking before the
-builder may return `status: pass`.
+`source_fields` must be non-empty and have exact once-only `field_mappings`
+coverage, and every `semantic: strategy` row must be mapped and non-blocking
+before the builder may return `status: pass`.
 Run both validators again after every mapping-contract edit. Do not write `builder_phase_result.json` with
 `status: pass` until both validator outputs are `status: pass`.
 
@@ -173,18 +178,18 @@ material component edit:
    If it is missing or stale, create it with:
 
    ```bash
-   uv run oxq registry export --out versions/<version_id>/04_spec_build/component_catalog.json
+   uv run oxq registry export --out <phase_paths.04_spec_build>/component_catalog.json
    ```
 
    Do not read the full catalog into the model context. Query only the needed
    names, aliases, recipes, and hashes with structured tools such as `jq`:
 
    ```bash
-   jq -r '.catalog_hash' versions/<version_id>/04_spec_build/component_catalog.json
-   jq '.indicators[] | select(.name=="NdayReturn" or .name=="RollingVolatility" or .name=="Ratio" or .name=="RPS")' versions/<version_id>/04_spec_build/component_catalog.json
-   jq '.signals[] | select(.name=="Threshold")' versions/<version_id>/04_spec_build/component_catalog.json
-   jq '.portfolios[] | select(.name=="TopNRanking")' versions/<version_id>/04_spec_build/component_catalog.json
-   jq '.recipes[] | select(.name=="volatility_adjusted_momentum" or .name=="threshold_then_rank_top_n" or .name=="rps_top_n_rotation")' versions/<version_id>/04_spec_build/component_catalog.json
+   jq -r '.catalog_hash' <phase_paths.04_spec_build>/component_catalog.json
+   jq '.indicators[] | select(.name=="NdayReturn" or .name=="RollingVolatility" or .name=="Ratio" or .name=="RPS")' <phase_paths.04_spec_build>/component_catalog.json
+   jq '.signals[] | select(.name=="Threshold")' <phase_paths.04_spec_build>/component_catalog.json
+   jq '.portfolios[] | select(.name=="TopNRanking")' <phase_paths.04_spec_build>/component_catalog.json
+   jq '.recipes[] | select(.name=="volatility_adjusted_momentum" or .name=="threshold_then_rank_top_n" or .name=="rps_top_n_rotation")' <phase_paths.04_spec_build>/component_catalog.json
    ```
 
 2. Search exact names and aliases in the catalog for every requested

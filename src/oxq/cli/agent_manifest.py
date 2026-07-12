@@ -75,6 +75,13 @@ def _find_marker_block(text: str, marker: str) -> tuple[int, int] | None:
     return begin_index, end_index + len(end)
 
 
+def validate_marker_block(path: Path, marker: str) -> None:
+    """Validate an existing managed marker block without changing the file."""
+
+    if path.exists():
+        _find_marker_block(path.read_text(encoding="utf-8"), marker)
+
+
 def upsert_marker_block(path: Path, marker: str, content: str) -> None:
     original = path.read_text(encoding="utf-8") if path.exists() else ""
     block = f"{_markers(marker)[0]}\n{content.rstrip()}\n{_markers(marker)[1]}"

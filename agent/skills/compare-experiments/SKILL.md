@@ -13,6 +13,17 @@ and `paths.comparison_registry` for the summary registry. Fall back to
 `comparisons/` and `comparisons/comparisons.jsonl` only when no workspace config
 value is present.
 
+Do not use this skill in a version-governed workspace. Stop before reading run
+artifacts or writing comparison outputs and route the request to
+`compare-strategy-versions`, including when the user only says "compare two
+experiments". The version-aware comparator must validate each candidate against
+its claimed version manifest and backtest phase.
+
+Classify the workspace exactly as the CLI does: it is version-governed if and
+only if `workflow.layout == version_governed` or the `paths.versions_dir` key
+is present. Otherwise it is legacy, even when `.open-xquant/workspace.yaml`
+exists. Use this legacy comparator only in the latter case.
+
 ## Preconditions
 
 Both runs must contain:
@@ -72,6 +83,17 @@ comparisons/
         ├── drawdown_overlay.png
         └── metrics_bar.png
 ```
+
+## Report Evidence Gate
+
+When a compared input includes a current report package, validate its
+`chart_build_result.json` before using charts or report claims. Require the
+requested/applicable/generated/skipped set invariants, closed skip reason codes,
+the exact `{path, sha256}` manifest reference, and every generated asset hash.
+For each manifest asset, require a safe package-relative `source.script`, full
+lowercase `source.script_sha256`, and recompute the script SHA-256 from exact
+bytes. A script mutation blocks report-derived comparison evidence; a containing
+manifest hash or unchanged PNG does not excuse it.
 
 ## Red Lines
 

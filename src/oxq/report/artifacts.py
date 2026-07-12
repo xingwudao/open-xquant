@@ -10,6 +10,13 @@ from typing import Any
 import pandas as pd
 import yaml  # type: ignore[import-untyped]
 
+_GOVERNED_REPORT_REQUIRED_SOURCE_ARTIFACTS = frozenset(
+    {
+        "reproducibility_audit.json",
+        "research_bias_audit.json",
+    }
+)
+
 
 @dataclass(frozen=True)
 class RunArtifacts:
@@ -50,6 +57,40 @@ class RunArtifacts:
             trades=_read_csv(run_path / "trades.csv"),
             positions=_read_csv(run_path / "positions.csv"),
             target_weights=_read_csv(run_path / "target_weights.csv"),
+        )
+
+
+def require_governed_report_source_hashes(run_dir: str | Path) -> None:
+    """Require governed monitor audits and their artifact manifest entries."""
+    run_path = Path(run_dir)
+    missing_required_files = sorted(
+        name
+        for name in _GOVERNED_REPORT_REQUIRED_SOURCE_ARTIFACTS
+        if not (run_path / name).is_file()
+    )
+    if missing_required_files:
+        raise ValueError(
+            "governed report source artifacts are required before report QA: "
+            f"{missing_required_files}"
+        )
+
+    manifest_path = run_path / "artifact_hashes.json"
+    try:
+        artifact_hashes = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("artifact_hashes.json must contain a valid JSON object") from exc
+    if not isinstance(artifact_hashes, dict):
+        raise ValueError("artifact_hashes.json must contain a valid JSON object")
+
+    missing_hashes = sorted(
+        name
+        for name in _GOVERNED_REPORT_REQUIRED_SOURCE_ARTIFACTS
+        if not isinstance(artifact_hashes.get(name), str) or not artifact_hashes[name]
+    )
+    if missing_hashes:
+        raise ValueError(
+            "artifact_hashes.json missing required hashes for governed report source artifacts: "
+            f"{missing_hashes}"
         )
 
 

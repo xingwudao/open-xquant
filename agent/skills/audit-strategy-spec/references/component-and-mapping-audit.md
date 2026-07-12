@@ -14,7 +14,7 @@ mapping-contract validation, and cross-sectional feasibility.
 Before approving a spec for backtest, audit component provenance against the
 same catalog used while building the spec:
 
-1. Load `versions/<version_id>/04_spec_build/component_catalog.json` from the
+1. Load `<phase_paths.04_spec_build>/component_catalog.json` from the
    active version. If it is missing or stale, block with
    `next_required_phase: build`. The builder must export or refresh the catalog;
    the auditor must not write into `04_spec_build/`.
@@ -65,7 +65,7 @@ semantics as `excluded_non_material`; such rows must be `mapped`,
 `needs_user_confirmation`, `unsupported`, or `blocked`.
 
 When running deterministic `spec-audit validate`, pass the mapping contract via
-`--mapping-contract versions/<version_id>/04_spec_build/spec_mapping_contract.json`
+`--mapping-contract <phase_paths.04_spec_build>/spec_mapping_contract.json`
 so machine validation can reject unsupported strategy semantics that are marked
 non-blocking.
 

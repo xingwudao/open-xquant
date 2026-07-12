@@ -9,6 +9,8 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 SPEC_AUDIT_SCHEMA_VERSION = 4
 
 REQUIRED_TOP_LEVEL_FIELDS = {
@@ -86,6 +88,18 @@ _HISTORICAL_NEGATIVE_PREFIX_RE = re.compile(
     r"(起初|最初|原先|一开始|此前|之前|先前|曾经|initially|originally|previously|earlier|before)\W*$",
     re.IGNORECASE,
 )
+_VERSION_PHASES = (
+    "01_brainstorm",
+    "02_idea_audit",
+    "03_component_authoring",
+    "04_spec_build",
+    "05_data_inspection",
+    "06_spec_audit",
+    "07_compile_preview",
+    "08_runtime_audit",
+    "09_backtests",
+    "10_reports",
+)
 
 
 def validate_spec_audit_file(
@@ -97,6 +111,8 @@ def validate_spec_audit_file(
     component_catalog: Any | None = None,
     require_confirmed_coverage: bool = False,
     verify_confirmation_table: bool = False,
+    mapping_contract_path: str | Path | None = None,
+    require_formal_provenance: bool = False,
 ) -> dict[str, Any]:
     """Validate a spec_audit.json file and return deterministic findings."""
     audit_path = Path(path)
@@ -104,7 +120,7 @@ def validate_spec_audit_file(
         payload = json.loads(audit_path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         return _result("fail", [{"path": "$", "message": f"invalid JSON: {exc}"}])
-    except OSError as exc:
+    except (OSError, UnicodeError) as exc:
         return _result("fail", [{"path": "$", "message": str(exc)}])
     if spec is None and spec_path is not None:
         try:
@@ -119,7 +135,7 @@ def validate_spec_audit_file(
             component_catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError as exc:
             return _result("fail", [{"path": "component_catalog", "message": f"invalid JSON: {exc}"}])
-        except OSError as exc:
+        except (OSError, UnicodeError) as exc:
             return _result("fail", [{"path": "component_catalog", "message": str(exc)}])
     result = validate_spec_audit(
         payload,
@@ -129,6 +145,16 @@ def validate_spec_audit_file(
     )
     if not isinstance(payload, dict):
         return result
+    errors = list(result["errors"])
+    if require_formal_provenance:
+        errors.extend(
+            _validate_formal_provenance_artifacts(
+                payload,
+                audit_path,
+                spec=spec,
+                mapping_contract_path=Path(mapping_contract_path) if mapping_contract_path is not None else None,
+            )
+        )
     requires_table = _requires_spec_confirmation_table(
         status=payload.get("status"),
         audit_conclusion=payload.get("audit_conclusion"),
@@ -139,7 +165,6 @@ def validate_spec_audit_file(
         confirmation_status=payload.get("user_confirmation_status"),
     )
     if verify_confirmation_table or requires_table or requires_event:
-        errors = list(result["errors"])
         errors.extend(_validate_spec_confirmation_table_artifact(payload.get("spec_confirmation_table"), audit_path, spec=spec))
         errors.extend(
             _validate_confirmation_event_artifact(
@@ -150,7 +175,7 @@ def validate_spec_audit_file(
             )
         )
         return _result("fail" if errors else "pass", errors)
-    return result
+    return _result("fail" if errors else "pass", errors)
 
 
 def validate_spec_audit(
@@ -263,10 +288,29 @@ def validate_spec_audit(
         if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
             errors.append({"path": field, "message": "must be a sha256:<hex> hash"})
 
+    if "spec_mapping_contract_hash" in payload:
+        value = payload.get("spec_mapping_contract_hash")
+        if not isinstance(value, str) or not _HASH_RE.fullmatch(value):
+            errors.append({"path": "spec_mapping_contract_hash", "message": "must be a sha256:<hex> hash"})
+
     for field in ("strategy_idea_brief", "strategy_idea_audit"):
         value = payload.get(field)
         if not isinstance(value, str) or not value.strip():
             errors.append({"path": field, "message": "must be a non-empty string"})
+
+    if "spec_mapping_contract" in payload:
+        value = payload.get("spec_mapping_contract")
+        if not isinstance(value, str) or not value.strip():
+            errors.append({"path": "spec_mapping_contract", "message": "must be a non-empty string"})
+    if "spec_mapping_contract_status" in payload:
+        value = payload.get("spec_mapping_contract_status")
+        if value not in {"pass", "block", "fail"}:
+            errors.append(
+                {
+                    "path": "spec_mapping_contract_status",
+                    "message": "must be one of ['block', 'fail', 'pass']",
+                }
+            )
 
     if spec is not None and callable(getattr(spec, "compute_hash", None)):
         expected_spec_hash = spec.compute_hash()
@@ -530,6 +574,8 @@ def _validate_confirmation_event(value: Any, *, require_event: bool, errors: lis
         item = value.get(field)
         if not isinstance(item, str) or not item:
             errors.append({"path": f"confirmation_event.{field}", "message": "must be a non-empty string"})
+    if value.get("decision") != "confirmed":
+        errors.append({"path": "confirmation_event.decision", "message": "must be confirmed"})
     line_number = value.get("line_number")
     if not isinstance(line_number, int) or isinstance(line_number, bool) or line_number <= 0:
         errors.append({"path": "confirmation_event.line_number", "message": "must be a positive integer"})
@@ -553,7 +599,16 @@ def _validate_spec_confirmation_table_artifact(value: Any, audit_path: Path, *, 
     if not table_path.exists():
         errors.append({"path": "spec_confirmation_table.path", "message": f"file not found: {raw_path}"})
         return errors
-    table_bytes = table_path.read_bytes()
+    try:
+        table_bytes = table_path.read_bytes()
+    except (OSError, UnicodeError) as exc:
+        errors.append(
+            {
+                "path": "spec_confirmation_table.path",
+                "message": f"could not read {raw_path}: {exc}",
+            }
+        )
+        return errors
     full_hash = f"sha256:{hashlib.sha256(table_bytes).hexdigest()}"
     short_hash = f"sha256:{hashlib.sha256(table_bytes).hexdigest()[:16]}"
     if recorded_hash not in {short_hash, full_hash}:
@@ -761,11 +816,24 @@ def _validate_confirmation_event_artifact(
         return errors
     if not isinstance(event_hash, str) or not _HASH_RE.fullmatch(event_hash):
         return errors
-    event_path = _resolve_audit_artifact_path(raw_path, audit_path)
+    event_path, path_error = _resolve_confirmation_event_path(raw_path, audit_path)
+    if path_error is not None:
+        errors.append({"path": "confirmation_event.path", "message": path_error})
+        return errors
+    assert event_path is not None
     if not event_path.exists():
         errors.append({"path": "confirmation_event.path", "message": f"file not found: {raw_path}"})
         return errors
-    lines = event_path.read_text(encoding="utf-8").splitlines()
+    try:
+        lines = event_path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError) as exc:
+        errors.append(
+            {
+                "path": "confirmation_event.path",
+                "message": f"could not read UTF-8 event log {raw_path}: {exc}",
+            }
+        )
+        return errors
     if line_number > len(lines):
         errors.append(
             {
@@ -832,7 +900,7 @@ def _validate_confirmation_event_artifact(
                 "message": "must match the pre-confirmation spec_audit.json hash",
             }
         )
-    for field in ("event_id", "artifact_path", "artifact_hash", "spec_audit_path", "spec_audit_hash"):
+    for field in ("event_id", "decision", "artifact_path", "artifact_hash", "spec_audit_path", "spec_audit_hash"):
         if event_payload.get(field) != value.get(field):
             errors.append(
                 {
@@ -844,6 +912,8 @@ def _validate_confirmation_event_artifact(
         errors.append({"path": "confirmation_event.phase", "message": "must be spec_confirmation"})
     if event_payload.get("field_scope") != "full_spec_table":
         errors.append({"path": "confirmation_event.field_scope", "message": "must be full_spec_table"})
+    if event_payload.get("decision") != "confirmed":
+        errors.append({"path": "confirmation_event.decision", "message": "must be confirmed"})
     return errors
 
 
@@ -879,10 +949,847 @@ def _resolve_audit_artifact_path(raw_path: str, audit_path: Path) -> Path:
     return Path.cwd() / path
 
 
+def _resolve_confirmation_event_path(raw_path: str, audit_path: Path) -> tuple[Path | None, str | None]:
+    workspace_root = _audit_workspace_root(audit_path)
+    conversations_path, error = _configured_conversations_path(workspace_root)
+    if error is not None:
+        return None, error
+
+    event_reference = Path(raw_path)
+    if event_reference.is_absolute() or ".." in event_reference.parts:
+        return None, "must be a safe workspace-relative path inside paths.conversations_dir"
+
+    event_path = workspace_root / event_reference
+    resolved_event = event_path.resolve(strict=False)
+    resolved_workspace = workspace_root.resolve()
+    assert conversations_path is not None
+    resolved_conversations = conversations_path.resolve(strict=False)
+    try:
+        resolved_event.relative_to(resolved_workspace)
+        resolved_event.relative_to(resolved_conversations)
+    except ValueError:
+        return None, "must resolve inside the configured paths.conversations_dir"
+    return event_path, None
+
+
+def _audit_workspace_root(audit_path: Path) -> Path:
+    lexical_audit = audit_path.absolute()
+    for parent in lexical_audit.parents:
+        if (parent / ".open-xquant" / "workspace.yaml").is_file():
+            return parent
+
+    cwd = Path.cwd().resolve()
+    if (cwd / ".open-xquant" / "workspace.yaml").is_file():
+        return cwd
+    try:
+        lexical_audit.relative_to(cwd)
+    except ValueError:
+        return lexical_audit.parent
+    return cwd
+
+
+def _configured_conversations_path(workspace_root: Path) -> tuple[Path | None, str | None]:
+    config_path = workspace_root / ".open-xquant" / "workspace.yaml"
+    configured_value: Any = "conversations"
+    if config_path.exists():
+        try:
+            workspace = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            return None, f"could not read .open-xquant/workspace.yaml: {exc}"
+        if not isinstance(workspace, dict):
+            return None, ".open-xquant/workspace.yaml must contain an object"
+        paths = workspace.get("paths")
+        if paths is not None and not isinstance(paths, dict):
+            return None, ".open-xquant/workspace.yaml paths must contain an object"
+        if isinstance(paths, dict) and "conversations_dir" in paths:
+            configured_value = paths["conversations_dir"]
+
+    if not isinstance(configured_value, str) or not configured_value:
+        return None, "workspace paths.conversations_dir must be a non-empty safe relative path"
+    configured_path = Path(configured_value)
+    if configured_path.is_absolute() or ".." in configured_path.parts:
+        return None, "workspace paths.conversations_dir must be a safe relative path"
+
+    conversations_path = workspace_root / configured_path
+    try:
+        conversations_path.resolve(strict=False).relative_to(workspace_root.resolve())
+    except ValueError:
+        return None, "workspace paths.conversations_dir must stay within the workspace"
+    return conversations_path, None
+
+
+def _validate_formal_provenance_artifacts(
+    payload: dict[str, Any],
+    audit_path: Path,
+    *,
+    spec: Any | None,
+    mapping_contract_path: Path | None,
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    workspace_root = _audit_workspace_root(audit_path)
+    governed_paths, governance_errors = _active_governed_provenance_paths(workspace_root)
+    errors.extend(governance_errors)
+    if governance_errors:
+        return errors
+    if governed_paths is not None:
+        expected_audit_path = governed_paths["06_spec_audit"] / "spec_audit.json"
+        if (
+            ".." in audit_path.parts
+            or _path_has_symlink_component(audit_path, workspace_root)
+            or audit_path.absolute() != expected_audit_path.absolute()
+        ):
+            errors.append(
+                {
+                    "path": "spec_audit.json",
+                    "message": (
+                        "must be the canonical active version "
+                        "phase_paths.06_spec_audit/spec_audit.json leaf without symlink components"
+                    ),
+                }
+            )
+
+    artifact_fields = (
+        ("strategy_idea_brief", "strategy_idea_brief_hash", "01_brainstorm", "strategy_idea_brief.json"),
+        ("strategy_idea_audit", "strategy_idea_audit_hash", "02_idea_audit", "strategy_idea_audit.json"),
+    )
+    resolved_artifacts: dict[str, Path] = {}
+    for field, hash_field, phase, filename in artifact_fields:
+        recorded_path = payload.get(field)
+        if governed_paths is not None:
+            owned_path = governed_paths[phase] / filename
+            if _path_has_symlink_component(owned_path, workspace_root):
+                errors.append(
+                    {
+                        "path": field,
+                        "message": f"manifest-owned {phase}/{filename} must not contain symlink components",
+                    }
+                )
+                continue
+            expected_path = owned_path
+        elif isinstance(recorded_path, str) and recorded_path:
+            expected_path = _resolve_workspace_artifact_reference(
+                recorded_path,
+                workspace_root,
+                audit_path.parent,
+            )
+        else:
+            errors.append({"path": field, "message": "formal provenance requires an artifact path"})
+            continue
+        expected_path = expected_path.resolve(strict=False)
+        if not isinstance(recorded_path, str) or not recorded_path:
+            errors.append({"path": field, "message": "formal provenance requires an artifact path"})
+        else:
+            recorded_resolved = _resolve_workspace_artifact_reference(recorded_path, workspace_root, audit_path.parent)
+            if recorded_resolved != expected_path:
+                errors.append(
+                    {
+                        "path": field,
+                        "message": f"must reference the active manifest-owned {phase}/{filename}",
+                    }
+                )
+        resolved_artifacts[field] = expected_path
+        actual_hash = _canonical_json_file_hash(expected_path, field, errors)
+        if actual_hash is not None and payload.get(hash_field) != actual_hash:
+            errors.append(
+                {
+                    "path": hash_field,
+                    "message": f"must match canonical hash {actual_hash}",
+                }
+            )
+
+    idea_audit_path = resolved_artifacts.get("strategy_idea_audit")
+    idea_brief_path = resolved_artifacts.get("strategy_idea_brief")
+    idea_brief = None
+    if idea_brief_path is not None and idea_brief_path.is_file():
+        idea_brief = _read_json_dict_for_provenance(idea_brief_path, "strategy_idea_brief", errors)
+    if idea_audit_path is not None and idea_audit_path.is_file():
+        idea_audit = _read_json_dict_for_provenance(idea_audit_path, "strategy_idea_audit", errors)
+        if idea_audit is not None:
+            if idea_audit.get("status") != "pass":
+                errors.append({"path": "strategy_idea_audit.status", "message": "must be pass"})
+            if idea_audit.get("idea_workflow_pass") is not True:
+                errors.append(
+                    {
+                        "path": "strategy_idea_audit.idea_workflow_pass",
+                        "message": "must be true",
+                    }
+                )
+            if idea_audit.get("next_required_phase") != "build":
+                errors.append(
+                    {
+                        "path": "strategy_idea_audit.next_required_phase",
+                        "message": "must be build",
+                    }
+                )
+            if idea_brief_path is not None:
+                internal_brief_path = idea_audit.get("strategy_idea_brief")
+                if not isinstance(internal_brief_path, str) or not internal_brief_path:
+                    errors.append(
+                        {
+                            "path": "strategy_idea_audit.strategy_idea_brief",
+                            "message": "must reference the canonical active strategy idea brief",
+                        }
+                    )
+                elif _resolve_workspace_artifact_reference(
+                    internal_brief_path,
+                    workspace_root,
+                    idea_audit_path.parent,
+                ) != idea_brief_path:
+                    errors.append(
+                        {
+                            "path": "strategy_idea_audit.strategy_idea_brief",
+                            "message": "must reference the canonical active strategy idea brief",
+                        }
+                    )
+                brief_hash = _canonical_json_file_hash(idea_brief_path, "strategy_idea_brief", errors)
+                if idea_audit.get("strategy_idea_brief_hash") != brief_hash:
+                    errors.append(
+                        {
+                            "path": "strategy_idea_audit.strategy_idea_brief_hash",
+                            "message": f"must match canonical strategy idea brief hash {brief_hash}",
+                        }
+                    )
+            if idea_brief is not None:
+                conversation_hash = idea_brief.get("conversation_hash")
+                if not isinstance(conversation_hash, str) or not _HASH_RE.fullmatch(conversation_hash):
+                    errors.append(
+                        {
+                            "path": "strategy_idea_brief.conversation_hash",
+                            "message": "must be a sha256:<hex> hash",
+                        }
+                    )
+                else:
+                    if idea_audit.get("conversation_hash") != conversation_hash:
+                        errors.append(
+                            {
+                                "path": "strategy_idea_audit.conversation_hash",
+                                "message": "must match the canonical strategy idea brief conversation_hash",
+                            }
+                        )
+                    if payload.get("conversation_hash") != conversation_hash:
+                        errors.append(
+                            {
+                                "path": "conversation_hash",
+                                "message": "must match the canonical strategy idea brief conversation_hash",
+                            }
+                        )
+
+    recorded_mapping_path = payload.get("spec_mapping_contract")
+    if governed_paths is not None:
+        owned_mapping_path = governed_paths["04_spec_build"] / "spec_mapping_contract.json"
+        if _path_has_symlink_component(owned_mapping_path, workspace_root):
+            errors.append(
+                {
+                    "path": "spec_mapping_contract",
+                    "message": "manifest-owned 04_spec_build/spec_mapping_contract.json must not contain symlink components",
+                }
+            )
+            return errors
+        expected_mapping_path = owned_mapping_path
+    elif mapping_contract_path is not None:
+        expected_mapping_path = mapping_contract_path
+    elif isinstance(recorded_mapping_path, str) and recorded_mapping_path:
+        expected_mapping_path = _resolve_workspace_artifact_reference(
+            recorded_mapping_path,
+            workspace_root,
+            audit_path.parent,
+        )
+    else:
+        expected_mapping_path = None
+    if expected_mapping_path is None:
+        errors.append(
+            {
+                "path": "spec_mapping_contract",
+                "message": "formal provenance requires the current spec mapping contract",
+            }
+        )
+        return errors
+
+    expected_mapping_path = expected_mapping_path.resolve(strict=False)
+    if mapping_contract_path is not None and mapping_contract_path.resolve(strict=False) != expected_mapping_path:
+        errors.append(
+            {
+                "path": "spec_mapping_contract",
+                "message": "--mapping-contract must be the active manifest-owned spec mapping contract",
+            }
+        )
+    if not isinstance(recorded_mapping_path, str) or not recorded_mapping_path:
+        errors.append({"path": "spec_mapping_contract", "message": "must record the current mapping contract path"})
+    else:
+        recorded_mapping_resolved = _resolve_workspace_artifact_reference(
+            recorded_mapping_path,
+            workspace_root,
+            audit_path.parent,
+        )
+        if recorded_mapping_resolved != expected_mapping_path:
+            errors.append(
+                {
+                    "path": "spec_mapping_contract",
+                    "message": "must reference the active manifest-owned 04_spec_build/spec_mapping_contract.json",
+                }
+            )
+
+    mapping_hash = _canonical_json_file_hash(expected_mapping_path, "spec_mapping_contract", errors)
+    if mapping_hash is not None and payload.get("spec_mapping_contract_hash") != mapping_hash:
+        errors.append(
+            {
+                "path": "spec_mapping_contract_hash",
+                "message": f"must match canonical hash {mapping_hash}",
+            }
+        )
+    mapping_status = _mapping_contract_status(
+        expected_mapping_path,
+        spec,
+        errors,
+        idea_brief=idea_brief,
+    )
+    if payload.get("spec_mapping_contract_status") != mapping_status:
+        errors.append(
+            {
+                "path": "spec_mapping_contract_status",
+                "message": f"must match current mapping contract status {mapping_status}",
+            }
+        )
+    return errors
+
+
+def _active_governed_provenance_paths(
+    workspace_root: Path,
+) -> tuple[dict[str, Path] | None, list[dict[str, str]]]:
+    config_path = workspace_root / ".open-xquant/workspace.yaml"
+    if not config_path.is_file():
+        return None, []
+    try:
+        workspace = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        return None, [{"path": "workspace", "message": f"could not read workspace config: {exc}"}]
+    if not isinstance(workspace, dict):
+        return None, [{"path": "workspace", "message": "workspace config must contain an object"}]
+    from oxq.cli.research import (
+        _classify_workspace_governance,
+        _workflow_manifest_path_mismatches,
+    )
+
+    paths = workspace.get("paths")
+    governed, classification_error = _classify_workspace_governance(workspace)
+    if not governed:
+        return None, []
+    if classification_error is not None:
+        return None, [{"path": "workspace.paths.versions_dir", "message": "must be a non-empty string"}]
+    if paths is not None and not isinstance(paths, dict):
+        return None, [{"path": "workspace.paths", "message": "must contain an object"}]
+    paths = paths if isinstance(paths, dict) else {}
+
+    current_errors: list[dict[str, str]] = []
+    current_path = _canonical_governance_manifest_path(
+        workspace_root,
+        paths,
+        "current_manifest",
+        "current.json",
+        current_errors,
+    )
+    if current_path is None:
+        return None, current_errors
+    current = _read_json_dict_for_provenance(current_path, "current.json", current_errors)
+    if current is None:
+        return None, current_errors or [
+            {"path": "current.json", "message": "version-governed workspace requires current.json"}
+        ]
+    current_errors.extend(_validate_current_manifest(current))
+    if current_errors:
+        return None, current_errors
+
+    workflow_errors: list[dict[str, str]] = []
+    workflow_path = _canonical_governance_manifest_path(
+        workspace_root,
+        paths,
+        "workflow_manifest",
+        "workflow_manifest.json",
+        workflow_errors,
+    )
+    if workflow_path is None:
+        return None, workflow_errors
+    workflow_manifest = _read_json_dict_for_provenance(
+        workflow_path,
+        "workflow_manifest.json",
+        workflow_errors,
+    )
+    if workflow_manifest is None:
+        return None, workflow_errors
+    workflow_errors.extend(_validate_workflow_manifest(workflow_manifest, current))
+    if workflow_errors:
+        return None, workflow_errors
+    workflow_mismatches = _workflow_manifest_path_mismatches(workspace, workflow_manifest)
+    if workflow_mismatches:
+        return None, [
+            {
+                "path": f"workflow_manifest.json.paths.{key}",
+                "message": "must match workspace config; root relocation requires an explicit migration",
+            }
+            for key in workflow_mismatches
+        ]
+
+    lineage_errors: list[dict[str, str]] = []
+    lineage_path = _canonical_governance_manifest_path(
+        workspace_root,
+        paths,
+        "lineage_manifest",
+        "lineage.json",
+        lineage_errors,
+    )
+    if lineage_path is None:
+        return None, lineage_errors
+    lineage = _read_json_dict_for_provenance(
+        lineage_path,
+        "lineage.json",
+        lineage_errors,
+    )
+    if lineage is None:
+        return None, lineage_errors
+
+    active_version = current.get("active_version")
+    assert isinstance(active_version, str)
+    versions_dir, error = _safe_workspace_relative_path(paths.get("versions_dir", "versions"), "workspace.paths.versions_dir")
+    if error is not None:
+        return None, [error]
+    assert versions_dir is not None
+    versions_path = workspace_root / versions_dir
+    if _path_has_symlink_component(versions_path, workspace_root):
+        return None, [{"path": "workspace.paths.versions_dir", "message": "must not contain symlink components"}]
+    versions_root = versions_path.resolve(strict=False)
+    try:
+        versions_root.relative_to(workspace_root.resolve())
+    except ValueError:
+        return None, [{"path": "workspace.paths.versions_dir", "message": "must stay within the workspace"}]
+    version_path = versions_root / active_version
+    if _path_has_symlink_component(version_path, workspace_root):
+        return None, [{"path": "active_version", "message": "active version path must not contain symlink components"}]
+    version_dir = version_path.resolve(strict=False)
+    try:
+        version_dir.relative_to(versions_root)
+    except ValueError:
+        return None, [{"path": "active_version", "message": "active version directory must stay within versions_dir"}]
+    manifest_errors: list[dict[str, str]] = []
+    manifest_path = version_dir / "version_manifest.json"
+    if _path_has_symlink_component(manifest_path, workspace_root):
+        return None, [
+            {
+                "path": "version_manifest.json",
+                "message": "must be the canonical active version manifest without symlink components",
+            }
+        ]
+    manifest = _read_json_dict_for_provenance(
+        manifest_path,
+        "version_manifest.json",
+        manifest_errors,
+    )
+    if manifest is None:
+        return None, manifest_errors
+    manifest_errors.extend(_validate_version_manifest(manifest, current))
+    if manifest_errors:
+        return None, manifest_errors
+
+    lineage_errors.extend(_validate_lineage_manifest(lineage, current, manifest))
+    if lineage_errors:
+        return None, lineage_errors
+
+    phase_state_errors: list[dict[str, str]] = []
+    phase_state_path = version_dir / "phase_state.json"
+    if _path_has_symlink_component(phase_state_path, workspace_root):
+        return None, [
+            {
+                "path": "phase_state.json",
+                "message": "must be the canonical active version phase state without symlink components",
+            }
+        ]
+    phase_state = _read_json_dict_for_provenance(
+        phase_state_path,
+        "phase_state.json",
+        phase_state_errors,
+    )
+    if phase_state is None:
+        return None, phase_state_errors
+    phase_state_errors.extend(_validate_phase_state(phase_state, current))
+    if phase_state_errors:
+        return None, phase_state_errors
+
+    raw_phase_paths = manifest.get("phase_paths")
+    assert isinstance(raw_phase_paths, dict)
+    resolved: dict[str, Path] = {}
+    for phase in _VERSION_PHASES:
+        relative, error = _safe_workspace_relative_path(raw_phase_paths.get(phase), f"phase_paths.{phase}")
+        if error is not None:
+            return None, [error]
+        assert relative is not None
+        owned_phase_path = workspace_root / relative
+        if _path_has_symlink_component(owned_phase_path, workspace_root):
+            return None, [{"path": f"phase_paths.{phase}", "message": "must not contain symlink components"}]
+        phase_path = owned_phase_path.resolve(strict=False)
+        try:
+            phase_path.relative_to(version_dir)
+        except ValueError:
+            return None, [{"path": f"phase_paths.{phase}", "message": "must stay within the active version"}]
+        resolved[phase] = phase_path
+    return resolved, []
+
+
+def _canonical_governance_manifest_path(
+    workspace_root: Path,
+    paths: dict[str, Any],
+    config_key: str,
+    filename: str,
+    errors: list[dict[str, str]],
+) -> Path | None:
+    raw_path = paths.get(config_key, filename)
+    configured = Path(raw_path) if isinstance(raw_path, str) and raw_path else None
+    if (
+        configured is None
+        or raw_path != filename
+        or configured.is_absolute()
+        or configured.parts != (filename,)
+    ):
+        errors.append(
+            {
+                "path": f"workspace.paths.{config_key}",
+                "message": f"must be the lexical workspace-root path {filename}",
+            }
+        )
+        return None
+    canonical = workspace_root / filename
+    if _path_has_symlink_component(canonical, workspace_root):
+        errors.append(
+            {
+                "path": filename,
+                "message": "must be a canonical workspace manifest without symlink components",
+            }
+        )
+        return None
+    try:
+        canonical.resolve(strict=False).relative_to(workspace_root.resolve())
+    except ValueError:
+        errors.append({"path": filename, "message": "must stay within the workspace"})
+        return None
+    return canonical
+
+
+def _validate_workflow_manifest(
+    payload: dict[str, Any],
+    current: dict[str, Any],
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
+        errors.append({"path": "workflow_manifest.json.schema_version", "message": "must be 1"})
+    if payload.get("layout") != "version_governed":
+        errors.append({"path": "workflow_manifest.json.layout", "message": "must be version_governed"})
+    if payload.get("strategy_family_id") != current.get("strategy_family_id"):
+        errors.append(
+            {
+                "path": "workflow_manifest.json.strategy_family_id",
+                "message": "must match current.json strategy_family_id",
+            }
+        )
+    workflow_paths = payload.get("paths")
+    if (
+        not isinstance(workflow_paths, dict)
+        or not workflow_paths
+        or any(
+            not isinstance(key, str)
+            or not key
+            or not isinstance(value, str)
+            or not value
+            for key, value in workflow_paths.items()
+        )
+    ):
+        errors.append(
+            {
+                "path": "workflow_manifest.json.paths",
+                "message": "must contain non-empty string path entries",
+            }
+        )
+    return errors
+
+
+def _validate_lineage_manifest(
+    payload: dict[str, Any],
+    current: dict[str, Any],
+    version_manifest: dict[str, Any],
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
+        errors.append({"path": "lineage.json.schema_version", "message": "must be 1"})
+    if payload.get("strategy_family_id") != current.get("strategy_family_id"):
+        errors.append(
+            {
+                "path": "lineage.json.strategy_family_id",
+                "message": "must match current.json strategy_family_id",
+            }
+        )
+    versions = payload.get("versions")
+    if not isinstance(versions, list) or not versions:
+        errors.append({"path": "lineage.json.versions", "message": "must contain version entries"})
+        return errors
+
+    version_ids: list[str] = []
+    active_entries: list[dict[str, Any]] = []
+    for index, entry in enumerate(versions):
+        prefix = f"lineage.json.versions[{index}]"
+        if not isinstance(entry, dict):
+            errors.append({"path": prefix, "message": "must contain an object"})
+            continue
+        version_id = entry.get("version_id")
+        if not isinstance(version_id, str) or not re.fullmatch(r"v[0-9][A-Za-z0-9_-]*", version_id):
+            errors.append({"path": f"{prefix}.version_id", "message": "must be a safe version id"})
+        else:
+            version_ids.append(version_id)
+        errors.extend(_validate_parent_reason_identity(entry, prefix))
+        status = entry.get("status")
+        if status not in {"active", "superseded"}:
+            errors.append({"path": f"{prefix}.status", "message": "must be active or superseded"})
+        elif status == "active":
+            active_entries.append(entry)
+
+    if len(version_ids) != len(set(version_ids)):
+        errors.append({"path": "lineage.json.versions", "message": "must not contain duplicate version ids"})
+    if len(active_entries) != 1:
+        errors.append({"path": "lineage.json.versions", "message": "must contain exactly one active version"})
+        return errors
+
+    active_entry = active_entries[0]
+    if active_entry.get("version_id") != current.get("active_version"):
+        errors.append(
+            {
+                "path": "lineage.json.active_version",
+                "message": "must match current.json active_version",
+            }
+        )
+    for field in ("version_id", "parent_version_id", "created_reason", "status"):
+        if active_entry.get(field) != version_manifest.get(field):
+            errors.append(
+                {
+                    "path": f"lineage.json.active_version.{field}",
+                    "message": f"must match version_manifest.json {field}",
+                }
+            )
+    return errors
+
+
+def _validate_current_manifest(payload: dict[str, Any]) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
+        errors.append({"path": "current.json.schema_version", "message": "must be 1"})
+    if not isinstance(payload.get("strategy_family_id"), str) or not payload["strategy_family_id"]:
+        errors.append({"path": "current.json.strategy_family_id", "message": "must be a non-empty string"})
+    active_version = payload.get("active_version")
+    if not isinstance(active_version, str) or not re.fullmatch(r"v[0-9][A-Za-z0-9_-]*", active_version):
+        errors.append({"path": "current.json.active_version", "message": "must be a safe active version"})
+    if payload.get("active_phase") not in _VERSION_PHASES:
+        errors.append({"path": "current.json.active_phase", "message": "must be a recognized version phase"})
+    if not isinstance(payload.get("active_run"), str):
+        errors.append({"path": "current.json.active_run", "message": "must be a string"})
+    return errors
+
+
+def _validate_version_manifest(
+    payload: dict[str, Any],
+    current: dict[str, Any],
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
+        errors.append({"path": "version_manifest.json.schema_version", "message": "must be 1"})
+    if payload.get("version_id") != current.get("active_version"):
+        errors.append({"path": "version_manifest.json.version_id", "message": "must match current.json active_version"})
+    if payload.get("strategy_family_id") != current.get("strategy_family_id"):
+        errors.append(
+            {
+                "path": "version_manifest.json.strategy_family_id",
+                "message": "must match current.json strategy_family_id",
+            }
+        )
+    errors.extend(_validate_parent_reason_identity(payload, "version_manifest.json"))
+    if payload.get("status") != "active":
+        errors.append({"path": "version_manifest.json.status", "message": "must be active"})
+    if payload.get("active_phase") != current.get("active_phase"):
+        errors.append({"path": "version_manifest.json.active_phase", "message": "must match current.json active_phase"})
+    if not isinstance(payload.get("source_conversation"), str):
+        errors.append({"path": "version_manifest.json.source_conversation", "message": "must be a string"})
+    if not isinstance(payload.get("phase_paths"), dict):
+        errors.append({"path": "version_manifest.json.phase_paths", "message": "must contain an object"})
+    return errors
+
+
+def _validate_parent_reason_identity(
+    payload: dict[str, Any],
+    prefix: str,
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    parent_present = "parent_version_id" in payload
+    parent_version = payload.get("parent_version_id")
+    parent_is_empty = parent_version is None or parent_version == ""
+    parent_is_safe = isinstance(parent_version, str) and bool(
+        re.fullmatch(r"v[0-9][A-Za-z0-9_-]*", parent_version)
+    )
+    if not parent_present or (not parent_is_empty and not parent_is_safe):
+        errors.append(
+            {
+                "path": f"{prefix}.parent_version_id",
+                "message": "must be empty or a safe version id",
+            }
+        )
+    created_reason = payload.get("created_reason")
+    if not isinstance(created_reason, str) or not created_reason:
+        errors.append(
+            {
+                "path": f"{prefix}.created_reason",
+                "message": "must be a non-empty string",
+            }
+        )
+    elif parent_present and (parent_is_empty != (created_reason == "initial_strategy_version")):
+        errors.append(
+            {
+                "path": f"{prefix}.created_reason",
+                "message": "must be initial_strategy_version if and only if parent_version_id is empty",
+            }
+        )
+    return errors
+
+
+def _validate_phase_state(
+    payload: dict[str, Any],
+    current: dict[str, Any],
+) -> list[dict[str, str]]:
+    errors: list[dict[str, str]] = []
+    if type(payload.get("schema_version")) is not int or payload.get("schema_version") != 1:
+        errors.append({"path": "phase_state.json.schema_version", "message": "must be 1"})
+    if payload.get("version_id") != current.get("active_version"):
+        errors.append({"path": "phase_state.json.version_id", "message": "must match current.json active_version"})
+    if payload.get("current_phase") != current.get("active_phase"):
+        errors.append({"path": "phase_state.json.current_phase", "message": "must match current.json active_phase"})
+    if payload.get("status") != "active":
+        errors.append({"path": "phase_state.json.status", "message": "must be active"})
+    completed = payload.get("completed_phases")
+    if not isinstance(completed, list) or any(phase not in _VERSION_PHASES for phase in completed) or len(set(completed)) != len(completed):
+        errors.append(
+            {
+                "path": "phase_state.json.completed_phases",
+                "message": "must be a unique list of recognized version phases",
+            }
+        )
+    blocked_phase = payload.get("blocked_phase")
+    if not isinstance(blocked_phase, str) or (blocked_phase and blocked_phase not in _VERSION_PHASES):
+        errors.append({"path": "phase_state.json.blocked_phase", "message": "must be empty or a recognized version phase"})
+    return errors
+
+
+def _path_has_symlink_component(path: Path, root: Path) -> bool:
+    try:
+        relative = path.absolute().relative_to(root.absolute())
+    except ValueError:
+        return True
+    candidate = root.absolute()
+    for part in relative.parts:
+        candidate = candidate / part
+        if candidate.is_symlink():
+            return True
+    return False
+
+
+def _safe_workspace_relative_path(value: Any, field: str) -> tuple[Path | None, dict[str, str] | None]:
+    if not isinstance(value, str) or not value:
+        return None, {"path": field, "message": "must be a non-empty safe relative path"}
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts:
+        return None, {"path": field, "message": "must be a safe relative path"}
+    return path, None
+
+
+def _resolve_workspace_artifact_reference(raw_path: str, workspace_root: Path, artifact_parent: Path) -> Path:
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path.resolve(strict=False)
+    workspace_candidate = workspace_root / path
+    if workspace_candidate.exists():
+        return workspace_candidate.resolve(strict=False)
+    return (artifact_parent / path).resolve(strict=False)
+
+
+def _canonical_json_file_hash(
+    path: Path,
+    field: str,
+    errors: list[dict[str, str]],
+) -> str | None:
+    payload = _read_json_dict_for_provenance(path, field, errors)
+    if payload is None:
+        return None
+    canonical = json.dumps(payload, sort_keys=True, default=str)
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+
+
+def _read_json_dict_for_provenance(
+    path: Path,
+    field: str,
+    errors: list[dict[str, str]],
+) -> dict[str, Any] | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        errors.append({"path": field, "message": f"could not read canonical JSON artifact {path}: {exc}"})
+        return None
+    if not isinstance(payload, dict):
+        errors.append({"path": field, "message": "canonical JSON artifact must contain an object"})
+        return None
+    return payload
+
+
+def _mapping_contract_status(
+    path: Path,
+    spec: Any | None,
+    errors: list[dict[str, str]],
+    *,
+    idea_brief: Any | None,
+) -> str:
+    from oxq.spec.mapping_contract import (
+        validate_mapping_contract_file,
+        validate_mapping_contract_for_builder_pass_file,
+    )
+
+    validation = validate_mapping_contract_file(path, spec=spec)
+    if validation["status"] == "fail":
+        errors.extend(
+            {
+                "path": f"spec_mapping_contract.{error['path']}",
+                "message": error["message"],
+            }
+            for error in validation["errors"]
+        )
+        return "fail"
+    builder_validation = validate_mapping_contract_for_builder_pass_file(path, spec=spec)
+    if idea_brief is not None:
+        from oxq.spec.mapping_contract import validate_mapping_contract_for_builder_pass
+
+        try:
+            mapping_payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError):
+            mapping_payload = None
+        builder_validation = validate_mapping_contract_for_builder_pass(
+            mapping_payload,
+            spec=spec,
+            idea_brief=idea_brief,
+        )
+    if builder_validation["status"] == "fail":
+        errors.append(
+            {
+                "path": "spec_mapping_contract.builder_pass",
+                "message": "current mapping contract does not satisfy the builder-pass gate",
+            }
+        )
+        return "block"
+    return "pass"
+
+
 def _is_faithful_archived_audit_copy(referenced_audit_path: Path, audit_payload: dict[str, Any]) -> bool:
     try:
         referenced_payload = json.loads(referenced_audit_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
+    except (json.JSONDecodeError, OSError, UnicodeError):
         return False
     return referenced_payload == audit_payload
 

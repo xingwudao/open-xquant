@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+import oxq.report.assets as assets_module
 from oxq.report.assets import (
     add_report_asset,
     add_report_assets,
@@ -189,6 +190,49 @@ def test_add_report_assets_upserts_multiple_in_place_regenerated_assets(tmp_path
     assert [asset.title for asset in listed] == ["Equity Updated", "Drawdown Updated"]
     assert (run_dir / "report_assets/figures/equity.png").read_bytes() == b"equity-regenerated"
     assert (run_dir / "report_assets/figures/drawdown.png").read_bytes() == b"drawdown-regenerated"
+
+
+def test_add_report_assets_rolls_back_entire_batch_when_manifest_replace_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    first_source = tmp_path / "first.png"
+    second_source = tmp_path / "second.png"
+    first_source.write_bytes(b"first-old")
+    second_source.write_bytes(b"second-old")
+    add_report_asset(run_dir, first_source, asset_id="first", title="First")
+    add_report_asset(run_dir, second_source, asset_id="second", title="Second")
+    manifest_before = manifest_path(run_dir).read_bytes()
+    first_before = (run_dir / "report_assets/figures/first.png").read_bytes()
+    second_before = (run_dir / "report_assets/figures/second.png").read_bytes()
+    first_source.write_bytes(b"first-new")
+    second_source.write_bytes(b"second-new")
+
+    def fail_manifest_replace(label: str) -> None:
+        if label == "report_assets/manifest.json.replace":
+            raise OSError("injected report manifest replacement failure")
+
+    monkeypatch.setattr(
+        assets_module,
+        "_report_publication_boundary",
+        fail_manifest_replace,
+        raising=False,
+    )
+
+    with pytest.raises(OSError, match="injected report manifest replacement failure"):
+        add_report_assets(
+            run_dir,
+            [
+                {"id": "first", "file_path": str(first_source), "title": "First New"},
+                {"id": "second", "file_path": str(second_source), "title": "Second New"},
+            ],
+        )
+
+    assert manifest_path(run_dir).read_bytes() == manifest_before
+    assert (run_dir / "report_assets/figures/first.png").read_bytes() == first_before
+    assert (run_dir / "report_assets/figures/second.png").read_bytes() == second_before
 
 
 def test_add_report_assets_still_validates_assets_outside_batch(tmp_path) -> None:

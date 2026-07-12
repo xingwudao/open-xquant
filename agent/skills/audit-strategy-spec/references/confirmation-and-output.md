@@ -153,10 +153,10 @@ Before emitting a final passing audit, validate the StrategySpec hash and
 effective field coverage:
 
 ```bash
-oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json \
-  --spec versions/<version_id>/04_spec_build/strategy_spec.yaml \
-  --component-catalog versions/<version_id>/04_spec_build/component_catalog.json \
-  --mapping-contract versions/<version_id>/04_spec_build/spec_mapping_contract.json \
+oxq spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json \
+  --spec <phase_paths.04_spec_build>/strategy_spec.yaml \
+  --component-catalog <phase_paths.04_spec_build>/component_catalog.json \
+  --mapping-contract <phase_paths.04_spec_build>/spec_mapping_contract.json \
   --strict-confirmed
 ```
 
@@ -177,8 +177,8 @@ this skill, not from a deterministic CLI. Use the existing schema version:
   "spec_hash": "sha256:<StrategySpec.compute_hash()>",
   "conversation_hash": "sha256:<hash>",
   "catalog_hash": "<component_catalog.catalog_hash>",
-  "strategy_idea_brief": "versions/<version_id>/01_brainstorm/strategy_idea_brief.json",
-  "strategy_idea_audit": "versions/<version_id>/02_idea_audit/strategy_idea_audit.json",
+  "strategy_idea_brief": "<phase_paths.01_brainstorm>/strategy_idea_brief.json",
+  "strategy_idea_audit": "<phase_paths.02_idea_audit>/strategy_idea_audit.json",
   "strategy_idea_brief_hash": "sha256:<hash>",
   "strategy_idea_audit_hash": "sha256:<hash>",
   "next_required_phase": "user_spec_confirmation | runtime_audit | build | brainstorm | data_inspection",
@@ -224,21 +224,22 @@ this skill, not from a deterministic CLI. Use the existing schema version:
   ],
   "spec_confirmation_table": {
     "format": "markdown",
-    "path": "versions/<version_id>/06_spec_audit/spec_confirmation_table.md",
+    "path": "<phase_paths.06_spec_audit>/spec_confirmation_table.md",
     "hash": "sha256:<markdown file hash>",
     "hash_type": "sha256"
   },
   "confirmation_event": {
-    "path": "conversations/<conversation_id>/confirmations.jsonl",
+    "path": "<paths.conversations_dir>/<conversation_id>/confirmations.jsonl",
     "event_id": "<stable confirmation event id>",
     "line_number": 1,
     "event_hash": "sha256:<confirmation jsonl line hash>",
-    "artifact_path": "versions/<version_id>/06_spec_audit/spec_confirmation_table.md",
+    "artifact_path": "<phase_paths.06_spec_audit>/spec_confirmation_table.md",
     "artifact_hash": "sha256:<markdown file hash>",
-    "spec_audit_path": "versions/<version_id>/06_spec_audit/spec_audit.json",
+    "spec_audit_path": "<phase_paths.06_spec_audit>/spec_audit.json",
     "spec_audit_hash": "sha256:<pre-confirmation spec_audit hash>",
     "phase": "spec_confirmation",
-    "field_scope": "full_spec_table"
+    "field_scope": "full_spec_table",
+    "decision": "confirmed"
   },
   "blocking_findings": [{"message": "...", "question": "..."}]
 }
@@ -253,12 +254,18 @@ to satisfy schema.
 
 `confirmation_event` is conditional separately. It is required only when
 `user_confirmation_status: confirmed` or `status: pass`. It must point to the
-line in `conversations/<conversation_id>/confirmations.jsonl` where the user
-confirmed the full SPEC table. The JSONL line and audit reference must both
-include the same `event_id`, `artifact_path`, `artifact_hash`,
-`spec_audit_path`, and `spec_audit_hash`. The JSONL line must also include
+line in the governed conversations root where the user confirmed the full SPEC
+table. Resolve that root from `.open-xquant/workspace.yaml`
+`paths.conversations_dir`; use `conversations` only when that setting is absent.
+The event path must be workspace-relative, contain no traversal, and resolve
+inside the configured conversations root without a symlink escape. Do not use
+an absolute path or a workspace-root `confirmations.jsonl`. The JSONL line and
+audit reference must both include the same `event_id`, `decision: confirmed`,
+`artifact_path`, `artifact_hash`, `spec_audit_path`, and `spec_audit_hash`. The
+JSONL line must also include
 `phase: spec_confirmation` and `field_scope: full_spec_table`; the
-`confirmation_event` object in `spec_audit.json` must mirror both values.
+`confirmation_event` object in `spec_audit.json` must mirror those values. A
+rejected or missing machine-readable decision cannot satisfy confirmation.
 `spec_audit_hash` is the pre-confirmation `spec_audit.json` hash.
 Pending all-pass audits must not
 invent a confirmation event.
@@ -340,14 +347,14 @@ from pathlib import Path
 
 from oxq.spec.compiler import _hash_file
 
-table_path = Path("versions/<version_id>/06_spec_audit/spec_confirmation_table.md")
+table_path = Path("<phase_paths.06_spec_audit>/spec_confirmation_table.md")
 print(_hash_file(table_path))
 PY
 ```
 
 Compute `spec_hash` from the parsed strategy SPEC semantics, not from raw file
 bytes. Use
-`oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml` and
+`oxq spec validate <phase_paths.04_spec_build>/strategy_spec.yaml` and
 copy its `Spec Hash`, or equivalently use
 `StrategySpec.from_yaml(...).compute_hash()`. Do not use
 `shasum strategy_spec.yaml`; the file SHA cannot satisfy the backtest gate.
@@ -364,10 +371,10 @@ After writing a blocked or failed `spec_audit.json`, run non-strict
 schema, hash, catalog, and mapping-contract validation:
 
 ```bash
-oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json \
-  --spec versions/<version_id>/04_spec_build/strategy_spec.yaml \
-  --component-catalog versions/<version_id>/04_spec_build/component_catalog.json \
-  --mapping-contract versions/<version_id>/04_spec_build/spec_mapping_contract.json
+oxq spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json \
+  --spec <phase_paths.04_spec_build>/strategy_spec.yaml \
+  --component-catalog <phase_paths.04_spec_build>/component_catalog.json \
+  --mapping-contract <phase_paths.04_spec_build>/spec_mapping_contract.json
 ```
 
 Do not use `--strict-confirmed` for `audit_conclusion: blocked`; blocked audits

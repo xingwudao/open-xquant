@@ -10,7 +10,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import os
 import platform
 import sys
 from copy import deepcopy
@@ -32,7 +31,8 @@ from oxq.data.market import LocalMarketDataProvider
 from oxq.market_calendar import normalize_exchange_calendar
 from oxq.portfolio.analytics import RunResult
 from oxq.portfolio.metrics_profile import compute_equity_curve_metrics, compute_profile_metrics, metric_assumptions
-from oxq.rules.constraint import CalendarRebalanceRule, RebalanceFrequencyRule
+from oxq.rules.constraint import CalendarRebalanceRule, RebalanceFrequencyRule, select_max_holdings_items
+from oxq.run_digests import replace_run_digest_entry
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec, effective_portfolio_params
 from oxq.trade.fees import PercentageFee, SideAwarePercentageFee
@@ -137,7 +137,8 @@ def _apply_indicator_lag(indicator: Any, lag_bars: int) -> Any:
 
 
 def _apply_portfolio_constraints(spec: StrategySpec, optimizer: PortfolioOptimizer) -> PortfolioOptimizer:
-    constraints = spec.portfolio.constraints
+    constraints = _effective_portfolio_constraints(spec)
+    runtime_max_holdings = _runtime_max_holdings(spec)
     if constraints.min_position_value is not None:
         raise ValueError("portfolio.constraints.min_position_value is not executable by the audited runtime")
     if (
@@ -148,7 +149,33 @@ def _apply_portfolio_constraints(spec: StrategySpec, optimizer: PortfolioOptimiz
         and constraints.cash_reserve == 0.0
     ):
         return optimizer
-    return _ConstrainedPortfolioOptimizer(optimizer, constraints)
+    return _ConstrainedPortfolioOptimizer(
+        optimizer,
+        constraints,
+        preserve_existing_holdings=runtime_max_holdings is not None,
+    )
+
+
+def _runtime_max_holdings(spec: StrategySpec) -> int | None:
+    caps = [
+        rule.params.get("max_holdings")
+        for rule in spec.portfolio.rules.values()
+        if rule.type == "MaxHoldingsRule"
+    ]
+    valid_caps = [cap for cap in caps if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0]
+    return min(valid_caps) if valid_caps else None
+
+
+def _effective_portfolio_constraints(spec: StrategySpec) -> Any:
+    constraints = deepcopy(spec.portfolio.constraints)
+    runtime_max_holdings = _runtime_max_holdings(spec)
+    if runtime_max_holdings is not None:
+        constraints.max_holdings = (
+            runtime_max_holdings
+            if constraints.max_holdings is None
+            else min(constraints.max_holdings, runtime_max_holdings)
+        )
+    return constraints
 
 
 class _ConstrainedPortfolioOptimizer:
@@ -156,13 +183,34 @@ class _ConstrainedPortfolioOptimizer:
 
     name = "ConstrainedPortfolioOptimizer"
 
-    def __init__(self, base: PortfolioOptimizer, constraints: Any) -> None:
+    def __init__(
+        self,
+        base: PortfolioOptimizer,
+        constraints: Any,
+        *,
+        preserve_existing_holdings: bool = False,
+    ) -> None:
         self._base = base
         self._constraints = constraints
+        self._preserve_existing_holdings = preserve_existing_holdings
+        self._held_symbols: set[str] = set()
+        self._pending_buy_symbols: set[str] = set()
         self.required_indicators = getattr(base, "required_indicators", {})
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._base, name)
+
+    def set_held_symbols(self, symbols: list[str]) -> None:
+        self._held_symbols = set(symbols)
+        setter = getattr(self._base, "set_held_symbols", None)
+        if callable(setter):
+            setter(symbols)
+
+    def set_pending_buy_symbols(self, symbols: list[str]) -> None:
+        self._pending_buy_symbols = set(symbols)
+        setter = getattr(self._base, "set_pending_buy_symbols", None)
+        if callable(setter):
+            setter(symbols)
 
     def optimize(
         self,
@@ -173,10 +221,19 @@ class _ConstrainedPortfolioOptimizer:
         cash = max(0.0, float(raw.pop("CASH", 0.0)))
         items = [(symbol, float(weight)) for symbol, weight in raw.items() if float(weight) > 0.0]
         if self._constraints.max_holdings is not None:
-            items = sorted(items, key=lambda item: item[1], reverse=True)[: self._constraints.max_holdings]
+            max_holdings = self._constraints.max_holdings
+            items = select_max_holdings_items(
+                items,
+                max_holdings,
+                held_symbols=self._held_symbols,
+                pending_buy_symbols=self._pending_buy_symbols,
+                preserve_existing_holdings=self._preserve_existing_holdings,
+            )
         constrained: dict[str, float] = {}
         for symbol, weight in items:
-            if self._constraints.min_weight is not None and weight < self._constraints.min_weight:
+            if self._constraints.min_weight is not None and _below_min_weight(
+                weight, self._constraints.min_weight
+            ):
                 cash += weight
                 continue
             if self._constraints.max_weight is not None and weight > self._constraints.max_weight:
@@ -190,9 +247,18 @@ class _ConstrainedPortfolioOptimizer:
             if invested > max_invested and invested > 0.0:
                 scale = max_invested / invested
                 constrained = {symbol: weight * scale for symbol, weight in constrained.items()}
+        if self._constraints.min_weight is not None:
+            for symbol, weight in list(constrained.items()):
+                if _below_min_weight(weight, self._constraints.min_weight):
+                    cash += weight
+                    del constrained[symbol]
         invested = sum(constrained.values())
         constrained["CASH"] = max(cash, 1.0 - invested)
         return constrained
+
+
+def _below_min_weight(weight: float, minimum: float) -> bool:
+    return weight < minimum and not math.isclose(weight, minimum, rel_tol=1e-12, abs_tol=1e-12)
 
 
 def _effective_lot_size(spec: StrategySpec) -> int:
@@ -233,7 +299,10 @@ def _effective_rebalance(spec: StrategySpec) -> tuple[int, str]:
     execution_interval = spec.execution.rebalance.interval_days
     rebalance_rule = spec.portfolio.rules.get("rebalance")
     if rebalance_rule is None:
-        return execution_interval, "execution.rebalance.interval_days"
+        interval, source = execution_interval, "execution.rebalance.interval_days"
+        if spec.execution.rebalance.schedule and interval > 1:
+            raise ValueError("calendar schedule cannot be combined with interval_days > 1")
+        return interval, source
     if rebalance_rule.type != "RebalanceFrequencyRule":
         raise ValueError("portfolio.rules.rebalance must use RebalanceFrequencyRule")
     unsupported_params = sorted(set(rebalance_rule.params) - {"interval_days"})
@@ -250,6 +319,8 @@ def _effective_rebalance(spec: StrategySpec) -> tuple[int, str]:
             "portfolio.rules.rebalance.params.interval_days conflicts with "
             "execution.rebalance.interval_days"
         )
+    if spec.execution.rebalance.schedule and interval > 1:
+        raise ValueError("calendar schedule cannot be combined with interval_days > 1")
     return interval, "portfolio.rules.rebalance"
 
 
@@ -768,7 +839,7 @@ def _effective_suspension_policy(filters: Any) -> str:
 
 
 def _portfolio_constraints_dict(spec: StrategySpec) -> dict[str, Any]:
-    constraints = spec.portfolio.constraints
+    constraints = _effective_portfolio_constraints(spec)
     return {
         "max_weight": constraints.max_weight,
         "min_weight": constraints.min_weight,
@@ -779,7 +850,7 @@ def _portfolio_constraints_dict(spec: StrategySpec) -> dict[str, Any]:
 
 
 def _portfolio_constraints_are_active(spec: StrategySpec) -> bool:
-    constraints = spec.portfolio.constraints
+    constraints = _effective_portfolio_constraints(spec)
     return (
         constraints.max_weight is not None
         or constraints.min_weight is not None
@@ -1141,6 +1212,7 @@ def _manifest_component_class_ref(component_manifests: list[dict[str, Any]], kin
 _COMPILED_PLAN_MATERIAL_KEYS = {
     "schema_version",
     "compilation_mode",
+    "open_xquant_version",
     "spec_hash",
     "strategy",
     "market",
@@ -1162,9 +1234,16 @@ def _compiled_plan_material_sections(plan: dict[str, Any]) -> dict[str, Any]:
     return {key: normalized.get(key) for key in sorted(_COMPILED_PLAN_MATERIAL_KEYS)}
 
 
-def _compiled_plan_material_differences(actual_plan: dict[str, Any], expected_plan: dict[str, Any]) -> list[str]:
+def _compiled_plan_material_differences(
+    actual_plan: dict[str, Any],
+    expected_plan: dict[str, Any],
+    *,
+    required_oxq_version: str | None = None,
+) -> list[str]:
     actual = _compiled_plan_material_sections(actual_plan)
     expected = _compiled_plan_material_sections(expected_plan)
+    if required_oxq_version is not None:
+        expected["open_xquant_version"] = required_oxq_version
     return sorted(key for key in set(actual) | set(expected) if actual.get(key) != expected.get(key))
 
 
@@ -1321,7 +1400,11 @@ def _build_strategy_py_artifact(
         '        if (run_dir / "component_manifests.json").exists():',
         "            load_component_manifests_from_run(run_dir)",
         "        expected_plan = _build_compiled_plan(spec, effective_data_dir=trusted_effective_data_dir())",
-        "    differences = _compiled_plan_material_differences(compiled_plan, expected_plan)",
+        "    differences = _compiled_plan_material_differences(",
+        "        compiled_plan,",
+        "        expected_plan,",
+        "        required_oxq_version=spec.required_oxq_version,",
+        "    )",
         "    if differences:",
         "        raise ValueError(",
         "            'compiled_plan.json material fields differ from strategy_spec.yaml: '",
@@ -1993,39 +2076,8 @@ def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
 
 
 def _append_run_digest(run_dir: Path, artifact_hashes_hash: str) -> None:
-    digest_path = run_dir.parent / "run_digests.jsonl"
-    lock_path = digest_path.with_suffix(digest_path.suffix + ".lock")
-    entry = {
-        "run_id": run_dir.name,
-        "artifact_hashes": artifact_hashes_hash,
-        "created_at": datetime.now(UTC).isoformat(),
-    }
-    with _FileLock(lock_path):
-        with open(digest_path, "a", encoding="utf-8") as fh:
-            fh.write(json.dumps(entry, sort_keys=True) + "\n")
-            fh.flush()
-            os.fsync(fh.fileno())
-
-
-class _FileLock:
-    def __init__(self, path: Path) -> None:
-        self._path = path
-        self._fh: Any = None
-
-    def __enter__(self) -> None:
-        self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self._path, "a+")
-        import fcntl
-
-        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)
-
-    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        if self._fh is None:
-            return
-        import fcntl
-
-        fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)
-        self._fh.close()
+    """Compatibility wrapper for callers that used the former append helper."""
+    replace_run_digest_entry(run_dir, artifact_hashes_hash)
 
 
 def _sanitize_json(value: Any) -> Any:

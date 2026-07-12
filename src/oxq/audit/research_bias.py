@@ -11,11 +11,19 @@ import json
 import math
 from pathlib import Path
 
+from oxq.run_digests import run_digest_transaction
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 
 
 def audit_research(run_dir: str | Path) -> dict:
+    """Audit one coherent, transaction-bound generation of a backtest run."""
+    run_path = Path(run_dir)
+    with run_digest_transaction(run_path):
+        return _audit_research_locked(run_path)
+
+
+def _audit_research_locked(run_path: Path) -> dict:
     """Run P0 research bias audit checks on a backtest run.
 
     Reads the strategy spec and artifacts from run_dir and checks for
@@ -31,7 +39,6 @@ def audit_research(run_dir: str | Path) -> dict:
     dict
         Audit result with 'status', 'checks', 'fatal_count', 'warning_count'.
     """
-    run_path = Path(run_dir)
     checks: list[dict] = []
     try:
         from oxq.core.component_manifest import (

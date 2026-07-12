@@ -363,6 +363,7 @@ class Engine:
         rule_weight_override = False
         rule_weight_overrides: dict[str, float] = {}
         rule_reasons: dict[str, list[str]] = {}
+        batch_rules: list[Any] = []
 
         def record_rule_reason(symbol: str, reason: str) -> None:
             if not reason:
@@ -370,6 +371,9 @@ class Engine:
             rule_reasons.setdefault(symbol, []).append(reason)
 
         for rule in self._rules:
+            if callable(getattr(rule, "evaluate_batch", None)):
+                batch_rules.append(rule)
+                continue
             for symbol in universe.symbols:
                 if date not in mktdata[symbol].index:
                     continue
@@ -387,6 +391,44 @@ class Engine:
                 if result.constraints is not None:
                     for constrained_symbol in result.constraints:
                         record_rule_reason(constrained_symbol, result.reason)
+
+        pending_market_orders = [
+            managed.order
+            for managed in broker.get_open_orders()
+            if managed.order.order_type == "market"
+        ]
+        for rule in batch_rules:
+            result = rule.evaluate_batch(
+                dict(target_weights),
+                portfolio,
+                pending_orders=pending_market_orders,
+            )
+            if result.hold:
+                rule_hold = True
+                record_rule_reason("__all__", result.reason)
+            if result.weights is not None:
+                # Batch-rule weights are the complete constrained target.
+                previous_weights = target_weights
+                target_weights = dict(result.weights)
+                changed_symbols = {
+                    symbol
+                    for symbol in set(previous_weights) | set(target_weights)
+                    if previous_weights.get(symbol, 0.0) != target_weights.get(symbol, 0.0)
+                }
+                actionable_symbols = changed_symbols | {
+                    symbol
+                    for symbol, weight in target_weights.items()
+                    if symbol != "CASH" and weight > 0 and symbol not in portfolio.positions
+                }
+                rule_weight_override = True
+                rule_weight_overrides.update(
+                    {symbol: target_weights.get(symbol, 0.0) for symbol in actionable_symbols}
+                )
+                for target_symbol in changed_symbols - {"CASH"}:
+                    record_rule_reason(target_symbol, result.reason)
+            if result.constraints is not None:
+                for constrained_symbol in result.constraints:
+                    record_rule_reason(constrained_symbol, result.reason)
 
         def current_portfolio_weights() -> dict[str, float]:
             total_value = portfolio.total_value(bar_prices)

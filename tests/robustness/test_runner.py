@@ -3,10 +3,12 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import threading
 from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import yaml
 
 from oxq.audit.reproducibility import audit_reproducibility
@@ -20,9 +22,11 @@ from oxq.robustness.runner import (
     _copy_component_provenance,
     _read_curve_csv,
     _read_trade_date_counts,
+    _write_robustness_artifact,
     run_robustness,
 )
-from oxq.spec.compiler import _hash_file, _write_artifacts
+from oxq.run_digests import RunDigestError, publish_run_artifacts, replace_run_digest_entry
+from oxq.spec.compiler import _hash_file, _hash_json_file, _write_artifacts
 from oxq.spec.schema import IndicatorDef, StrategySpec
 
 
@@ -34,6 +38,7 @@ def test_regime_analysis_request_is_not_reported_as_pass_when_unimplemented(tmp_
         encoding="utf-8",
     )
     (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 1.0}), encoding="utf-8")
+    (tmp_path / "artifact_hashes.json").write_text("{}\n", encoding="utf-8")
 
     result = run_robustness(tmp_path)
 
@@ -88,8 +93,12 @@ def test_run_robustness_restores_workspace_component_registry(monkeypatch, tmp_p
         del data_dir
         out_path = Path(out_dir)
         out_path.mkdir(parents=True, exist_ok=True)
-        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.8}), encoding="utf-8")
-        (out_path / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:metrics"}), encoding="utf-8")
+        metrics_path = out_path / "metrics.json"
+        metrics_path.write_text(json.dumps({"sharpe_ratio": 0.8}), encoding="utf-8")
+        (out_path / "artifact_hashes.json").write_text(
+            json.dumps({"metrics.json": _hash_json_file(metrics_path)}),
+            encoding="utf-8",
+        )
         return FakeResult(), out_path
 
     monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
@@ -129,7 +138,12 @@ def test_copy_component_provenance_includes_legacy_component_root(tmp_path) -> N
         encoding="utf-8",
     )
     (source_run / "component_bundle_hash.txt").write_text(bundle_hash + "\n", encoding="utf-8")
-    (child_run / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:metrics"}), encoding="utf-8")
+    child_metrics = child_run / "metrics.json"
+    child_metrics.write_text(json.dumps({"sharpe_ratio": 0.8}), encoding="utf-8")
+    (child_run / "artifact_hashes.json").write_text(
+        json.dumps({"metrics.json": _hash_json_file(child_metrics)}),
+        encoding="utf-8",
+    )
 
     _copy_component_provenance(source_run, child_run)
     shutil.rmtree(source_run / "custom_components")
@@ -252,6 +266,7 @@ def test_run_robustness_handles_unavailable_baseline_sharpe(monkeypatch, tmp_pat
         encoding="utf-8",
     )
     (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": None}), encoding="utf-8")
+    (tmp_path / "artifact_hashes.json").write_text("{}\n", encoding="utf-8")
 
     class FakeResult:
         def sharpe_ratio(self) -> float:
@@ -276,6 +291,7 @@ def test_run_robustness_compares_perturbed_metrics_artifact(monkeypatch, tmp_pat
         encoding="utf-8",
     )
     (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 1.2}), encoding="utf-8")
+    (tmp_path / "artifact_hashes.json").write_text("{}\n", encoding="utf-8")
 
     class FakeResult:
         def sharpe_ratio(self) -> float:
@@ -304,6 +320,7 @@ def test_run_robustness_does_not_fallback_to_legacy_sharpe(monkeypatch, tmp_path
         encoding="utf-8",
     )
     (tmp_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 1.2}), encoding="utf-8")
+    (tmp_path / "artifact_hashes.json").write_text("{}\n", encoding="utf-8")
 
     class FakeResult:
         def sharpe_ratio(self) -> float:
@@ -429,6 +446,81 @@ def test_run_robustness_hashes_robustness_json_for_reproducibility(monkeypatch, 
 
     assert audit["status"] == "fail"
     assert any(check["id"] == "robustness_hash" and check["status"] == "fail" for check in audit["checks"])
+
+
+def test_robustness_writer_updates_hash_manifest_through_digest_transaction(monkeypatch, tmp_path) -> None:
+    artifact_hashes_path = tmp_path / "artifact_hashes.json"
+    artifact_hashes_path.write_text(json.dumps({"metrics.json": "sha256:" + "1" * 16}), encoding="utf-8")
+    publications: list[tuple[Path, dict[str, bytes]]] = []
+
+    def capture_transaction(run_path, artifacts) -> str:
+        assert run_path == tmp_path
+        assert not (tmp_path / "robustness.json").exists()
+        publications.append((run_path, artifacts))
+        return "sha256:" + "2" * 16
+
+    monkeypatch.setattr(
+        "oxq.robustness.runner.publish_run_artifacts",
+        capture_transaction,
+    )
+
+    _write_robustness_artifact(tmp_path, {"status": "pass", "tests": []})
+
+    assert len(publications) == 1
+    assert json.loads(publications[0][1]["robustness.json"])["status"] == "pass"
+
+
+def test_robustness_writer_propagates_publication_failure(monkeypatch, tmp_path) -> None:
+    (tmp_path / "artifact_hashes.json").write_text("{}\n", encoding="utf-8")
+
+    def fail_publication(*_args, **_kwargs):
+        raise OSError("publication failed")
+
+    monkeypatch.setattr("oxq.robustness.runner.publish_run_artifacts", fail_publication)
+
+    with pytest.raises(OSError, match="publication failed"):
+        _write_robustness_artifact(tmp_path, {"status": "pass", "tests": []})
+
+    assert not (tmp_path / "robustness.json").exists()
+
+
+def test_run_robustness_rejects_baseline_change_before_publication(monkeypatch, tmp_path) -> None:
+    spec = StrategySpec.template(strategy_id="pinned_baseline", hypothesis="robustness commits against one baseline")
+    _write_run_inputs(tmp_path, spec, {"sharpe_ratio": 1.0})
+    _seal_legacy_run(tmp_path)
+    computation_started = threading.Event()
+    allow_computation = threading.Event()
+    failures: list[BaseException] = []
+
+    def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
+        del data_dir
+        computation_started.set()
+        assert allow_computation.wait(timeout=5)
+        out_path = Path(out_dir)
+        out_path.mkdir(parents=True, exist_ok=True)
+        (out_path / "metrics.json").write_text(json.dumps({"sharpe_ratio": 0.9}), encoding="utf-8")
+        return object(), out_path
+
+    def run() -> None:
+        try:
+            run_robustness(tmp_path)
+        except BaseException as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr("oxq.robustness.runner.compile_run", fake_compile_run)
+    worker = threading.Thread(target=run, name="robustness-worker")
+    worker.start()
+    assert computation_started.wait(timeout=5)
+
+    publish_run_artifacts(tmp_path, {"metrics.json": json.dumps({"sharpe_ratio": 2.0}).encode()})
+    allow_computation.set()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], RunDigestError)
+    assert "baseline changed" in str(failures[0])
+    assert not (tmp_path / "robustness.json").exists()
 
 
 def test_is_oos_comparison_uses_metrics_json_numeric_values(monkeypatch, tmp_path) -> None:
@@ -966,7 +1058,10 @@ def test_regime_analysis_ignores_untracked_benchmark_artifact(monkeypatch, tmp_p
             ("2022-01-04", 110),
         ],
     )
-    (tmp_path / "artifact_hashes.json").write_text(json.dumps({"metrics.json": "sha256:unused"}), encoding="utf-8")
+    (tmp_path / "artifact_hashes.json").write_text(
+        json.dumps({"metrics.json": _hash_json_file(tmp_path / "metrics.json")}),
+        encoding="utf-8",
+    )
 
     def fake_compile_run(_spec, *, out_dir: str, data_dir=None):
         del data_dir
@@ -989,8 +1084,21 @@ def _write_run_inputs(tmp_path: Path, spec: StrategySpec, metrics: dict) -> None
         encoding="utf-8",
     )
     (tmp_path / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+    (tmp_path / "artifact_hashes.json").write_text("{}\n", encoding="utf-8")
     _write_equity_curve(tmp_path, [("2022-01-01", 100), ("2022-01-02", 101), ("2022-01-03", 102)])
     _write_trades(tmp_path, [])
+
+
+def _seal_legacy_run(run_path: Path) -> None:
+    artifact_hashes = {
+        "strategy_spec.yaml": _hash_file(run_path / "strategy_spec.yaml"),
+        "metrics.json": _hash_json_file(run_path / "metrics.json"),
+        "equity_curve.csv": _hash_file(run_path / "equity_curve.csv"),
+        "trades.csv": _hash_file(run_path / "trades.csv"),
+    }
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    replace_run_digest_entry(run_path, _hash_json_file(artifact_hashes_path))
 
 
 def _write_robustness_component_manifest(tmp_path: Path) -> Path:

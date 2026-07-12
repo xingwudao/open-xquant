@@ -23,6 +23,13 @@ comparison → final selection**
 `docs/images/strategy-workflow-artifact-governance.dot`。最终版本治理由
 `select-final-version` skill 承接。
 
+版本根不是固定目录名。Agent 必须从 `.open-xquant/workspace.yaml` 的
+`paths.versions_dir` 解析 `version_root`，仅在配置缺失时默认使用
+`versions`，并拒绝绝对路径、父目录穿越和解析后逃逸 workspace 的
+symlink。确认 `<version_root>/<version_id>/version_manifest.json` 后，
+阶段产物一律使用清单中的 `phase_paths`。例如 `research_versions`
+配置下的 spec-build phase 是 `research_versions/v003/04_spec_build`。
+
 ![Strategy Workflow Artifact Governance](images/strategy-workflow-artifact-governance.png)
 
 底层是严谨的量化金融引擎，经 Universe → Indicator → Signal → Portfolio → Rule → Broker
@@ -399,7 +406,7 @@ Spec Auditor 必须在完整确认表里让用户确认每个有效字段。
 ```bash
 oxq spec init "A-share momentum TopN" --market-preset cn_a_share
 # version-governed workspace default:
-# versions/<version_id>/04_spec_build/strategy_spec.yaml
+# <phase_paths.04_spec_build>/strategy_spec.yaml
 ```
 
 `cn_a_share` 会显式写出关键候选假设，包括：
@@ -453,7 +460,7 @@ oxq spec init "A-share momentum TopN" --market-preset cn_a_share
 
 ### 5.3 Spec Validator
 
-命令：`oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml`
+命令：`oxq spec validate <phase_paths.04_spec_build>/strategy_spec.yaml`
 
 P0 校验规则：
 
@@ -529,7 +536,7 @@ Research Bias Audit   — 判断回测研究是否可信
 检查 spec hash、compiled plan hash、strategy.py 一致性、data manifest hash、
 trades hash、equity curve hash、metrics hash、environment hash。
 
-命令：`oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/`
+命令：`uv run oxq audit reproducibility "$RUN_DIR" --json --publish`
 
 ### 6.3 Research Bias Audit
 
@@ -548,7 +555,7 @@ P0 检查项：
 | drawdown_tail | warning | 最大回撤是否不可接受 |
 | missing_data | warning | 数据缺失是否严重 |
 
-命令：`oxq audit research versions/<version_id>/09_backtests/<run_id>/`
+命令：`uv run oxq audit research "$RUN_DIR" --json --publish`
 
 ---
 
@@ -564,7 +571,13 @@ P0 稳健性测试四类：
 输出 `robustness.json`，用于报告和实验比较。报告不应只复述
 baseline Sharpe，而应保留 fragile、warn 和 error 状态。
 
-命令：`oxq robustness run versions/<version_id>/09_backtests/<run_id>/`
+命令：`uv run oxq robustness run "$RUN_DIR" --json`
+
+`RUN_DIR` 必须先解析为 manifest-owned
+`<phase_paths.09_backtests>/<run_id>`。`--json` 只控制 response formatting；
+audit 的 `--publish` 是 canonical artifact 的原子 publication contract。
+Robustness 会 self-publish `robustness.json`，不需要重定向，也没有额外的
+publish flag。禁止用 shell redirection 写 governed monitor artifacts。
 
 ---
 
@@ -595,7 +608,7 @@ manifest。最终 `research_report.md` 必须由 Agent 调用
 图表和附件通过 manifest 登记：
 
 ```text
-versions/<version_id>/10_reports/<run_id>/
+<phase_paths.10_reports>/<run_id>/
   report_assets/
     manifest.json
     figures/
@@ -603,15 +616,29 @@ versions/<version_id>/10_reports/<run_id>/
     attachments/
 ```
 
-报告资产命令：
+Chart assets, scripts, report manifests, Markdown, HTML, writer results, and
+review results are published through
+`publish_report_artifacts(report_dir, artifacts, *, lock_subject=None)`. Its
+mapping uses safe relative keys and complete `bytes`; `None` deletes a target.
+A callable builder executes under the final-selection lock, performs the
+baseline check against current bytes, and commits an atomic all-or-rollback
+batch. Direct path writes, shell redirection, and report asset CLI publication
+paths bypass this transaction and are forbidden.
 
-```bash
-oxq report asset add versions/<version_id>/10_reports/<run_id>/ \
-  versions/<version_id>/10_reports/<run_id>/report_assets/figures/chart.png \
-  --id chart_id --title "Chart"
-oxq report asset add-batch versions/<version_id>/10_reports/<run_id>/ versions/<version_id>/10_reports/<run_id>/report_assets/assets.json
-oxq report asset list versions/<version_id>/10_reports/<run_id>/
-```
+For an export whose report directory is outside the governed workspace, set
+`lock_subject=source_run_dir`. If report construction needs coherent run
+locking, wrap publication with `run_digest_transaction(source_run_dir)`; the
+runtime acquires the run lock first and the final-selection lock second.
+Publishers must not pre-acquire the final lock. Final Selector pointer work
+still releases run/registry locks before its direct-byte final-lock region and
+does not call a run-locking validator there.
+
+Final-selection comparison v2 packages use immutable
+`<comparisons_dir>/<selection_id>/<comparison_id>/` directories. Creation is
+exclusive: an existing output directory is rejected, a retry uses a fresh
+`comparison_id` under the same selection, and `restart_selection` uses a fresh
+selection directory. No retry may overwrite evidence referenced by a prior
+`current_final.json`.
 
 ---
 
@@ -623,24 +650,25 @@ oxq report asset list versions/<version_id>/10_reports/<run_id>/
 
 记录：experiment_id, strategy_id, spec_hash, run_id, metrics, audit_status, decision, created_at。
 
-命令：`oxq experiment add versions/<version_id>/09_backtests/<run_id>/`
+命令：`oxq experiment add <phase_paths.09_backtests>/<run_id>/`
 
 ---
 
 ## 10. CLI 设计
 
 ```
-oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
-oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --strict-confirmed
-oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml --out versions/<version_id>/07_compile_preview
-oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
-# oxq-coordinator must first write versions/<version_id>/08_runtime_audit/backtest_authorization.json
+oxq spec validate <phase_paths.04_spec_build>/strategy_spec.yaml
+oxq spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json --spec <phase_paths.04_spec_build>/strategy_spec.yaml --component-catalog <phase_paths.04_spec_build>/component_catalog.json --strict-confirmed
+oxq strategy compile <phase_paths.04_spec_build>/strategy_spec.yaml --out <phase_paths.07_compile_preview>
+oxq runtime-audit validate <phase_paths.08_runtime_audit>/runtime_audit.json
+# oxq-coordinator must first write <phase_paths.08_runtime_audit>/backtest_authorization.json
 # oxq-runner-worker then uses run-authorized-backtest; the raw CLI call below is not a manual bypass.
-oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --out versions/<version_id>/09_backtests --json
-oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
-oxq audit research versions/<version_id>/09_backtests/<run_id>/
-oxq robustness run versions/<version_id>/09_backtests/<run_id>/
-oxq experiment add versions/<version_id>/09_backtests/<run_id>/
+oxq backtest run <phase_paths.04_spec_build>/strategy_spec.yaml --spec-audit <phase_paths.06_spec_audit>/spec_audit.json --runtime-audit <phase_paths.08_runtime_audit>/runtime_audit.json --component-catalog <phase_paths.04_spec_build>/component_catalog.json --out <phase_paths.09_backtests> --json
+RUN_DIR="<phase_paths.09_backtests>/<run_id>"
+uv run oxq audit reproducibility "$RUN_DIR" --json --publish
+uv run oxq audit research "$RUN_DIR" --json --publish
+uv run oxq robustness run "$RUN_DIR" --json
+oxq experiment add <phase_paths.09_backtests>/<run_id>/
 ```
 
 CLI 是 SDK 的薄封装。业务逻辑在 SDK 中实现；最终研究报告文本由
@@ -935,15 +963,17 @@ target-specific 包维护。
 用以下命令验证系统端到端可工作：
 
 ```bash
-oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
-oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json --spec versions/<version_id>/04_spec_build/strategy_spec.yaml --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --strict-confirmed
-oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
-# oxq-coordinator must first write versions/<version_id>/08_runtime_audit/backtest_authorization.json
+oxq spec validate <phase_paths.04_spec_build>/strategy_spec.yaml
+oxq spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json --spec <phase_paths.04_spec_build>/strategy_spec.yaml --component-catalog <phase_paths.04_spec_build>/component_catalog.json --strict-confirmed
+oxq runtime-audit validate <phase_paths.08_runtime_audit>/runtime_audit.json
+# oxq-coordinator must first write <phase_paths.08_runtime_audit>/backtest_authorization.json
 # oxq-runner-worker then uses run-authorized-backtest; the raw CLI call below is not a manual bypass.
-oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json --component-catalog versions/<version_id>/04_spec_build/component_catalog.json --out versions/<version_id>/09_backtests --json
-oxq audit research versions/<version_id>/09_backtests/<run_id>/
-oxq robustness run versions/<version_id>/09_backtests/<run_id>/
-oxq experiment add versions/<version_id>/09_backtests/<run_id>/
+oxq backtest run <phase_paths.04_spec_build>/strategy_spec.yaml --spec-audit <phase_paths.06_spec_audit>/spec_audit.json --runtime-audit <phase_paths.08_runtime_audit>/runtime_audit.json --component-catalog <phase_paths.04_spec_build>/component_catalog.json --out <phase_paths.09_backtests> --json
+RUN_DIR="<phase_paths.09_backtests>/<run_id>"
+uv run oxq audit reproducibility "$RUN_DIR" --json --publish
+uv run oxq audit research "$RUN_DIR" --json --publish
+uv run oxq robustness run "$RUN_DIR" --json
+oxq experiment add <phase_paths.09_backtests>/<run_id>/
 ```
 
 验证断言：

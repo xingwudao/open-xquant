@@ -4,14 +4,23 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import pandas as pd
 
 from oxq.market_calendar import normalize_exchange_calendar
+from oxq.run_digests import run_digest_transaction
 
 
 def audit_reproducibility(run_dir: str | Path) -> dict:
+    """Audit one coherent, transaction-bound generation of a backtest run."""
+    run_path = Path(os.path.abspath(run_dir))
+    with run_digest_transaction(run_path):
+        return _audit_reproducibility_locked(run_path)
+
+
+def _audit_reproducibility_locked(run_path: Path) -> dict:
     """Verify that a backtest run's core outputs are consistent.
 
     Checks spec hash, data manifest hash, trades hash, equity curve hash,
@@ -27,7 +36,6 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     dict
         Audit result with 'status', 'checks', and summary fields.
     """
-    run_path = Path(run_dir)
     checks: list[dict] = []
 
     # Check required files exist
@@ -41,11 +49,27 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         "trades.csv",
         "artifact_hashes.json",
     ]
-    missing = [f for f in required_files if not (run_path / f).exists()]
-    if missing:
+    required_paths: dict[str, Path] = {}
+    invalid_required: list[str] = []
+    for artifact_name in required_files:
+        try:
+            required_paths[artifact_name] = validate_run_artifact_path(
+                run_path,
+                artifact_name,
+            )
+        except OSError as exc:
+            invalid_required.append(f"{artifact_name}: {exc}")
+    if invalid_required:
         return {
             "status": "fail",
-            "checks": [{"id": "missing_files", "status": "fail", "severity": "fatal", "message": f"Missing files: {missing}"}],
+            "checks": [
+                {
+                    "id": "missing_files",
+                    "status": "fail",
+                    "severity": "fatal",
+                    "message": f"Missing or unsafe files: {invalid_required}",
+                }
+            ],
             "fatal_count": 1,
             "warning_count": 0,
         }
@@ -54,12 +78,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     parsed_spec = None
     try:
         from oxq.spec.schema import StrategySpec
-        parsed_spec = StrategySpec.from_yaml(str(run_path / "strategy_spec.yaml"))
+        parsed_spec = StrategySpec.from_yaml(str(required_paths["strategy_spec.yaml"]))
         spec_hash_actual = parsed_spec.compute_hash()
     except Exception:
-        spec_yaml = (run_path / "strategy_spec.yaml").read_text(encoding="utf-8")
+        spec_yaml = required_paths["strategy_spec.yaml"].read_text(encoding="utf-8")
         spec_hash_actual = f"sha256:{hashlib.sha256(spec_yaml.encode()).hexdigest()[:16]}"
-    spec_hash_stored = (run_path / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    spec_hash_stored = required_paths["spec_hash.txt"].read_text(encoding="utf-8").strip()
     checks.append(
         _check(
             "spec_hash",
@@ -72,7 +96,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     # Verify environment.json is valid
     env = {}
     try:
-        parsed_env = json.loads((run_path / "environment.json").read_text(encoding="utf-8"))
+        parsed_env = json.loads(required_paths["environment.json"].read_text(encoding="utf-8"))
         if not isinstance(parsed_env, dict):
             checks.append(_check("environment", False, "fatal", "environment.json must be an object"))
         else:
@@ -87,7 +111,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     manifest_schema_version = 0
     manifest = {}
     try:
-        parsed_manifest = json.loads((run_path / "data_manifest.json").read_text(encoding="utf-8"))
+        parsed_manifest = json.loads(required_paths["data_manifest.json"].read_text(encoding="utf-8"))
         if not isinstance(parsed_manifest, dict):
             checks.append(_check("data_manifest", False, "fatal", "data_manifest.json must be an object"))
         else:
@@ -146,7 +170,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
     }
     artifact_schema_version = 0
     try:
-        expected_hashes = json.loads((run_path / "artifact_hashes.json").read_text(encoding="utf-8"))
+        expected_hashes = json.loads(required_paths["artifact_hashes.json"].read_text(encoding="utf-8"))
         valid_hash_manifest = isinstance(expected_hashes, dict)
         unsafe_hash_keys: list[str] = []
         if not isinstance(expected_hashes, dict):
@@ -191,13 +215,13 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                 if artifact_schema_version >= 2:
                     optional_artifact_hashes["target_weights.csv"] = "target_weights_hash"
                 for artifact_name, check_id in optional_artifact_hashes.items():
-                    if artifact_name in expected_hashes or (run_path / artifact_name).exists():
+                    if artifact_name in expected_hashes or _artifact_path_present(run_path, artifact_name):
                         required_hashes = {
                             **required_hashes,
                             artifact_name: check_id,
                         }
                 provenance_present = any(
-                    artifact_name in expected_hashes or (run_path / artifact_name).exists()
+                    artifact_name in expected_hashes or _artifact_path_present(run_path, artifact_name)
                     for artifact_name in provenance_artifact_hashes
                 )
                 if provenance_present:
@@ -206,7 +230,7 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
                         **provenance_artifact_hashes,
                     }
                 for artifact_name, check_id in optional_provenance_artifact_hashes.items():
-                    if artifact_name in expected_hashes or (run_path / artifact_name).exists():
+                    if artifact_name in expected_hashes or _artifact_path_present(run_path, artifact_name):
                         required_hashes = {
                             **required_hashes,
                             artifact_name: check_id,
@@ -261,12 +285,12 @@ def audit_reproducibility(run_dir: str | Path) -> dict:
         required_hashes = required_artifact_hashes
 
     if expected_hashes and not missing_hash_keys:
-        run_digest_check = _check_run_digest(run_path)
+        run_digest_check = _check_run_digest_locked(run_path)
         if run_digest_check is not None:
             checks.append(run_digest_check)
         for fname, check_id in required_hashes.items():
             try:
-                actual = _hash_artifact(_safe_artifact_path(run_path, fname))
+                actual = _hash_artifact(validate_run_artifact_path(run_path, fname))
                 expected = expected_hashes.get(fname)
                 checks.append(_check(check_id, actual == expected, "fatal", f"{fname} hash mismatch: stored={expected}, actual={actual}"))
             except (json.JSONDecodeError, OSError):
@@ -325,10 +349,10 @@ def _hash_artifact(path: Path) -> str:
 
 
 def _check_component_bundle_hashes(run_path: Path) -> list[dict]:
-    summary_path = run_path / "component_manifests.json"
-    if not summary_path.exists():
+    if not _artifact_path_present(run_path, "component_manifests.json"):
         return []
     try:
+        summary_path = validate_run_artifact_path(run_path, "component_manifests.json")
         summary = json.loads(summary_path.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError) as exc:
         return [_check("component_bundle_hash", False, "fatal", f"component_manifests.json is invalid: {exc}")]
@@ -378,14 +402,28 @@ def _check_component_bundle_hashes(run_path: Path) -> list[dict]:
 def _resolve_component_manifest_for_audit(run_path: Path, item: dict, recorded_hash: str, summary_count: int) -> Path:
     archived_path = item.get("archived_manifest_path")
     if isinstance(archived_path, str) and archived_path:
-        archived = _safe_artifact_path(run_path, archived_path)
-        if not archived.exists():
+        if not _artifact_path_present(run_path, archived_path):
             raise OSError(f"archived component manifest not found: {archived_path}")
+        try:
+            archived = validate_run_artifact_path(run_path, archived_path)
+        except OSError as exc:
+            if "symlink" in str(exc):
+                raise OSError(
+                    f"archived component manifest must not be a symlink: {archived_path}"
+                ) from exc
+            raise
         _verify_run_local_component_manifest(run_path, archived, str(archived_path), recorded_hash)
         return archived
 
-    legacy = run_path / "component_manifest.json"
-    if summary_count == 1 and legacy.exists():
+    if summary_count == 1 and _artifact_path_present(run_path, "component_manifest.json"):
+        try:
+            legacy = validate_run_artifact_path(run_path, "component_manifest.json")
+        except OSError as exc:
+            if "symlink" in str(exc):
+                raise OSError(
+                    "archived component manifest must not be a symlink: component_manifest.json"
+                ) from exc
+            raise
         _verify_run_local_component_manifest(run_path, legacy, "component_manifest.json", recorded_hash)
         return legacy
 
@@ -393,19 +431,33 @@ def _resolve_component_manifest_for_audit(run_path: Path, item: dict, recorded_h
     if not isinstance(manifest_path, str) or not manifest_path:
         raise OSError("component manifest path is required")
     candidate = Path(manifest_path)
-    if not candidate.is_absolute():
-        candidate = run_path / candidate
-    if candidate.exists():
-        return candidate
-    raise OSError(f"component manifest not found: {candidate}")
+    try:
+        relative = candidate.relative_to(run_path) if candidate.is_absolute() else candidate
+    except ValueError as exc:
+        raise OSError(
+            f"component manifest must stay within the run directory: {candidate}"
+        ) from exc
+    try:
+        local_manifest = validate_run_artifact_path(run_path, relative.as_posix())
+    except OSError as exc:
+        raise OSError(f"component manifest must stay within the run directory: {candidate}") from exc
+    _verify_run_local_component_manifest(
+        run_path,
+        local_manifest,
+        str(manifest_path),
+        recorded_hash,
+    )
+    return local_manifest
 
 
 def _verify_run_local_component_manifest(run_path: Path, path: Path, label: str, recorded_hash: str) -> None:
-    if path.is_symlink():
-        raise OSError(f"archived component manifest must not be a symlink: {label}")
-    resolved = path.resolve()
-    if not resolved.is_relative_to(run_path.resolve()):
-        raise OSError(f"archived component manifest escapes run directory: {label}")
+    try:
+        relative = path.relative_to(run_path).as_posix()
+        path = validate_run_artifact_path(run_path, relative)
+    except (OSError, ValueError) as exc:
+        raise OSError(
+            f"archived component manifest must be a run-local regular file without symlinks: {label}"
+        ) from exc
     from oxq.core.component_manifest import compute_component_bundle_hash
 
     actual = compute_component_bundle_hash(path)
@@ -424,14 +476,35 @@ def _unknown_artifact_check_id(artifact_name: str) -> str:
     return f"{normalized}_hash" if normalized else "unknown_artifact_hash"
 
 
-def _safe_artifact_path(run_path: Path, artifact_name: str) -> Path:
+def validate_run_artifact_path(run_path: str | Path, artifact_name: str) -> Path:
+    """Return one regular, non-symlinked artifact canonically contained by a run."""
     if not _is_safe_artifact_name(artifact_name):
         raise OSError(f"unsafe artifact path: {artifact_name}")
-    path = run_path / artifact_name
-    resolved_parent = path.parent.resolve()
-    if not resolved_parent.is_relative_to(run_path.resolve()):
+    lexical_run = Path(os.path.abspath(run_path))
+    if lexical_run.is_symlink() or not lexical_run.is_dir():
+        raise OSError(f"run directory must be a regular directory without symlinks: {lexical_run}")
+    path = lexical_run / artifact_name
+    current = lexical_run
+    for part in Path(artifact_name).parts:
+        current /= part
+        if current.is_symlink():
+            raise OSError(f"artifact path must not contain symlinks: {artifact_name}")
+    if not path.is_file():
+        raise OSError(f"artifact path must be a regular file: {artifact_name}")
+    try:
+        resolved_run = lexical_run.resolve(strict=True)
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(resolved_run)
+    except (OSError, ValueError):
         raise OSError(f"unsafe artifact path escapes run directory: {artifact_name}")
     return path
+
+
+def _artifact_path_present(run_path: Path, artifact_name: str) -> bool:
+    if not _is_safe_artifact_name(artifact_name):
+        return False
+    path = run_path / artifact_name
+    return path.exists() or path.is_symlink()
 
 
 def _is_safe_artifact_name(artifact_name: str) -> bool:
@@ -446,11 +519,11 @@ def _check_compiled_plan_consistency(
     env: dict | None = None,
     manifest: dict | None = None,
 ) -> dict:
-    compiled_plan_path = run_path / "compiled_plan.json"
-    if not compiled_plan_path.exists():
+    if not _artifact_path_present(run_path, "compiled_plan.json"):
         return _check("compiled_plan_consistency", False, "fatal", "compiled_plan.json is missing")
 
     try:
+        compiled_plan_path = validate_run_artifact_path(run_path, "compiled_plan.json")
         compiled_plan = json.loads(compiled_plan_path.read_text(encoding="utf-8"))
     except Exception as exc:
         return _check("compiled_plan_consistency", False, "fatal", f"compiled_plan.json consistency check failed: {exc}")
@@ -489,7 +562,14 @@ def _check_compiled_plan_consistency(
             "fatal",
             f"compiled_plan.json consistency check failed while rebuilding plan: {exc}",
         )
-    differing = _compiled_plan_material_differences(compiled_plan, expected_plan)
+    required_oxq_version = getattr(spec, "required_oxq_version", None)
+    if not isinstance(required_oxq_version, str) or not required_oxq_version:
+        required_oxq_version = None
+    differing = _compiled_plan_material_differences(
+        compiled_plan,
+        expected_plan,
+        required_oxq_version=required_oxq_version,
+    )
     if differing:
         return _check(
             "compiled_plan_consistency",
@@ -507,9 +587,9 @@ def _check_compiled_plan_consistency(
 
 
 def _read_component_manifests_for_plan(run_path: Path) -> list[dict]:
-    summary_path = run_path / "component_manifests.json"
-    if not summary_path.exists():
+    if not _artifact_path_present(run_path, "component_manifests.json"):
         return []
+    summary_path = validate_run_artifact_path(run_path, "component_manifests.json")
     summary = json.loads(summary_path.read_text(encoding="utf-8"))
     if not isinstance(summary, list):
         raise ValueError("component_manifests.json must be a list")
@@ -548,24 +628,22 @@ def _hash_json_file(path: Path, exclude_keys: set[str] | None = None) -> str:
 
 
 def _check_run_digest(run_path: Path) -> dict | None:
+    with run_digest_transaction(run_path):
+        return _check_run_digest_locked(run_path)
+
+
+def _check_run_digest_locked(run_path: Path) -> dict | None:
     digest_path = run_path.parent / "run_digests.jsonl"
     if not digest_path.exists():
         return None
-    run_id = run_path.name
-    expected = None
+
+    from oxq.run_digests import RunDigestError, require_current_run_digest
+
     try:
-        for line in digest_path.read_text(encoding="utf-8").splitlines():
-            if not line.strip():
-                continue
-            entry = json.loads(line)
-            if isinstance(entry, dict) and entry.get("run_id") == run_id:
-                expected = entry.get("artifact_hashes")
-    except (json.JSONDecodeError, OSError):
-        return _check("run_digest", False, "fatal", "run_digests.jsonl is invalid")
-    if not isinstance(expected, str):
-        return None
-    actual = _hash_json_file(run_path / "artifact_hashes.json")
-    return _check("run_digest", actual == expected, "fatal", f"artifact_hashes.json digest mismatch: stored={expected}, actual={actual}")
+        require_current_run_digest(run_path)
+    except RunDigestError as exc:
+        return _check("run_digest", False, "fatal", str(exc))
+    return _check("run_digest", True, "fatal", "run digest matches artifact_hashes.json")
 
 
 def _check_data_fingerprints(manifest: dict, data_dir: str | None, enforce: bool) -> list[dict]:

@@ -37,7 +37,7 @@ change affects reproducibility. Record the resolved version in
 Run deterministic validation:
 
 ```bash
-uv run oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml
+uv run oxq spec validate <phase_paths.04_spec_build>/strategy_spec.yaml
 ```
 
 Fix fatal validation errors before completing the builder phase only when they
@@ -57,17 +57,17 @@ Write `builder_phase_result.json` after validation:
 ```json
 {
   "status": "pass | blocked | fail",
-  "strategy_spec": "versions/<version_id>/04_spec_build/strategy_spec.yaml",
-  "strategy_idea_brief": "versions/<version_id>/01_brainstorm/strategy_idea_brief.json",
-  "strategy_idea_audit": "versions/<version_id>/02_idea_audit/strategy_idea_audit.json",
+  "strategy_spec": "<phase_paths.04_spec_build>/strategy_spec.yaml",
+  "strategy_idea_brief": "<phase_paths.01_brainstorm>/strategy_idea_brief.json",
+  "strategy_idea_audit": "<phase_paths.02_idea_audit>/strategy_idea_audit.json",
   "strategy_idea_brief_hash": "sha256:<hash>",
   "strategy_idea_audit_hash": "sha256:<hash>",
   "required_oxq_version": "0.1.0",
-  "component_catalog": "versions/<version_id>/04_spec_build/component_catalog.json",
+  "component_catalog": "<phase_paths.04_spec_build>/component_catalog.json",
   "catalog_hash": "<component_catalog.catalog_hash>",
-  "spec_build_notes": "versions/<version_id>/04_spec_build/spec_build_notes.md",
-  "spec_mapping_notes": "versions/<version_id>/04_spec_build/spec_mapping_notes.md",
-  "spec_mapping_contract": "versions/<version_id>/04_spec_build/spec_mapping_contract.json",
+  "spec_build_notes": "<phase_paths.04_spec_build>/spec_build_notes.md",
+  "spec_mapping_notes": "<phase_paths.04_spec_build>/spec_mapping_notes.md",
+  "spec_mapping_contract": "<phase_paths.04_spec_build>/spec_mapping_contract.json",
   "validation": {
     "status": "pass | fail",
     "spec_hash": "sha256:<hash>",
@@ -100,10 +100,10 @@ Write `builder_phase_result.json` after validation:
 
 The builder phase output is:
 
-- `versions/<version_id>/04_spec_build/strategy_spec.yaml`
-- `versions/<version_id>/04_spec_build/component_catalog.json`
-- `versions/<version_id>/04_spec_build/spec_build_notes.md` or equivalent
+- `<phase_paths.04_spec_build>/strategy_spec.yaml`
+- `<phase_paths.04_spec_build>/component_catalog.json`
+- `<phase_paths.04_spec_build>/spec_build_notes.md` or equivalent
   build notes
-- `versions/<version_id>/04_spec_build/spec_mapping_notes.md`
-- `versions/<version_id>/04_spec_build/spec_mapping_contract.json`
-- `versions/<version_id>/04_spec_build/builder_phase_result.json`
+- `<phase_paths.04_spec_build>/spec_mapping_notes.md`
+- `<phase_paths.04_spec_build>/spec_mapping_contract.json`
+- `<phase_paths.04_spec_build>/builder_phase_result.json`

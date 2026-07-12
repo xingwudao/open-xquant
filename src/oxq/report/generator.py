@@ -5,7 +5,9 @@ from __future__ import annotations
 import csv
 import json
 import math
-import shutil
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,9 +17,15 @@ import yaml
 from oxq.audit.reproducibility import audit_reproducibility
 from oxq.audit.research_bias import audit_research
 from oxq.report.artifacts import RunArtifacts
-from oxq.report.assets import ReportAsset, list_report_assets
+from oxq.report.assets import (
+    ReportAsset,
+    list_report_assets,
+    publish_report_artifacts,
+    report_publication_read_transaction,
+)
 from oxq.report.facts import ReportFacts, build_report_facts
 from oxq.report.i18n import messages
+from oxq.run_digests import run_digest_transaction
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
 from oxq.spec.validator import validate
@@ -29,8 +37,19 @@ class ReportOutputs:
     html: Path | None = None
 
 
+_ACTIVE_REPORT_RUN_TRANSACTIONS: ContextVar[tuple[Path, ...]] = ContextVar(
+    "oxq_active_report_run_transactions",
+    default=(),
+)
+
+
 def generate_report(run_dir: str | Path, lang: str = "zh") -> str:
     """Generate a research_report.md from a backtest run directory."""
+    with _report_run_read_transaction(run_dir) as run_path:
+        return _generate_report_locked(run_path, lang=lang)
+
+
+def _generate_report_locked(run_dir: str | Path, lang: str = "zh") -> str:
     run_path = Path(run_dir)
     msg = messages(lang)
     headings = msg["headings"]
@@ -271,36 +290,73 @@ def write_report_files(
         raise ValueError(f"unsupported report format: {output_format}")
 
     run_path = Path(run_dir)
-    markdown_path: Path | None = None
-    html_path: Path | None = None
-    report_md: str | None = None
+    markdown_path = (
+        _markdown_output_path(run_path, output_format, out)
+        if output_format in {"all", "markdown"}
+        else None
+    )
+    html_path = (
+        _html_output_path(run_path, output_format, out)
+        if output_format in {"all", "html"}
+        else None
+    )
+    output_path = markdown_path or html_path
+    assert output_path is not None
+    output_root = output_path.parent
 
-    if output_format in {"all", "markdown"}:
-        report_md = generate_report(run_path, lang=lang)
-        markdown_path = _markdown_output_path(run_path, output_format, out)
-        markdown_path.parent.mkdir(parents=True, exist_ok=True)
-        markdown_path.write_text(report_md, encoding="utf-8")
-
-    if output_format in {"all", "html"}:
+    def build_publication() -> dict[str | Path, bytes | None]:
         from oxq.report.html import render_html_report, render_markdown_html_report
 
-        if report_md is None:
-            report_md = _read_existing_report_markdown(run_path)
-        report_html = (
-            render_markdown_html_report(report_md, lang=lang)
-            if report_md is not None
-            else render_html_report(run_path, lang=lang)
-        )
-        html_path = _html_output_path(run_path, output_format, out)
-        html_path.parent.mkdir(parents=True, exist_ok=True)
-        html_path.write_text(report_html, encoding="utf-8")
+        publication: dict[str | Path, bytes | None] = {}
+        report_md: str | None = None
+        if markdown_path is not None:
+            report_md = generate_report(run_path, lang=lang)
+            publication[markdown_path.relative_to(output_root)] = report_md.encode()
+        if html_path is not None:
+            if report_md is None:
+                report_md = _read_existing_report_markdown(run_path)
+            report_html = (
+                render_markdown_html_report(report_md, lang=lang)
+                if report_md is not None
+                else render_html_report(run_path, lang=lang)
+            )
+            publication[html_path.relative_to(output_root)] = report_html.encode()
+        if out is not None:
+            publication.update(_report_asset_bundle_publication(run_path, output_root))
+        return publication
 
-    if out is not None:
-        output_path = markdown_path or html_path
-        if output_path is not None:
-            _copy_report_asset_bundle(run_path, output_path.parent)
+    with _report_run_read_transaction(run_path) as locked_run:
+        if output_root.resolve(strict=False) == locked_run:
+            publish_report_artifacts(output_root, build_publication, lock_subject=locked_run)
+        else:
+            with report_publication_read_transaction(locked_run):
+                publication = build_publication()
+            publish_report_artifacts(output_root, publication, lock_subject=locked_run)
 
     return ReportOutputs(markdown=markdown_path, html=html_path)
+
+
+@contextmanager
+def _report_run_read_transaction(run_dir: str | Path) -> Iterator[Path]:
+    supplied = Path(run_dir)
+    try:
+        run_path = supplied.resolve(strict=True)
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"run directory could not be resolved: {supplied}: {exc}") from exc
+    if not run_path.is_dir():
+        raise ValueError(f"run directory must be a directory: {supplied}")
+
+    active_runs = _ACTIVE_REPORT_RUN_TRANSACTIONS.get()
+    if run_path in active_runs:
+        yield run_path
+        return
+
+    with run_digest_transaction(run_path):
+        token = _ACTIVE_REPORT_RUN_TRANSACTIONS.set((*active_runs, run_path))
+        try:
+            yield run_path
+        finally:
+            _ACTIVE_REPORT_RUN_TRANSACTIONS.reset(token)
 
 
 def _read_existing_report_markdown(run_path: Path) -> str | None:
@@ -326,14 +382,20 @@ def _html_output_path(run_path: Path, output_format: str, out: str | Path | None
     return out_path if out_path.suffix.lower() == ".html" else out_path.with_suffix(".html")
 
 
-def _copy_report_asset_bundle(run_path: Path, output_dir: Path) -> None:
+def _report_asset_bundle_publication(run_path: Path, output_dir: Path) -> dict[Path, bytes]:
     source = run_path / "report_assets"
     if not source.exists():
-        return
+        return {}
     destination = output_dir / "report_assets"
     if source.resolve() == destination.resolve():
-        return
-    shutil.copytree(source, destination, dirs_exist_ok=True)
+        return {}
+    publication: dict[Path, bytes] = {}
+    for path in source.rglob("*"):
+        if path.is_symlink():
+            raise ValueError(f"report asset bundle must not contain symlinks: {path}")
+        if path.is_file():
+            publication[Path("report_assets") / path.relative_to(source)] = path.read_bytes()
+    return publication
 
 
 def _determine_decision(

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import math
+from numbers import Real
+
 import pandas as pd
 
 
@@ -27,7 +30,7 @@ class RPS:
     ) -> pd.Series:
         _validate_rps_params(period=period, scale=scale, min_symbols=min_symbols)
         del column
-        return pd.Series(pd.NA, index=mktdata.index, dtype="float64")
+        return pd.Series(float("nan"), index=mktdata.index, dtype="float64")
 
     def compute_cross_section(
         self,
@@ -59,5 +62,10 @@ def _validate_rps_params(*, period: int, scale: float, min_symbols: int) -> None
         raise ValueError("period must be a positive integer")
     if isinstance(min_symbols, bool) or not isinstance(min_symbols, int) or min_symbols <= 0:
         raise ValueError("min_symbols must be a positive integer")
-    if float(scale) <= 0:
-        raise ValueError("scale must be positive")
+    if (
+        isinstance(scale, bool)
+        or not isinstance(scale, Real)
+        or not math.isfinite(float(scale))
+        or scale <= 0
+    ):
+        raise ValueError("scale must be a positive finite real number")

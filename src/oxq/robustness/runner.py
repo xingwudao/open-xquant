@@ -11,18 +11,37 @@ import json
 import math
 import re
 import shutil
+import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 
 from oxq.portfolio.metrics_profile import compute_equity_curve_metrics
-from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, compile_run
+from oxq.run_digests import (
+    RunDigestError,
+    publish_run_artifacts,
+    require_current_run_digest,
+    run_digest_transaction,
+    validate_run_artifact_inventory,
+)
+from oxq.spec.compiler import _hash_file, _hash_json_file, compile_run
 from oxq.spec.schema import CostSection, StrategySpec
 
 _BENCHMARK_CURVE_FILES = ("benchmark_curve.csv", "benchmark_equity_curve.csv", "benchmark_prices.csv")
 _COMPONENT_PROVENANCE_FILES = ("component_manifest.json", "component_manifests.json", "component_bundle_hash.txt")
 _COMPONENT_EXTENSION_ARCHIVE_DIR = "component_extensions"
+
+
+@dataclass(frozen=True)
+class _PinnedRunBaseline:
+    snapshot_path: Path
+    artifact_hashes_digest: str | None
+    inventory_profile: str
+    governed: bool
 
 
 def run_robustness(run_dir: str | Path) -> dict:
@@ -49,17 +68,23 @@ def run_robustness(run_dir: str | Path) -> dict:
 
 def _run_robustness_scoped(run_dir: str | Path) -> dict:
     run_path = Path(run_dir)
+    with _pinned_run_snapshot(run_path) as baseline:
+        return _run_robustness_from_snapshot(run_path, baseline)
+
+
+def _run_robustness_from_snapshot(run_path: Path, baseline: _PinnedRunBaseline) -> dict:
+    source_path = baseline.snapshot_path
     tests: list[dict] = []
     try:
         from oxq.core.component_manifest import load_component_manifests_from_run
 
-        load_component_manifests_from_run(run_path)
+        load_component_manifests_from_run(source_path)
     except Exception as exc:
         return {"status": "error", "tests": [], "message": f"run component manifests could not be loaded: {exc}"}
 
     # Load spec and baseline metrics
-    spec_path = run_path / "strategy_spec.yaml"
-    metrics_path = run_path / "metrics.json"
+    spec_path = source_path / "strategy_spec.yaml"
+    metrics_path = source_path / "metrics.json"
     if not spec_path.exists() or not metrics_path.exists():
         return {"status": "error", "tests": [], "message": "run directory missing spec or metrics"}
 
@@ -70,7 +95,7 @@ def _run_robustness_scoped(run_dir: str | Path) -> dict:
     baseline_sharpe = _finite_float(baseline_metrics.get("sharpe_ratio"))
 
     # Preserve the effective data directory from the original run
-    env_path = run_path / "environment.json"
+    env_path = source_path / "environment.json"
     data_dir = None
     if env_path.exists():
         env, error = _read_json_object(env_path, "environment.json")
@@ -83,7 +108,7 @@ def _run_robustness_scoped(run_dir: str | Path) -> dict:
         cost_x2_dir = run_path.parent / f"{run_path.name}_cost_x2"
         cost_spec = _clone_spec_with_cost_multiplier(spec, 2.0)
         _, cost_run_dir = compile_run(cost_spec, out_dir=str(cost_x2_dir), data_dir=data_dir)
-        _copy_component_provenance(run_path, Path(cost_run_dir))
+        _copy_component_provenance(source_path, Path(cost_run_dir))
         perturbed_sharpe = _read_metric_sharpe(Path(cost_run_dir) / "metrics.json")
         if baseline_sharpe is None or perturbed_sharpe is None:
             tests.append({
@@ -108,10 +133,10 @@ def _run_robustness_scoped(run_dir: str | Path) -> dict:
     tests.append(_compare_is_oos(spec, baseline_metrics))
 
     # --- Test 3: Parameter perturbation — check sensitivity hints from spec ---
-    tests.append(_run_parameter_perturbations(spec, run_path, data_dir, baseline_sharpe))
+    tests.append(_run_parameter_perturbations(spec, source_path, run_path, data_dir, baseline_sharpe))
 
     # --- Test 4: Regime analysis ---
-    tests.append(_analyze_regimes(spec, run_path))
+    tests.append(_analyze_regimes(spec, source_path))
 
     # Summary
     failed = [t for t in tests if t["status"] == "fail"]
@@ -128,8 +153,54 @@ def _run_robustness_scoped(run_dir: str | Path) -> dict:
         status = "robust"
 
     result = {"status": status, "tests": tests, "baseline_sharpe": baseline_sharpe}
-    _write_robustness_artifact(run_path, result)
+    _write_robustness_artifact(run_path, result, baseline=baseline)
     return result
+
+
+@contextmanager
+def _pinned_run_snapshot(run_path: Path) -> Iterator[_PinnedRunBaseline]:
+    with tempfile.TemporaryDirectory(prefix="oxq-robustness-baseline-") as temporary_root:
+        snapshot_path = Path(temporary_root) / run_path.name
+        with run_digest_transaction(run_path):
+            digest, profile, governed = _current_baseline_identity(run_path)
+            shutil.copytree(run_path, snapshot_path)
+        yield _PinnedRunBaseline(
+            snapshot_path=snapshot_path,
+            artifact_hashes_digest=digest,
+            inventory_profile=profile,
+            governed=governed,
+        )
+
+
+def _current_baseline_identity(run_path: Path) -> tuple[str | None, str, bool]:
+    artifact_hashes_path = run_path / "artifact_hashes.json"
+    if not artifact_hashes_path.exists():
+        return None, "absent", False
+    artifact_hashes, error = _read_json_object(artifact_hashes_path, "artifact_hashes.json")
+    if error is not None:
+        raise RunDigestError(error)
+    governed = _run_digest_registry_contains(run_path)
+    if governed:
+        require_current_run_digest(run_path)
+    if "schema_version" in artifact_hashes or "data_manifest.json" in artifact_hashes:
+        profile = validate_run_artifact_inventory(run_path).name
+    else:
+        profile = "unversioned"
+    return _hash_json_file(artifact_hashes_path), profile, governed
+
+
+def _run_digest_registry_contains(run_path: Path) -> bool:
+    digest_path = run_path.parent / "run_digests.jsonl"
+    if not digest_path.exists():
+        return False
+    try:
+        lines = digest_path.read_text(encoding="utf-8").splitlines()
+        entries = [json.loads(line) for line in lines if line.strip()]
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise RunDigestError(f"run_digests.jsonl is invalid: {digest_path}: {exc}") from exc
+    if any(not isinstance(entry, dict) for entry in entries):
+        raise RunDigestError(f"run_digests.jsonl entries must be JSON objects: {digest_path}")
+    return any(entry.get("run_id") == run_path.name for entry in entries)
 
 
 def _read_json_object(path: Path, name: str) -> tuple[dict[str, Any], str | None]:
@@ -263,7 +334,8 @@ def _drawdown_degradation(in_sample: float | None, out_of_sample: float | None) 
 
 def _run_parameter_perturbations(
     spec: StrategySpec,
-    run_path: Path,
+    source_path: Path,
+    output_run_path: Path,
     data_dir: str | None,
     baseline_sharpe: float | None,
 ) -> dict[str, Any]:
@@ -306,9 +378,9 @@ def _run_parameter_perturbations(
                 value_slug = _slugify(str(value))
                 target_slug = _slugify(target)
                 perturbed_spec.strategy_id = f"{spec.strategy_id}_perturb_{target_slug}_{value_slug}"
-                out_dir = run_path.parent / f"{run_path.name}_perturb_{target_slug}_{value_slug}"
+                out_dir = output_run_path.parent / f"{output_run_path.name}_perturb_{target_slug}_{value_slug}"
                 _, perturbed_run_dir = compile_run(perturbed_spec, out_dir=str(out_dir), data_dir=data_dir)
-                _copy_component_provenance(run_path, Path(perturbed_run_dir))
+                _copy_component_provenance(source_path, Path(perturbed_run_dir))
                 perturbed_sharpe = _read_metric_sharpe(Path(perturbed_run_dir) / "metrics.json")
                 results.append(_perturbation_result(target, value, baseline_sharpe, perturbed_sharpe, perturbed_run_dir))
             except Exception as exc:
@@ -344,14 +416,12 @@ def _run_parameter_perturbations(
 
 
 def _copy_component_provenance(source_run: Path, child_run: Path) -> None:
-    copied: list[str] = []
+    artifacts: dict[str, bytes] = {}
     for filename in _COMPONENT_PROVENANCE_FILES:
         source = source_run / filename
         if not source.exists():
             continue
-        target = child_run / filename
-        shutil.copy2(source, target)
-        copied.append(filename)
+        artifacts[filename] = source.read_bytes()
     source_extensions = source_run / _COMPONENT_EXTENSION_ARCHIVE_DIR
     if source_extensions.exists():
         target_extensions = child_run / _COMPONENT_EXTENSION_ARCHIVE_DIR
@@ -362,20 +432,9 @@ def _copy_component_provenance(source_run: Path, child_run: Path) -> None:
             ignore=shutil.ignore_patterns("__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", "*.pyc", "*.pyo"),
         )
     _copy_legacy_component_roots(source_run, child_run)
-    if not copied:
+    if not artifacts:
         return
-
-    hashes_path = child_run / "artifact_hashes.json"
-    hashes: dict[str, Any] = {}
-    if hashes_path.exists():
-        hashes, error = _read_json_object(hashes_path, "artifact_hashes.json")
-        if error is not None:
-            hashes = {}
-    for filename in copied:
-        path = child_run / filename
-        hashes[filename] = _hash_json_file(path) if path.suffix == ".json" else _hash_file(path)
-    hashes_path.write_text(json.dumps(hashes, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    _append_run_digest(child_run, _hash_json_file(hashes_path))
+    publish_run_artifacts(child_run, artifacts)
 
 
 def _copy_legacy_component_roots(source_run: Path, child_run: Path) -> None:
@@ -674,24 +733,26 @@ def _slugify(value: str) -> str:
     return slug or "value"
 
 
-def _write_robustness_artifact(run_path: Path, result: dict[str, Any]) -> None:
-    artifact_path = run_path / "robustness.json"
-    artifact_path.write_text(
-        json.dumps(result, indent=2, allow_nan=False) + "\n",
-        encoding="utf-8",
-    )
-    artifact_hashes_path = run_path / "artifact_hashes.json"
-    if not artifact_hashes_path.exists():
+def _write_robustness_artifact(
+    run_path: Path,
+    result: dict[str, Any],
+    *,
+    baseline: _PinnedRunBaseline | None = None,
+) -> None:
+    content = (json.dumps(result, indent=2, allow_nan=False) + "\n").encode()
+    if baseline is None:
+        publish_run_artifacts(run_path, {"robustness.json": content})
         return
-    try:
-        artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return
-    if not isinstance(artifact_hashes, dict):
-        return
-    artifact_hashes["robustness.json"] = _hash_file(artifact_path)
-    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
-    _append_run_digest(run_path, _hash_json_file(artifact_hashes_path))
+    with run_digest_transaction(run_path):
+        current_digest, current_profile, current_governed = _current_baseline_identity(run_path)
+        current = (current_digest, current_profile, current_governed)
+        pinned = (baseline.artifact_hashes_digest, baseline.inventory_profile, baseline.governed)
+        if current != pinned:
+            raise RunDigestError(
+                "robustness baseline changed before publication: "
+                f"pinned={pinned}, current={current}"
+            )
+        publish_run_artifacts(run_path, {"robustness.json": content})
 
 
 def _clone_spec_with_cost_multiplier(spec: StrategySpec, multiplier: float) -> StrategySpec:

@@ -1,13 +1,19 @@
 from __future__ import annotations
 
 import json
+import threading
+from contextlib import contextmanager
 
+import pytest
 import yaml
 
+import oxq.report.assets as assets_module
+import oxq.report.generator as generator_module
 from oxq.report import generate_report
 from oxq.report.assets import add_report_asset
 from oxq.report.generator import write_report_files
 from oxq.report.html import render_html_report, render_markdown_html_report
+from oxq.selection_lock import final_selection_lock_path, hold_final_selection_lock
 from oxq.spec.schema import StrategySpec
 
 
@@ -153,6 +159,118 @@ def test_write_report_files_outputs_markdown_and_html_by_default(tmp_path) -> No
     assert outputs.html == run_dir / "research_report.html"
     assert outputs.markdown.read_text(encoding="utf-8").startswith("# 研究报告: renderer_case")
     assert outputs.html.read_text(encoding="utf-8").startswith("<!doctype html>")
+
+
+def test_write_report_files_waits_for_final_selection_lock(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "workflow": {"layout": "version_governed"},
+                "paths": {"versions_dir": "versions"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    backtest_phase = workspace / "versions/v001/09_backtests"
+    backtest_phase.mkdir(parents=True)
+    run_dir = _write_report_run(backtest_phase)
+    attempted = threading.Event()
+    completed = threading.Event()
+    failures: list[BaseException] = []
+
+    def write_report() -> None:
+        attempted.set()
+        try:
+            write_report_files(run_dir)
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            completed.set()
+
+    with hold_final_selection_lock(final_selection_lock_path(run_dir)):
+        worker = threading.Thread(target=write_report)
+        worker.start()
+        assert attempted.wait(timeout=5)
+        assert not completed.wait(timeout=0.1)
+        assert not (run_dir / "research_report.md").exists()
+        assert not (run_dir / "research_report.html").exists()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert failures == []
+    assert (run_dir / "research_report.md").is_file()
+    assert (run_dir / "research_report.html").is_file()
+
+
+def test_write_report_files_rolls_back_markdown_when_html_replace_fails(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir = _write_report_run(tmp_path)
+    markdown_path = run_dir / "research_report.md"
+    html_path = run_dir / "research_report.html"
+    markdown_path.write_bytes(b"old markdown\n")
+    html_path.write_bytes(b"old html\n")
+
+    def fail_html_replace(label: str) -> None:
+        if label == "research_report.html.replace":
+            raise OSError("injected report HTML replacement failure")
+
+    monkeypatch.setattr(
+        assets_module,
+        "_report_publication_boundary",
+        fail_html_replace,
+        raising=False,
+    )
+
+    with pytest.raises(OSError, match="injected report HTML replacement failure"):
+        write_report_files(run_dir)
+
+    assert markdown_path.read_bytes() == b"old markdown\n"
+    assert html_path.read_bytes() == b"old html\n"
+
+
+def test_write_report_files_acquires_run_transaction_before_report_replacements(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    run_dir = _write_report_run(tmp_path)
+    events: list[str] = []
+
+    @contextmanager
+    def observed_run_transaction(path):
+        assert path == run_dir
+        events.append("run-enter")
+        try:
+            yield
+        finally:
+            events.append("run-exit")
+
+    def observe_replacement(label: str) -> None:
+        assert events and events[0] == "run-enter"
+        assert "run-exit" not in events
+        events.append(label)
+
+    monkeypatch.setattr(
+        generator_module,
+        "run_digest_transaction",
+        observed_run_transaction,
+        raising=False,
+    )
+    monkeypatch.setattr(assets_module, "_report_publication_boundary", observe_replacement)
+
+    write_report_files(run_dir)
+
+    assert events == [
+        "run-enter",
+        "research_report.md.replace",
+        "research_report.html.replace",
+        "run-exit",
+    ]
 
 
 def test_write_report_files_format_all_uses_distinct_paths_for_html_out(tmp_path) -> None:

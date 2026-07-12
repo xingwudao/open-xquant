@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 import yaml
@@ -253,6 +254,29 @@ def test_validate_rejects_cross_sectional_rps_non_positive_period() -> None:
     )
 
 
+@pytest.mark.parametrize("scale", [np.nan, np.inf, -np.inf])
+def test_validate_rejects_cross_sectional_rps_non_finite_scale(scale: float) -> None:
+    spec = StrategySpec.template(
+        strategy_id="rps_non_finite_scale",
+        hypothesis="cross-sectional ranks require a finite scale",
+    )
+    spec.universe.symbols = ["AAA", "BBB"]
+    spec.signal.indicators = {
+        "rps_bad": IndicatorDef(type="RPS", params={"column": "close", "period": 1, "scale": scale})
+    }
+    spec.portfolio.type = "TopNRanking"
+    spec.portfolio.params = {"score_col": "rps_bad", "n": 1}
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(
+        error["check"] == "compute_dry_run_failed"
+        and "scale must be a positive finite real number" in error["message"]
+        for error in result.errors
+    )
+
+
 def test_validate_rejects_data_filter_without_required_column() -> None:
     spec = StrategySpec.template(strategy_id="filter_missing_col", hypothesis="filter columns must be declared")
     spec.data.filters.exclude_st = True
@@ -397,6 +421,23 @@ validation:
 
     assert spec.universe.point_in_time is False
     warning = _finding(result.warnings, "static_universe_survivorship")
+    assert warning["dimensions"] == ["conservative"]
+
+
+def test_validate_warns_for_non_point_in_time_index_snapshot() -> None:
+    spec = StrategySpec.template(
+        strategy_id="index_snapshot_survivorship",
+        hypothesis="current index constituents can introduce survivorship bias",
+    )
+    spec.universe.type = "index"
+    spec.universe.index_key = "csi300"
+    spec.universe.symbols = ["600519.SH", "000001.SZ"]
+    spec.universe.point_in_time = False
+
+    result = validate(spec)
+
+    warning = _finding(result.warnings, "static_universe_survivorship")
+    assert "index universe snapshot" in warning["message"]
     assert warning["dimensions"] == ["conservative"]
 
 
@@ -760,6 +801,20 @@ def test_validate_rejects_invalid_portfolio_constraints() -> None:
     assert any(error["check"] == "portfolio_constraint_invalid" for error in result.errors)
 
 
+@pytest.mark.parametrize("field", ["max_weight", "min_weight", "cash_reserve"])
+def test_validate_rejects_sdk_constructed_numeric_string_constraint(field: str) -> None:
+    spec = StrategySpec.template(
+        strategy_id=f"string_{field}",
+        hypothesis="portfolio constraints require real numeric values",
+    )
+    setattr(spec.portfolio.constraints, field, "0.2")
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "portfolio_constraint_invalid" for error in result.errors)
+
+
 def test_validate_rejects_unexecutable_min_position_value_constraint() -> None:
     spec = StrategySpec.template(
         strategy_id="min_position_value_unsupported",
@@ -1043,6 +1098,21 @@ validation:
     result = validate(StrategySpec.from_yaml(spec_path))
 
     assert result.status == "pass"
+
+
+def test_validate_rejects_combined_calendar_and_interval_rebalance_controls() -> None:
+    spec = StrategySpec.template(
+        strategy_id="conflicting_weekly_rebalance",
+        hypothesis="calendar and interval controls must not both gate rebalance sessions",
+    )
+    spec.execution.rebalance.frequency = "weekly"
+    spec.execution.rebalance.schedule = "week_start"
+    spec.execution.rebalance.interval_days = 5
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    assert any(error["check"] == "rebalance_controls_conflict" for error in result.errors)
 
 
 def test_validate_accepts_timestamp_signal_dry_run() -> None:

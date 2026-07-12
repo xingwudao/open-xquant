@@ -5,7 +5,72 @@ description: >-
   notebook-like assets are required for an open-xquant experiment report.
 ---
 
+## Phase Path Containment Preflight
+
+Before any phase artifact read, write, directory creation, command, or handoff,
+run this preflight completely and block on any failure:
+
+1. Read `.open-xquant/workspace.yaml`. Resolve `version_root` from
+   `paths.versions_dir`, using `versions` only when that key is absent.
+   Require `version_root` to be a safe workspace-relative path: reject an
+   absolute path or any `..` path segment, resolve it canonically with
+   symlinks, and require the result to stay inside the workspace.
+2. Read `current.json`. For normal phase work, set `expected_version_id` to
+   `current.json.active_version`; it must exist. Only a contract that
+   explicitly owns cross-version inspection may instead set
+   `expected_version_id` from the referenced version id for that historical
+   read. This exception never permits active-version work to consume another
+   version.
+3. Set the intended version directory to
+   `<version_root>/<expected_version_id>/` and resolve it canonically. Require
+   the intended version directory to remain inside the canonical version root
+   and workspace; otherwise treat it as a symlink escape. Read
+   `version_manifest.json` only from that exact directory. The manifest
+   `version_id` must equal `expected_version_id`; for normal phase work it
+   therefore must also equal `current.json.active_version`.
+4. Before using each required `phase_paths` value, require a non-empty
+   workspace-relative string. Reject an absolute path and any `..` path
+   segment. Resolve `<workspace>/<phase_path>` canonically, including existing
+   symlink ancestors even when the leaf will be created, and require the target
+   to be the intended version directory or a descendant of it. A symlink escape
+   outside that directory is invalid.
+5. On any identity or path failure, stop before phase artifact reads, writes,
+   directory creation, commands, or handoffs. Do not normalize an unsafe path
+   into acceptance and do not fall back to a default phase path.
+
+Block examples when `expected_version_id` is `v001` include
+`strategy_store/v001/../v002/04_spec_build`,
+`strategy_store/v002/04_spec_build`, `/tmp/04_spec_build`, and
+`strategy_store/v001/escape/04_spec_build` when `escape` is a symlink
+whose target is outside the intended version directory. An allowed custom
+nested phase path is
+`strategy_store/v001/custom/phases/04_spec_build` when its canonical
+target remains under the intended version directory.
+
+For a new-version bootstrap, only `manage-strategy-version` may proceed before
+the new manifest exists or the new id becomes active. It must apply the same
+workspace-relative, traversal, canonical-containment, and symlink checks to
+every constructed phase path before directory creation, then write a matching
+manifest before publishing `current.json` last.
+
+## Version Path Resolution
+
+Before using any `<phase_paths.*>` or `<version_root>` placeholder, read
+`.open-xquant/workspace.yaml`. Resolve `version_root` from
+`paths.versions_dir`; use `versions` only when that key is absent. Require a
+safe relative path whose resolved target stays inside the workspace. Then read
+`<version_root>/<version_id>/version_manifest.json` and use its exact
+`phase_paths` entry for each phase. For example, a configured root of
+`research_versions` must resolve the spec-build phase to
+`research_versions/v003/04_spec_build`; never redirect it to a default-root phase path.
+
 # Report Chart Builder
+
+Round 26: `default_professional_chart_pack` is versioned with a canonical
+requested set; caller subsets fail exact requested equality. Omitted charts are
+generated or recorded with a closed skip reason. Use an unsealed report revision
+attempt, fresh `report_revision_id` on chart retry, and seal only after chart
+completion.
 
 Use this skill after a run exists and the experiment report needs charts. Final
 research reports need charts by default: build the Default Professional Chart
@@ -22,15 +87,17 @@ Before writing chart artifacts, read `current.json` and use `active_version` as
 `version_id`. Read source run artifacts from:
 
 ```text
-versions/<version_id>/09_backtests/<run_id>/
+<phase_paths.09_backtests>/<run_id>/
 ```
 
-Write chart assets for the final report under:
+For current production, stage chart assets for the supplied immutable report
+revision and publish them under:
 
 ```text
-versions/<version_id>/10_reports/<run_id>/report_assets/manifest.json
-versions/<version_id>/10_reports/<run_id>/report_assets/figures/<figure>.png
-versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/manifest.json
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/figures/<figure>.png
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/scripts/<script>.py
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/chart_build_result.json
 ```
 
 Do not write root-level `report_assets/`. Do not place final report assets
@@ -70,18 +137,21 @@ outside the version's `10_reports/<run_id>/` package.
      data.
 
 3. Write plotting Python.
-   - Prefer a small script under `report_assets/scripts`.
+   - Build a small script in temporary staging whose final relative key will be
+     `report_assets/scripts/<script>.py`.
    - Read run artifacts from the run directory.
-   - Write figure outputs under `report_assets/figures`.
+   - Render figure outputs into temporary staging. Their final relative keys
+     will be under `report_assets/figures/`; do not render directly into the
+     governed report package.
    - Keep plotting deterministic and local; do not download new data unless the
      user explicitly asks.
    - Require `seaborn` for the default OpenXQuant report chart style. The
      project `chart` extra includes `seaborn>=0.13`; if import fails, treat it
      as an environment problem and fix the chart environment or block with a
      clear message; do not silently downgrade to arbitrary Matplotlib defaults.
-   - In a source worktree, run plotting scripts with
-     `uv run --extra chart python versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py`
-     so the `chart` extra is active. In an installed SDK bundle, verify
+   - In a source worktree, run the staged plotting script with
+     `uv run --extra chart python <temporary_staging>/<script>.py` so the
+     `chart` extra is active. In an installed SDK bundle, verify
      `import seaborn` works in the runner environment before plotting.
    - Use the OpenXQuant Report Chart Style below in every generated script
      before plotting any figure.
@@ -159,73 +229,96 @@ def market_return_colors(market_region: str) -> tuple[str, str]:
      `market_region == "cn"` to select red-up / green-down colors; use
      green-up / red-down outside China.
 
-4. Register generated assets.
+4. Publish generated assets as one batch.
 
-For one asset, use `asset add`:
+Generate every figure and source script in temporary staging, construct the
+complete next manifest from those exact bytes, and route the figure, script,
+obsolete-file deletion, and `report_assets/manifest.json` set through
+`publish_report_artifacts(report_dir, artifacts, *, lock_subject=None)`. The
+mapping uses safe relative keys and complete `bytes`; `None` deletes an obsolete
+asset. Use a callable builder when the manifest depends on the current package:
+the callable builder executes under the final-selection lock, performs its
+baseline check there, and commits an atomic all-or-rollback batch. Do not write
+any target directly and do not invoke an asset CLI path that publishes files or
+the manifest outside this batch.
 
-```bash
-oxq report asset add versions/<version_id>/10_reports/<run_id>/ \
-  versions/<version_id>/10_reports/<run_id>/report_assets/figures/<figure>.png \
-  --id <stable_id> \
-  --title "<human title>" \
-  --caption "<data source and interpretation limits>" \
-  --section results \
-  --order 10 \
-  --source-script versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py \
-  --source-artifact equity_curve.csv
-```
+Keep the two relative-path namespaces distinct. Manifest asset `path` values
+are relative to the `report_assets/manifest.json` package, so figure values use
+`figures/<name>.png`, and `source.script` values use `scripts/<name>.py`; a
+manifest value is never `report_assets/figures/<name>.png`. Publisher mapping
+keys remain relative to the report directory and therefore use
+`report_assets/manifest.json`, `report_assets/figures/<name>.png`, and
+`report_assets/scripts/<name>.py`. In `research_report.md` and rendered HTML,
+the report image URL remains `report_assets/figures/<name>.png` because those
+documents are also relative to the report directory.
 
-When one plotting script regenerates multiple already-registered figures, use a
-batch JSON file and `asset add-batch` so all replaced asset hashes update in one
-manifest write. The manifest `title` and `caption` values must be written in
-the resolved `report_language`; the default example below uses Chinese because
-the default report language is `中文`:
+The manifest `title` and `caption` values must use the resolved
+`report_language`; the default fragment below uses Chinese because the default
+report language is `中文`:
 
 ```json
-[
-  {
-    "id": "equity_curve",
-    "file_path": "versions/<version_id>/10_reports/<run_id>/report_assets/figures/equity_curve.png",
-    "title": "策略净值与基准对比",
-    "caption": "来自 equity_curve.csv 和 benchmark_curve.csv；用于比较策略与基准净值走势。",
-    "section": "results",
-    "order": 10,
-    "source_script": "versions/<version_id>/10_reports/<run_id>/report_assets/scripts/plot_report_charts.py",
-    "source_artifacts": ["equity_curve.csv", "benchmark_curve.csv"]
-  },
-  {
-    "id": "drawdown",
-    "file_path": "versions/<version_id>/10_reports/<run_id>/report_assets/figures/drawdown.png",
-    "title": "回撤曲线",
-    "caption": "来自 equity_curve.csv；展示回撤深度与恢复过程。",
-    "section": "results",
-    "order": 20,
-    "source_script": "versions/<version_id>/10_reports/<run_id>/report_assets/scripts/plot_report_charts.py",
-    "source_artifacts": ["equity_curve.csv"]
-  },
-  {
-    "id": "trade_curve",
-    "file_path": "versions/<version_id>/10_reports/<run_id>/report_assets/figures/trade_curve.png",
-    "title": "交易曲线",
-    "caption": "来自 equity_curve.csv 和 trades.csv；标记展示成交记录，不代表日内路径。",
-    "section": "results",
-    "order": 30,
-    "source_script": "versions/<version_id>/10_reports/<run_id>/report_assets/scripts/plot_report_charts.py",
-    "source_artifacts": ["equity_curve.csv", "trades.csv"]
-  }
-]
-```
-
-```bash
-oxq report asset add-batch versions/<version_id>/10_reports/<run_id>/ \
-  versions/<version_id>/10_reports/<run_id>/report_assets/assets.json
+{
+  "schema_version": 2,
+  "assets": [
+    {
+      "id": "equity_curve",
+      "kind": "figure",
+      "path": "figures/equity_curve.png",
+      "title": "策略净值与基准对比",
+      "caption": "来自 equity_curve.csv 和 benchmark_curve.csv；用于比较策略与基准净值走势。",
+      "section": "results",
+      "order": 10,
+      "mime_type": "image/png",
+      "sha256": "<sha256-of-exact-figure-bytes>",
+      "source": {
+        "script": "scripts/plot_report_charts.py",
+        "script_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "input_artifacts": ["equity_curve.csv", "benchmark_curve.csv"]
+      }
+    },
+    {
+      "id": "drawdown",
+      "kind": "figure",
+      "path": "figures/drawdown.png",
+      "title": "回撤曲线",
+      "caption": "来自 equity_curve.csv；展示回撤深度与恢复过程。",
+      "section": "results",
+      "order": 20,
+      "mime_type": "image/png",
+      "sha256": "<sha256-of-exact-figure-bytes>",
+      "source": {
+        "script": "scripts/plot_report_charts.py",
+        "script_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "input_artifacts": ["equity_curve.csv"]
+      }
+    },
+    {
+      "id": "trade_curve",
+      "kind": "figure",
+      "path": "figures/trade_curve.png",
+      "title": "交易曲线",
+      "caption": "来自 equity_curve.csv 和 trades.csv；标记展示成交记录，不代表日内路径。",
+      "section": "results",
+      "order": 30,
+      "mime_type": "image/png",
+      "sha256": "<sha256-of-exact-figure-bytes>",
+      "source": {
+        "script": "scripts/plot_report_charts.py",
+        "script_sha256": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+        "input_artifacts": ["equity_curve.csv", "trades.csv"]
+      }
+    }
+  ]
+}
 ```
 
 After registration, verify every generated figure:
 
 - The image file is non-empty.
 - The image dimensions are readable and positive.
-- The path is under `report_assets/figures`.
+- The manifest `path` is under `figures/` and resolves under the
+  `report_assets/` package; the published file and report URL are under
+  `report_assets/figures/` relative to the report directory.
 - The figure is present in `report_assets/manifest.json`.
 - The manifest hash matches the current file.
 - Chart labels follow the report language when the rendered image proves the
@@ -234,10 +327,25 @@ After registration, verify every generated figure:
 - The chart is not blank or visually empty.
 - The caption names the source artifact and the interpretation limit.
 
+### Governed Publication Lock
+
+The runtime publisher owns lock discovery and final-lock acquisition. When
+`report_dir` is an export outside the governed workspace, pass
+`lock_subject=source_run_dir`; this binds publication to the source run's
+workspace instead of silently publishing unlocked. For an in-workspace package,
+the report directory may remain the default subject. Malformed governed
+configuration fails closed.
+
+If chart construction needs a coherent run lock, wrap publication with
+`run_digest_transaction(source_run_dir)` rather than taking locks manually.
+The runtime protocol acquires the run lock first and the final-selection lock
+second. Never pre-acquire the final lock, call a direct writer, or publish one
+file at a time around `publish_report_artifacts`.
+
 Run deterministic report QA only with a command or wrapper that checks the
 split report package
-`versions/<version_id>/10_reports/<run_id>/` against the source run package
-`versions/<version_id>/09_backtests/<run_id>/`. Do not run old run-directory QA
+`<phase_paths.10_reports>/<run_id>/` against the source run package
+`<phase_paths.09_backtests>/<run_id>/`. Do not run old run-directory QA
 against an empty report package. Numeric claim review is semantic/advisory;
 route it through `review-research-report` or an explicitly advisory QA pass
 rather than treating the CLI command as proof that all numeric claims are
@@ -249,11 +357,12 @@ Use `write-research-report` to read run artifacts, audits, robustness output,
 metrics, and registered assets, then write the final Markdown report and render
 HTML from that final Markdown. The expected outputs are:
 
-- `versions/<version_id>/10_reports/<run_id>/research_report.md`
-- `versions/<version_id>/10_reports/<run_id>/research_report.html`
-- `versions/<version_id>/10_reports/<run_id>/report_assets/manifest.json`
-- `versions/<version_id>/10_reports/<run_id>/report_assets/figures/<figure>.png`
-- `versions/<version_id>/10_reports/<run_id>/report_assets/scripts/<script>.py`
+- `<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/research_report.md`
+- `<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/research_report.html`
+- `<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/manifest.json`
+- `<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/figures/<figure>.png`
+- `<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/scripts/<script>.py`
+- `<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/chart_build_result.json`
 
 ## Common Charts
 
@@ -386,3 +495,92 @@ readable, but it does not replace artifact-backed evidence.
 - Do not silently scan random image files; only registered assets enter the
   report.
 - Do not overwrite a user script without reading it first.
+
+## Current Immutable Report-Revision Contract
+
+Current report work is revision-scoped. The coordinator supplies a fresh
+`report_revision_id` matching
+`\Areport_[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z`; the complete candidate is
+published under
+`<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/`. Build in
+temporary staging and publish figures, scripts, the asset manifest, and
+`chart_build_result.json` as one batch. The writer later publishes
+`candidate_manifest.json` last and thereby seals the immutable report revision.
+Create the candidate directory exclusively. An existing id is a collision;
+never overwrite, delete, rename, merge, or repair it, especially when its
+evidence is reachable from any prior selection.
+
+Every schema-version-2 asset entry has exactly one safe package-relative
+`source.script` under `scripts/`, a full lowercase `source.script_sha256`, and
+`input_artifacts`. Reject absolute paths, `..`, symlinks, aliases, duplicate
+canonical targets, unregistered scripts, and registered scripts not referenced
+by an asset. Recompute the script SHA-256 from exact current bytes before
+manifest publication and at every writer, review, lineage, comparison, and
+selection consumption gate. A script mutation invalidates the manifest,
+`chart_build_result.json`, candidate manifest, review revision, lineage,
+comparison, and selection even when every PNG is unchanged.
+
+`chart_build_result.json` is the durable writer handoff. Its
+requested/applicable/generated/skipped inventory uses canonical chart order,
+unique ids, closed skip reason codes, and an exact `{path, sha256}` manifest
+reference. The closed skip reason codes are `missing_optional_input`,
+`empty_optional_input`, `structurally_insufficient_input`, and
+`not_applicable_to_strategy`. Environment, rendering, publication, or required
+input failures are blockers, not skips. Validate the set invariants:
+`generated.ids == applicable`, generated and skipped are disjoint, and their
+union equals requested. A `complete` result has no blockers and every generated
+asset hash equals both the manifest and exact figure bytes.
+
+```json
+{
+  "schema_version": 1,
+  "status": "complete",
+  "version_id": "v001",
+  "run_id": "runA",
+  "report_revision_id": "report_20260712_181000",
+  "chart_decision": "default_professional_chart_pack",
+  "hash_algorithm": "sha256-file-bytes-v1",
+  "requested": ["equity_curve", "drawdown", "cost_sensitivity"],
+  "applicable": ["equity_curve", "drawdown"],
+  "generated": [
+    {
+      "id": "equity_curve",
+      "asset": {
+        "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/report_assets/figures/equity_curve.png",
+        "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+      }
+    },
+    {
+      "id": "drawdown",
+      "asset": {
+        "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/report_assets/figures/drawdown.png",
+        "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+      }
+    }
+  ],
+  "skipped": [
+    {
+      "id": "cost_sensitivity",
+      "reason_code": "missing_optional_input",
+      "input_artifacts": ["robustness.json:cost_stress"]
+    }
+  ],
+  "manifest": {
+    "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/report_assets/manifest.json",
+    "sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+  },
+  "blocking_findings": []
+}
+```
+
+For `candidate_scoped_historical_report_revision`, resolve the explicit
+inactive version through its own manifest and require the exact current-state
+guard before and after publication. Use a fresh `report_revision_id` and the
+handoff's fresh `review_revision_id`; must not reactivate the inactive version,
+change `current.json`, phase state, lineage state, or active run, and must not
+overwrite any prior revision. A successful chart batch is only the write step
+of the guarded `write -> review -> lineage -> comparison -> reselection`
+workflow; prior revision bytes remain reachable.
+
+Accept only the coordinator's closed schema-version-1 historical handoff; reject
+aliases, extra keys, missing base/guard fields, and unknown reason codes.

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import threading
 
+import yaml
 from click.testing import CliRunner
 
 from oxq.cli.main import main
+from oxq.selection_lock import final_selection_lock_path, hold_final_selection_lock
 
 
 def test_report_asset_add_registers_figure_with_source_metadata(tmp_path) -> None:
@@ -48,6 +51,61 @@ def test_report_asset_add_registers_figure_with_source_metadata(tmp_path) -> Non
     assert entry["path"] == "figures/equity_vs_benchmark.png"
     assert entry["source"]["script"] == "scripts/plot_equity.py"
     assert entry["source"]["input_artifacts"] == ["equity_curve.csv"]
+
+
+def test_report_asset_add_waits_for_final_selection_lock(tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "workflow": {"layout": "version_governed"},
+                "paths": {"versions_dir": "versions"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    run_dir = workspace / "versions/v001/09_backtests/run_1"
+    run_dir.mkdir(parents=True)
+    figure = tmp_path / "equity.png"
+    figure.write_bytes(b"png")
+    attempted = threading.Event()
+    completed = threading.Event()
+    results = []
+
+    def add_asset() -> None:
+        attempted.set()
+        results.append(
+            CliRunner().invoke(
+                main,
+                [
+                    "report",
+                    "asset",
+                    "add",
+                    str(run_dir),
+                    str(figure),
+                    "--id",
+                    "equity",
+                    "--title",
+                    "Equity",
+                ],
+            )
+        )
+        completed.set()
+
+    with hold_final_selection_lock(final_selection_lock_path(run_dir)):
+        worker = threading.Thread(target=add_asset)
+        worker.start()
+        assert attempted.wait(timeout=5)
+        assert not completed.wait(timeout=0.1)
+        assert not (run_dir / "report_assets/manifest.json").exists()
+    worker.join(timeout=5)
+
+    assert not worker.is_alive()
+    assert results[0].exit_code == 0, results[0].output
+    assert (run_dir / "report_assets/manifest.json").is_file()
 
 
 def test_report_asset_list_prints_registered_assets(tmp_path) -> None:

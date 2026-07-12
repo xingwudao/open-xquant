@@ -1,5 +1,12 @@
 # Agent Guide - open-xquant 安装
 
+Round 26 current schema registry: decision schema `5`, candidate/policy/comparison schema `3`,
+and lineage `3`; pointer validation rejects decision schema `4`. Confirmation
+events use closed user/coordinator provenance and raw-line hashes. Historical
+refresh is `write -> review -> lineage -> prepare new selection -> comparison ->
+resume` with fresh selection and candidate hashes. The default chart pack uses
+canonical requested equality, closed skip reasons, and unsealed chart retries.
+
 本文档只说明如何把 open-xquant 的长期能力安装到 Agent 环境中。
 研究流程、任务路由和写报告规则由已安装的 `open-xquant router skill`
 以及更具体的 `agent/skills/*/SKILL.md` 负责。
@@ -7,6 +14,19 @@
 安装完成后，Agent 遇到量化研究、回测、因子、调参、审计、报告、
 图表资产、SDK 开发或实盘连接任务时，应先加载 `open-xquant` skill，
 再由它路由到更具体的 skill。不要把本文档当成研究 workflow。
+
+版本化研究路径必须先从 `.open-xquant/workspace.yaml` 的
+`paths.versions_dir` 解析 `version_root`；仅当该键缺失时才默认使用
+`versions`。该值必须是解析后仍位于 workspace 内的安全相对路径。
+随后读取 `<version_root>/<version_id>/version_manifest.json`，所有阶段
+输入输出都使用其中对应的 `phase_paths`，而不是自行拼接默认目录。
+例如自定义 `research_versions` 根时，spec build 必须落到
+`research_versions/v003/04_spec_build`。
+
+workspace-local 组件路径必须独立从 `paths.components_dir` 解析
+`components_dir`；only when that key is absent 才默认使用 `components`。
+该值必须是 safe relative path，且解析后的目标 stays inside the workspace。
+后续阶段统一使用 `<components_dir>`，不得重新拼接默认组件根。
 
 边界原则：
 
@@ -125,14 +145,79 @@ uv run oxq agent install --target trae --profile standalone-agent --yes
 - `oxq-final-selector-worker`: 使用 `select-final-version`，只在用户确认后
   标记最终版本。
 - `oxq-report-writer-worker`: 使用 `build-report-charts` 和
-  `write-research-report`，只写图表和报告。
+  `write-research-report`，只写 immutable report revision、图表和报告。
 - `oxq-report-reviewer-worker`: 使用 `review-research-report`，只输出
-  `report_review.json`。
+  immutable `reviews/<review_revision_id>/report_review.json`。
+
+Report publication contract: chart assets, scripts, report manifests,
+Markdown, HTML, writer results, and review results use
+`publish_report_artifacts(report_dir, artifacts, *, lock_subject=None)`. The
+mapping contains safe relative keys and complete `bytes`; `None` deletes a
+target. A callable builder executes under the final-selection lock, performs a
+baseline check, and commits one atomic all-or-rollback batch. Direct path
+writes, shell redirection, and report asset CLI publication paths are invalid.
+For exports outside the governed workspace, pass
+`lock_subject=source_run_dir`. If report work needs coherent run locking, wrap
+the publication with `run_digest_transaction(source_run_dir)`; runtime acquires
+the run lock first and the final-selection lock second. Agent code must not
+pre-acquire either publisher lock.
+
+Other governed Agent publishers continue to use the shared final-selection
+lock protocol. Selector pointer publication performs only direct byte snapshots,
+the unchanged-byte sweep, and atomic pointer replacement while holding that
+lock; it does not invoke a run-locking validator.
+
+Final-selection comparison evidence is immutable and selection-scoped at
+`<comparisons_dir>/<selection_id>/<comparison_id>/`. Existing output
+directories are collisions, never update targets. A remediable retry keeps the
+same selection and uses a fresh `comparison_id`; `restart_selection` allocates
+a fresh selection directory and fresh comparison scope. Evidence reachable
+from a prior `current_final.json` is never overwritten. Current manifests use
+schema version 3; schema version 2 is historical recognition only.
+
+Current report evidence is revision-scoped: sealed candidates live below
+`10_reports/<run_id>/candidates/<report_revision_id>/`, and semantic reviews
+live below `10_reports/<run_id>/reviews/<review_revision_id>/`. Final selection
+binds both exact paths and hashes; historical repair creates fresh revisions
+without changing the active version.
+
+Version/bootstrap and governance batches use one recovery journal at
+`<workspace_root>/.open-xquant/transactions/governance/<transaction_id>.json`.
+The journal contains baselines, staged hashes, durable backup hashes,
+replacement order, and `prepared -> committing -> committed`. The publisher
+acquires `workspace-governance.lock`, then `final-selection.lock` last, performs
+unchanged-byte checks, and holds both through recovery and fsync. Before the
+first replacement recovery discards staging; after a non-pointer replacement
+it must roll back; after `current.json` replacement it may roll forward only
+when all exact staged bytes are present, otherwise it must roll back the whole
+transaction.
+
+Pointer publication must `fsync(<final_dir>)` after atomic replacement. A
+post-rename directory-sync failure means publication outcome is indeterminate
+and must not claim that the prior pointer is unchanged. Recover under
+`final-selection.lock`: exact new pointer bytes are revalidated and synced,
+exact prior pointer bytes are retried, and any other bytes block as corruption.
+Parent fsync is required. `final_decision.json` is the sole canonical decision
+artifact.
 
 这些角色的单一来源是 `agent/roles/*.md`。安装器会按目标 Agent 的官方
 格式渲染：Codex 使用 TOML custom agents；OpenCode、Claude Code、
 Cursor 使用 Markdown agent files。没有官方确认 subagent 角色目录的目标
 只安装 skills，不安装这些角色。
+
+OpenCode 角色显式使用 `edit: ask` 和 `bash: ask`。安装时无法知道当前
+workspace 解析后的配置根和 active version，因此不会用 basename glob
+静默放行同名文件。custom `paths.conversations_dir` 仍可使用，但每个具体
+编辑或命令都必须经过用户批准；该批准 does not expand 角色在
+`agent/roles/*.md` 中声明的 ownership。
+
+OpenCode 角色也显式设置 `permission.task`。worker 使用 `"*": deny`，
+不能继续委派；coordinator 先 deny `*`，再 allow exact managed worker names，
+不会放行 `general`、`explore` 或 worker wildcard。OpenCode 的 `--auto`
+automatically approves permission requests that are not explicitly denied；
+因此它会自动批准 `edit: ask` 和 `bash: ask`，但 explicit `deny` remains
+enforced。只有用户明确接受该 session-wide 授权边界时才应启用；默认交互
+模式会对具体 `ask` 操作逐次请求批准。
 
 各目标安装的 skill 是平级目录，例如：
 
@@ -301,36 +386,36 @@ skill 决定是否需要运行 `research init` 或 `research init --sdk`。
 workspace-local custom Rule 当前不属于普通 authoring 能力；如果需要 Rule，
 应阻塞并要求用户明确是否进入 OpenXQuant 框架开发。
 
-组件 authoring 阶段默认写入：
+组件 authoring 阶段写入已解析的组件根：
 
 ```text
-components/bundles/<bundle_id>/custom_components/
-components/bundles/<bundle_id>/component_manifest.json
-components/bundles/<bundle_id>/component_catalog.json
-versions/<version_id>/03_component_authoring/result.json
+<components_dir>/bundles/<bundle_id>/custom_components/
+<components_dir>/bundles/<bundle_id>/component_manifest.json
+<components_dir>/bundles/<bundle_id>/component_catalog.json
+<phase_paths.03_component_authoring>/result.json
 ```
 
 后续确定性命令通过 manifest 加载组件：
 
 ```bash
-uv run oxq component-manifest validate components/bundles/<bundle_id>/component_manifest.json
+uv run oxq component-manifest validate <components_dir>/bundles/<bundle_id>/component_manifest.json
 uv run oxq registry export \
-  --component-manifest components/bundles/<bundle_id>/component_manifest.json \
-  --out versions/<version_id>/04_spec_build/component_catalog.json
-uv run oxq spec validate versions/<version_id>/04_spec_build/strategy_spec.yaml \
-  --component-manifest components/bundles/<bundle_id>/component_manifest.json
-uv run oxq strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \
-  --component-manifest components/bundles/<bundle_id>/component_manifest.json \
-  --out versions/<version_id>/07_compile_preview
+  --component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json \
+  --out <phase_paths.04_spec_build>/component_catalog.json
+uv run oxq spec validate <phase_paths.04_spec_build>/strategy_spec.yaml \
+  --component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json
+uv run oxq strategy compile <phase_paths.04_spec_build>/strategy_spec.yaml \
+  --component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json \
+  --out <phase_paths.07_compile_preview>
 # oxq-coordinator must first write:
-# versions/<version_id>/08_runtime_audit/backtest_authorization.json
+# <phase_paths.08_runtime_audit>/backtest_authorization.json
 # oxq-runner-worker then uses run-authorized-backtest.
-uv run oxq backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \
-  --component-manifest components/bundles/<bundle_id>/component_manifest.json \
-  --spec-audit versions/<version_id>/06_spec_audit/spec_audit.json \
-  --runtime-audit versions/<version_id>/08_runtime_audit/runtime_audit.json \
-  --component-catalog versions/<version_id>/04_spec_build/component_catalog.json \
-  --out versions/<version_id>/09_backtests \
+uv run oxq backtest run <phase_paths.04_spec_build>/strategy_spec.yaml \
+  --component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json \
+  --spec-audit <phase_paths.06_spec_audit>/spec_audit.json \
+  --runtime-audit <phase_paths.08_runtime_audit>/runtime_audit.json \
+  --component-catalog <phase_paths.04_spec_build>/component_catalog.json \
+  --out <phase_paths.09_backtests> \
   --json
 ```
 

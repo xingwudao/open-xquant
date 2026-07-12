@@ -13,6 +13,7 @@ from oxq.indicators.rps import RPS
 from oxq.indicators.sma import SMA
 from oxq.portfolio.optimizers import EqualWeightOptimizer, SignalToPositionOptimizer
 from oxq.portfolio.orderbook import ManagedOrder
+from oxq.rules.constraint import MaxHoldingsRule
 from oxq.signals.crossover import Crossover
 from oxq.spec.schema import DataFilterSection
 from oxq.trade.live_broker import LiveBroker
@@ -670,6 +671,132 @@ class NeverBuyOptimizer:
         return {"CASH": 1.0}
 
 
+class RotatingOptimizer:
+    """Allocate to one symbol per bar in signal iteration order."""
+
+    def optimize(
+        self, signals: dict[str, pd.DataFrame], indicators: dict[str, pd.DataFrame],
+    ) -> dict[str, float]:
+        symbol = "AAA" if len(next(iter(signals.values()))) == 1 else "BBB"
+        return {symbol: 1.0}
+
+
+class HalfWeightRotatingOptimizer:
+    """Leave cash available while rotating to expose pending-buy capacity."""
+
+    def optimize(
+        self, signals: dict[str, pd.DataFrame], indicators: dict[str, pd.DataFrame],
+    ) -> dict[str, float]:
+        symbol = "AAA" if len(next(iter(signals.values()))) == 1 else "BBB"
+        return {symbol: 0.5, "CASH": 0.5}
+
+
+class NonFillingBroker(SimBroker):
+    """Keep submitted market orders open across bars."""
+
+    def fill_due_market_orders(self, mktdata, date) -> None:
+        return None
+
+    def on_bar_open(self, mktdata, date) -> None:
+        return None
+
+    def on_bar_close(self, mktdata, date) -> None:
+        return None
+
+
+def _two_symbol_flat_data(periods: int = 2) -> dict[str, pd.DataFrame]:
+    dates = pd.bdate_range("2024-01-02", periods=periods, tz="UTC")
+    return {
+        symbol: pd.DataFrame(
+            {
+                "open": [10.0] * periods,
+                "high": [10.0] * periods,
+                "low": [10.0] * periods,
+                "close": [10.0] * periods,
+                "volume": [1_000_000] * periods,
+            },
+            index=dates,
+        )
+        for symbol in ("AAA", "BBB")
+    }
+
+
+def test_engine_max_holdings_caps_simultaneous_direct_buy_batch() -> None:
+    data = _two_symbol_flat_data()
+    strategy = Strategy(
+        name="direct_max_holdings_batch",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={},
+        portfolio=EqualWeightOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(fill_price_mode=FillPriceMode.CLOSE),
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[MaxHoldingsRule(1)],
+    )
+
+    assert [fill.order.symbol for fill in result.trades if fill.order.side == "BUY"] == ["AAA"]
+    assert set(result.portfolio.positions) == {"AAA"}
+    assert result.snapshots[0].adjusted_weights == {"AAA": 0.5, "CASH": 0.5}
+
+
+def test_engine_max_holdings_allows_exit_before_replacement() -> None:
+    data = _two_symbol_flat_data()
+    strategy = Strategy(
+        name="direct_max_holdings_rotation",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={},
+        portfolio=RotatingOptimizer(),
+    )
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=SimBroker(fill_price_mode=FillPriceMode.CLOSE),
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[MaxHoldingsRule(1)],
+    )
+
+    assert [(fill.order.symbol, fill.order.side) for fill in result.trades] == [
+        ("AAA", "BUY"),
+        ("AAA", "SELL"),
+        ("BBB", "BUY"),
+    ]
+    assert set(result.portfolio.positions) == {"BBB"}
+
+
+def test_engine_max_holdings_counts_pending_buy_symbols() -> None:
+    data = _two_symbol_flat_data()
+    strategy = Strategy(
+        name="direct_max_holdings_pending",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={},
+        portfolio=HalfWeightRotatingOptimizer(),
+    )
+    broker = NonFillingBroker(fill_price_mode=FillPriceMode.CLOSE)
+
+    result = Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=broker,
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[MaxHoldingsRule(2), MaxHoldingsRule(1)],
+    )
+
+    open_buys = [
+        managed.order.symbol
+        for managed in result.orders
+        if managed.status == "open" and managed.order.side == "BUY"
+    ]
+    assert open_buys == ["AAA"]
+
+
 class AlwaysExitRule:
     """Rule that exits any open position."""
 
@@ -736,6 +863,49 @@ class DroppingBroker(SimBroker):
     def submit_order(self, order: Order) -> str:
         self.submitted_orders.append(order)
         return f"dropped-{len(self.submitted_orders)}"
+
+
+def test_engine_max_holdings_retries_dropped_selected_buy_on_hold() -> None:
+    dates = pd.bdate_range("2024-01-02", periods=2, tz="UTC")
+    data = {
+        symbol: pd.DataFrame(
+            {
+                "open": [10.0, 10.0],
+                "high": [10.0, 10.0],
+                "low": [10.0, 10.0],
+                "close": [10.0, 10.0],
+                "volume": [1_000_000, 1_000_000],
+                "timing_input": ["BUY", "HOLD"],
+            },
+            index=dates,
+        )
+        for symbol in ("AAA", "BBB")
+    }
+
+    class TimingInputSignal:
+        name = "TimingInputSignal"
+
+        def compute(self, mktdata: pd.DataFrame) -> pd.Series:
+            return mktdata["timing_input"]
+
+    broker = DroppingBroker()
+    strategy = Strategy(
+        name="max_holdings_retry_dropped_selected_buy",
+        universe=StaticUniverse(("AAA", "BBB")),
+        signals={"timing": (TimingInputSignal(), {})},
+        portfolio=SignalToPositionOptimizer(signal="timing"),
+    )
+
+    Engine().run(
+        strategy,
+        market=FakeMarketDataProvider(data),
+        broker=broker,
+        start="2024-01-02",
+        end="2024-01-03",
+        rules=[MaxHoldingsRule(1)],
+    )
+
+    assert [order.symbol for order in broker.submitted_orders] == ["AAA", "AAA"]
 
 
 class DroppingSellBroker(SimBroker):

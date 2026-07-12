@@ -38,9 +38,10 @@ def test_report_chart_builder_skill_documents_chart_asset_workflow() -> None:
     assert "plotting Python" in text
     assert "report_assets/figures" in text
     assert "report_assets/scripts" in text
-    assert "oxq report asset add" in text
-    assert "oxq report asset add-batch" in text
-    assert "source_artifacts" in text
+    assert "publish_report_artifacts" in text
+    assert "atomic all-or-rollback batch" in text
+    assert "oxq report asset add" not in text
+    assert "input_artifacts" in text
     assert "trade_curve" in text
     assert "research_report.md" in text
     assert "research_report.html" in text
@@ -153,7 +154,7 @@ def test_report_chart_builder_skill_batch_example_sorts_in_canonical_order() -> 
 
     text = skill.read_text(encoding="utf-8")
     batch_json = text.split("```json", 1)[1].split("```", 1)[0]
-    assets = json.loads(batch_json)
+    assets = json.loads(batch_json)["assets"]
     canonical_core = ["equity_curve", "drawdown", "trade_curve"]
     core_assets = [asset for asset in assets if asset["id"] in canonical_core]
 
@@ -173,7 +174,7 @@ def test_report_chart_builder_skill_localizes_manifest_titles_and_captions() -> 
 
     text = skill.read_text(encoding="utf-8")
     batch_json = text.split("```json", 1)[1].split("```", 1)[0]
-    assets = json.loads(batch_json)
+    assets = json.loads(batch_json)["assets"]
 
     assert "manifest `title` and `caption`" in text
     assert "report_language" in text
@@ -521,39 +522,39 @@ def test_workspace_governance_worker_roles_are_installed_boundaries() -> None:
 def test_version_governed_phase_paths_are_mandatory_for_leaf_skills_and_roles() -> None:
     required_skill_fragments = {
         "brainstorm-strategy-idea": [
-            "versions/<version_id>/01_brainstorm/strategy_idea_brief.json",
+            "<phase_paths.01_brainstorm>/strategy_idea_brief.json",
             "Do not write root-level `strategy_idea_brief.json`",
         ],
         "audit-strategy-idea": [
-            "versions/<version_id>/02_idea_audit/strategy_idea_audit.json",
+            "<phase_paths.02_idea_audit>/strategy_idea_audit.json",
             "Do not write root-level `strategy_idea_audit.json`",
         ],
         "build-strategy-spec": [
-            "versions/<version_id>/04_spec_build/strategy_spec.yaml",
+            "<phase_paths.04_spec_build>/strategy_spec.yaml",
             "Do not write root-level `strategy_spec.yaml`",
         ],
         "audit-strategy-spec": [
-            "versions/<version_id>/06_spec_audit/spec_confirmation_table.md",
+            "<phase_paths.06_spec_audit>/spec_confirmation_table.md",
             "Do not write root-level `spec_audit.json`",
         ],
         "audit-runtime-semantics": [
-            "versions/<version_id>/07_compile_preview/compiled_plan.json",
-            "versions/<version_id>/08_runtime_audit/runtime_audit.json",
+            "<phase_paths.07_compile_preview>/compiled_plan.json",
+            "<phase_paths.08_runtime_audit>/runtime_audit.json",
         ],
         "run-authorized-backtest": [
-            "versions/<version_id>/09_backtests/<run_id>/strategy_spec.yaml",
+            "<phase_paths.09_backtests>/<run_id>/strategy_spec.yaml",
             "Do not write formal run outputs to root `runs/`",
         ],
         "monitor-strategy-run": [
-            "versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json",
+            "<phase_paths.09_backtests>/<run_id>/reproducibility_audit.json",
             "version_id",
         ],
         "write-research-report": [
-            "versions/<version_id>/10_reports/<run_id>/research_report.md",
+            "<phase_paths.10_reports>/<run_id>/research_report.md",
             "Do not write root-level `research_report.md`",
         ],
         "review-research-report": [
-            "versions/<version_id>/10_reports/<run_id>/report_review.json",
+            "<phase_paths.10_reports>/<run_id>/report_review.json",
             "Do not write root-level `report_review.json`",
         ],
     }
@@ -567,7 +568,249 @@ def test_version_governed_phase_paths_are_mandatory_for_leaf_skills_and_roles() 
     assert "Version-Governed Artifact Contract" in coordinator
     assert "active_version" in coordinator
     assert "Root-level phase artifacts are layout pollution" in coordinator
-    assert "versions/<version_id>/04_spec_build/strategy_spec.yaml" in coordinator
+    assert "<phase_paths.04_spec_build>/strategy_spec.yaml" in coordinator
+
+
+def test_agent_contracts_resolve_custom_version_root_through_phase_manifest() -> None:
+    contract_paths = [
+        *Path("agent/roles").glob("*.md"),
+        *Path("agent/skills").glob("*/SKILL.md"),
+        *Path("agent/skills").glob("*/references/*.md"),
+        Path("docs/agent-guide.md"),
+        Path("docs/architecture.md"),
+        Path("docs/strategy-workflow-artifact-governance.md"),
+        Path("README.md"),
+    ]
+    forbidden_patterns = (
+        "versions/v001",
+        "versions/vNNN",
+        "versions/**",
+        "versions/<active_version>",
+        "versions/<version_id>",
+        "versions/{version_id}",
+    )
+    offenders = [
+        path.as_posix()
+        for path in contract_paths
+        if any(pattern in path.read_text(encoding="utf-8") for pattern in forbidden_patterns)
+    ]
+
+    assert offenders == []
+
+    for path in (
+        Path("agent/roles/oxq-coordinator.md"),
+        Path("agent/skills/manage-strategy-version/SKILL.md"),
+        Path("agent/skills/build-strategy-spec/SKILL.md"),
+        Path("agent/skills/run-authorized-backtest/SKILL.md"),
+        Path("agent/skills/write-research-report/SKILL.md"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        assert "paths.versions_dir" in text, path
+        assert "version_manifest.json" in text, path
+        assert "phase_paths" in text, path
+        assert "research_versions" in text, path
+
+    coordinator = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
+    assert "<phase_paths.04_spec_build>/strategy_spec.yaml" in coordinator
+    assert "<phase_paths.09_backtests>/<run_id>/" in coordinator
+    assert "research_versions/v003/04_spec_build" in coordinator
+    assert "`versions/v003/04_spec_build`" not in coordinator
+
+
+def test_manage_strategy_version_bootstraps_new_version_under_custom_root() -> None:
+    text = Path("agent/skills/manage-strategy-version/SKILL.md").read_text(encoding="utf-8")
+
+    assert "new-version bootstrap" in text
+    assert "<version_root>/<version_id>/version_manifest.json" in text
+    assert "<version_root>/<version_id>/phase_state.json" in text
+    assert "<version_root>/<version_id>/01_brainstorm" in text
+    assert "canonical `phase_paths`" in text
+    assert "versions/vNNN" not in text
+
+
+def test_manage_strategy_version_bootstrap_contract_matches_initialized_workspace_schema() -> None:
+    text = Path("agent/skills/manage-strategy-version/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "`schema_version`" in text
+    for phase in (
+        "01_brainstorm",
+        "02_idea_audit",
+        "03_component_authoring",
+        "04_spec_build",
+        "05_data_inspection",
+        "06_spec_audit",
+        "07_compile_preview",
+        "08_runtime_audit",
+        "09_backtests",
+        "10_reports",
+    ):
+        assert f"research_versions/v003/{phase}" in text
+    assert "Create every directory named by `phase_paths` before publishing" in normalized
+    assert "`lineage.json.versions`" in text
+    assert "`phase_state.json.current_phase`" in text
+    assert "`version_manifest.json.active_phase`" in text
+    assert "`current.json.active_version`" in text
+    assert "`current.json.active_phase`" in text
+
+
+def test_manage_strategy_version_bootstrap_atomically_supersedes_prior_active_version() -> None:
+    text = Path("agent/skills/manage-strategy-version/SKILL.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "v001 -> v002 bootstrap transaction" in normalized
+    assert "prior `v001` lineage entry status to `superseded`" in normalized
+    assert "prior `v001` version_manifest.json status to `superseded`" in normalized
+    assert "new `v002` lineage entry and version_manifest.json status to `active`" in normalized
+    assert "exactly one `active` lineage entry" in normalized
+    assert "must match `current.json.active_version`" in normalized
+    assert "publish `current.json` last" in normalized
+
+
+def test_version_manager_worker_bootstraps_before_new_version_manifest_exists() -> None:
+    text = Path("agent/roles/oxq-version-manager-worker.md").read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "new-version bootstrap" in text
+    assert "the new version manifest does not exist yet" in normalized
+    assert "must not be treated as an input prerequisite" in normalized
+    assert "For an existing version, read" in text
+
+
+def test_governance_and_lineage_contracts_resolve_custom_version_roots() -> None:
+    paths = [
+        Path("agent/roles/oxq-artifact-governor-worker.md"),
+        Path("agent/roles/oxq-lineage-auditor-worker.md"),
+        Path("agent/skills/audit-artifact-lineage/SKILL.md"),
+        Path("agent/skills/govern-research-workspace/SKILL.md"),
+    ]
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        assert ".open-xquant/workspace.yaml" in text, path
+        assert "paths.versions_dir" in text, path
+        assert "<version_root>/**" in text, path
+        assert "<phase_paths.09_backtests>" in text, path
+        assert "version_manifest.json" in text, path
+        assert "phase_paths" in text, path
+        assert "versions/**" not in text, path
+        assert "versions/<active_version>" not in text, path
+
+
+def test_lineage_contracts_resolve_each_cross_version_candidate_manifest() -> None:
+    for path in (
+        Path("agent/roles/oxq-lineage-auditor-worker.md"),
+        Path("agent/skills/audit-artifact-lineage/SKILL.md"),
+    ):
+        text = path.read_text(encoding="utf-8")
+        normalized = " ".join(text.split())
+        assert "active version is `v003`" in normalized, path
+        assert "candidates reference `v001` and `v002`" in normalized, path
+        assert "<version_root>/v001/version_manifest.json" in text, path
+        assert "<version_root>/v002/version_manifest.json" in text, path
+        assert "Reserve `current.json` for active-state checks" in text, path
+
+
+def test_final_governance_contracts_resolve_each_configured_artifact_root() -> None:
+    defaults = {
+        "paths.experiment_registry": "experiments.jsonl",
+        "paths.governance_dir": "governance",
+        "paths.comparisons_dir": "comparisons",
+        "paths.comparison_registry": "comparisons/comparisons.jsonl",
+        "paths.final_dir": "final",
+    }
+    contracts = {
+        Path("agent/skills/select-final-version/SKILL.md"): {
+            "paths.experiment_registry": "<experiment_registry>",
+            "paths.comparisons_dir": "<comparisons_dir>",
+            "paths.governance_dir": "<governance_dir>",
+            "paths.final_dir": "<final_dir>",
+        },
+        Path("agent/roles/oxq-final-selector-worker.md"): {
+            "paths.experiment_registry": "<experiment_registry>",
+            "paths.comparisons_dir": "<comparisons_dir>",
+            "paths.governance_dir": "<governance_dir>",
+            "paths.final_dir": "<final_dir>",
+        },
+        Path("agent/skills/compare-strategy-versions/SKILL.md"): {
+            "paths.experiment_registry": "<experiment_registry>",
+            "paths.governance_dir": "<governance_dir>",
+            "paths.comparisons_dir": "<comparisons_dir>",
+            "paths.comparison_registry": "<comparison_registry>",
+        },
+        Path("agent/roles/oxq-experiment-comparator-worker.md"): {
+            "paths.experiment_registry": "<experiment_registry>",
+            "paths.governance_dir": "<governance_dir>",
+            "paths.comparisons_dir": "<comparisons_dir>",
+            "paths.comparison_registry": "<comparison_registry>",
+        },
+        Path("agent/skills/audit-artifact-lineage/SKILL.md"): {
+            "paths.governance_dir": "<governance_dir>",
+            "paths.comparisons_dir": "<comparisons_dir>",
+            "paths.final_dir": "<final_dir>",
+        },
+        Path("agent/roles/oxq-lineage-auditor-worker.md"): {
+            "paths.governance_dir": "<governance_dir>",
+            "paths.comparisons_dir": "<comparisons_dir>",
+            "paths.final_dir": "<final_dir>",
+        },
+    }
+
+    for path, required_paths in contracts.items():
+        text = path.read_text(encoding="utf-8")
+        normalized = " ".join(text.split())
+        assert ".open-xquant/workspace.yaml" in text, path
+        assert "Resolve each key independently" in text, path
+        assert "only when that key is absent" in normalized, path
+        assert "absolute" in text, path
+        assert "traversal" in text, path
+        assert "symlink" in text, path
+        for config_key, resolved_path in required_paths.items():
+            assert config_key in text, f"{path} missing {config_key}"
+            assert resolved_path in text, f"{path} missing {resolved_path}"
+            assert defaults[config_key] in text, f"{path} missing default for {config_key}"
+
+
+def test_router_and_builder_define_read_only_existing_spec_validation_mode() -> None:
+    router = Path("agent/skills/open-xquant/SKILL.md").read_text(encoding="utf-8")
+    builder = Path("agent/skills/build-strategy-spec/SKILL.md").read_text(encoding="utf-8")
+    normalized_builder = " ".join(builder.split())
+
+    assert "read-only validation-only mode" in router
+    assert "## Read-Only Validation-Only Mode" in builder
+    assert "does not require `strategy_idea_brief.json`" in normalized_builder
+    assert "does not require `strategy_idea_audit.json`" in normalized_builder
+    assert "Do not run `oxq registry export`" in builder
+    assert "Do not create or modify `builder_phase_result.json`" in builder
+    assert "Do not create or modify `spec_mapping_contract.json`" in builder
+
+
+def test_formal_contracts_do_not_override_resolved_version_root() -> None:
+    paths = [
+        Path("agent/skills/brainstorm-strategy-idea/SKILL.md"),
+        Path("agent/skills/audit-strategy-idea/SKILL.md"),
+        Path("README.md"),
+    ]
+    forbidden = (
+        "versions/v001",
+        "versions/vNNN",
+        "versions/**",
+        "versions/<active_version>",
+        "versions/<version_id>",
+        "versions/{version_id}",
+    )
+
+    for path in paths:
+        text = path.read_text(encoding="utf-8")
+        for pattern in forbidden:
+            assert pattern not in text, f"{path} contains concrete default-root override {pattern}"
+
+    readme = Path("README.md").read_text(encoding="utf-8")
+    assert "<phase_paths.08_runtime_audit>/runtime_audit.json" in readme
+    assert "<phase_paths.09_backtests>/<run_id>/" in readme
+    assert "<phase_paths.10_reports>/<run_id>/" in readme
+    assert "paths.versions_dir" in readme
+    assert "version_root" in readme
 
 
 def test_architecture_doc_links_strategy_workflow_governance_design() -> None:
@@ -638,9 +881,9 @@ def test_component_author_skill_documents_workspace_extension_contract() -> None
 
     assert "name: author-component" in text
     assert "component_request.json" in text
-    assert "versions/<version_id>/03_component_authoring/component_request.json" in text
-    assert "versions/<version_id>/03_component_authoring/result.json" in text
-    assert "components/bundles/<bundle_id>/" in text
+    assert "<phase_paths.03_component_authoring>/component_request.json" in text
+    assert "<phase_paths.03_component_authoring>/result.json" in text
+    assert "<components_dir>/bundles/<bundle_id>/" in text
     assert "Do not write root-level `component_request.json`" in text
     assert "Do not write root-level `result.json`" in text
     assert "custom_components/" in text
@@ -648,15 +891,15 @@ def test_component_author_skill_documents_workspace_extension_contract() -> None
     assert "result.json" in text
     assert "oxq component-manifest hash" in text
     assert "oxq component-manifest validate" in text
-    assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
+    assert "--component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json" in text
     assert "Workspace-local `Rule` authoring is currently blocked" in text
     assert "Do not emit `component_ready` for a workspace-local custom `Rule`" in text
     assert "Do not build or edit `strategy_spec.yaml`" in text
     assert "Do not modify the installed SDK bundle" in text
     assert "role_kind: component_author" in role_text
     assert "author-component" in role_text
-    assert "versions/<version_id>/03_component_authoring/" in role_text
-    assert "components/bundles/<bundle_id>/" in role_text
+    assert "<phase_paths.03_component_authoring>/" in role_text
+    assert "<components_dir>/bundles/<bundle_id>/" in role_text
     assert "create-rule" not in role_text
     assert "Block workspace-local custom `Rule` requests" in role_text
     assert "forbidden_outputs" in role_text
@@ -757,7 +1000,7 @@ def test_spec_auditor_skill_documents_source_trace_gate() -> None:
     assert "field_path" in text
     assert "agent_added" in text
     assert "spec_audit.json" in text
-    assert "oxq spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json" in text
+    assert "oxq spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json" in text
     assert "component_catalog.json" in text
     assert "catalog_hash" in text
     assert '"catalog_hash": "sha256:<component_catalog.catalog_hash>"' not in text
@@ -790,7 +1033,7 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "`confirmation_event` referencing the durable confirmation log event" in spec_skill
     assert '"confirmation_event": {' in spec_skill
     assert "pre_confirmation_spec_audit_hash" not in spec_skill
-    assert '"spec_audit_path": "versions/<version_id>/06_spec_audit/spec_audit.json"' in spec_skill
+    assert '"spec_audit_path": "<phase_paths.06_spec_audit>/spec_audit.json"' in spec_skill
     assert '"spec_audit_hash": "sha256:<pre-confirmation spec_audit hash>"' in spec_skill
     assert "Pending all-pass audits must not\ninvent a confirmation event" in spec_skill
     assert "complete `strategy.py` source" in spec_skill
@@ -846,7 +1089,7 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert '"Effective StrategySpec default value"' in spec_role
     assert "Use actual user confirmation evidence" in spec_role
     assert "Do not hand off to `oxq-runtime-auditor-worker`" in spec_role
-    assert "`confirmation_event` reference with `path`, `event_id`, `line_number`" in spec_role
+    assert "`confirmation_event` reference with `path`, `event_id`, `decision: confirmed`" in spec_role
     assert "relay the full Markdown Spec table to the user" in coordinator_role
     assert "`user_spec_confirmation`" in coordinator_role
     assert "`user_confirmation_status: confirmed`" in coordinator_role
@@ -855,12 +1098,16 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
         assert field in coordinator_role
     assert "`phase: spec_confirmation`" in spec_skill
     assert "`field_scope: full_spec_table`" in spec_skill
+    assert '"decision": "confirmed"' in spec_skill
+    assert "`decision: confirmed`" in coordinator_role
+    assert "`decision: confirmed`" in runtime_skill
+    assert "`decision: confirmed`" in runtime_role
     assert "json.dumps(candidate, sort_keys=True, default=str)" in spec_skill
     assert "Do not start `oxq-runtime-auditor-worker`" in coordinator_role
     assert "confirmed `spec_audit.json`" in runtime_skill
     assert "`confirmation_event` exists" in runtime_skill
     assert "`schema_version: 4`" in runtime_skill
-    assert "spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json" in runtime_skill
+    assert "spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json" in runtime_skill
     assert "--strict-confirmed" in runtime_skill
     assert "--json" in runtime_skill
     assert "`spec_audit_path` plus `spec_audit_hash`" in runtime_skill
@@ -871,11 +1118,16 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
         assert field in runtime_skill
     assert "print the complete `strategy.py` source" in runtime_skill
     assert "`strategy_source_code`" in runtime_skill
+    assert '"schema_version": 2' in runtime_skill
+    assert '"strategy_source_path"' in runtime_skill
+    assert '"strategy_source_hash"' in runtime_skill
+    assert "must not write source-presentation evidence" in runtime_skill
+    assert "`strategy_source_printed`" not in runtime_skill
     assert "Return both the `strategy.py` path and the complete source text" in runtime_skill
     assert "confirmed `spec_audit.json`" in runtime_role
     assert "`schema_version: 4`" in runtime_role
     assert "valid `confirmation_event`" in runtime_role
-    assert "<resolved_runner> spec-audit validate versions/<version_id>/06_spec_audit/spec_audit.json" in runtime_role
+    assert "<resolved_runner> spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json" in runtime_role
     assert "--strict-confirmed --json" in runtime_role
     for field in ("`path`", "`event_id`", "`line_number`", "`event_hash`", "`artifact_path`", "`artifact_hash`"):
         assert field in runtime_role
@@ -883,9 +1135,13 @@ def test_spec_auditor_requires_all_pass_then_user_confirmed_table_gate() -> None
     assert "`spec_audit_hash`" in runtime_role
     assert "`strategy_source_code`" in runtime_role
     assert "Do not return only the file path" in runtime_role
+    assert "must not certify or record user-facing presentation" in runtime_role
     assert "When receiving the runtime auditor result" in coordinator_role
     assert "relay the complete `strategy.py` source to the user" in coordinator_role
     assert "Do not replace it with only a file path" in coordinator_role
+    assert "runtime-source-presentations.jsonl" in coordinator_role
+    assert "append the presentation event only after" in normalized_coordinator
+    assert "`strategy_source_presentation`" in coordinator_role
     assert "conditionally writes `spec_confirmation_table.md` only" in normalized_coordinator
     assert "blocked audits omit it or set `spec_confirmation_table: null`" in normalized_coordinator
 
@@ -898,7 +1154,7 @@ def test_spec_auditor_is_read_only_and_returns_mapping_errors_to_builder() -> No
 
     assert "Read-Only SPEC Boundary" in auditor
     assert "Do not write, patch, rewrite, normalize, or repair" in auditor
-    assert "versions/<version_id>/04_spec_build/strategy_spec.yaml" in auditor
+    assert "<phase_paths.04_spec_build>/strategy_spec.yaml" in auditor
     assert "misplaced, ignored, dropped, or mistranslated" in auditor
     assert "block with `next_required_phase: build`" in auditor
     assert "`execution.initial_cash`" in auditor
@@ -923,7 +1179,7 @@ def test_spec_auditor_is_read_only_and_returns_mapping_errors_to_builder() -> No
     assert "`builder_required_fix`" in auditor
     assert "Do not write YAML-only paths such as `portfolio.initial_cash` as `field_audits` rows" in auditor
 
-    assert "versions/<version_id>/04_spec_build/strategy_spec.yaml" in auditor_role
+    assert "<phase_paths.04_spec_build>/strategy_spec.yaml" in auditor_role
     assert "Do not edit, patch, repair, or normalize" in auditor_role
     assert "return `next_required_phase: build`" in auditor_role
     assert "User-confirmed source values must match effective StrategySpec values" in auditor_role
@@ -1053,15 +1309,15 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
     text = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
     assert "audit-runtime-semantics" in text
-    assert "<resolved_runner> strategy compile versions/<version_id>/04_spec_build/strategy_spec.yaml \\" in text
+    assert "<resolved_runner> strategy compile <phase_paths.04_spec_build>/strategy_spec.yaml \\" in text
     assert "--data-dir data" in text
     assert "compiled_plan.json" in text
     assert "runtime_audit.json" in text
-    assert "<resolved_runner> runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json" in text
+    assert "<resolved_runner> runtime-audit validate <phase_paths.08_runtime_audit>/runtime_audit.json" in text
     assert "Runner Resolution" in text
     assert "same `data_dir` and every `component_manifest` path" in text
-    assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
-    assert "--component-manifest versions/<version_id>/03_component_authoring/component_manifest.json" not in text
+    assert "--component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json" in text
+    assert "--component-manifest <phase_paths.03_component_authoring>/component_manifest.json" not in text
     assert "Omit `--component-manifest` when no workspace-local custom" in text
     assert "components are authorized; repeat it for each authorized bundle manifest" in text
     assert "component_bundle_hashes" in text
@@ -1070,7 +1326,7 @@ def test_runtime_auditor_skill_documents_compile_consistency_gate() -> None:
     assert "from oxq.spec.schema import StrategySpec" in text
     assert "from pathlib import Path" in text
     assert "from oxq.spec.compiler import _hash_json_file" in text
-    assert 'spec_path = Path("versions/<version_id>/04_spec_build/strategy_spec.yaml")' in text
+    assert 'spec_path = Path("<phase_paths.04_spec_build>/strategy_spec.yaml")' in text
     assert "Do not import non-existent helpers from `oxq.core.hashing`" in text
 
 
@@ -1256,7 +1512,7 @@ def test_builder_and_spec_auditor_require_unsupported_mapping_disclosure() -> No
     assert "do not run `oxq spec validate_mapping_contract`" in builder.lower()
     assert "every `semantic: strategy` row must be mapped and non-blocking" in builder
     assert "derive the\nallowed field paths from the effective StrategySpec" in builder
-    assert "StrategySpec.from_yaml(\"versions/<version_id>/04_spec_build/strategy_spec.yaml\").to_effective_dict()" in builder
+    assert "StrategySpec.from_yaml(\"<phase_paths.04_spec_build>/strategy_spec.yaml\").to_effective_dict()" in builder
     assert "Do not use parent container paths\nlike `portfolio`" in builder
     assert "conceptual absent paths like `execution.leverage.allowed`" in builder
     assert "Every `field_mappings` row must have a non-empty `reason`" in builder
@@ -1273,7 +1529,7 @@ def test_builder_and_spec_auditor_require_unsupported_mapping_disclosure() -> No
 
     assert "unsupported_mappings" in auditor
     assert "spec_mapping_contract.json" in auditor
-    assert "--mapping-contract versions/<version_id>/04_spec_build/spec_mapping_contract.json" in auditor
+    assert "--mapping-contract <phase_paths.04_spec_build>/spec_mapping_contract.json" in auditor
     assert "Do not use `--strict-confirmed` for `audit_conclusion: blocked`" in auditor
     assert "Strategy rows with `status: needs_user_confirmation` and `blocking: false`" in auditor
     assert "builder-pass" in auditor
@@ -1356,13 +1612,13 @@ def test_strategy_monitor_is_post_run_and_uses_runtime_audit() -> None:
     assert "recipe_catalog_hash.txt" in strategy_monitor
     assert "conversation_hash.txt" in strategy_monitor
     assert (
-        "oxq spec-audit validate versions/<version_id>/09_backtests/<run_id>/spec_audit.json"
+        "oxq spec-audit validate <phase_paths.06_spec_audit>/spec_audit.json"
         in strategy_monitor
     )
-    assert "> versions/<version_id>/09_backtests/<run_id>/reproducibility_audit.json" in strategy_monitor
-    assert "> versions/<version_id>/09_backtests/<run_id>/research_bias_audit.json" in strategy_monitor
-    assert "> versions/<version_id>/09_backtests/<run_id>/robustness.json" in strategy_monitor
-    assert "stdout-only audit output is not sufficient" in strategy_monitor
+    assert 'uv run oxq audit reproducibility "$RUN_DIR" --json --publish' in strategy_monitor
+    assert 'uv run oxq audit research "$RUN_DIR" --json --publish' in strategy_monitor
+    assert 'uv run oxq robustness run "$RUN_DIR" --json' in strategy_monitor
+    assert "Shell redirection into governed artifacts is invalid" in strategy_monitor
     assert "Monitoring is not a separate version phase name" in strategy_monitor
     assert "Do not set `current.json.active_phase`" in strategy_monitor
     assert "Keep the active phase at\n`09_backtests`" in strategy_monitor
@@ -1417,11 +1673,14 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     text = skill.read_text(encoding="utf-8")
 
     assert "backtest_authorization.json" in text
+    assert "`strategy_source_presentation`" in text
+    assert "runtime-source-presentations.jsonl" in text
+    assert "full source-file SHA-256" in text
     assert "--spec-audit spec_audit.json" in text
     assert "--runtime-audit runtime_audit.json" in text
     assert "--component-catalog component_catalog.json" in text
-    assert "--component-manifest components/bundles/<bundle_id>/component_manifest.json" in text
-    assert "<resolved_runner> backtest run versions/<version_id>/04_spec_build/strategy_spec.yaml \\" in text
+    assert "--component-manifest <components_dir>/bundles/<bundle_id>/component_manifest.json" in text
+    assert "<resolved_runner> backtest run <phase_paths.04_spec_build>/strategy_spec.yaml \\" in text
     assert "Runner Resolution" in text
     assert "Omit `--component-manifest` only when" in text
     assert "same `component_bundle_hashes`" in text
@@ -1432,7 +1691,7 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
     assert "top-level fields above are required" in text.lower()
     assert "only records nested\ndiagnostic hashes" in text
     assert "must not run `oxq registry export`" in text.lower()
-    assert "Use the authorized\n`versions/<version_id>/04_spec_build/component_catalog.json`" in text
+    assert "Use the authorized\n`<phase_paths.04_spec_build>/component_catalog.json`" in text
     assert "Do not write `component_catalog.json` outside" in text
     assert "pass\n`Path` objects to `_hash_json_file`" in text
     assert "formal run command attaches `spec_audit.json`" in text
@@ -1447,7 +1706,7 @@ def test_backtest_runner_is_authorized_execution_only() -> None:
 
     role = Path("agent/roles/oxq-runner-worker.md").read_text(encoding="utf-8")
     assert "`user_confirmation_status: confirmed`" in role
-    assert "valid `confirmation_event` with `path`, `event_id`, `line_number`" in role
+    assert "valid `confirmation_event` with `path`, `event_id`, `decision: confirmed`" in role
     assert "Do not run\n  `oxq registry export`" in role
     assert "`08_runtime_audit`, `09_backtests`, or any root-level path" in role
     assert "_hash_json_file(Path(...))" in role
@@ -1502,7 +1761,7 @@ def test_report_writer_documents_installed_bundle_facts_api_and_qa_safe_markdown
     assert "report QA strips HTML tags" in writer
 
 
-def test_version_governed_manifests_live_at_workspace_root() -> None:
+def test_version_governed_manifests_are_root_only_but_experiment_registry_is_configured() -> None:
     coordinator = Path("agent/roles/oxq-coordinator.md").read_text(encoding="utf-8")
     router = Path("agent/skills/open-xquant/SKILL.md").read_text(encoding="utf-8")
     governor = Path("agent/skills/govern-research-workspace/SKILL.md").read_text(encoding="utf-8")
@@ -1510,7 +1769,10 @@ def test_version_governed_manifests_live_at_workspace_root() -> None:
     for text in (coordinator, router, governor):
         normalized = " ".join(text.split())
         assert "`.open-xquant/workspace.yaml` is configuration only" in text
-        assert "`current.json`, `lineage.json`, and `experiments.jsonl` live at the workspace root" in normalized
+        assert "`current.json` and `lineage.json` live at the workspace root" in normalized
+        assert "`paths.experiment_registry`" in text
+        assert "`experiments.jsonl`" in text
+        assert any(phrase in normalized for phrase in ("only when absent", "only when that key is absent"))
         assert "Do not probe `.open-xquant/current.json`" in normalized
         assert ".open-xquant/experiments.jsonl" not in text
 
@@ -1530,7 +1792,7 @@ def test_workspace_governor_accepts_version_local_run_registry_and_robustness_su
     text = Path("agent/skills/govern-research-workspace/SKILL.md").read_text(encoding="utf-8")
 
     assert "root-level `runs/` is not required" in text
-    assert "versions/<version_id>/09_backtests/run_digests.jsonl" in text
+    assert "<phase_paths.09_backtests>/run_digests.jsonl" in text
     assert "_cost_x2" in text
     assert "not root-level pollution" in text
 
@@ -1555,6 +1817,6 @@ def test_workspace_governance_contract_lists_root_phase_pollution_artifacts() ->
         assert artifact in doc
     assert "routes back to `oxq-spec-auditor-worker`" in doc
     assert "`audit-strategy-spec` updates `spec_audit.json`" in doc
-    for input_root in ("comparisons/**", "final/**"):
+    for input_root in ("<comparisons_dir>/**", "<final_dir>/**"):
         assert input_root in skill
         assert input_root in role

@@ -658,18 +658,18 @@ def _validate_portfolio_constraints(spec: StrategySpec) -> list[dict]:
         errors.append(_err("fatal", "portfolio_constraint_invalid", message, ["executable"]))
 
     if constraints.max_weight is not None and (
-        not _is_finite_number(constraints.max_weight) or not 0.0 < float(constraints.max_weight) <= 1.0
+        not _is_finite_real_number(constraints.max_weight) or not 0.0 < float(constraints.max_weight) <= 1.0
     ):
         add_invalid("portfolio.constraints.max_weight must be in (0, 1]")
     if constraints.min_weight is not None and (
-        not _is_finite_number(constraints.min_weight) or not 0.0 < float(constraints.min_weight) <= 1.0
+        not _is_finite_real_number(constraints.min_weight) or not 0.0 < float(constraints.min_weight) <= 1.0
     ):
         add_invalid("portfolio.constraints.min_weight must be in (0, 1]")
     if (
         constraints.min_weight is not None
         and constraints.max_weight is not None
-        and _is_finite_number(constraints.min_weight)
-        and _is_finite_number(constraints.max_weight)
+        and _is_finite_real_number(constraints.min_weight)
+        and _is_finite_real_number(constraints.max_weight)
         and float(constraints.min_weight) > float(constraints.max_weight)
     ):
         add_invalid("portfolio.constraints.min_weight must be less than or equal to max_weight")
@@ -684,7 +684,7 @@ def _validate_portfolio_constraints(spec: StrategySpec) -> list[dict]:
                 ["executable"],
             )
         )
-    if not _is_finite_number(constraints.cash_reserve) or not 0.0 <= float(constraints.cash_reserve) < 1.0:
+    if not _is_finite_real_number(constraints.cash_reserve) or not 0.0 <= float(constraints.cash_reserve) < 1.0:
         add_invalid("portfolio.constraints.cash_reserve must be in [0, 1)")
     return errors
 
@@ -818,6 +818,15 @@ def _validate_rebalance_schedule(spec: StrategySpec, effective_interval_days: in
                     "fatal",
                     "rebalance_schedule_unsupported",
                     f"execution.rebalance.frequency={frequency} requires schedule={expected_schedule}",
+                    ["executable"],
+                )
+            )
+        if effective_interval_days > 1:
+            errors.append(
+                _err(
+                    "fatal",
+                    "rebalance_controls_conflict",
+                    "calendar rebalance schedule cannot be combined with interval_days > 1",
                     ["executable"],
                 )
             )
@@ -1070,12 +1079,13 @@ def validate(spec: StrategySpec) -> ValidationResult:
             errors.append(_err("fatal", "universe_symbol_unsafe", f"universe symbol '{symbol}' is not a safe data symbol"))
     if not isinstance(spec.universe.point_in_time, bool):
         errors.append(_err("fatal", "universe_point_in_time_type", "universe.point_in_time must be boolean"))
-    if spec.universe.type == "static" and spec.universe.point_in_time is not True:
+    if spec.universe.type in {"static", "index"} and spec.universe.point_in_time is not True:
+        universe_description = "static universe" if spec.universe.type == "static" else "index universe snapshot"
         warnings.append(
             _err(
                 "warning",
                 "static_universe_survivorship",
-                "static universe with point_in_time=false may have survivorship bias",
+                f"{universe_description} with point_in_time=false may have survivorship bias",
                 ["conservative"],
             )
         )

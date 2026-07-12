@@ -3,22 +3,46 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 import shutil
+import subprocess
+import sys
+import threading
+import time
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
+import pytest
 import yaml
 from click.testing import CliRunner
 
-from oxq.cli.main import main
+import oxq.cli.main as main_module
+import oxq.run_digests as run_digests_module
+from oxq.cli.main import _run_comparability_signature, main
 from oxq.core.component_catalog import build_component_catalog, component_catalog_json
 from oxq.core.component_manifest import compute_component_bundle_hash
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
+from oxq.run_digests import (
+    publish_run_artifacts,
+    replace_run_digest_entry,
+    require_current_run_digest,
+    run_digest_transaction,
+)
 from oxq.spec.compiler import _append_run_digest, _hash_file, _hash_json_file, _write_artifacts
 from oxq.spec.schema import StrategySpec
+
+
+def _write_experiment_identity(run_dir: Path, strategy_id: str) -> None:
+    spec = StrategySpec.template(strategy_id=strategy_id, hypothesis="experiment identity fixture")
+    (run_dir / "strategy_spec.yaml").write_text(
+        yaml.safe_dump(spec.to_dict(), sort_keys=False),
+        encoding="utf-8",
+    )
+    (run_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
 
 
 def _spec_audit_context() -> dict[str, object]:
@@ -48,16 +72,20 @@ def _confirmation_event(
 
 
 def _write_confirmation_event(
-    path: Path,
+    workspace_root: Path,
     *,
     artifact_path: str,
     artifact_hash: str,
     spec_audit_hash: str = "sha256:" + "8" * 16,
 ) -> dict[str, object]:
+    event_reference = Path("conversations/demo/confirmations.jsonl")
+    path = workspace_root / event_reference
+    path.parent.mkdir(parents=True, exist_ok=True)
     event = {
         "timestamp": "2026-07-07T08:00:00Z",
         "phase": "spec_confirmation",
         "field_scope": "full_spec_table",
+        "decision": "confirmed",
         "event_id": "spec-confirmation-1",
         "user_text": "确认",
         "artifact_path": artifact_path,
@@ -66,11 +94,14 @@ def _write_confirmation_event(
         "spec_audit_hash": spec_audit_hash,
     }
     line = json.dumps(event, sort_keys=True, ensure_ascii=False)
-    path.write_text(line + "\n", encoding="utf-8")
+    line_number = len(path.read_text(encoding="utf-8").splitlines()) + 1 if path.exists() else 1
+    with path.open("a", encoding="utf-8") as stream:
+        stream.write(line + "\n")
     return {
-        "path": str(path),
+        "path": event_reference.as_posix(),
         "event_id": event["event_id"],
-        "line_number": 1,
+        "decision": event["decision"],
+        "line_number": line_number,
         "event_hash": f"sha256:{hashlib.sha256(line.encode('utf-8')).hexdigest()}",
         "artifact_path": artifact_path,
         "artifact_hash": artifact_hash,
@@ -101,7 +132,7 @@ def _attach_confirmation_artifacts(tmp_path: Path, audit: dict) -> None:
         "hash_type": "sha256",
     }
     audit["confirmation_event"] = _write_confirmation_event(
-        tmp_path / "confirmations.jsonl",
+        tmp_path,
         artifact_path=str(confirmation_table),
         artifact_hash=table_hash,
         spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
@@ -275,8 +306,292 @@ def test_spec_init_rejects_symlinked_versions_dir_escape(tmp_path) -> None:
         result = runner.invoke(main, ["spec", "init", "symlink escape"])
 
         assert result.exit_code == 1
-        assert "paths.versions_dir must stay within the workspace" in result.output
+        assert "paths.versions_dir must not contain symlink components" in result.output
         assert not (outside / "v011").exists()
+
+
+def test_spec_init_rejects_symlinked_active_version_dir_escape_before_mutation(tmp_path) -> None:
+    runner = CliRunner()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sentinel.txt").write_text("unchanged\n", encoding="utf-8")
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        (cwd_path / ".open-xquant").mkdir()
+        (cwd_path / "versions").mkdir()
+        (cwd_path / "versions/v011").symlink_to(outside, target_is_directory=True)
+        (cwd_path / ".open-xquant/workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {"versions_dir": "versions", "current_manifest": "current.json"},
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(
+            json.dumps({"active_version": "v011"}),
+            encoding="utf-8",
+        )
+        before = {
+            path.relative_to(outside).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(outside.rglob("*"))
+        }
+
+        result = runner.invoke(main, ["spec", "init", "active version symlink escape"])
+
+        assert result.exit_code == 1
+        assert "active version directory must stay within the workspace" in result.output
+        assert {
+            path.relative_to(outside).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(outside.rglob("*"))
+        } == before
+
+
+def test_spec_init_legacy_fallback_rejects_symlinked_spec_phase_before_mutation(tmp_path) -> None:
+    runner = CliRunner()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        workspace = Path(cwd)
+        version_dir = workspace / "versions/v012"
+        (workspace / ".open-xquant").mkdir()
+        version_dir.mkdir(parents=True)
+        (version_dir / "04_spec_build").symlink_to(outside, target_is_directory=True)
+        (workspace / ".open-xquant/workspace.yaml").write_text(
+            "workflow:\n  layout: version_governed\npaths:\n  versions_dir: versions\n",
+            encoding="utf-8",
+        )
+        (workspace / "current.json").write_text(json.dumps({"active_version": "v012"}), encoding="utf-8")
+
+        result = runner.invoke(main, ["spec", "init", "legacy symlink phase"])
+
+        assert result.exit_code != 0
+        assert "04_spec_build" in result.output
+        assert "symlink" in result.output
+        assert list(outside.iterdir()) == []
+
+
+def test_experiment_add_honors_custom_workspace_versions_dir(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    config_dir = work / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"versions_dir": "research_versions"},
+                "workflow": {"layout": "version_governed"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    run_dir = work / "research_versions/v003/09_backtests/run_1"
+    run_dir.mkdir(parents=True)
+    (work / "current.json").write_text(
+        json.dumps({"active_version": "v003"}),
+        encoding="utf-8",
+    )
+    (work / "research_versions/v003/version_manifest.json").write_text(
+        json.dumps(
+            {
+                "version_id": "v003",
+                "phase_paths": {
+                    "09_backtests": "research_versions/v003/09_backtests",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "custom_root", "run_id": "run_1"}),
+        encoding="utf-8",
+    )
+    _write_experiment_identity(run_dir, "custom_root")
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["experiment", "add", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    entry = json.loads((work / "experiments.jsonl").read_text(encoding="utf-8"))
+    assert entry["version_id"] == "v003"
+    assert not (work / "versions").exists()
+
+
+@pytest.mark.parametrize("governance_state", ["missing_current", "missing_active_version", "missing_manifest"])
+def test_experiment_add_fails_closed_for_incomplete_governance(
+    monkeypatch,
+    tmp_path,
+    governance_state: str,
+) -> None:
+    work = tmp_path / "work"
+    config_dir = work / ".open-xquant"
+    run_dir = work / "versions/v999/09_backtests/run_1"
+    config_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"versions_dir": "versions"},
+                "workflow": {"layout": "version_governed"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    if governance_state != "missing_current":
+        current = {"active_version": "v999"} if governance_state != "missing_active_version" else {}
+        (work / "current.json").write_text(json.dumps(current), encoding="utf-8")
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "fail_closed", "run_id": "run_1"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["experiment", "add", str(run_dir)])
+
+    assert result.exit_code == 1
+    assert "version-governed workspace" in result.output
+    assert not (work / "experiments.jsonl").exists()
+    assert not (run_dir / "research_bias_audit.json").exists()
+
+
+def test_experiment_add_keeps_structural_fallback_for_legacy_workspace(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "legacy"
+    run_dir = work / "versions/v003/09_backtests/run_1"
+    run_dir.mkdir(parents=True)
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "legacy", "run_id": "run_1"}),
+        encoding="utf-8",
+    )
+    _write_experiment_identity(run_dir, "legacy")
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["experiment", "add", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    entry = json.loads((work / "experiments.jsonl").read_text(encoding="utf-8"))
+    assert entry["version_id"] == "v003"
+
+
+def test_experiment_add_rejects_arbitrary_structural_version_in_governed_workspace(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    work = tmp_path / "work"
+    run_dir = work / "versions/v999/09_backtests/run_1"
+    (work / ".open-xquant").mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    (work / ".open-xquant/workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {"versions_dir": "versions"},
+                "workflow": {"layout": "version_governed"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "current.json").write_text(json.dumps({"active_version": "v003"}), encoding="utf-8")
+    active_version_dir = work / "versions/v003"
+    active_version_dir.mkdir(parents=True)
+    (active_version_dir / "version_manifest.json").write_text(
+        json.dumps(
+            {
+                "version_id": "v003",
+                "phase_paths": {"09_backtests": "versions/v003/09_backtests"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "arbitrary_version", "run_id": "run_1"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["experiment", "add", str(run_dir)])
+
+    assert result.exit_code == 1
+    assert "resolved backtest phase directory" in result.output
+    assert not (work / "experiments.jsonl").exists()
+    assert not (run_dir / "research_bias_audit.json").exists()
+
+
+def test_experiment_add_honors_custom_workspace_registry(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    config_dir = work / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump({"paths": {"experiment_registry": "governance/registry.jsonl"}}),
+        encoding="utf-8",
+    )
+    run_dir = work / "run_1"
+    run_dir.mkdir()
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "custom_registry", "run_id": "run_1"}),
+        encoding="utf-8",
+    )
+    _write_experiment_identity(run_dir, "custom_registry")
+    default_registry = work / "experiments.jsonl"
+    default_registry.write_bytes(b"existing-default\n")
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["experiment", "add", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    custom_registry = work / "governance/registry.jsonl"
+    entry = json.loads(custom_registry.read_text(encoding="utf-8"))
+    assert entry["strategy_id"] == "custom_registry"
+    assert default_registry.read_bytes() == b"existing-default\n"
+
+
+def test_experiment_add_honors_manifest_backtest_phase_path(monkeypatch, tmp_path) -> None:
+    work = tmp_path / "work"
+    config_dir = work / ".open-xquant"
+    version_dir = work / "research_versions/v003"
+    backtest_dir = version_dir / "artifacts/backtests"
+    run_dir = backtest_dir / "run_1_cost_x2"
+    config_dir.mkdir(parents=True)
+    run_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "paths": {
+                    "versions_dir": "research_versions",
+                    "current_manifest": "current.json",
+                },
+                "workflow": {"layout": "version_governed"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (work / "current.json").write_text(
+        json.dumps({"active_version": "v003"}),
+        encoding="utf-8",
+    )
+    (version_dir / "version_manifest.json").write_text(
+        json.dumps(
+            {
+                "version_id": "v003",
+                "phase_paths": {
+                    "09_backtests": "research_versions/v003/artifacts/backtests"
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (run_dir / "metrics.json").write_text(
+        json.dumps({"strategy_id": "custom_phase", "run_id": "run_1_cost_x2"}),
+        encoding="utf-8",
+    )
+    _write_experiment_identity(run_dir, "custom_phase")
+    monkeypatch.chdir(work)
+
+    result = CliRunner().invoke(main, ["experiment", "add", str(run_dir)])
+
+    assert result.exit_code == 0, result.output
+    entry = json.loads((work / "experiments.jsonl").read_text(encoding="utf-8"))
+    assert entry["version_id"] == "v003"
+    assert entry["run_role"] == "robustness_cost_x2"
 
 
 def test_spec_init_fails_when_version_workspace_lacks_current_manifest(tmp_path) -> None:
@@ -352,6 +667,103 @@ def test_spec_init_fails_for_hidden_current_manifest_path(tmp_path) -> None:
         assert result.exit_code == 1
         assert "requires root current.json active_version" in result.output
         assert not (cwd_path / "strategy_spec.yaml").exists()
+
+
+def test_spec_init_uses_manifest_spec_phase_path_with_custom_versions_root(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        config_dir = cwd_path / ".open-xquant"
+        version_dir = cwd_path / "research_versions/v003"
+        config_dir.mkdir()
+        version_dir.mkdir(parents=True)
+        (config_dir / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {
+                        "versions_dir": "research_versions",
+                        "current_manifest": "current.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(
+            json.dumps({"active_version": "v003"}),
+            encoding="utf-8",
+        )
+        spec_phase = "research_versions/v003/artifacts/specs"
+        (version_dir / "version_manifest.json").write_text(
+            json.dumps(
+                {
+                    "version_id": "v003",
+                    "phase_paths": {"04_spec_build": spec_phase},
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(main, ["spec", "init", "custom spec phase"])
+
+        assert result.exit_code == 0, result.output
+        assert (cwd_path / spec_phase / "strategy_spec.yaml").is_file()
+        assert not (version_dir / "04_spec_build").exists()
+
+
+@pytest.mark.parametrize(
+    "phase_paths",
+    [
+        {},
+        {"04_spec_build": "../escape"},
+    ],
+)
+def test_spec_init_rejects_invalid_manifest_spec_phase_path_before_mutation(
+    tmp_path,
+    phase_paths: dict[str, str],
+) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        config_dir = cwd_path / ".open-xquant"
+        version_dir = cwd_path / "research_versions/v003"
+        config_dir.mkdir()
+        version_dir.mkdir(parents=True)
+        (config_dir / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {
+                    "paths": {
+                        "versions_dir": "research_versions",
+                        "current_manifest": "current.json",
+                    },
+                    "workflow": {"layout": "version_governed"},
+                },
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        (cwd_path / "current.json").write_text(
+            json.dumps({"active_version": "v003"}),
+            encoding="utf-8",
+        )
+        (version_dir / "version_manifest.json").write_text(
+            json.dumps({"version_id": "v003", "phase_paths": phase_paths}),
+            encoding="utf-8",
+        )
+        before = {
+            path.relative_to(cwd_path).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(cwd_path.rglob("*"))
+        }
+
+        result = runner.invoke(main, ["spec", "init", "invalid spec phase"])
+
+        assert result.exit_code == 1
+        assert "phase_paths.04_spec_build" in result.output
+        assert {
+            path.relative_to(cwd_path).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(cwd_path.rglob("*"))
+        } == before
 
 
 def test_registry_export_writes_component_catalog(tmp_path) -> None:
@@ -973,6 +1385,847 @@ def _write_hashed_custom_indicator_extension(tmp_path) -> Path:
     return manifest
 
 
+def _write_hashed_preview_indicator_extension(
+    workspace: Path,
+    *,
+    root_name: str,
+    indicator_name: str,
+    marker: str,
+) -> Path:
+    workspace.mkdir(parents=True, exist_ok=True)
+    root = workspace / root_name
+    root.mkdir(parents=True, exist_ok=True)
+    module_name = f"{root_name}_indicator"
+    source = root / f"{module_name}.py"
+    source.write_text(
+        "\n".join(
+            [
+                "from __future__ import annotations",
+                "import pandas as pd",
+                f"class {indicator_name}:",
+                f"    name = {indicator_name!r}",
+                f"    marker = {marker!r}",
+                "    def compute(self, mktdata: pd.DataFrame) -> pd.Series:",
+                "        return pd.Series(1.0, index=mktdata.index, name=self.name)",
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    manifest = workspace / f"{root_name}_manifest.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "extension_id": root_name,
+                "extension_root": root_name,
+                "bundle_hash": "",
+                "components": [
+                    {
+                        "name": indicator_name,
+                        "kind": "Indicator",
+                        "source": "workspace_extension",
+                        "module": module_name,
+                        "class": indicator_name,
+                        "protocol": "Indicator",
+                        "parameters": {},
+                        "source_path": source.name,
+                        "source_hash": "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest(),
+                    }
+                ],
+            },
+            indent=2,
+            sort_keys=True,
+        ),
+        encoding="utf-8",
+    )
+    _rehash_preview_indicator_extension(manifest)
+    return manifest
+
+
+def _rehash_preview_indicator_extension(manifest: Path) -> None:
+    payload = json.loads(manifest.read_text(encoding="utf-8"))
+    source = manifest.parent / payload["extension_root"] / payload["components"][0]["source_path"]
+    payload["components"][0]["source_hash"] = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+    payload["bundle_hash"] = ""
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    payload["bundle_hash"] = compute_component_bundle_hash(manifest)
+    manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _compile_preview(spec_path: Path, out_dir: Path, *manifests: Path):
+    args = ["strategy", "compile", str(spec_path), "--out", str(out_dir)]
+    for manifest in manifests:
+        args.extend(["--component-manifest", str(manifest)])
+    return CliRunner().invoke(main, args)
+
+
+def _directory_file_snapshot(path: Path) -> dict[str, bytes]:
+    return {
+        item.relative_to(path).as_posix(): item.read_bytes()
+        for item in sorted(path.rglob("*"))
+        if item.is_file()
+    }
+
+
+def test_formal_backtest_rejects_component_bundle_swap_after_authorization_before_import_or_execution(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    manifest = _write_hashed_custom_indicator_extension(tmp_path)
+    source = tmp_path / "custom_components/oxq_components/indicators/workspace_constant_indicator.py"
+    replacement_import_marker = tmp_path / "replacement_imported"
+    spec = StrategySpec.template(strategy_id="component_swap", hypothesis="authorized component snapshot")
+    spec.signal.indicators = {
+        "custom_score": {
+            "type": "WorkspaceConstantIndicator",
+            "params": {"value": 1.0},
+        }
+    }
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    gate_paths = {}
+    for name in ("spec_audit.json", "runtime_audit.json", "component_catalog.json", "backtest_authorization.json"):
+        gate_paths[name] = tmp_path / name
+        gate_paths[name].write_text("{}\n", encoding="utf-8")
+    compile_called = False
+
+    def swap_to_valid_replacement(*args, **kwargs) -> None:
+        replacement_source = source.read_text(encoding="utf-8").replace(
+            "import pandas as pd",
+            f"import pandas as pd\nfrom pathlib import Path\nPath({str(replacement_import_marker)!r}).write_text('imported')",
+        )
+        source.write_text(replacement_source, encoding="utf-8")
+        payload = json.loads(manifest.read_text(encoding="utf-8"))
+        payload["components"][0]["source_hash"] = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+        manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        payload["bundle_hash"] = compute_component_bundle_hash(manifest)
+        manifest.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+    def fake_compile_run(*args, **kwargs):
+        nonlocal compile_called
+        compile_called = True
+        raise AssertionError("backtest must not execute after a component source swap")
+
+    monkeypatch.setattr("oxq.cli.main._require_pre_backtest_spec_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oxq.cli.main._require_pre_backtest_runtime_audit", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oxq.cli.main._require_component_catalog_before_import", lambda *args, **kwargs: None)
+    monkeypatch.setattr("oxq.cli.main._require_backtest_authorization", swap_to_valid_replacement)
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "run",
+            str(spec_path),
+            "--spec-audit",
+            str(gate_paths["spec_audit.json"]),
+            "--runtime-audit",
+            str(gate_paths["runtime_audit.json"]),
+            "--component-catalog",
+            str(gate_paths["component_catalog.json"]),
+            "--authorization",
+            str(gate_paths["backtest_authorization.json"]),
+            "--component-manifest",
+            str(manifest),
+            "--out",
+            str(tmp_path / "runs"),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "component bundle changed after its authorized snapshot was staged" in result.output
+    assert not replacement_import_marker.exists()
+    assert compile_called is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("run_id", None, "metrics.json run_id is required for comparison"),
+        ("run_id", "wrong-run", "metrics.json run_id does not match run directory"),
+        ("strategy_id", None, "metrics.json strategy_id is required for comparison"),
+        ("strategy_id", "wrong-strategy", "metrics.json strategy_id does not match strategy_spec.yaml"),
+    ],
+    ids=["missing-run-id", "wrong-run-id", "missing-strategy-id", "wrong-strategy-id"],
+)
+def test_backtest_compare_runs_rejects_missing_or_wrong_metrics_identity(
+    tmp_path,
+    field: str,
+    value: str | None,
+    message: str,
+) -> None:
+    left_root = tmp_path / "left"
+    right_root = tmp_path / "right"
+    left_root.mkdir()
+    right_root.mkdir()
+    left_run = _write_minimal_cli_run(left_root)
+    right_run = _write_minimal_cli_run(right_root)
+    metrics_path = left_run / "metrics.json"
+    metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+    if value is None:
+        metrics.pop(field)
+    else:
+        metrics[field] = value
+    metrics_path.write_text(json.dumps(metrics, indent=2) + "\n", encoding="utf-8")
+    artifact_hashes_path = left_run / "artifact_hashes.json"
+    artifact_hashes = json.loads(artifact_hashes_path.read_text(encoding="utf-8"))
+    artifact_hashes["metrics.json"] = _hash_json_file(metrics_path, exclude_keys={"run_id"})
+    artifact_hashes_path.write_text(json.dumps(artifact_hashes, indent=2) + "\n", encoding="utf-8")
+    replace_run_digest_entry(left_run, _hash_json_file(artifact_hashes_path))
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "compare-runs", str(left_run), str(right_run), "--json"],
+    )
+
+    assert result.exit_code == 1
+    assert message in result.output
+
+
+@pytest.mark.parametrize("boundary", ["artifact:metrics.json.replace", "manifest.replace"])
+def test_backtest_compare_runs_waits_for_paused_publication(monkeypatch, tmp_path, boundary: str) -> None:
+    left_root = tmp_path / "left"
+    left_root.mkdir()
+    left_run = _write_minimal_cli_run(left_root)
+    metrics = json.loads((left_run / "metrics.json").read_text(encoding="utf-8"))
+    metrics["total_return"] = 0.25
+    publication_paused = threading.Event()
+    allow_publication = threading.Event()
+    reader_attempted = threading.Event()
+    reader_completed = threading.Event()
+    publisher_failures: list[BaseException] = []
+    reader_results: list[dict[str, object]] = []
+    reader_failures: list[BaseException] = []
+    original_boundary = run_digests_module._publication_boundary
+
+    def pause_publication(label: str) -> None:
+        if threading.current_thread().name == "compare-publisher" and label == boundary:
+            publication_paused.set()
+            assert allow_publication.wait(timeout=5)
+        original_boundary(label)
+
+    @contextmanager
+    def observed_transaction(run_path):
+        if threading.current_thread().name == "compare-reader":
+            reader_attempted.set()
+        with run_digest_transaction(run_path):
+            yield
+
+    def publish_metrics() -> None:
+        try:
+            publish_run_artifacts(left_run, {"metrics.json": json.dumps(metrics).encode()})
+        except BaseException as exc:
+            publisher_failures.append(exc)
+
+    def compare() -> None:
+        try:
+            reader_results.append(_run_comparability_signature(left_run))
+        except BaseException as exc:
+            reader_failures.append(exc)
+        finally:
+            reader_completed.set()
+
+    monkeypatch.setattr(run_digests_module, "_publication_boundary", pause_publication)
+    monkeypatch.setattr("oxq.cli.main.run_digest_transaction", observed_transaction, raising=False)
+    publisher = threading.Thread(target=publish_metrics, name="compare-publisher")
+    reader = threading.Thread(target=compare, name="compare-reader")
+    publisher.start()
+    try:
+        assert publication_paused.wait(timeout=5)
+        reader.start()
+        assert reader_attempted.wait(timeout=5)
+        assert not reader_completed.is_set()
+    finally:
+        allow_publication.set()
+    publisher.join(timeout=5)
+    reader.join(timeout=5)
+
+    assert not publisher.is_alive()
+    assert not reader.is_alive()
+    assert publisher_failures == []
+    assert reader_failures == []
+    assert reader_results[0]["spec_hash"]
+
+
+def test_backtest_compare_runs_holds_left_lock_while_right_publisher_is_paused(monkeypatch, tmp_path) -> None:
+    left_root = tmp_path / "a-left"
+    right_root = tmp_path / "z-right"
+    left_root.mkdir()
+    right_root.mkdir()
+    left_run = _write_minimal_cli_run(left_root)
+    right_run = _write_minimal_cli_run(right_root)
+    right_metrics = json.loads((right_run / "metrics.json").read_text(encoding="utf-8"))
+    left_metrics = json.loads((left_run / "metrics.json").read_text(encoding="utf-8"))
+    right_metrics["total_return"] = 0.25
+    left_metrics["total_return"] = 0.25
+    right_paused = threading.Event()
+    allow_right = threading.Event()
+    compare_waiting_for_right = threading.Event()
+    left_completed = threading.Event()
+    failures: list[BaseException] = []
+    compare_results = []
+    original_boundary = run_digests_module._publication_boundary
+    original_lock = run_digests_module.ProcessFileLock
+    right_lock_path = (right_run.parent / "run_digests.jsonl.lock").resolve(strict=False)
+
+    def pause_right_publication(label: str) -> None:
+        if threading.current_thread().name == "right-publisher" and label == "artifact:metrics.json.replace":
+            right_paused.set()
+            assert allow_right.wait(timeout=5)
+        original_boundary(label)
+
+    class ObservedLock:
+        def __init__(self, path: str | Path) -> None:
+            self.path = Path(path).resolve(strict=False)
+            self.delegate = original_lock(path)
+            if threading.current_thread().name == "compare-reader" and self.path == right_lock_path:
+                compare_waiting_for_right.set()
+
+        def __enter__(self):
+            self.delegate.__enter__()
+            return self
+
+        def __exit__(self, exc_type, exc, traceback):
+            return self.delegate.__exit__(exc_type, exc, traceback)
+
+    def publish_right() -> None:
+        try:
+            publish_run_artifacts(right_run, {"metrics.json": json.dumps(right_metrics).encode()})
+        except BaseException as exc:
+            failures.append(exc)
+
+    def publish_left() -> None:
+        try:
+            publish_run_artifacts(left_run, {"metrics.json": json.dumps(left_metrics).encode()})
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            left_completed.set()
+
+    def compare() -> None:
+        try:
+            compare_results.append(
+                CliRunner().invoke(
+                    main,
+                    ["backtest", "compare-runs", str(left_run), str(right_run), "--json"],
+                )
+            )
+        except BaseException as exc:
+            failures.append(exc)
+
+    monkeypatch.setattr(run_digests_module, "_publication_boundary", pause_right_publication)
+    monkeypatch.setattr(run_digests_module, "ProcessFileLock", ObservedLock)
+    right_publisher = threading.Thread(target=publish_right, name="right-publisher")
+    compare_reader = threading.Thread(target=compare, name="compare-reader")
+    left_publisher = threading.Thread(target=publish_left, name="left-publisher")
+    right_publisher.start()
+    try:
+        assert right_paused.wait(timeout=5)
+        compare_reader.start()
+        assert compare_waiting_for_right.wait(timeout=5)
+        left_publisher.start()
+        assert not left_completed.wait(timeout=0.2)
+    finally:
+        allow_right.set()
+    for thread in (right_publisher, compare_reader, left_publisher):
+        thread.join(timeout=5)
+
+    assert all(not thread.is_alive() for thread in (right_publisher, compare_reader, left_publisher))
+    assert failures == []
+    assert compare_results[0].exit_code in {0, 1}, compare_results[0].output
+    assert json.loads(compare_results[0].output)["status"] in {"pass", "fail"}
+
+
+def _write_governed_compare_runs(tmp_path: Path, *, distinct_workspaces: bool) -> tuple[Path, Path]:
+    if distinct_workspaces:
+        left_workspace = tmp_path / "a-workspace"
+        right_workspace = tmp_path / "z-workspace"
+        left_version = right_version = "v001"
+    else:
+        left_workspace = right_workspace = tmp_path / "workspace"
+        left_version, right_version = "v001", "v002"
+
+    for workspace in {left_workspace, right_workspace}:
+        config = workspace / ".open-xquant" / "workspace.yaml"
+        config.parent.mkdir(parents=True)
+        config.write_text(
+            "workflow:\n  layout: version_governed\npaths:\n  versions_dir: versions\n",
+            encoding="utf-8",
+        )
+
+    left_fixture_root = left_workspace / "versions" / left_version / "09_backtests"
+    right_fixture_root = right_workspace / "versions" / right_version / "09_backtests"
+    left_fixture_root.mkdir(parents=True)
+    right_fixture_root.mkdir(parents=True)
+    left_run = _write_minimal_cli_run(left_fixture_root)
+    right_run = _write_minimal_cli_run(right_fixture_root)
+    synchronized = {
+        name: (left_run / name).read_bytes()
+        for name in ("compiled_plan.json", "data_manifest.json", "execution_assumptions.json")
+    }
+    publish_run_artifacts(right_run, synchronized)
+
+    stale_plan = json.loads((right_run / "compiled_plan.json").read_text(encoding="utf-8"))
+    stale_plan["execution"]["fill_price_mode"] = "stale-before-publication"
+    publish_run_artifacts(
+        right_run,
+        {"compiled_plan.json": (json.dumps(stale_plan, indent=2) + "\n").encode()},
+    )
+    return left_run, right_run
+
+
+def _subprocess_env() -> dict[str, str]:
+    return {**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)}
+
+
+def _start_paused_plan_publisher(
+    run_dir: Path,
+    source_plan: Path,
+    ready: Path,
+    release: Path,
+) -> subprocess.Popen[str]:
+    script = r"""
+import sys
+import time
+from contextlib import contextmanager
+from pathlib import Path
+
+import oxq.run_digests as run_digests
+
+run_dir = Path(sys.argv[1])
+source_plan = Path(sys.argv[2])
+ready = Path(sys.argv[3])
+release = Path(sys.argv[4])
+original_hold = run_digests.hold_final_selection_lock
+
+@contextmanager
+def paused_hold(lock_path):
+    ready.write_text("ready\n", encoding="utf-8")
+    deadline = time.monotonic() + 15
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("publisher release was not signaled")
+        time.sleep(0.01)
+    with original_hold(lock_path):
+        yield
+
+run_digests.hold_final_selection_lock = paused_hold
+run_digests.publish_run_artifacts(
+    run_dir,
+    {"compiled_plan.json": source_plan.read_bytes()},
+)
+"""
+    return subprocess.Popen(
+        [sys.executable, "-c", script, str(run_dir), str(source_plan), str(ready), str(release)],
+        cwd=Path.cwd(),
+        env=_subprocess_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _start_observed_compare(
+    left_run: Path,
+    right_run: Path,
+    left_locked: Path,
+) -> subprocess.Popen[str]:
+    script = r"""
+import sys
+from pathlib import Path
+
+from click.testing import CliRunner
+import oxq.run_digests as run_digests
+from oxq.cli.main import main
+
+left_run = Path(sys.argv[1])
+right_run = Path(sys.argv[2])
+left_locked = Path(sys.argv[3])
+left_lock_path = (left_run.parent / "run_digests.jsonl.lock").resolve(strict=False)
+OriginalLock = run_digests.ProcessFileLock
+
+class ObservedLock:
+    def __init__(self, path):
+        self.path = Path(path).resolve(strict=False)
+        self.delegate = OriginalLock(path)
+
+    def __enter__(self):
+        self.delegate.__enter__()
+        if self.path == left_lock_path:
+            left_locked.write_text("locked\n", encoding="utf-8")
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return self.delegate.__exit__(exc_type, exc, traceback)
+
+run_digests.ProcessFileLock = ObservedLock
+result = CliRunner().invoke(
+    main,
+    ["backtest", "compare-runs", str(left_run), str(right_run), "--json"],
+)
+sys.stdout.write(result.output)
+raise SystemExit(result.exit_code)
+"""
+    return subprocess.Popen(
+        [sys.executable, "-c", script, str(left_run), str(right_run), str(left_locked)],
+        cwd=Path.cwd(),
+        env=_subprocess_env(),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def _wait_for_process_marker(path: Path, process: subprocess.Popen[str], timeout: float = 8) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.exists():
+            return
+        if process.poll() is not None:
+            stdout, stderr = process.communicate()
+            raise AssertionError(
+                f"process exited before {path.name}: code={process.returncode}, stdout={stdout!r}, stderr={stderr!r}"
+            )
+        time.sleep(0.01)
+    process.kill()
+    stdout, stderr = process.communicate()
+    raise AssertionError(f"process did not reach {path.name}: stdout={stdout!r}, stderr={stderr!r}")
+
+
+def _assert_publisher_compare_complete_without_deadlock(tmp_path: Path, *, distinct_workspaces: bool) -> None:
+    left_run, right_run = _write_governed_compare_runs(
+        tmp_path,
+        distinct_workspaces=distinct_workspaces,
+    )
+    publisher_ready = tmp_path / "publisher-ready"
+    release_publisher = tmp_path / "release-publisher"
+    left_locked = tmp_path / "compare-left-locked"
+    publisher = _start_paused_plan_publisher(
+        right_run,
+        left_run / "compiled_plan.json",
+        publisher_ready,
+        release_publisher,
+    )
+    compare: subprocess.Popen[str] | None = None
+    try:
+        _wait_for_process_marker(publisher_ready, publisher)
+        compare = _start_observed_compare(left_run, right_run, left_locked)
+        _wait_for_process_marker(left_locked, compare)
+        release_publisher.write_text("release\n", encoding="utf-8")
+        publisher_stdout, publisher_stderr = publisher.communicate(timeout=10)
+        compare_stdout, compare_stderr = compare.communicate(timeout=10)
+    except BaseException:
+        publisher.kill()
+        publisher.communicate()
+        if compare is not None:
+            compare.kill()
+            compare.communicate()
+        raise
+
+    assert publisher.returncode == 0, (publisher_stdout, publisher_stderr)
+    assert compare.returncode == 0, (compare_stdout, compare_stderr)
+    payload = json.loads(compare_stdout)
+    assert payload["comparable"] is True
+    assert payload["differences"] == []
+
+
+def test_backtest_compare_runs_process_avoids_two_version_same_workspace_publisher_deadlock(tmp_path) -> None:
+    _assert_publisher_compare_complete_without_deadlock(tmp_path, distinct_workspaces=False)
+
+
+def test_backtest_compare_runs_process_keeps_distinct_workspace_signatures_coherent(tmp_path) -> None:
+    _assert_publisher_compare_complete_without_deadlock(tmp_path, distinct_workspaces=True)
+
+
+def test_backtest_compare_runs_deduplicates_same_run_path_alias(monkeypatch, tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    alias = tmp_path / "run-alias"
+    alias.symlink_to(run_dir, target_is_directory=True)
+    observed: list[tuple[Path, ...]] = []
+    original_transaction = main_module.multi_run_digest_read_transaction
+
+    @contextmanager
+    def observe_transaction(run_dirs):
+        observed.append(tuple(Path(path) for path in run_dirs))
+        with original_transaction(run_dirs) as resolved:
+            assert resolved == (run_dir.resolve(), run_dir.resolve())
+            yield resolved
+
+    monkeypatch.setattr(main_module, "multi_run_digest_read_transaction", observe_transaction)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "compare-runs", str(run_dir), str(alias), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["comparable"] is True
+    assert payload["differences"] == []
+    assert observed == [(run_dir, alias)]
+
+
+def test_backtest_compare_runs_releases_all_locks_when_signature_read_fails(monkeypatch, tmp_path) -> None:
+    left_run, right_run = _write_governed_compare_runs(tmp_path, distinct_workspaces=False)
+    original_signature = main_module._run_comparability_signature_locked
+
+    def fail_right_signature(run_dir: Path) -> dict[str, object]:
+        if run_dir == right_run.resolve():
+            raise main_module.click.ClickException("injected comparison read failure")
+        return original_signature(run_dir)
+
+    monkeypatch.setattr(main_module, "_run_comparability_signature_locked", fail_right_signature)
+
+    result = CliRunner().invoke(
+        main,
+        ["backtest", "compare-runs", str(left_run), str(right_run), "--json"],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output)["errors"][0]["message"] == "injected comparison read failure"
+    for run_dir in (left_run, right_run):
+        completed = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; from pathlib import Path; "
+                    "from oxq.run_digests import publish_run_artifacts; "
+                    "run = Path(sys.argv[1]); "
+                    "publish_run_artifacts(run, {'compiled_plan.json': (run / 'compiled_plan.json').read_bytes()})"
+                ),
+                str(run_dir),
+            ],
+            cwd=Path.cwd(),
+            env=_subprocess_env(),
+            capture_output=True,
+            text=True,
+            timeout=8,
+            check=False,
+        )
+        assert completed.returncode == 0, (completed.stdout, completed.stderr)
+
+
+def test_run_component_manifest_writer_publishes_complete_artifact_set(monkeypatch, tmp_path) -> None:
+    from oxq.cli.main import _write_run_component_manifest_artifacts
+
+    run_dir = _write_minimal_cli_run(tmp_path)
+    manifest_path = _write_hashed_custom_indicator_extension(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["_manifest_path"] = str(manifest_path)
+    publications: list[dict[str, bytes]] = []
+
+    def capture_publication(run_path, artifacts, *, replacement_paths, remove_artifacts) -> str:
+        assert run_path == run_dir
+        assert not (run_dir / "component_manifests.json").exists()
+        assert not (run_dir / "component_manifest.json").exists()
+        assert not (run_dir / "component_bundle_hash.txt").exists()
+        assert not (run_dir / "component_extensions").exists()
+        assert not (run_dir / "custom_components").exists()
+        publications.append(dict(artifacts))
+        assert set(replacement_paths) == {"component_extensions", "custom_components"}
+        assert remove_artifacts == set()
+        return "sha256:" + "1" * 16
+
+    monkeypatch.setattr("oxq.cli.main.publish_run_artifacts", capture_publication, raising=False)
+
+    _write_run_component_manifest_artifacts(run_dir, [manifest])
+
+    assert set(publications[0]) == {
+        "component_manifests.json",
+        "component_manifest.json",
+        "component_bundle_hash.txt",
+    }
+
+
+@pytest.mark.parametrize("boundary", ["path:component_extensions.replace", "manifest.replace"])
+def test_run_component_manifest_writer_rolls_back_interrupted_manifest_publication(
+    monkeypatch,
+    tmp_path,
+    boundary: str,
+) -> None:
+    from oxq.cli.main import _write_run_component_manifest_artifacts
+
+    run_dir = _write_minimal_cli_run(tmp_path)
+    manifest_path = _write_hashed_custom_indicator_extension(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["_manifest_path"] = str(manifest_path)
+    original_hashes = (run_dir / "artifact_hashes.json").read_bytes()
+    original_boundary = run_digests_module._publication_boundary
+
+    def interrupt_manifest(label: str) -> None:
+        if label == boundary:
+            raise OSError("interrupted component manifest publication")
+        original_boundary(label)
+
+    monkeypatch.setattr(run_digests_module, "_publication_boundary", interrupt_manifest)
+
+    with pytest.raises(OSError, match="interrupted component manifest publication"):
+        _write_run_component_manifest_artifacts(run_dir, [manifest])
+
+    assert (run_dir / "artifact_hashes.json").read_bytes() == original_hashes
+    assert not (run_dir / "component_manifests.json").exists()
+    assert not (run_dir / "component_manifest.json").exists()
+    assert not (run_dir / "component_bundle_hash.txt").exists()
+    assert not (run_dir / "component_extensions").exists()
+    assert not (run_dir / "custom_components").exists()
+    require_current_run_digest(run_dir)
+
+
+def test_run_component_manifest_writer_replaces_changed_bundle_without_stale_files(tmp_path) -> None:
+    from oxq.cli.main import _write_run_component_manifest_artifacts
+
+    run_dir = _write_minimal_cli_run(tmp_path)
+    manifest_path = _write_hashed_custom_indicator_extension(tmp_path)
+    source_root = tmp_path / "custom_components"
+    stale_file = source_root / "stale_module.py"
+    stale_file.write_text("STALE = True\n", encoding="utf-8")
+    first_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    first_manifest["bundle_hash"] = ""
+    manifest_path.write_text(json.dumps(first_manifest, indent=2, sort_keys=True), encoding="utf-8")
+    first_manifest["bundle_hash"] = compute_component_bundle_hash(manifest_path)
+    manifest_path.write_text(json.dumps(first_manifest, indent=2, sort_keys=True), encoding="utf-8")
+    first_manifest["_manifest_path"] = str(manifest_path)
+
+    _write_run_component_manifest_artifacts(run_dir, [first_manifest])
+
+    archived_stale = run_dir / "component_extensions/00_custom_components/custom_components/stale_module.py"
+    legacy_stale = run_dir / "custom_components/stale_module.py"
+    assert archived_stale.exists()
+    assert legacy_stale.exists()
+
+    stale_file.unlink()
+    source = source_root / "oxq_components/indicators/workspace_constant_indicator.py"
+    source.write_text(source.read_text(encoding="utf-8") + "\nUPDATED = True\n", encoding="utf-8")
+    second_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    second_manifest["components"][0]["source_hash"] = "sha256:" + hashlib.sha256(source.read_bytes()).hexdigest()
+    second_manifest["bundle_hash"] = ""
+    manifest_path.write_text(json.dumps(second_manifest, indent=2, sort_keys=True), encoding="utf-8")
+    second_manifest["bundle_hash"] = compute_component_bundle_hash(manifest_path)
+    manifest_path.write_text(json.dumps(second_manifest, indent=2, sort_keys=True), encoding="utf-8")
+    second_manifest["_manifest_path"] = str(manifest_path)
+
+    _write_run_component_manifest_artifacts(run_dir, [second_manifest])
+
+    assert not archived_stale.exists()
+    assert not legacy_stale.exists()
+    require_current_run_digest(run_dir)
+
+
+def test_run_component_manifest_writer_atomically_switches_inventory_variants(tmp_path) -> None:
+    from oxq.cli.main import _write_run_component_manifest_artifacts
+
+    run_dir = _write_minimal_cli_run(tmp_path)
+    first_path = _write_hashed_custom_indicator_extension(tmp_path / "first")
+    second_path = _write_hashed_custom_indicator_extension(tmp_path / "second")
+    first = json.loads(first_path.read_text(encoding="utf-8"))
+    second = json.loads(second_path.read_text(encoding="utf-8"))
+    first["_manifest_path"] = str(first_path)
+    second["_manifest_path"] = str(second_path)
+
+    _write_run_component_manifest_artifacts(run_dir, [first])
+    assert (run_dir / "component_manifest.json").exists()
+    assert (run_dir / "component_bundle_hash.txt").exists()
+
+    _write_run_component_manifest_artifacts(run_dir, [first, second])
+
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert "component_manifests.json" in hashes
+    assert "component_manifest.json" not in hashes
+    assert "component_bundle_hash.txt" not in hashes
+    assert not (run_dir / "component_manifest.json").exists()
+    assert not (run_dir / "component_bundle_hash.txt").exists()
+    assert {path.name for path in (run_dir / "component_extensions").iterdir()} == {
+        "00_custom_components",
+        "01_custom_components",
+    }
+    require_current_run_digest(run_dir)
+
+
+def test_component_and_provenance_publications_serialize_without_lost_updates(monkeypatch, tmp_path) -> None:
+    from oxq.cli.main import _publish_provenance_artifacts, _write_run_component_manifest_artifacts
+
+    run_dir = _write_minimal_cli_run(tmp_path)
+    manifest_path = _write_hashed_custom_indicator_extension(tmp_path)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["_manifest_path"] = str(manifest_path)
+    component_paused = threading.Event()
+    allow_component = threading.Event()
+    provenance_attempted = threading.Event()
+    provenance_completed = threading.Event()
+    failures: list[BaseException] = []
+    original_boundary = run_digests_module._publication_boundary
+    original_transaction = run_digests_module.run_digest_transaction
+
+    def pause_component_manifest(label: str) -> None:
+        if threading.current_thread().name == "component-publisher" and label == "manifest.replace":
+            component_paused.set()
+            assert allow_component.wait(timeout=5)
+        original_boundary(label)
+
+    @contextmanager
+    def observed_transaction(run_path):
+        if threading.current_thread().name == "provenance-publisher":
+            provenance_attempted.set()
+        with original_transaction(run_path):
+            yield
+
+    def publish_components() -> None:
+        try:
+            _write_run_component_manifest_artifacts(run_dir, [manifest])
+        except BaseException as exc:
+            failures.append(exc)
+
+    def publish_provenance() -> None:
+        try:
+            _publish_provenance_artifacts(
+                run_dir,
+                spec_audit_content=b'{"status":"pass"}',
+                runtime_audit_content=b'{"status":"pass"}',
+                conversation_hash="sha256:" + "a" * 64,
+                catalog_hash="sha256:" + "b" * 64,
+                recipe_catalog_hash="sha256:" + "c" * 64,
+            )
+        except BaseException as exc:
+            failures.append(exc)
+        finally:
+            provenance_completed.set()
+
+    monkeypatch.setattr(run_digests_module, "_publication_boundary", pause_component_manifest)
+    monkeypatch.setattr(run_digests_module, "run_digest_transaction", observed_transaction)
+    component_thread = threading.Thread(target=publish_components, name="component-publisher")
+    provenance_thread = threading.Thread(target=publish_provenance, name="provenance-publisher")
+    component_thread.start()
+    try:
+        assert component_paused.wait(timeout=5)
+        provenance_thread.start()
+        assert provenance_attempted.wait(timeout=5)
+        assert not provenance_completed.is_set()
+    finally:
+        allow_component.set()
+    component_thread.join(timeout=5)
+    provenance_thread.join(timeout=5)
+
+    assert not component_thread.is_alive()
+    assert not provenance_thread.is_alive()
+    assert failures == []
+    hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert {
+        "component_manifests.json",
+        "component_manifest.json",
+        "component_bundle_hash.txt",
+        "spec_audit.json",
+        "conversation_hash.txt",
+        "component_catalog_hash.txt",
+        "recipe_catalog_hash.txt",
+    } <= hashes.keys()
+    require_current_run_digest(run_dir)
+
+
 def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
     spec = StrategySpec.template(strategy_id="compile_preview", hypothesis="compile preview should be auditable")
     spec.data.data_dir = "data"
@@ -1009,6 +2262,179 @@ def test_strategy_compile_writes_compile_preview(monkeypatch, tmp_path) -> None:
     assert (out_dir / "spec_hash.txt").read_text(encoding="utf-8").strip() == compiled_plan["spec_hash"]
     assert "Effective data dir:" in result.output
     assert "included in compiled_plan.json and its hash" in result.output
+
+
+@pytest.mark.parametrize("out_value", [".", ".."], ids=["cwd", "ancestor"])
+def test_strategy_compile_preview_rejects_cwd_and_ancestors_without_deleting_sentinel(
+    monkeypatch,
+    tmp_path,
+    out_value: str,
+) -> None:
+    work_dir = tmp_path / "work"
+    cwd = work_dir / "nested"
+    cwd.mkdir(parents=True)
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_unsafe_out",
+        hypothesis="compile preview must not replace its working directory",
+    )
+    spec_path = cwd / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    protected_dir = cwd if out_value == "." else work_dir
+    sentinel = protected_dir / "sentinel.txt"
+    sentinel.write_text("keep me\n", encoding="utf-8")
+    monkeypatch.chdir(cwd)
+
+    result = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", out_value],
+    )
+
+    assert result.exit_code == 1
+    assert "current working directory or one of its ancestors" in result.output
+    assert sentinel.read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_strategy_compile_preview_rejects_unowned_nonempty_directory_without_deleting_sentinel(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_unowned",
+        hypothesis="compile preview must preserve unowned directories",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "compile_preview"
+    out_dir.mkdir()
+    sentinel = out_dir / "sentinel.txt"
+    sentinel.write_text("keep me\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "not an OpenXQuant-managed compile preview" in result.output
+    assert sentinel.read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_strategy_compile_preview_adopts_empty_directory_then_replaces_managed_preview(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_managed_transition",
+        hypothesis="only managed compile previews may be replaced",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    out_dir = tmp_path / "compile_preview"
+    out_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+
+    first = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)],
+    )
+
+    assert first.exit_code == 0, first.output
+    marker = json.loads((out_dir / ".oxq-compile-preview.json").read_text(encoding="utf-8"))
+    assert marker == {
+        "artifact": "strategy-compile-preview",
+        "managed_by": "open-xquant",
+        "schema_version": 1,
+    }
+    stale = out_dir / "stale.txt"
+    stale.write_text("remove me\n", encoding="utf-8")
+
+    second = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)],
+    )
+
+    assert second.exit_code == 0, second.output
+    assert not stale.exists()
+    assert (out_dir / ".oxq-compile-preview.json").is_file()
+
+
+def test_strategy_compile_preview_rejects_symlink_target_without_mutating_target(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_symlink",
+        hypothesis="compile preview targets must not be symlinks",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    external = tmp_path / "external"
+    external.mkdir()
+    sentinel = external / "sentinel.txt"
+    sentinel.write_text("keep me\n", encoding="utf-8")
+    out_dir = tmp_path / "compile_preview"
+    out_dir.symlink_to(external, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "must not contain symlink components" in result.output
+    assert out_dir.is_symlink()
+    assert sentinel.read_text(encoding="utf-8") == "keep me\n"
+
+
+def test_strategy_compile_preview_rejects_parent_replacement_before_target_mutation(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_parent_change",
+        hypothesis="compile preview publication pins its output parent",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    parent = tmp_path / "preview_parent"
+    parent.mkdir()
+    out_dir = parent / "compile_preview"
+    sentinel = out_dir / "sentinel.txt"
+    monkeypatch.chdir(tmp_path)
+    first = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)],
+    )
+    assert first.exit_code == 0, first.output
+    sentinel.write_text("keep me\n", encoding="utf-8")
+    displaced_parent = tmp_path / "displaced_preview_parent"
+    original_replace = main_module._replace_compile_preview
+
+    def replace_after_parent_swap(target, staging_root, **kwargs):
+        parent.rename(displaced_parent)
+        parent.mkdir()
+        try:
+            return original_replace(
+                target,
+                staging_root,
+                **kwargs,
+            )
+        finally:
+            shutil.rmtree(parent)
+            displaced_parent.rename(parent)
+
+    monkeypatch.setattr(main_module, "_replace_compile_preview", replace_after_parent_swap)
+
+    result = CliRunner().invoke(
+        main,
+        ["strategy", "compile", "strategy_spec.yaml", "--out", str(out_dir)],
+    )
+
+    assert result.exit_code == 1
+    assert "output parent changed during publication" in result.output
+    assert sentinel.read_text(encoding="utf-8") == "keep me\n"
 
 
 def test_strategy_compile_preview_writes_strategy_py_for_user_review(tmp_path, monkeypatch) -> None:
@@ -1097,6 +2523,169 @@ def test_strategy_compile_preview_archives_workspace_component_manifest(tmp_path
     preview = module.main(dry_run=True)
     assert preview["status"] == "dry_run"
     assert preview["indicators"]["custom_score"]["type"] == "WorkspaceConstantIndicator"
+
+
+def test_strategy_compile_preview_replaces_one_many_one_and_absent_component_states(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_replacement",
+        hypothesis="compile preview is a complete replacement",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    alpha = _write_hashed_preview_indicator_extension(
+        tmp_path / "alpha_workspace",
+        root_name="alpha_components",
+        indicator_name="AlphaPreviewIndicator",
+        marker="alpha",
+    )
+    beta = _write_hashed_preview_indicator_extension(
+        tmp_path / "beta_workspace",
+        root_name="beta_components",
+        indicator_name="BetaPreviewIndicator",
+        marker="beta",
+    )
+    gamma = _write_hashed_preview_indicator_extension(
+        tmp_path / "gamma_workspace",
+        root_name="gamma_components",
+        indicator_name="GammaPreviewIndicator",
+        marker="gamma",
+    )
+    out_dir = tmp_path / "compile_preview"
+    monkeypatch.chdir(tmp_path)
+
+    first = _compile_preview(spec_path, out_dir, alpha)
+    assert first.exit_code == 0, first.output
+    (out_dir / "stale-preview-file.txt").write_text("stale", encoding="utf-8")
+
+    one_to_many = _compile_preview(spec_path, out_dir, beta, gamma)
+
+    assert one_to_many.exit_code == 0, one_to_many.output
+    assert not (out_dir / "alpha_components").exists()
+    assert not (out_dir / "component_manifest.json").exists()
+    assert not (out_dir / "component_bundle_hash.txt").exists()
+    assert not (out_dir / "stale-preview-file.txt").exists()
+    summary = json.loads((out_dir / "component_manifests.json").read_text(encoding="utf-8"))
+    assert [item["extension_id"] for item in summary] == ["beta_components", "gamma_components"]
+    assert len(list((out_dir / "component_extensions").iterdir())) == 2
+
+    many_to_one = _compile_preview(spec_path, out_dir, alpha)
+
+    assert many_to_one.exit_code == 0, many_to_one.output
+    assert (out_dir / "alpha_components").is_dir()
+    assert (out_dir / "component_manifest.json").is_file()
+    assert (out_dir / "component_bundle_hash.txt").is_file()
+    assert len(list((out_dir / "component_extensions").iterdir())) == 1
+    assert not list(out_dir.rglob("*beta_components*"))
+    assert not list(out_dir.rglob("*gamma_components*"))
+
+    absent = _compile_preview(spec_path, out_dir)
+
+    assert absent.exit_code == 0, absent.output
+    assert {path.name for path in out_dir.iterdir()} == {
+        ".oxq-compile-preview.json",
+        "compiled_plan.json",
+        "spec_hash.txt",
+        "strategy.py",
+        "strategy_spec.yaml",
+    }
+
+
+def test_strategy_compile_preview_replaces_changed_same_root_without_stale_files(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_same_root",
+        hypothesis="same-root changes replace the old tree",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    manifest = _write_hashed_preview_indicator_extension(
+        tmp_path / "component_workspace",
+        root_name="shared_components",
+        indicator_name="SharedPreviewIndicator",
+        marker="old-generation",
+    )
+    source_root = manifest.parent / "shared_components"
+    obsolete = source_root / "obsolete.py"
+    obsolete.write_text("GENERATION = 'obsolete'\n", encoding="utf-8")
+    _rehash_preview_indicator_extension(manifest)
+    out_dir = tmp_path / "compile_preview"
+    monkeypatch.chdir(tmp_path)
+    first = _compile_preview(spec_path, out_dir, manifest)
+    assert first.exit_code == 0, first.output
+    assert list(out_dir.rglob("obsolete.py"))
+
+    source = source_root / "shared_components_indicator.py"
+    source.write_text(
+        source.read_text(encoding="utf-8").replace("old-generation", "new-generation"),
+        encoding="utf-8",
+    )
+    obsolete.unlink()
+    _rehash_preview_indicator_extension(manifest)
+
+    second = _compile_preview(spec_path, out_dir, manifest)
+
+    assert second.exit_code == 0, second.output
+    assert not list(out_dir.rglob("obsolete.py"))
+    published_sources = list(out_dir.rglob("shared_components_indicator.py"))
+    assert published_sources
+    assert all("new-generation" in path.read_text(encoding="utf-8") for path in published_sources)
+
+
+def test_strategy_compile_preview_failed_publish_preserves_previous_state_and_retry_replaces_it(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    spec = StrategySpec.template(
+        strategy_id="compile_preview_retry",
+        hypothesis="failed preview publication can be retried",
+    )
+    spec_path = tmp_path / "strategy_spec.yaml"
+    spec_path.write_text(yaml.safe_dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    manifest = _write_hashed_preview_indicator_extension(
+        tmp_path / "component_workspace",
+        root_name="retry_components",
+        indicator_name="RetryPreviewIndicator",
+        marker="old-generation",
+    )
+    source = manifest.parent / "retry_components/retry_components_indicator.py"
+    out_dir = tmp_path / "compile_preview"
+    monkeypatch.chdir(tmp_path)
+    initial = _compile_preview(spec_path, out_dir, manifest)
+    assert initial.exit_code == 0, initial.output
+    original_snapshot = _directory_file_snapshot(out_dir)
+    source.write_text(
+        source.read_text(encoding="utf-8").replace("old-generation", "new-generation"),
+        encoding="utf-8",
+    )
+    _rehash_preview_indicator_extension(manifest)
+    original_write_bytes = Path.write_bytes
+
+    def fail_summary_write(path: Path, content: bytes) -> int:
+        if path.name == "component_manifests.json":
+            raise OSError("injected preview publication failure")
+        return original_write_bytes(path, content)
+
+    with monkeypatch.context() as failure_patch:
+        failure_patch.setattr(Path, "write_bytes", fail_summary_write)
+        failed = _compile_preview(spec_path, out_dir, manifest)
+
+    assert failed.exit_code == 1
+    assert "injected preview publication failure" in str(failed.exception)
+    assert _directory_file_snapshot(out_dir) == original_snapshot
+
+    retried = _compile_preview(spec_path, out_dir, manifest)
+
+    assert retried.exit_code == 0, retried.output
+    assert _directory_file_snapshot(out_dir) != original_snapshot
+    assert all(
+        "new-generation" in path.read_text(encoding="utf-8")
+        for path in out_dir.rglob("retry_components_indicator.py")
+    )
 
 
 def test_backtest_default_out_uses_version_governed_workspace_default(monkeypatch, tmp_path) -> None:
@@ -1239,6 +2828,160 @@ def test_backtest_default_out_honors_custom_versions_dir_workspace(monkeypatch, 
 
     assert result.exit_code == 0, result.output
     assert captured["out_dir"] == "research_versions/v003/09_backtests"
+
+
+@pytest.mark.parametrize("requested_out", ["../escape", "research_versions/v001/09_backtests"])
+def test_backtest_rejects_output_outside_active_governed_phase(
+    monkeypatch,
+    tmp_path,
+    requested_out: str,
+) -> None:
+    home = tmp_path / "home"
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".open-xquant"
+    version_dir = workspace / "research_versions/v003"
+    config_dir.mkdir(parents=True)
+    version_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "paths": {"versions_dir": "research_versions"},
+                "workflow": {"layout": "version_governed"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "current.json").write_text(
+        json.dumps({"active_version": "v003", "active_phase": "09_backtests"}),
+        encoding="utf-8",
+    )
+    (version_dir / "version_manifest.json").write_text(
+        json.dumps(
+            {
+                "version_id": "v003",
+                "phase_paths": {"09_backtests": "research_versions/v003/09_backtests"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = StrategySpec.template(strategy_id="reject_outside", hypothesis="governed output only")
+    spec_path = workspace / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    called = False
+
+    def fake_compile_run(*args, **kwargs):
+        nonlocal called
+        called = True
+        raise AssertionError("compile_run must not be called")
+
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    entry_cwd = Path.cwd()
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path):
+        with monkeypatch.context() as cwd_patch:
+            cwd_patch.chdir(workspace)
+            result = runner.invoke(
+                main,
+                ["backtest", "run", str(spec_path), "--allow-unaudited", "--out", requested_out, "--json"],
+            )
+
+    assert Path.cwd() == entry_cwd
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "output_dir_failed"
+    assert called is False
+    assert not (workspace.parent / "escape").exists()
+
+
+def test_backtest_rejects_configured_output_outside_active_governed_phase(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".open-xquant"
+    version_dir = workspace / "versions/v002"
+    config_dir.mkdir(parents=True)
+    version_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "paths": {"versions_dir": "versions"},
+                "workflow": {
+                    "layout": "version_governed",
+                    "default_output_dir": "unrelated/backtests",
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "current.json").write_text(json.dumps({"active_version": "v002"}), encoding="utf-8")
+    (version_dir / "version_manifest.json").write_text(
+        json.dumps(
+            {
+                "version_id": "v002",
+                "phase_paths": {"09_backtests": "versions/v002/09_backtests"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    spec = StrategySpec.template(strategy_id="reject_config", hypothesis="governed output only")
+    spec_path = workspace / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.output)["errors"][0]["check"] == "output_dir_failed"
+    assert not (workspace / "unrelated").exists()
+
+
+def test_backtest_default_uses_active_version_manifest_backtest_phase(monkeypatch, tmp_path) -> None:
+    workspace = tmp_path / "workspace"
+    config_dir = workspace / ".open-xquant"
+    version_dir = workspace / "research_versions/v004"
+    config_dir.mkdir(parents=True)
+    version_dir.mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (config_dir / "workspace.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": 1,
+                "paths": {"versions_dir": "research_versions"},
+                "workflow": {"layout": "version_governed"},
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    (workspace / "current.json").write_text(json.dumps({"active_version": "v004"}), encoding="utf-8")
+    governed_output = "research_versions/v004/09_backtests/formal"
+    (version_dir / "version_manifest.json").write_text(
+        json.dumps({"version_id": "v004", "phase_paths": {"09_backtests": governed_output}}),
+        encoding="utf-8",
+    )
+    spec = StrategySpec.template(strategy_id="manifest_output", hypothesis="manifest path is authoritative")
+    spec_path = workspace / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    captured: dict[str, str | None] = {}
+
+    def fake_compile_run(spec, data_dir=None, out_dir=None):
+        captured["out_dir"] = out_dir
+        run_dir = Path(str(out_dir)) / "run_001"
+        run_dir.mkdir(parents=True)
+        (run_dir / "metrics.json").write_text("{}", encoding="utf-8")
+        return object(), run_dir
+
+    monkeypatch.setattr("oxq.spec.compiler.compile_run", fake_compile_run)
+    monkeypatch.chdir(workspace)
+
+    result = CliRunner().invoke(main, ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"])
+
+    assert result.exit_code == 0, result.output
+    assert captured["out_dir"] == governed_output
 
 
 def test_backtest_default_out_rewrites_legacy_default_for_custom_versions_dir(monkeypatch, tmp_path) -> None:
@@ -1431,8 +3174,35 @@ def test_backtest_default_out_rejects_symlinked_versions_dir_escape(monkeypatch,
     assert result.exit_code == 1
     payload = json.loads(result.output)
     assert payload["errors"][0]["check"] == "output_dir_failed"
-    assert "paths.versions_dir must stay within the workspace" in payload["errors"][0]["message"]
+    assert "paths.versions_dir must not contain symlink components" in payload["errors"][0]["message"]
     assert not (outside / "v012").exists()
+
+
+def test_backtest_legacy_fallback_rejects_symlinked_backtest_phase_before_mutation(monkeypatch, tmp_path) -> None:
+    outside = tmp_path / "outside"
+    version_dir = tmp_path / "versions/v013"
+    (tmp_path / ".open-xquant").mkdir()
+    version_dir.mkdir(parents=True)
+    outside.mkdir()
+    (version_dir / "09_backtests").symlink_to(outside, target_is_directory=True)
+    (tmp_path / ".open-xquant/workspace.yaml").write_text(
+        "workflow:\n  layout: version_governed\npaths:\n  versions_dir: versions\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "current.json").write_text(json.dumps({"active_version": "v013"}), encoding="utf-8")
+    spec = StrategySpec.template(strategy_id="legacy_symlink_out", hypothesis="reject symlinked fallback")
+    spec_path = version_dir / "strategy_spec.yaml"
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(main, ["backtest", "run", str(spec_path), "--allow-unaudited", "--json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert payload["errors"][0]["check"] == "output_dir_failed"
+    assert "09_backtests" in payload["errors"][0]["message"]
+    assert "symlink" in payload["errors"][0]["message"]
+    assert list(outside.iterdir()) == []
 
 
 def test_backtest_default_out_rejects_unsafe_active_version(monkeypatch, tmp_path) -> None:
@@ -1535,6 +3305,63 @@ def test_backtest_default_out_rejects_malformed_workspace_yaml(monkeypatch, tmp_
     payload = json.loads(result.output)
     assert payload["errors"][0]["check"] == "output_dir_failed"
     assert "workspace config is invalid" in payload["errors"][0]["message"]
+
+
+@pytest.mark.parametrize(
+    ("command", "audit_name", "artifact_name"),
+    [
+        ("reproducibility", "audit_reproducibility", "reproducibility_audit.json"),
+        ("research", "audit_research", "research_bias_audit.json"),
+    ],
+)
+def test_audit_publish_atomically_binds_result_without_changing_json_stdout(
+    monkeypatch,
+    tmp_path,
+    command: str,
+    audit_name: str,
+    artifact_name: str,
+) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    audit_result = {
+        "status": "pass",
+        "checks": [{"id": command, "status": "pass", "severity": "info", "message": "ok"}],
+        "fatal_count": 0,
+        "warning_count": 0,
+    }
+    monkeypatch.setattr(f"oxq.audit.{audit_name}", lambda _run_dir: audit_result)
+
+    result = CliRunner().invoke(
+        main,
+        ["audit", command, str(run_dir), "--json", "--publish"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert json.loads(result.output) == audit_result
+    assert json.loads((run_dir / artifact_name).read_text(encoding="utf-8")) == audit_result
+    artifact_hashes = json.loads((run_dir / "artifact_hashes.json").read_text(encoding="utf-8"))
+    assert artifact_name in artifact_hashes
+    require_current_run_digest(run_dir)
+
+
+def test_audit_publish_does_not_truncate_existing_artifact_before_audit_succeeds(monkeypatch, tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    artifact_name = "reproducibility_audit.json"
+    original = b'{"status":"pass","generation":"original"}\n'
+    publish_run_artifacts(run_dir, {artifact_name: original})
+
+    def fail_audit(_run_dir):
+        raise RuntimeError("audit validation failed")
+
+    monkeypatch.setattr("oxq.audit.audit_reproducibility", fail_audit)
+
+    result = CliRunner().invoke(
+        main,
+        ["audit", "reproducibility", str(run_dir), "--json", "--publish"],
+    )
+
+    assert result.exit_code == 1
+    assert (run_dir / artifact_name).read_bytes() == original
+    require_current_run_digest(run_dir)
 
 
 def test_spec_audit_validate_accepts_required_schema(tmp_path) -> None:
@@ -2116,6 +3943,80 @@ def test_spec_audit_validate_checks_mapping_contract(tmp_path) -> None:
     assert any(error["path"] == "mapping_contract.field_mappings[0].blocking" for error in payload["errors"])
 
 
+def test_spec_audit_validate_binds_mapping_contract_to_supplied_spec(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        root = tmp_path / cwd
+        spec = StrategySpec.template(strategy_id="equal_weight", hypothesis="actual mapping fields")
+        spec_path = root / "strategy_spec.yaml"
+        spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False), encoding="utf-8")
+        audit_path = root / "spec_audit.json"
+        audit_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 4,
+                    "status": "block",
+                    "audit_conclusion": "blocked",
+                    "user_confirmation_status": "pending",
+                    "spec_confirmation_table": None,
+                    "spec_provenance_pass": False,
+                    "spec_hash": "sha256:" + "1" * 16,
+                    "conversation_hash": "sha256:" + "2" * 16,
+                    "catalog_hash": "sha256:" + "3" * 16,
+                    **_spec_audit_context(),
+                    "recipe_matches": [],
+                    "field_audits": [],
+                    "component_audits": [],
+                    "missing_user_requirements": [],
+                    "agent_added_fields": [],
+                    "contradictions": [],
+                    "blocking_findings": [{"message": "mapping is invalid"}],
+                }
+            ),
+            encoding="utf-8",
+        )
+        contract_path = root / "spec_mapping_contract.json"
+        contract_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "source_format": "external_strategy",
+                    "field_mappings": [
+                        {
+                            "source_field": "portfolio.nonexistent",
+                            "target_field": "portfolio.params.nonexistent",
+                            "semantic": "strategy",
+                            "status": "mapped",
+                            "confirmation_required": False,
+                            "blocking": False,
+                            "reason": "Must exist in this EqualWeight candidate.",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = runner.invoke(
+            main,
+            [
+                "spec-audit",
+                "validate",
+                str(audit_path),
+                "--spec",
+                str(spec_path),
+                "--mapping-contract",
+                str(contract_path),
+                "--json",
+            ],
+        )
+
+    assert result.exit_code == 1
+    payload = json.loads(result.output)
+    assert any(error["path"] == "mapping_contract.field_mappings[0].target_field" for error in payload["errors"])
+
+
 def test_spec_audit_validate_rejects_pass_with_blocked_strategy_mapping(tmp_path) -> None:
     audit_path = tmp_path / "spec_audit.json"
     audit_path.write_text(
@@ -2182,6 +4083,65 @@ def test_spec_audit_validate_rejects_pass_with_blocked_strategy_mapping(tmp_path
         in error["message"]
         for error in payload["errors"]
     )
+
+
+def test_spec_audit_validate_accepts_blocked_audit_with_blocking_mapping(tmp_path) -> None:
+    audit_path = tmp_path / "spec_audit.json"
+    audit_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "status": "block",
+                "audit_conclusion": "blocked",
+                "user_confirmation_status": "pending",
+                "spec_confirmation_table": None,
+                "spec_provenance_pass": False,
+                "spec_hash": "sha256:" + "1" * 16,
+                "conversation_hash": "sha256:" + "2" * 16,
+                "catalog_hash": "sha256:" + "3" * 16,
+                **_spec_audit_context(),
+                "recipe_matches": [],
+                "field_audits": [],
+                "component_audits": [],
+                "missing_user_requirements": [],
+                "agent_added_fields": [],
+                "contradictions": [],
+                "blocking_findings": [{"message": "The source mapping is not executable."}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    contract_path = tmp_path / "spec_mapping_contract.json"
+    contract_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_format": "external_strategy",
+                "field_mappings": [
+                    {
+                        "source_field": "market.cross_calendar_policy",
+                        "target_field": "",
+                        "semantic": "strategy",
+                        "status": "blocked",
+                        "confirmation_required": False,
+                        "blocking": True,
+                        "reason": "The runtime cannot preserve the source calendar policy.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        main,
+        ["spec-audit", "validate", str(audit_path), "--mapping-contract", str(contract_path), "--json"],
+    )
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["status"] == "pass"
+    assert payload["errors"] == []
 
 
 def test_spec_audit_validate_checks_strategy_confirmation_blocking(tmp_path) -> None:
@@ -2254,7 +4214,7 @@ def test_spec_audit_validate_strict_confirmed_rejects_missing_effective_fields(t
     confirmation_table = tmp_path / "spec_confirmation_table.md"
     confirmation_table.write_text(_spec_confirmation_table_text(spec_path), encoding="utf-8")
     confirmation_event = _write_confirmation_event(
-        tmp_path / "confirmations.jsonl",
+        tmp_path,
         artifact_path=str(confirmation_table),
         artifact_hash=_hash_file(confirmation_table),
     )
@@ -2357,6 +4317,53 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
     path = tmp_path / "spec_audit.json"
     confirmation_table = tmp_path / "spec_confirmation_table.md"
     confirmation_table.write_text(_spec_confirmation_table_text(spec_path), encoding="utf-8")
+    idea_brief_path = tmp_path / "strategy_idea_brief.json"
+    conversation_hash = "sha256:" + "2" * 16
+    idea_brief_path.write_text(
+        json.dumps(
+            {
+                "strategy_name": "strict_audit",
+                "conversation_hash": conversation_hash,
+            }
+        ),
+        encoding="utf-8",
+    )
+    idea_audit_path = tmp_path / "strategy_idea_audit.json"
+    idea_audit_path.write_text(
+        json.dumps(
+            {
+                "status": "pass",
+                "idea_workflow_pass": True,
+                "strategy_idea_brief": str(idea_brief_path),
+                "strategy_idea_brief_hash": _hash_json_file(idea_brief_path),
+                "conversation_hash": conversation_hash,
+                "next_required_phase": "build",
+            }
+        ),
+        encoding="utf-8",
+    )
+    mapping_contract_path = tmp_path / "spec_mapping_contract.json"
+    mapping_contract_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "source_format": "strategy_idea_brief",
+                "source_fields": ["strategy_name"],
+                "field_mappings": [
+                    {
+                        "source_field": "strategy_name",
+                        "target_field": "strategy_id",
+                        "semantic": "strategy",
+                        "status": "mapped",
+                        "confirmation_required": False,
+                        "blocking": False,
+                        "reason": "The confirmed name supplies the strategy id.",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
     audit = {
         "schema_version": 4,
         "status": "pass",
@@ -2369,9 +4376,16 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
         },
         "spec_provenance_pass": True,
         "spec_hash": spec.compute_hash(),
-        "conversation_hash": "sha256:" + "2" * 16,
+        "conversation_hash": conversation_hash,
         "catalog_hash": "sha256:" + "3" * 16,
         **_spec_audit_context(),
+        "strategy_idea_brief": str(idea_brief_path),
+        "strategy_idea_audit": str(idea_audit_path),
+        "strategy_idea_brief_hash": _hash_json_file(idea_brief_path),
+        "strategy_idea_audit_hash": _hash_json_file(idea_audit_path),
+        "spec_mapping_contract": str(mapping_contract_path),
+        "spec_mapping_contract_hash": _hash_json_file(mapping_contract_path),
+        "spec_mapping_contract_status": "pass",
         "recipe_matches": [],
         "field_audits": _confirmed_field_audits(spec_path),
         "component_audits": [],
@@ -2381,7 +4395,7 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
         "blocking_findings": [],
     }
     audit["confirmation_event"] = _write_confirmation_event(
-        tmp_path / "confirmations.jsonl",
+        tmp_path,
         artifact_path=str(confirmation_table),
         artifact_hash=_hash_file(confirmation_table),
         spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
@@ -2390,7 +4404,17 @@ def test_spec_audit_validate_strict_confirmed_accepts_full_effective_field_confi
 
     result = CliRunner().invoke(
         main,
-        ["spec-audit", "validate", str(path), "--spec", str(spec_path), "--strict-confirmed", "--json"],
+        [
+            "spec-audit",
+            "validate",
+            str(path),
+            "--spec",
+            str(spec_path),
+            "--mapping-contract",
+            str(mapping_contract_path),
+            "--strict-confirmed",
+            "--json",
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -2404,7 +4428,7 @@ def test_spec_audit_validate_rejects_missing_confirmation_event_artifact_without
         "sha256:" + "3" * 16,
     )
     audit = json.loads(audit_path.read_text(encoding="utf-8"))
-    Path(audit["confirmation_event"]["path"]).unlink()
+    (tmp_path / audit["confirmation_event"]["path"]).unlink()
 
     result = CliRunner().invoke(main, ["spec-audit", "validate", str(audit_path), "--json"])
 
@@ -2416,10 +4440,11 @@ def test_spec_audit_validate_rejects_missing_confirmation_event_artifact_without
 
 def test_runtime_audit_validate_accepts_required_schema(tmp_path) -> None:
     audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": True,
-        "strategy_source_printed": True,
+        "strategy_source_path": "compile_preview/strategy.py",
+        "strategy_source_hash": "sha256:" + "4" * 64,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -2449,10 +4474,11 @@ def test_runtime_audit_validate_accepts_required_schema(tmp_path) -> None:
 
 def test_runtime_audit_validate_rejects_pass_with_false_runtime_gate(tmp_path) -> None:
     audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": False,
-        "strategy_source_printed": True,
+        "strategy_source_path": "compile_preview/strategy.py",
+        "strategy_source_hash": "sha256:" + "4" * 64,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -2472,10 +4498,11 @@ def test_runtime_audit_validate_rejects_pass_with_false_runtime_gate(tmp_path) -
 
 def test_runtime_audit_validate_rejects_invalid_component_bundle_hashes(tmp_path) -> None:
     audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": True,
-        "strategy_source_printed": True,
+        "strategy_source_path": "compile_preview/strategy.py",
+        "strategy_source_hash": "sha256:" + "4" * 64,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -2496,10 +4523,11 @@ def test_runtime_audit_validate_rejects_invalid_component_bundle_hashes(tmp_path
 
 def test_runtime_audit_validate_rejects_pass_with_blocking_findings(tmp_path) -> None:
     audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": True,
-        "strategy_source_printed": True,
+        "strategy_source_path": "compile_preview/strategy.py",
+        "strategy_source_hash": "sha256:" + "4" * 64,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -2519,10 +4547,11 @@ def test_runtime_audit_validate_rejects_pass_with_blocking_findings(tmp_path) ->
 
 def test_runtime_audit_validate_rejects_pass_with_mismatch_material_field(tmp_path) -> None:
     audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": True,
-        "strategy_source_printed": True,
+        "strategy_source_path": "compile_preview/strategy.py",
+        "strategy_source_hash": "sha256:" + "4" * 64,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -2552,10 +4581,11 @@ def test_runtime_audit_validate_rejects_pass_with_mismatch_material_field(tmp_pa
 
 def test_runtime_audit_validate_rejects_pass_with_blocking_material_field(tmp_path) -> None:
     audit = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": True,
-        "strategy_source_printed": True,
+        "strategy_source_path": "compile_preview/strategy.py",
+        "strategy_source_hash": "sha256:" + "4" * 64,
         "spec_hash": "sha256:" + "1" * 16,
         "spec_audit_hash": "sha256:" + "2" * 16,
         "compiled_plan_hash": "sha256:" + "3" * 16,
@@ -2640,7 +4670,7 @@ def test_backtest_attach_provenance_accepts_full_spec_confirmation_table_hash(tm
     full_table_hash = f"sha256:{hashlib.sha256(table_path.read_bytes()).hexdigest()}"
     audit["spec_confirmation_table"]["hash"] = full_table_hash
     audit["confirmation_event"] = _write_confirmation_event(
-        Path(audit["confirmation_event"]["path"]),
+        tmp_path,
         artifact_path=str(table_path),
         artifact_hash=full_table_hash,
         spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
@@ -2777,7 +4807,7 @@ def test_backtest_attach_provenance_rejects_tampered_confirmation_event(tmp_path
         spec_path=run_dir / "strategy_spec.yaml",
     )
     audit = json.loads(spec_audit.read_text(encoding="utf-8"))
-    event_path = Path(str(audit["confirmation_event"]["path"]))
+    event_path = tmp_path / str(audit["confirmation_event"]["path"])
     event_path.write_text(
         event_path.read_text(encoding="utf-8").replace('"field_scope": "full_spec_table"', '"field_scope": "partial"'),
         encoding="utf-8",
@@ -2803,7 +4833,7 @@ def test_backtest_attach_provenance_rejects_tampered_confirmation_event(tmp_path
     assert "confirmation_event" in result.output
 
 
-def test_backtest_attach_provenance_rejects_runtime_audit_without_printed_source(tmp_path) -> None:
+def test_backtest_attach_provenance_rejects_mismatched_strategy_source_hash(tmp_path) -> None:
     run_dir = _write_minimal_cli_run(tmp_path)
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
     component_catalog, catalog = _write_component_catalog(tmp_path)
@@ -2815,7 +4845,7 @@ def test_backtest_attach_provenance_rejects_runtime_audit_without_printed_source
     )
     runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
     payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
-    payload["strategy_source_printed"] = False
+    payload["strategy_source_hash"] = "sha256:" + "f" * 64
     runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
 
     result = CliRunner().invoke(
@@ -2834,7 +4864,7 @@ def test_backtest_attach_provenance_rejects_runtime_audit_without_printed_source
     )
 
     assert result.exit_code == 1
-    assert "strategy_source_printed" in result.output
+    assert "strategy_source_hash mismatch" in result.output
 
 
 def test_backtest_attach_provenance_rejects_blocking_runtime_audit(tmp_path) -> None:
@@ -3376,7 +5406,7 @@ def _write_pass_spec_audit(
         "blocking_findings": [],
     }
     audit["confirmation_event"] = _write_confirmation_event(
-        tmp_path / "confirmations.jsonl",
+        tmp_path,
         artifact_path=str(confirmation_table),
         artifact_hash=_hash_file(confirmation_table),
         spec_audit_hash=_pre_confirmation_spec_audit_hash(audit),
@@ -3468,26 +5498,43 @@ def _write_pass_runtime_audit(
     component_bundle_hashes: list[str] | None = None,
 ) -> Path:
     spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml").to_effective_dict()
+    compiled_plan = json.loads((run_dir / "compiled_plan.json").read_text(encoding="utf-8"))
+    material_paths = (
+        ("required_oxq_version", "open_xquant_version"),
+        ("market", "market"),
+        ("universe", "universe"),
+        ("data", "data"),
+        ("signal", "signals"),
+        ("portfolio", "portfolio"),
+        ("execution", "execution"),
+        ("cost", "cost"),
+        ("benchmark", "benchmark"),
+        ("validation", "validation"),
+        ("metrics", "metrics"),
+    )
     path = spec_audit.with_name("runtime_audit.json")
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "status": "pass",
         "runtime_semantics_pass": True,
-        "strategy_source_printed": True,
+        "strategy_source_path": str(run_dir / "strategy.py"),
+        "strategy_source_hash": "sha256:" + hashlib.sha256((run_dir / "strategy.py").read_bytes()).hexdigest(),
         "spec_hash": spec_hash,
         "spec_audit_hash": _hash_json_file(spec_audit),
         "compiled_plan_hash": _hash_json_file(run_dir / "compiled_plan.json"),
         "compiled_plan_path": str(run_dir / "compiled_plan.json"),
         "material_field_audits": [
             {
-                "field_path": "portfolio.rules.rebalance",
-                "spec_value": {"type": "RebalanceFrequencyRule"},
-                "runtime_path": "execution.rebalance",
-                "runtime_value": {},
+                "field_path": field_path,
+                "spec_value": spec[field_path],
+                "runtime_path": runtime_path,
+                "runtime_value": compiled_plan[runtime_path],
                 "status": "mismatch" if blocking else "preserved",
                 "evidence": ["test fixture"],
                 "blocking": blocking,
             }
+            for field_path, runtime_path in material_paths
         ],
         "blocking_findings": [],
     }
@@ -3497,6 +5544,150 @@ def _write_pass_runtime_audit(
         encoding="utf-8",
     )
     return path
+
+
+def test_backtest_attach_provenance_rejects_empty_runtime_material_coverage(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    payload["material_field_audits"] = []
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "missing material field audit row" in result.output
+
+
+def test_backtest_attach_provenance_rejects_omitted_execution_runtime_coverage(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    payload["material_field_audits"] = [
+        row for row in payload["material_field_audits"] if row["field_path"] != "execution"
+    ]
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "missing material field audit row for execution" in result.output
+
+
+def test_backtest_attach_provenance_rejects_duplicate_runtime_material_row(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    execution_row = next(row for row in payload["material_field_audits"] if row["field_path"] == "execution")
+    payload["material_field_audits"].append(execution_row)
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "duplicate material field path" in result.output
+
+
+def test_backtest_attach_provenance_rejects_tampered_runtime_material_value(tmp_path) -> None:
+    run_dir = _write_minimal_cli_run(tmp_path)
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    component_catalog, catalog = _write_component_catalog(tmp_path)
+    spec_audit = _write_pass_spec_audit(
+        tmp_path,
+        spec_hash,
+        catalog["catalog_hash"],
+        spec_path=run_dir / "strategy_spec.yaml",
+    )
+    runtime_audit = _write_pass_runtime_audit(run_dir, spec_audit)
+    payload = json.loads(runtime_audit.read_text(encoding="utf-8"))
+    execution_row = next(row for row in payload["material_field_audits"] if row["field_path"] == "execution")
+    execution_row["runtime_value"]["fill_price_mode"] = "close"
+    runtime_audit.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = CliRunner().invoke(
+        main,
+        [
+            "backtest",
+            "attach-provenance",
+            str(run_dir),
+            "--spec-audit",
+            str(spec_audit),
+            "--runtime-audit",
+            str(runtime_audit),
+            "--component-catalog",
+            str(component_catalog),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "does not match compiled runtime field execution" in result.output
 
 
 def _attach_component_bundle_artifacts(run_dir: Path) -> str:
@@ -3590,3 +5781,35 @@ def _write_component_catalog(tmp_path):
     component_catalog = tmp_path / "component_catalog.json"
     component_catalog.write_text(component_catalog_json(catalog), encoding="utf-8")
     return component_catalog, catalog
+
+
+@pytest.mark.parametrize("versions_dir", [None, "", 7])
+def test_spec_init_rejects_malformed_configured_versions_dir_as_invalid_governed(
+    tmp_path,
+    versions_dir: object,
+) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        cwd_path = Path(cwd)
+        config_dir = cwd_path / ".open-xquant"
+        config_dir.mkdir()
+        (config_dir / "workspace.yaml").write_text(
+            yaml.safe_dump(
+                {"paths": {"versions_dir": versions_dir}},
+                sort_keys=False,
+            ),
+            encoding="utf-8",
+        )
+        before = {
+            path.relative_to(cwd_path).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(cwd_path.rglob("*"))
+        }
+
+        result = runner.invoke(main, ["spec", "init", "invalid governed root"])
+
+        assert result.exit_code == 1
+        assert "workspace paths.versions_dir must be a non-empty string" in result.output
+        assert {
+            path.relative_to(cwd_path).as_posix(): path.read_bytes() if path.is_file() else None
+            for path in sorted(cwd_path.rglob("*"))
+        } == before

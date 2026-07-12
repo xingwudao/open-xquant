@@ -29,7 +29,7 @@ the audited idea gate passes, then replace candidate values with audited
 values. Do not keep initializer defaults as confirmations.
 
 Never run `oxq spec init` without an explicit `--out` path under
-`versions/<version_id>/04_spec_build/`. The default command writes root-level
+`<phase_paths.04_spec_build>/`. The default command writes root-level
 `strategy_spec.yaml`, which is a workspace layout violation even if the file is
 deleted later. Do not create, read, or use root-level `strategy_spec.yaml` as a
 template reference. If such a file is accidentally created, delete it, record
@@ -105,7 +105,9 @@ confirmed merely because they exist:
   `portfolio.rules.rebalance.params.interval_days`.
 - `execution.rebalance.frequency: weekly` with `schedule: week_start`, or
   `frequency: monthly` with `schedule: month_start`, when the audited idea
-  confirms calendar rebalance. Do not write month-end or week-end schedules.
+  confirms calendar rebalance. Do not combine a calendar schedule with
+  `interval_days > 1` or an interval-based portfolio rebalance rule. Do not
+  write month-end or week-end schedules.
 - `portfolio.rules` only for the audited runtime whitelist:
   `RebalanceFrequencyRule`, `StopLossRule`, `TakeProfitRule`,
   `TrailingStopRule`, `MaxDrawdownRisk`, `DailyLossLimitRisk`, and

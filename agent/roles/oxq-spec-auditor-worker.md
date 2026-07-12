@@ -18,19 +18,82 @@ inputs:
   - spec_mapping_notes.md
   - spec_mapping_contract.json
 outputs:
-  - versions/<version_id>/06_spec_audit/spec_audit.json
-  - versions/<version_id>/06_spec_audit/audit_notes.md
-  - versions/<version_id>/06_spec_audit/spec_confirmation_table.md only when audit_conclusion is all_pass and user_confirmation_status is pending or confirmed
+  - <phase_paths.06_spec_audit>/spec_audit.json
+  - <phase_paths.06_spec_audit>/audit_notes.md
+  - <phase_paths.06_spec_audit>/spec_confirmation_table.md only when audit_conclusion is all_pass and user_confirmation_status is pending or confirmed
+ownership_resolution:
+  placeholder_order: resolve_before_match
+  overlap_policy: output_wins_within_declared_output_only
+  outside_declared_output: forbidden_still_applies
 forbidden_outputs:
-  - versions/<version_id>/04_spec_build/strategy_spec.yaml
-  - versions/<version_id>/04_spec_build/builder_phase_result.json
-  - versions/<version_id>/04_spec_build/spec_mapping_contract.json
+  - <phase_paths.04_spec_build>/strategy_spec.yaml
+  - <phase_paths.04_spec_build>/builder_phase_result.json
+  - <phase_paths.04_spec_build>/spec_mapping_contract.json
   - runtime_audit.json
   - compiled_plan.json
   - runs/**
   - research_report.md
   - research_report.html
 ---
+
+## Phase Path Containment Preflight
+
+Before any phase artifact read, write, directory creation, command, or handoff,
+run this preflight completely and block on any failure:
+
+1. Read `.open-xquant/workspace.yaml`. Resolve `version_root` from
+   `paths.versions_dir`, using `versions` only when that key is absent.
+   Require `version_root` to be a safe workspace-relative path: reject an
+   absolute path or any `..` path segment, resolve it canonically with
+   symlinks, and require the result to stay inside the workspace.
+2. Read `current.json`. For normal phase work, set `expected_version_id` to
+   `current.json.active_version`; it must exist. Only a contract that
+   explicitly owns cross-version inspection may instead set
+   `expected_version_id` from the referenced version id for that historical
+   read. This exception never permits active-version work to consume another
+   version.
+3. Set the intended version directory to
+   `<version_root>/<expected_version_id>/` and resolve it canonically. Require
+   the intended version directory to remain inside the canonical version root
+   and workspace; otherwise treat it as a symlink escape. Read
+   `version_manifest.json` only from that exact directory. The manifest
+   `version_id` must equal `expected_version_id`; for normal phase work it
+   therefore must also equal `current.json.active_version`.
+4. Before using each required `phase_paths` value, require a non-empty
+   workspace-relative string. Reject an absolute path and any `..` path
+   segment. Resolve `<workspace>/<phase_path>` canonically, including existing
+   symlink ancestors even when the leaf will be created, and require the target
+   to be the intended version directory or a descendant of it. A symlink escape
+   outside that directory is invalid.
+5. On any identity or path failure, stop before phase artifact reads, writes,
+   directory creation, commands, or handoffs. Do not normalize an unsafe path
+   into acceptance and do not fall back to a default phase path.
+
+Block examples when `expected_version_id` is `v001` include
+`strategy_store/v001/../v002/04_spec_build`,
+`strategy_store/v002/04_spec_build`, `/tmp/04_spec_build`, and
+`strategy_store/v001/escape/04_spec_build` when `escape` is a symlink
+whose target is outside the intended version directory. An allowed custom
+nested phase path is
+`strategy_store/v001/custom/phases/04_spec_build` when its canonical
+target remains under the intended version directory.
+
+For a new-version bootstrap, only `manage-strategy-version` may proceed before
+the new manifest exists or the new id becomes active. It must apply the same
+workspace-relative, traversal, canonical-containment, and symlink checks to
+every constructed phase path before directory creation, then write a matching
+manifest before publishing `current.json` last.
+
+## Version Path Resolution
+
+Before using any `<phase_paths.*>` or `<version_root>` placeholder, read
+`.open-xquant/workspace.yaml`. Resolve `version_root` from
+`paths.versions_dir`; use `versions` only when that key is absent. Require a
+safe relative path whose resolved target stays inside the workspace. Then read
+`<version_root>/<version_id>/version_manifest.json` and use its exact
+`phase_paths` entry for each phase. For example, a configured root of
+`research_versions` must resolve the spec-build phase to
+`research_versions/v003/04_spec_build`; never redirect it to a default-root phase path.
 
 Use the `audit-strategy-spec` skill.
 
@@ -42,14 +105,14 @@ Use the `audit-strategy-spec` skill.
   "default_agent": "oxq-spec-auditor-worker",
   "required_skills": ["open-xquant", "audit-strategy-spec"],
   "outputs": [
-    "versions/<version_id>/06_spec_audit/spec_audit.json",
-    "versions/<version_id>/06_spec_audit/audit_notes.md",
-    "versions/<version_id>/06_spec_audit/spec_confirmation_table.md only when audit_conclusion is all_pass and user_confirmation_status is pending or confirmed"
+    "<phase_paths.06_spec_audit>/spec_audit.json",
+    "<phase_paths.06_spec_audit>/audit_notes.md",
+    "<phase_paths.06_spec_audit>/spec_confirmation_table.md only when audit_conclusion is all_pass and user_confirmation_status is pending or confirmed"
   ],
   "forbidden_outputs": [
-    "versions/<version_id>/04_spec_build/strategy_spec.yaml",
-    "versions/<version_id>/04_spec_build/builder_phase_result.json",
-    "versions/<version_id>/04_spec_build/spec_mapping_contract.json",
+    "<phase_paths.04_spec_build>/strategy_spec.yaml",
+    "<phase_paths.04_spec_build>/builder_phase_result.json",
+    "<phase_paths.04_spec_build>/spec_mapping_contract.json",
     "runtime_audit.json",
     "compiled_plan.json",
     "runs/**",
@@ -85,7 +148,7 @@ Use the `audit-strategy-spec` skill.
   Passing audits must satisfy the builder-pass mapping gate.
 - Do not accept builder-authored parquet inspection, data directory listing, or
   `latest_available` resolution as evidence. Data facts must come from
-  `versions/<version_id>/05_data_inspection/data_inspection_result.json` or a
+  `<phase_paths.05_data_inspection>/data_inspection_result.json` or a
   user-confirmed data snapshot.
 - Write blocking confirmation questions when the user must decide.
 - When audit checks are all pass but user confirmation is pending, write an
@@ -114,16 +177,16 @@ Use the `audit-strategy-spec` skill.
   table covering the whole SPEC, not only findings.
 - When required, compute `spec_confirmation_table.hash` with
   `oxq.spec.compiler._hash_file(Path(...))`, not with `shasum`.
-- Read phase inputs from `versions/<version_id>/01_brainstorm/`,
-  `versions/<version_id>/02_idea_audit/`, and
-  `versions/<version_id>/04_spec_build/`.
+- Read phase inputs from `<phase_paths.01_brainstorm>/`,
+  `<phase_paths.02_idea_audit>/`, and
+  `<phase_paths.04_spec_build>/`.
 - Write only
-  `versions/<version_id>/06_spec_audit/spec_audit.json`,
-  `versions/<version_id>/06_spec_audit/audit_notes.md`, and conditionally
-  `versions/<version_id>/06_spec_audit/spec_confirmation_table.md`.
+  `<phase_paths.06_spec_audit>/spec_audit.json`,
+  `<phase_paths.06_spec_audit>/audit_notes.md`, and conditionally
+  `<phase_paths.06_spec_audit>/spec_confirmation_table.md`.
 - Do not edit, patch, repair, or normalize
-  `versions/<version_id>/04_spec_build/strategy_spec.yaml` or any
-  `versions/<version_id>/04_spec_build/` builder artifact. If an effective
+  `<phase_paths.04_spec_build>/strategy_spec.yaml` or any
+  `<phase_paths.04_spec_build>/` builder artifact. If an effective
   SPEC value is wrong because YAML was misplaced, ignored, dropped, or mapped
   to a non-operative field, return `next_required_phase: build`.
 - User-confirmed source values must match effective StrategySpec values before
@@ -150,9 +213,9 @@ Use the `audit-strategy-spec` skill.
 
 ## Outputs
 
-- `versions/<version_id>/06_spec_audit/spec_audit.json`
-- `versions/<version_id>/06_spec_audit/audit_notes.md`
-- `versions/<version_id>/06_spec_audit/spec_confirmation_table.md` only when
+- `<phase_paths.06_spec_audit>/spec_audit.json`
+- `<phase_paths.06_spec_audit>/audit_notes.md`
+- `<phase_paths.06_spec_audit>/spec_confirmation_table.md` only when
   `audit_conclusion: all_pass` and `user_confirmation_status` is pending or
   confirmed
 
@@ -166,9 +229,9 @@ Do not hand off to `oxq-runtime-auditor-worker` while
 `oxq-runtime-auditor-worker` only after the coordinator records explicit user
 confirmation and `spec_audit.json` has `status: pass`,
 `audit_conclusion: all_pass`, `user_confirmation_status: confirmed`, and a
-`confirmation_event` reference with `path`, `event_id`, `line_number`,
-`event_hash`, `artifact_path`, `artifact_hash`, `spec_audit_path`, and
-`spec_audit_hash`. If
+`confirmation_event` reference with `path`, `event_id`, `decision: confirmed`,
+`line_number`, `event_hash`, `artifact_path`, `artifact_hash`,
+`spec_audit_path`, and `spec_audit_hash`. If
 the audited idea gate blocks, return to `oxq-strategy-brainstorm-worker`. If
 the SPEC mistranslates the audited idea, return to
 `oxq-strategy-builder-worker`.

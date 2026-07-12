@@ -2,18 +2,26 @@ from __future__ import annotations
 
 import hashlib
 import json
+import threading
+from contextlib import contextmanager
 from decimal import Decimal
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
+import oxq.run_digests as run_digests_module
+from oxq.audit import reproducibility as reproducibility_module
+from oxq.audit import research_bias as research_bias_module
 from oxq.audit.reproducibility import _hash_json_file, audit_reproducibility
+from oxq.audit.research_bias import audit_research
 from oxq.core.component_manifest import compute_component_bundle_hash
 from oxq.core.engine import Engine
 from oxq.core.types import Portfolio
 from oxq.portfolio.analytics import RunResult
+from oxq.run_digests import publish_run_artifacts, run_digest_transaction, update_artifact_hashes_and_run_digest
 from oxq.spec.compiler import _build_strategy_py_artifact, _hash_file, _write_artifacts
-from oxq.spec.schema import StrategySpec
+from oxq.spec.schema import PortfolioRuleDef, StrategySpec
 
 
 def _spec_audit_context() -> dict[str, object]:
@@ -28,6 +36,7 @@ def _spec_audit_context() -> dict[str, object]:
         "confirmation_event": {
             "path": "conversations/demo/confirmations.jsonl",
             "event_id": "spec-confirmation-1",
+            "decision": "confirmed",
             "line_number": 1,
             "event_hash": "sha256:" + "9" * 16,
             "artifact_path": "versions/v001/06_spec_audit/spec_confirmation_table.md",
@@ -76,6 +85,46 @@ def test_reproducibility_audit_accepts_xshe_calendar_alias(tmp_path) -> None:
 
     assert audit["status"] == "pass"
     assert any(check["id"] == "data_fingerprint" and check["status"] == "pass" for check in audit["checks"])
+
+
+@pytest.mark.parametrize("corruption", ["zero", "duplicate", "malformed"])
+def test_reproducibility_audit_requires_exactly_one_valid_run_digest_entry(
+    tmp_path,
+    corruption: str,
+) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    digest_path = run_dir.parent / "run_digests.jsonl"
+    current = digest_path.read_text(encoding="utf-8").strip()
+    if corruption == "zero":
+        digest_path.write_text(
+            json.dumps({"run_id": "other-run", "artifact_hashes": "sha256:" + "0" * 16}) + "\n",
+            encoding="utf-8",
+        )
+    elif corruption == "duplicate":
+        digest_path.write_text(f"{current}\n{current}\n", encoding="utf-8")
+    else:
+        digest_path.write_text(
+            current + "\n" + json.dumps({"run_id": "other-run", "artifact_hashes": 7}) + "\n",
+            encoding="utf-8",
+        )
+
+    audit = audit_reproducibility(run_dir)
+
+    digest_check = next(check for check in audit["checks"] if check["id"] == "run_digest")
+    assert audit["status"] == "fail"
+    assert digest_check["status"] == "fail"
+    assert digest_check["severity"] == "fatal"
+    assert "run_digests.jsonl" in digest_check["message"]
+
+
+def test_reproducibility_audit_preserves_non_governed_run_without_digest_registry(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    (run_dir.parent / "run_digests.jsonl").unlink()
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "pass"
+    assert not any(check["id"] == "run_digest" for check in audit["checks"])
 
 
 def test_reproducibility_audit_requires_execution_assumptions_for_schema_v2_hashes(tmp_path) -> None:
@@ -362,6 +411,81 @@ def test_reproducibility_audit_rejects_compiled_plan_material_drift(tmp_path) ->
     assert audit["status"] == "fail"
     consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
     assert "compiled_plan.json material fields differ" in consistency["message"]
+
+
+def test_reproducibility_audit_uses_archived_required_oxq_version(tmp_path, monkeypatch) -> None:
+    archived_version = "archived-required-version"
+    monkeypatch.setattr("oxq.spec.compiler._get_version", lambda: "current-installed-version")
+    run_dir = _write_minimal_run(tmp_path, required_oxq_version=archived_version)
+    _set_archived_run_versions(run_dir, environment_version=archived_version, plan_version=archived_version)
+
+    audit = audit_reproducibility(run_dir)
+
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
+    assert consistency["status"] == "pass"
+    assert audit["status"] == "pass"
+
+
+def test_reproducibility_audit_rejects_tampered_archived_oxq_version(tmp_path, monkeypatch) -> None:
+    archived_version = "archived-required-version"
+    monkeypatch.setattr("oxq.spec.compiler._get_version", lambda: "current-installed-version")
+    run_dir = _write_minimal_run(tmp_path, required_oxq_version=archived_version)
+    _set_archived_run_versions(
+        run_dir,
+        environment_version=archived_version,
+        plan_version="tampered-archived-version",
+    )
+
+    audit = audit_reproducibility(run_dir)
+
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
+    assert consistency["status"] == "fail"
+    assert "open_xquant_version" in consistency["message"]
+    assert audit["status"] == "fail"
+
+
+def test_reproducibility_audit_rebuilds_rule_derived_max_holdings_constraint(tmp_path) -> None:
+    spec = StrategySpec.template(
+        strategy_id="rule_derived_max_holdings",
+        hypothesis="runtime and metadata use the same effective holdings cap",
+    )
+    spec.portfolio.rules["max_holdings"] = PortfolioRuleDef(
+        type="MaxHoldingsRule",
+        params={"max_holdings": 1},
+    )
+    dates = pd.to_datetime(["2024-01-02", "2024-01-03", "2024-01-04"], utc=True)
+    source_df = pd.DataFrame(
+        {
+            "open": [1.0, 1.0, 1.0],
+            "high": [1.0, 1.0, 1.0],
+            "low": [1.0, 1.0, 1.0],
+            "close": [1.0, 1.0, 1.0],
+            "volume": [100, 100, 100],
+        },
+        index=dates,
+    )
+    result = RunResult(
+        portfolio=Portfolio(cash=Decimal("100000")),
+        trades=[],
+        equity_curve=[
+            (dates[0], 100000.0),
+            (dates[1], 100000.0),
+            (dates[2], 100000.0),
+        ],
+        mktdata={"SPY": source_df},
+    )
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    source_df.to_parquet(data_dir / "SPY.parquet")
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
+
+    audit = audit_reproducibility(run_dir)
+
+    consistency = next(check for check in audit["checks"] if check["id"] == "compiled_plan_consistency")
+    assert consistency["status"] == "pass"
+    assert audit["status"] == "pass"
 
 
 def test_reproducibility_audit_rejects_compiled_plan_data_path_drift(tmp_path) -> None:
@@ -834,6 +958,89 @@ def test_reproducibility_audit_rejects_symlinked_legacy_component_manifest(tmp_p
     )
 
 
+def test_reproducibility_audit_rejects_symlinked_required_artifact_leaf(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    metrics_path = run_dir / "metrics.json"
+    external_metrics = tmp_path / "external_metrics.json"
+    metrics_path.rename(external_metrics)
+    metrics_path.symlink_to(external_metrics)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(
+        check["id"] == "missing_files"
+        and check["status"] == "fail"
+        and "metrics.json" in check["message"]
+        and "symlink" in check["message"]
+        for check in audit["checks"]
+    )
+
+
+def test_reproducibility_audit_rejects_nested_artifact_symlink_component(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    real_dir = run_dir / "real-artifacts"
+    real_dir.mkdir()
+    artifact = real_dir / "evidence.json"
+    artifact.write_text('{"status": "pass"}\n', encoding="utf-8")
+    (run_dir / "nested").symlink_to(real_dir, target_is_directory=True)
+    hashes_path = run_dir / "artifact_hashes.json"
+    hashes = json.loads(hashes_path.read_text(encoding="utf-8"))
+    hashes["nested/evidence.json"] = _hash_file(artifact)
+    hashes_path.write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(
+        check["id"] == "nested_evidence_json_hash"
+        and check["status"] == "fail"
+        and "unreadable" in check["message"]
+        for check in audit["checks"]
+    )
+
+
+def test_reproducibility_audit_rejects_mutable_external_component_manifest(tmp_path) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    workspace_manifest, bundle_hash = _write_component_manifest_bundle(
+        workspace,
+        value="1.0",
+    )
+    summary_path = run_dir / "component_manifests.json"
+    summary_path.write_text(
+        json.dumps(
+            [
+                {
+                    "manifest_path": str(workspace_manifest),
+                    "bundle_hash": bundle_hash,
+                }
+            ],
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    hashes_path = run_dir / "artifact_hashes.json"
+    hashes = json.loads(hashes_path.read_text(encoding="utf-8"))
+    hashes["component_manifests.json"] = _hash_json_file(summary_path)
+    hashes_path.write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    _write_current_run_digest(run_dir)
+
+    audit = audit_reproducibility(run_dir)
+
+    assert audit["status"] == "fail"
+    assert any(
+        check["id"] == "component_bundle_hash"
+        and check["status"] == "fail"
+        and "run directory" in check["message"]
+        for check in audit["checks"]
+    )
+
+
 def _write_component_manifest_bundle(base: Path, *, value: str) -> tuple[Path, str]:
     root = base / "custom_components"
     source_dir = root / "oxq_components" / "indicators"
@@ -988,8 +1195,10 @@ def _rewrite_run_with_archived_indicator_spec(run_dir: Path) -> None:
     (run_dir / "artifact_hashes.json").write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
 
 
-def _write_minimal_run(tmp_path):
+def _write_minimal_run(tmp_path, *, required_oxq_version: str | None = None):
     spec = StrategySpec.template(strategy_id="audit_execution_assumptions", hypothesis="audit execution assumptions")
+    if required_oxq_version is not None:
+        spec.required_oxq_version = required_oxq_version
     spec.validation.train_period = []
     spec.validation.test_period = ["2024-01-02", "2024-01-03"]
     dates = pd.to_datetime(["2024-01-02", "2024-01-03"], utc=True)
@@ -1016,6 +1225,148 @@ def _write_minimal_run(tmp_path):
     run_dir.mkdir()
     _write_artifacts(spec, result, run_dir, Engine(), effective_data_dir=str(data_dir))
     return run_dir
+
+
+def test_reproducibility_audit_reads_one_generation_during_paused_publication(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    update_artifact_hashes_and_run_digest(run_dir, lambda hashes: None)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics["total_return"] = 0.25
+
+    result = _audit_during_paused_metrics_publish(
+        run_dir,
+        metrics,
+        audit_reproducibility,
+        reproducibility_module,
+        monkeypatch,
+    )
+
+    assert result["status"] == "pass"
+    assert all(check["status"] == "pass" for check in result["checks"] if check["severity"] == "fatal")
+
+
+def test_research_audit_reads_one_generation_during_paused_publication(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    run_dir = _write_minimal_run(tmp_path)
+    update_artifact_hashes_and_run_digest(run_dir, lambda hashes: None)
+    metrics = json.loads((run_dir / "metrics.json").read_text(encoding="utf-8"))
+    metrics["max_drawdown"] = -0.75
+
+    result = _audit_during_paused_metrics_publish(
+        run_dir,
+        metrics,
+        audit_research,
+        research_bias_module,
+        monkeypatch,
+    )
+
+    drawdown = next(check for check in result["checks"] if check["id"] == "drawdown_tail")
+    assert drawdown["status"] == "fail"
+    assert "-75.0%" in drawdown["message"]
+
+
+def _audit_during_paused_metrics_publish(
+    run_dir: Path,
+    metrics: dict[str, object],
+    reader,
+    reader_module,
+    monkeypatch,
+) -> dict:
+    publication_paused = threading.Event()
+    allow_publication = threading.Event()
+    reader_attempted = threading.Event()
+    reader_completed = threading.Event()
+    publisher_failures: list[BaseException] = []
+    reader_failures: list[BaseException] = []
+    reader_results: list[dict] = []
+    original_boundary = run_digests_module._publication_boundary
+
+    def pause_publication(label: str) -> None:
+        if threading.current_thread().name == "audit-publisher" and label == "artifact:metrics.json.replace":
+            publication_paused.set()
+            assert allow_publication.wait(timeout=5)
+        original_boundary(label)
+
+    @contextmanager
+    def observed_transaction(transaction_run_path):
+        if threading.current_thread().name == "audit-reader":
+            reader_attempted.set()
+        with run_digest_transaction(transaction_run_path):
+            yield
+
+    def publish_metrics() -> None:
+        try:
+            publish_run_artifacts(run_dir, {"metrics.json": json.dumps(metrics).encode()})
+        except BaseException as exc:
+            publisher_failures.append(exc)
+
+    def read_audit() -> None:
+        try:
+            reader_results.append(reader(run_dir))
+        except BaseException as exc:
+            reader_failures.append(exc)
+        finally:
+            reader_completed.set()
+
+    monkeypatch.setattr(run_digests_module, "_publication_boundary", pause_publication)
+    monkeypatch.setattr(reader_module, "run_digest_transaction", observed_transaction, raising=False)
+    publisher = threading.Thread(target=publish_metrics, name="audit-publisher")
+    audit_reader = threading.Thread(target=read_audit, name="audit-reader")
+    publisher.start()
+    try:
+        assert publication_paused.wait(timeout=5)
+        audit_reader.start()
+        assert reader_attempted.wait(timeout=5)
+        assert not reader_completed.is_set()
+    finally:
+        allow_publication.set()
+    publisher.join(timeout=5)
+    audit_reader.join(timeout=5)
+
+    assert not publisher.is_alive()
+    assert not audit_reader.is_alive()
+    assert publisher_failures == []
+    assert reader_failures == []
+    return reader_results[0]
+
+
+def _set_archived_run_versions(
+    run_dir: Path,
+    *,
+    environment_version: str,
+    plan_version: str,
+) -> None:
+    environment_path = run_dir / "environment.json"
+    environment = json.loads(environment_path.read_text(encoding="utf-8"))
+    environment["open_xquant_version"] = environment_version
+    environment_path.write_text(json.dumps(environment, indent=2) + "\n", encoding="utf-8")
+
+    plan_path = run_dir / "compiled_plan.json"
+    plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    plan["open_xquant_version"] = plan_version
+    plan_path.write_text(json.dumps(plan, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    plan_hash = _hash_json_file(plan_path)
+
+    spec = StrategySpec.from_yaml(run_dir / "strategy_spec.yaml")
+    spec_hash = (run_dir / "spec_hash.txt").read_text(encoding="utf-8").strip()
+    strategy_path = run_dir / "strategy.py"
+    strategy_path.write_text(
+        _build_strategy_py_artifact(spec, plan, spec_hash, plan_hash),
+        encoding="utf-8",
+    )
+
+    hashes_path = run_dir / "artifact_hashes.json"
+    hashes = json.loads(hashes_path.read_text(encoding="utf-8"))
+    hashes["environment.json"] = _hash_json_file(environment_path, exclude_keys={"run_timestamp"})
+    hashes["compiled_plan.json"] = plan_hash
+    hashes["strategy.py"] = _hash_file(strategy_path)
+    hashes_path.write_text(json.dumps(hashes, indent=2) + "\n", encoding="utf-8")
+    (run_dir.parent / "run_digests.jsonl").unlink()
 
 
 def _write_current_run_digest(run_dir) -> None:

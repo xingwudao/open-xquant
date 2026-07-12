@@ -47,7 +47,11 @@ Before validating or backtesting:
 - ensure `symbols` is not empty
 - for `index`, require `index_key` or `index_code` and a local `symbols`
   snapshot; do not let the Agent invent the constituents
-- reject unsafe symbols containing `/`, `\`, `.`, `..`, or absolute paths
+- permit dots within normal symbols, including exchange suffixes such as
+  `600519.SH` and `000001.SZ`; do not reject a symbol merely because it contains
+  a dot
+- reject empty symbols, path separators (`/` or `\`), absolute paths, and
+  literal `.` or `..` path components
 - make sure local parquet data exists for every symbol
 - make benchmark symbols available in the same data directory
 - explain survivorship risk when `point_in_time: false`

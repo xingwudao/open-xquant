@@ -74,25 +74,29 @@ equity curve、artifact hashes、audit、report——可版本化、可 diff、�
 
 ## 核心流程
 
+以下 `<phase_paths.*>` 从活动版本的 `version_manifest.json` 解析。若
+`.open-xquant/workspace.yaml` 省略 `paths.versions_dir`，则 `version_root`
+默认使用 `versions`。
+
 ```
 Agent loads open-xquant skill
   → manage-strategy-version opens or continues a strategy version
   → brainstorm-strategy-idea writes strategy_idea_brief.json
   → audit-strategy-idea checks the brainstorm process and user evidence
-  → build-strategy-spec writes versions/<version_id>/04_spec_build/strategy_spec.yaml
+  → build-strategy-spec writes <phase_paths.04_spec_build>/strategy_spec.yaml
   → audit-strategy-spec checks provenance and prints the full SPEC table
   → user confirms the full SPEC table
   → audit-runtime-semantics compiles and checks compiled_plan.json semantics
-  → oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+  → oxq runtime-audit validate <phase_paths.08_runtime_audit>/runtime_audit.json
   → run-authorized-backtest runs gated backtest
-  → oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
-  → oxq audit research versions/<version_id>/09_backtests/<run_id>/
-  → oxq robustness run versions/<version_id>/09_backtests/<run_id>/
+  → oxq audit reproducibility <phase_paths.09_backtests>/<run_id>/
+  → oxq audit research <phase_paths.09_backtests>/<run_id>/
+  → oxq robustness run <phase_paths.09_backtests>/<run_id>/
   → build-report-charts registers the default professional chart pack
   → write-research-report writes research_report.md/html
-  → oxq report qa versions/<version_id>/10_reports/<run_id>/
+  → oxq report qa <phase_paths.10_reports>/<run_id>/
   → review-research-report reviews the final report
-  → oxq experiment add versions/<version_id>/09_backtests/<run_id>/
+  → oxq experiment add <phase_paths.09_backtests>/<run_id>/
   → compare-strategy-versions and select-final-version govern final choice
 ```
 
@@ -312,25 +316,29 @@ diffable, and persistent.
 
 ## Core Workflow
 
+The `<phase_paths.*>` placeholders below resolve from the active version's
+`version_manifest.json`. When `.open-xquant/workspace.yaml` omits
+`paths.versions_dir`, `version_root` defaults to `versions`.
+
 ```
 Agent loads the open-xquant skill
   → manage-strategy-version opens or continues a strategy version
   → brainstorm-strategy-idea writes strategy_idea_brief.json
   → audit-strategy-idea checks the brainstorm process and user evidence
-  → build-strategy-spec writes versions/<version_id>/04_spec_build/strategy_spec.yaml
+  → build-strategy-spec writes <phase_paths.04_spec_build>/strategy_spec.yaml
   → audit-strategy-spec checks provenance and prints the full SPEC table
   → user confirms the full SPEC table
   → audit-runtime-semantics compiles and checks compiled_plan.json semantics
-  → oxq runtime-audit validate versions/<version_id>/08_runtime_audit/runtime_audit.json
+  → oxq runtime-audit validate <phase_paths.08_runtime_audit>/runtime_audit.json
   → run-authorized-backtest runs gated backtest
-  → oxq audit reproducibility versions/<version_id>/09_backtests/<run_id>/
-  → oxq audit research versions/<version_id>/09_backtests/<run_id>/
-  → oxq robustness run versions/<version_id>/09_backtests/<run_id>/
+  → oxq audit reproducibility <phase_paths.09_backtests>/<run_id>/
+  → oxq audit research <phase_paths.09_backtests>/<run_id>/
+  → oxq robustness run <phase_paths.09_backtests>/<run_id>/
   → build-report-charts registers the default professional chart pack
   → write-research-report writes research_report.md/html
-  → oxq report qa versions/<version_id>/10_reports/<run_id>/
+  → oxq report qa <phase_paths.10_reports>/<run_id>/
   → review-research-report reviews the final report
-  → oxq experiment add versions/<version_id>/09_backtests/<run_id>/
+  → oxq experiment add <phase_paths.09_backtests>/<run_id>/
   → compare-strategy-versions and select-final-version govern final choice
 ```
 

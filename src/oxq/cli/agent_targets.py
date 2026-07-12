@@ -16,6 +16,37 @@ from oxq.cli.agent_manifest import expand_path, sha256_file
 CONCRETE_TARGETS = ("codex", "opencode", "claude-code", "cursor", "openclaw", "trae")
 SUPPORTED_TARGETS = CONCRETE_TARGETS + ("generic",)
 ROLE_TARGETS = ("codex", "opencode", "claude-code", "cursor")
+ROLE_CONTRACT_FIELDS = (
+    "role_kind",
+    "required_skills",
+    "inputs",
+    "outputs",
+    "forbidden_outputs",
+    "ownership_resolution",
+)
+ROLE_OWNERSHIP_RESOLUTION = {
+    "placeholder_order": "resolve_before_match",
+    "overlap_policy": "output_wins_within_declared_output_only",
+    "outside_declared_output": "forbidden_still_applies",
+}
+OPENCODE_COORDINATOR_WORKERS = (
+    "oxq-artifact-governor-worker",
+    "oxq-component-author-worker",
+    "oxq-data-inspection-worker",
+    "oxq-experiment-comparator-worker",
+    "oxq-final-selector-worker",
+    "oxq-lineage-auditor-worker",
+    "oxq-monitor-worker",
+    "oxq-report-reviewer-worker",
+    "oxq-report-writer-worker",
+    "oxq-runner-worker",
+    "oxq-runtime-auditor-worker",
+    "oxq-spec-auditor-worker",
+    "oxq-strategy-brainstorm-worker",
+    "oxq-strategy-builder-worker",
+    "oxq-strategy-idea-auditor-worker",
+    "oxq-version-manager-worker",
+)
 
 
 @dataclass(frozen=True)
@@ -204,6 +235,11 @@ def _read_agent_role(path: Path) -> AgentRoleSource:
         raise SkillValidationError(f"Agent role {path} is missing description frontmatter")
     if mode not in {"primary", "subagent"}:
         raise SkillValidationError(f"Agent role {path} has invalid mode: {mode}")
+    ownership_resolution = metadata.get("ownership_resolution")
+    if ownership_resolution is not None and ownership_resolution != ROLE_OWNERSHIP_RESOLUTION:
+        raise SkillValidationError(
+            f"Agent role {path} must declare the standard placeholder-aware ownership resolution"
+        )
     return AgentRoleSource(
         name=name.strip(),
         description=" ".join(description.split()),
@@ -279,20 +315,22 @@ def _render_codex_role(role: AgentRoleSource) -> str:
     import json
 
     body = _role_body_with_header(role)
-    return (
-        f"name = {json.dumps(role.name)}\n"
-        f"description = {json.dumps(role.description)}\n"
-        f"developer_instructions = {json.dumps(body)}\n"
-    )
+    return f"name = {json.dumps(role.name)}\ndescription = {json.dumps(role.description)}\ndeveloper_instructions = {json.dumps(body)}\n"
 
 
 def _render_opencode_role(role: AgentRoleSource) -> str:
+    task_permissions = {"*": "deny"}
+    if role.name == "oxq-coordinator":
+        task_permissions.update({name: "allow" for name in OPENCODE_COORDINATOR_WORKERS})
     rendered = {
         "description": role.description,
         "mode": role.mode,
+        "permission": {
+            "edit": "ask",
+            "bash": "ask",
+            "task": task_permissions,
+        },
     }
-    if role.mode == "primary":
-        rendered["permission"] = {"edit": "deny", "bash": "deny"}
     frontmatter = yaml.safe_dump(rendered, sort_keys=False, default_flow_style=False).strip()
     return f"---\n{frontmatter}\n---\n{_role_body_with_header(role)}"
 
@@ -307,4 +345,32 @@ def _render_markdown_role(role: AgentRoleSource) -> str:
 
 
 def _role_body_with_header(role: AgentRoleSource) -> str:
-    return f"# {role.name}\n\n{role.body.lstrip()}"
+    contract = _role_contract(role)
+    rendered_contract = yaml.safe_dump(contract, sort_keys=False, default_flow_style=False).strip()
+    return (
+        f"# {role.name}\n\n"
+        "## Ownership And Handoff Contract\n\n"
+        f"```yaml\n{rendered_contract}\n```\n\n"
+        "### Result And Handoff\n\n"
+        "On completion or blockage, return a result to the caller that states the status, "
+        "outputs produced, validation evidence, blockers, and the next required handoff. "
+        "Resolve all placeholders before matching paths. When a resolved path matches both "
+        "`outputs` and `forbidden_outputs`, the declared output wins only for that exact file "
+        "or declared output subtree; the broader forbidden rule still applies to its parent, "
+        "siblings, and every path outside that output. Any output not listed under `outputs` "
+        "remains outside this role's ownership; never produce an entry listed under "
+        "`forbidden_outputs`.\n\n"
+        f"{role.body.lstrip()}"
+    )
+
+
+def _role_contract(role: AgentRoleSource) -> dict[str, object]:
+    return {
+        field: (
+            ROLE_OWNERSHIP_RESOLUTION
+            if field == "ownership_resolution"
+            else role.metadata[field]
+        )
+        for field in ROLE_CONTRACT_FIELDS
+        if field == "ownership_resolution" or field in role.metadata
+    }

@@ -6,7 +6,73 @@ description: >-
   chart assets.
 ---
 
+## Phase Path Containment Preflight
+
+Before any phase artifact read, write, directory creation, command, or handoff,
+run this preflight completely and block on any failure:
+
+1. Read `.open-xquant/workspace.yaml`. Resolve `version_root` from
+   `paths.versions_dir`, using `versions` only when that key is absent.
+   Require `version_root` to be a safe workspace-relative path: reject an
+   absolute path or any `..` path segment, resolve it canonically with
+   symlinks, and require the result to stay inside the workspace.
+2. Read `current.json`. For normal phase work, set `expected_version_id` to
+   `current.json.active_version`; it must exist. Only a contract that
+   explicitly owns cross-version inspection may instead set
+   `expected_version_id` from the referenced version id for that historical
+   read. This exception never permits active-version work to consume another
+   version.
+3. Set the intended version directory to
+   `<version_root>/<expected_version_id>/` and resolve it canonically. Require
+   the intended version directory to remain inside the canonical version root
+   and workspace; otherwise treat it as a symlink escape. Read
+   `version_manifest.json` only from that exact directory. The manifest
+   `version_id` must equal `expected_version_id`; for normal phase work it
+   therefore must also equal `current.json.active_version`.
+4. Before using each required `phase_paths` value, require a non-empty
+   workspace-relative string. Reject an absolute path and any `..` path
+   segment. Resolve `<workspace>/<phase_path>` canonically, including existing
+   symlink ancestors even when the leaf will be created, and require the target
+   to be the intended version directory or a descendant of it. A symlink escape
+   outside that directory is invalid.
+5. On any identity or path failure, stop before phase artifact reads, writes,
+   directory creation, commands, or handoffs. Do not normalize an unsafe path
+   into acceptance and do not fall back to a default phase path.
+
+Block examples when `expected_version_id` is `v001` include
+`strategy_store/v001/../v002/04_spec_build`,
+`strategy_store/v002/04_spec_build`, `/tmp/04_spec_build`, and
+`strategy_store/v001/escape/04_spec_build` when `escape` is a symlink
+whose target is outside the intended version directory. An allowed custom
+nested phase path is
+`strategy_store/v001/custom/phases/04_spec_build` when its canonical
+target remains under the intended version directory.
+
+For a new-version bootstrap, only `manage-strategy-version` may proceed before
+the new manifest exists or the new id becomes active. It must apply the same
+workspace-relative, traversal, canonical-containment, and symlink checks to
+every constructed phase path before directory creation, then write a matching
+manifest before publishing `current.json` last.
+
+## Version Path Resolution
+
+Before using any `<phase_paths.*>` or `<version_root>` placeholder, read
+`.open-xquant/workspace.yaml`. Resolve `version_root` from
+`paths.versions_dir`; use `versions` only when that key is absent. Require a
+safe relative path whose resolved target stays inside the workspace. Then read
+`<version_root>/<version_id>/version_manifest.json` and use its exact
+`phase_paths` entry for each phase. For example, a configured root of
+`research_versions` must resolve the spec-build phase to
+`research_versions/v003/04_spec_build`; never redirect it to a default-root phase path.
+
 # Research Report Writer
+
+Round 26 chart retry: keep a blocked report as an unsealed revision attempt,
+allocate a fresh `report_revision_id`, and seal only after chart completion.
+The default professional pack uses its canonical requested set and cannot be
+narrowed by the caller; omitted charts receive closed skip reasons. Historical
+refresh routes `write -> review -> lineage -> prepare new selection -> comparison
+-> resume` with fresh selection and candidate hashes.
 
 Use this skill after the run artifacts, audits, robustness checks, and report
 chart assets exist. Final research reports require registered chart assets by
@@ -31,20 +97,25 @@ Before writing any report artifact, read `current.json` and use
 `active_version` as `version_id`. The source run package is:
 
 ```text
-versions/<version_id>/09_backtests/<run_id>/
+<phase_paths.09_backtests>/<run_id>/
 ```
 
-Write final report artifacts only under:
+For current production, write final report artifacts only under the supplied
+immutable candidate revision:
 
 ```text
-versions/<version_id>/10_reports/<run_id>/research_report.md
-versions/<version_id>/10_reports/<run_id>/research_report.html
-versions/<version_id>/10_reports/<run_id>/writer_result.json
-versions/<version_id>/10_reports/<run_id>/report_assets/
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/research_report.md
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/research_report.html
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/writer_result.json
+<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/report_assets/
 ```
 
 Do not write root-level `research_report.md`, `research_report.html`,
 `writer_result.json`, or `report_assets/`.
+
+The old working-head path
+`<phase_paths.10_reports>/<run_id>/research_report.md` is retained only for
+historical layout recognition; it is not a current selectable write target.
 
 ## Language Parameter Gate
 
@@ -212,7 +283,10 @@ Write `research_report.md` with:
      `oxq backtest compare-runs` passes.
 
 4. Chart narrative.
-   - Embed registered figures using their manifest paths.
+   - Resolve each package-relative manifest path `figures/<name>.png` beneath
+     `report_assets/`, then embed the report image URL
+     `report_assets/figures/<name>.png`. Do not embed the package-relative
+     manifest path directly and do not add a second `report_assets/` prefix.
    - Add a caption and an interpretation paragraph for each important figure.
    - Do not include unregistered images.
 
@@ -255,7 +329,8 @@ Write `research_report.md` with:
 
 ## HTML Output
 
-After writing final Markdown, render HTML from that same Markdown:
+After drafting final Markdown in memory, render HTML from that same string and
+publish all coupled outputs together:
 
 Do not fall back to `zh` for an explicitly requested non-Chinese language. Map
 known language names to valid HTML language tags, preserve explicit language
@@ -271,10 +346,13 @@ current directory is the open-xquant source worktree being developed.
 ```bash
 <runner-python> - <<'PY'
 from pathlib import Path
+from oxq.report.assets import publish_report_artifacts
 from oxq.report.html import render_markdown_html_report
 
-report_dir = Path("versions/<version_id>/10_reports/<run_id>")
+report_dir = Path("<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>")
+source_run_dir = Path("<phase_paths.09_backtests>/<run_id>")
 report_language = "中文"  # Use the resolved report_language value from this phase.
+
 
 def language_to_html_lang(language: str) -> str:
     normalized = language.strip().lower().replace("_", "-")
@@ -302,15 +380,43 @@ def language_to_html_lang(language: str) -> str:
         return normalized
     return "und"
 
-markdown = (report_dir / "research_report.md").read_text(encoding="utf-8")
-html_lang = language_to_html_lang(report_language)
-html = render_markdown_html_report(markdown, lang=html_lang)
-(report_dir / "research_report.html").write_text(html, encoding="utf-8")
+
+def publish_rendered_report(markdown: str, writer_result_bytes: bytes) -> None:
+    html_lang = language_to_html_lang(report_language)
+    html = render_markdown_html_report(markdown, lang=html_lang)
+    publish_report_artifacts(
+        report_dir,
+        {
+            "research_report.md": markdown.encode("utf-8"),
+            "research_report.html": html.encode("utf-8"),
+            "writer_result.json": writer_result_bytes,
+        },
+        lock_subject=source_run_dir,
+    )
 PY
 ```
 
 The HTML renderer may format the final Markdown, but it must not regenerate the
 report narrative from templates.
+
+## Governed Publication Lock
+
+Route Markdown, HTML, `writer_result.json`, manifest changes, and any coupled
+asset changes through
+`publish_report_artifacts(report_dir, artifacts, *, lock_subject=None)`. The
+mapping accepts safe relative keys and complete `bytes`; `None` deletes a
+target. A callable builder executes under the final-selection lock so it can
+re-read the locked baseline, run the baseline check, and commit one atomic
+all-or-rollback batch. This applies to blocked results too. Direct
+`Path.write_text`, `Path.write_bytes`, open-file writes, shell redirection, and
+asset CLI publication paths are forbidden for these targets.
+
+For an export whose `report_dir` is outside the governed workspace, pass
+`lock_subject=source_run_dir`. If the writer needs coherent run evidence, wrap
+the publisher with `run_digest_transaction(source_run_dir)`; the runtime owns
+the order, acquiring the run lock first and the final-selection lock second.
+Do not pre-acquire either publisher lock or nest another lock inside the
+publisher callback.
 
 ## Red Lines
 
@@ -344,13 +450,86 @@ Write `writer_result.json` after this phase:
   "status": "pass | blocked | fail",
   "version_id": "<version_id>",
   "run_id": "<run_id>",
+  "report_revision_id": "<report_revision_id>",
   "strategy_id": "<strategy_id>",
-  "source_run_dir": "versions/<version_id>/09_backtests/<run_id>",
+  "source_run_dir": "<phase_paths.09_backtests>/<run_id>",
   "language": "中文",
-  "report_markdown": "versions/<version_id>/10_reports/<run_id>/research_report.md",
-  "report_html": "versions/<version_id>/10_reports/<run_id>/research_report.html",
+  "report_markdown": "<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/research_report.md",
+  "report_html": "<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/research_report.html",
   "blocking_reason": "",
   "next_required_phase": "report_review",
   "errors": []
 }
 ```
+
+## Current Immutable Candidate Publication
+
+The direct-path phase-result example above is a legacy working-head shape, not
+a selectable producer target. Current report writing consumes a validated
+`chart_build_result.json` and publishes one immutable report revision at
+`<phase_paths.10_reports>/<run_id>/candidates/<report_revision_id>/`. The
+coordinator supplies a fresh `report_revision_id` and a fresh
+`review_revision_id`; create the candidate directory exclusively and publish
+`candidate_manifest.json` last. Its appearance seals the revision. Never
+overwrite, delete, rename, merge, or repair a sealed revision or any evidence
+reachable from any prior selection.
+
+Before drafting, validate the chart handoff's
+requested/applicable/generated/skipped set invariants, closed skip reason codes,
+every generated asset hash, and exact `{path, sha256}` manifest reference.
+Within the manifest require each safe package-relative `source.script`, its full
+lowercase `source.script_sha256`, and exact current regular-file bytes. Recompute
+the script SHA-256 and block on any script mutation. The same checks run again
+inside the publication callable before the candidate manifest is committed.
+
+The sealed candidate manifest uses this exact shape. Every artifact reference
+is a safe workspace-relative current regular file below the same revision, and
+every digest is full SHA-256 over exact bytes:
+
+```json
+{
+  "schema_version": 1,
+  "version_id": "v001",
+  "run_id": "runA",
+  "report_revision_id": "report_20260712_181000",
+  "hash_algorithm": "sha256-file-bytes-v1",
+  "source_run": {
+    "path": "<phase_paths.09_backtests>/runA",
+    "digest": "sha256:1111111111111111"
+  },
+  "artifacts": {
+    "research_report.md": {
+      "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/research_report.md",
+      "sha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    "research_report.html": {
+      "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/research_report.html",
+      "sha256": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    },
+    "writer_result.json": {
+      "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/writer_result.json",
+      "sha256": "sha256:3333333333333333333333333333333333333333333333333333333333333333"
+    },
+    "chart_build_result.json": {
+      "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/chart_build_result.json",
+      "sha256": "sha256:4444444444444444444444444444444444444444444444444444444444444444"
+    },
+    "report_assets/manifest.json": {
+      "path": "<phase_paths.10_reports>/runA/candidates/report_20260712_181000/report_assets/manifest.json",
+      "sha256": "sha256:5555555555555555555555555555555555555555555555555555555555555555"
+    }
+  }
+}
+```
+
+For `candidate_scoped_historical_report_revision`, use only the explicit
+inactive version/run and current-state guard. Stage and publish under a fresh
+`report_revision_id`, reserve the handoff's fresh `review_revision_id`, and
+must not reactivate the inactive version or mutate `current.json`, phase state,
+lineage state, or active run. The mode must not overwrite a prior candidate or
+review revision. Return the sealed candidate reference to the coordinator for
+the guarded `write -> review -> lineage -> comparison -> reselection` route;
+prior revision bytes remain reachable.
+
+Accept only the coordinator's closed schema-version-1 historical handoff; reject
+aliases, extra keys, missing base/guard fields, and unknown reason codes.
