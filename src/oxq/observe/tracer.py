@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from typing import Any
 
 

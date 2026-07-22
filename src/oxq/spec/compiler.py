@@ -13,7 +13,7 @@ import math
 import platform
 import sys
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from decimal import Decimal
 from pathlib import Path
 from typing import Any

@@ -1,9 +1,10 @@
-"""Rolling Volatility indicator."""
+"""Rolling Volatility — std of log returns (eQuant-backed via eclassic)."""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
+
+from oxq.adapters.equant import to_panel, from_panel
 
 
 class RollingVolatility:
@@ -19,5 +20,9 @@ class RollingVolatility:
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
         """Return rolling std of log returns (uses ddof=1)."""
-        log_returns = np.log(mktdata[column]).diff()
-        return log_returns.rolling(period).std(ddof=1)
+        import eclassic
+        panel = to_panel(mktdata)
+        result = eclassic.volatility(panel, close_col=column, n=period,
+                                     type="sd", new_col="vol",
+                                     append=True)
+        return from_panel(result, f"vol_{period}", mktdata.index)

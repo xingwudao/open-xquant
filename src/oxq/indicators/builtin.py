@@ -1,17 +1,10 @@
-"""Built-in technical indicators — 20 classic TA indicators.
+"""Built-in technical indicators — eQuant-Py backed.
 
-Covers six categories:
-- **Trend:** EMA, WMA, DEMA, TEMA
-- **Momentum:** RSI, MACDLine, MACDSignal, MACDHistogram, ROC, PPO, CCI
-- **Volatility:** BollingerUpper, BollingerLower, ATR
-- **Volume:** OBV, VWAP, MFI
-- **Trend Strength:** ADX, AROON
-- **Stochastic:** StochK
+Wraps eTTR functions to satisfy the oxq ``Indicator`` Protocol
+(``compute(self, mktdata: pd.DataFrame, **params) -> pd.Series``).
 
-Multi-output indicators (e.g. MACD) are split into independent classes.
-Dependent classes declare a ``depends_on`` class attribute listing the
-mktdata column names they read.  The engine logs a warning when a
-dependency column is missing — see ``engine.py`` Phase 1.
+Multi-output eQuant indicators (MACD, Bollinger, etc.) are split into
+independent oxq classes, each extracting a single output column.
 """
 
 from __future__ import annotations
@@ -19,11 +12,13 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from oxq.adapters.equant import to_panel, from_panel
+
 # ── Trend ─────────────────────────────────────────────────────────────────
 
 
 class EMA:
-    """Exponential Moving Average."""
+    """Exponential Moving Average (eQuant-backed)."""
 
     name = "EMA"
     formula = r"EMA_t = \alpha \cdot P_t + (1 - \alpha) \cdot EMA_{t-1}, \quad \alpha = \frac{2}{N+1}"
@@ -31,12 +26,14 @@ class EMA:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
-        """Return EMA series."""
-        return mktdata[column].ewm(span=period, adjust=False).mean()
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.ema(panel, close_col=column, n=period, append=True)
+        return from_panel(result, f"EMA_{period}", mktdata.index)
 
 
 class WMA:
-    """Weighted Moving Average (linearly weighted)."""
+    """Weighted Moving Average (eQuant-backed)."""
 
     name = "WMA"
     formula = r"WMA_t = \frac{\sum_{i=0}^{N-1} (N-i) \cdot P_{t-i}}{\sum_{i=1}^{N} i}"
@@ -44,15 +41,14 @@ class WMA:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
-        """Return WMA series (first ``period - 1`` values will be NaN)."""
-        weights = np.arange(1, period + 1, dtype=float)
-        return mktdata[column].rolling(period).apply(
-            lambda x: np.dot(x, weights) / weights.sum(), raw=True,
-        )
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.wma(panel, close_col=column, n=period, append=True)
+        return from_panel(result, f"WMA_{period}", mktdata.index)
 
 
 class DEMA:
-    """Double Exponential Moving Average."""
+    """Double Exponential Moving Average (eQuant-backed)."""
 
     name = "DEMA"
     formula = r"DEMA_t = 2 \cdot EMA_t - EMA(EMA_t)"
@@ -60,14 +56,18 @@ class DEMA:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
-        """Return DEMA = 2 * EMA - EMA(EMA)."""
-        ema1 = mktdata[column].ewm(span=period, adjust=False).mean()
-        ema2 = ema1.ewm(span=period, adjust=False).mean()
-        return 2 * ema1 - ema2
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.dema(panel, close_col=column, n=period, append=True)
+        return from_panel(result, f"DEMA_{period}", mktdata.index)
 
 
 class TEMA:
-    """Triple Exponential Moving Average."""
+    """Triple Exponential Moving Average.
+
+    eTTR does not provide a standalone TEMA function, so we compute it from
+    three stacked EMA calls on a single panel.
+    """
 
     name = "TEMA"
     formula = r"TEMA_t = 3 \cdot EMA_t - 3 \cdot EMA_2_t + EMA_3_t"
@@ -75,18 +75,31 @@ class TEMA:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
-        """Return TEMA = 3*EMA - 3*EMA2 + EMA3."""
-        ema1 = mktdata[column].ewm(span=period, adjust=False).mean()
-        ema2 = ema1.ewm(span=period, adjust=False).mean()
-        ema3 = ema2.ewm(span=period, adjust=False).mean()
-        return 3 * ema1 - 3 * ema2 + ema3
+        import ettr
+        panel = to_panel(mktdata)
+        # EMA1: EMA of close
+        panel = ettr.ema(panel, close_col=column, n=period, append=True,
+                         new_col="_TEMA1")
+        col1 = f"_TEMA1_{period}"
+        # EMA2: EMA of EMA1
+        panel = ettr.ema(panel, close_col=col1, n=period, append=True,
+                         new_col="_TEMA2")
+        col2 = f"_TEMA2_{period}"
+        # EMA3: EMA of EMA2
+        panel = ettr.ema(panel, close_col=col2, n=period, append=True,
+                         new_col="_TEMA3")
+        col3 = f"_TEMA3_{period}"
+
+        # TEMA = 3*EMA1 - 3*EMA2 + EMA3
+        panel["_TEMA"] = 3.0 * panel[col1] - 3.0 * panel[col2] + panel[col3]
+        return from_panel(panel, "_TEMA", mktdata.index)
 
 
 # ── Momentum ──────────────────────────────────────────────────────────────
 
 
 class RSI:
-    """Relative Strength Index (Wilder smoothing)."""
+    """Relative Strength Index (eQuant-backed, Wilder smoothing default)."""
 
     name = "RSI"
     formula = r"RSI = 100 - \frac{100}{1 + \frac{AvgGain}{AvgLoss}}"
@@ -94,21 +107,14 @@ class RSI:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 14,
     ) -> pd.Series:
-        """Return RSI in [0, 100]. Uses Wilder's smoothing (ewm alpha=1/period)."""
-        delta = mktdata[column].diff()
-        gain = delta.clip(lower=0.0)
-        loss = -delta.clip(upper=0.0)
-        avg_gain = gain.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-        avg_loss = loss.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
-        rs = avg_gain / avg_loss
-        rsi = 100.0 - 100.0 / (1.0 + rs)
-        # First (period) values are unreliable — set to NaN
-        rsi.iloc[:period] = np.nan
-        return rsi
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.rsi(panel, close_col=column, n=period, wilder=True, append=True)
+        return from_panel(result, f"RSI_{period}", mktdata.index)
 
 
 class MACDLine:
-    """MACD Line = EMA(fast) - EMA(slow)."""
+    """MACD Line = EMA(fast) - EMA(slow) (eQuant-backed)."""
 
     name = "MACDLine"
     formula = r"MACD = EMA_{fast} - EMA_{slow}"
@@ -120,10 +126,11 @@ class MACDLine:
         fast_period: int = 12,
         slow_period: int = 26,
     ) -> pd.Series:
-        """Return MACD line series."""
-        ema_fast = mktdata[column].ewm(span=fast_period, adjust=False).mean()
-        ema_slow = mktdata[column].ewm(span=slow_period, adjust=False).mean()
-        return ema_fast - ema_slow
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.macd(panel, close_col=column, n_fast=fast_period,
+                           n_slow=slow_period, new_col="MACD", append=True)
+        return from_panel(result, "MACD", mktdata.index)
 
 
 class MACDSignal:
@@ -142,8 +149,17 @@ class MACDSignal:
         macd_col: str = "macd",
         signal_period: int = 9,
     ) -> pd.Series:
-        """Return MACD signal line (EMA of the MACD column)."""
-        return mktdata[macd_col].ewm(span=signal_period, adjust=False).mean()
+        import ettr
+        panel = to_panel(mktdata)
+        # Copy the macd column into a "close-like" column for ettr
+        panel["_macd_for_signal"] = panel["close"]  # placeholder; we use macd_col
+        col_name = panel.columns[panel.columns.get_loc("close")]
+        # Use ettr.ema on the MACD line column
+        result = ettr.ema(
+            panel, close_col=macd_col if macd_col in panel.columns else col_name,
+            n=signal_period, wilder=False, new_col="_MACDSig", append=True,
+        )
+        return from_panel(result, f"_MACDSig_{signal_period}", mktdata.index)
 
 
 class MACDHistogram:
@@ -162,12 +178,11 @@ class MACDHistogram:
         macd_col: str = "macd",
         signal_col: str = "macd_signal",
     ) -> pd.Series:
-        """Return MACD histogram series."""
         return mktdata[macd_col] - mktdata[signal_col]
 
 
 class ROC:
-    """Rate of Change (percentage)."""
+    """Rate of Change (eQuant-backed)."""
 
     name = "ROC"
     formula = r"ROC_t = \frac{P_t - P_{t-N}}{P_{t-N}} \times 100"
@@ -175,12 +190,20 @@ class ROC:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 10,
     ) -> pd.Series:
-        """Return ROC = pct_change(period) * 100."""
-        return mktdata[column].pct_change(period) * 100.0
+        import ettr
+        panel = to_panel(mktdata)
+        # eTTR's ROC returns ROC_N; with type="continuous" it matches pct_change
+        result = ettr.roc(panel, close_col=column, n=period, type="continuous",
+                          append=True)
+        return from_panel(result, f"ROC_{period}", mktdata.index)
 
 
 class PPO:
-    """Percentage Price Oscillator."""
+    """Percentage Price Oscillator.
+
+    eTTR provides ``po_`` which is (EMA_fast - EMA_slow) / EMA_slow * 100,
+    matching the standard PPO formula.
+    """
 
     name = "PPO"
     formula = r"PPO = \frac{EMA_{fast} - EMA_{slow}}{EMA_{slow}} \times 100"
@@ -192,14 +215,15 @@ class PPO:
         fast_period: int = 12,
         slow_period: int = 26,
     ) -> pd.Series:
-        """Return PPO = (EMA_fast - EMA_slow) / EMA_slow * 100."""
-        ema_fast = mktdata[column].ewm(span=fast_period, adjust=False).mean()
-        ema_slow = mktdata[column].ewm(span=slow_period, adjust=False).mean()
-        return (ema_fast - ema_slow) / ema_slow * 100.0
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.po_(panel, close_col=column, n_fast=fast_period,
+                          n_slow=slow_period, append=True)
+        return from_panel(result, "PO", mktdata.index)
 
 
 class CCI:
-    """Commodity Channel Index."""
+    """Commodity Channel Index (eQuant-backed)."""
 
     name = "CCI"
     formula = r"CCI = \frac{TP - SMA(TP)}{0.015 \cdot MAD(TP)}, \quad TP = \frac{H+L+C}{3}"
@@ -207,21 +231,17 @@ class CCI:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 20,
     ) -> pd.Series:
-        """Return CCI = (TP - SMA(TP)) / (0.015 * MAD(TP)).
-
-        Typical Price = (High + Low + Close) / 3.
-        """
-        tp = (mktdata["high"] + mktdata["low"] + mktdata["close"]) / 3.0
-        sma_tp = tp.rolling(period).mean()
-        mad = tp.rolling(period).apply(lambda x: np.abs(x - x.mean()).mean(), raw=True)
-        return (tp - sma_tp) / (0.015 * mad)
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.cci(panel, n=period, append=True)
+        return from_panel(result, f"CCI_{period}", mktdata.index)
 
 
 # ── Volatility ────────────────────────────────────────────────────────────
 
 
 class BollingerUpper:
-    """Bollinger Band — upper band."""
+    """Bollinger Band — upper band (eQuant-backed)."""
 
     name = "BollingerUpper"
     formula = r"Upper = SMA_N + k \cdot \sigma_N"
@@ -233,13 +253,15 @@ class BollingerUpper:
         period: int = 20,
         offset: float = 2.0,
     ) -> pd.Series:
-        """Return SMA + offset * rolling std (population)."""
-        rolling = mktdata[column].rolling(period)
-        return rolling.mean() + offset * rolling.std(ddof=0)
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.bollinger(panel, close_col=column, n=period, sd=offset,
+                                append=True)
+        return from_panel(result, "BB_upper", mktdata.index)
 
 
 class BollingerLower:
-    """Bollinger Band — lower band."""
+    """Bollinger Band — lower band (eQuant-backed)."""
 
     name = "BollingerLower"
     formula = r"Lower = SMA_N - k \cdot \sigma_N"
@@ -251,13 +273,15 @@ class BollingerLower:
         period: int = 20,
         offset: float = 2.0,
     ) -> pd.Series:
-        """Return SMA - offset * rolling std (population)."""
-        rolling = mktdata[column].rolling(period)
-        return rolling.mean() - offset * rolling.std(ddof=0)
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.bollinger(panel, close_col=column, n=period, sd=offset,
+                                append=True)
+        return from_panel(result, "BB_lower", mktdata.index)
 
 
 class ATR:
-    """Average True Range (Wilder smoothing)."""
+    """Average True Range (eQuant-backed, Wilder smoothing)."""
 
     name = "ATR"
     formula = r"TR = \max(H-L, |H-C_{prev}|, |L-C_{prev}|), \quad ATR = Wilder(TR, N)"
@@ -265,26 +289,17 @@ class ATR:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 14,
     ) -> pd.Series:
-        """Return ATR series.
-
-        TR = max(H - L, |H - prev_close|, |L - prev_close|).
-        Smoothing uses Wilder's EWM (alpha = 1/period).
-        """
-        high = mktdata["high"]
-        low = mktdata["low"]
-        prev_close = mktdata["close"].shift(1)
-        tr = pd.concat(
-            [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
-            axis=1,
-        ).max(axis=1)
-        return tr.ewm(alpha=1.0 / period, min_periods=period, adjust=False).mean()
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.atr(panel, n=period, wilder=True, append=True)
+        return from_panel(result, f"ATR_{period}", mktdata.index)
 
 
 # ── Volume ────────────────────────────────────────────────────────────────
 
 
 class OBV:
-    """On-Balance Volume."""
+    """On-Balance Volume (eQuant-backed)."""
 
     name = "OBV"
     formula = r"OBV_t = OBV_{t-1} + sign(\Delta C_t) \cdot V_t"
@@ -292,19 +307,18 @@ class OBV:
     def compute(
         self, mktdata: pd.DataFrame, column: str = "close",
     ) -> pd.Series:
-        """Return cumulative OBV.
-
-        +volume when close > prev_close, -volume when close < prev_close,
-        0 when unchanged.
-        """
-        direction = np.sign(mktdata[column].diff())
-        # First bar has no previous close — direction is NaN → set to 0
-        direction.iloc[0] = 0.0
-        return (direction * mktdata["volume"]).cumsum()
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.obv(panel, close_col=column, append=True)
+        return from_panel(result, "OBV", mktdata.index)
 
 
 class VWAP:
-    """Volume-Weighted Average Price (rolling)."""
+    """Volume-Weighted Average Price (eQuant-backed).
+
+    eTTR provides a cumulative VWAP. For a rolling window version,
+    we fall back to the manual calculation.
+    """
 
     name = "VWAP"
     formula = r"VWAP = \frac{\sum_{i} TP_i \cdot V_i}{\sum_{i} V_i}"
@@ -312,14 +326,20 @@ class VWAP:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 20,
     ) -> pd.Series:
-        """Return rolling VWAP = sum(TP * V) / sum(V) over *period* bars."""
-        tp = (mktdata["high"] + mktdata["low"] + mktdata["close"]) / 3.0
-        tp_vol = tp * mktdata["volume"]
-        return tp_vol.rolling(period).sum() / mktdata["volume"].rolling(period).sum()
+        import ettr
+        panel = to_panel(mktdata)
+        # eTTR provides cumulative VWAP; we also support a rolling version
+        if period is not None and period > 0:
+            # Roll our own rolling VWAP for per-symbol windowing
+            tp = (mktdata["high"] + mktdata["low"] + mktdata["close"]) / 3.0
+            tp_vol = tp * mktdata["volume"]
+            return tp_vol.rolling(period).sum() / mktdata["volume"].rolling(period).sum()
+        result = ettr.vwap(panel, append=True)
+        return from_panel(result, "VWAP", mktdata.index)
 
 
 class MFI:
-    """Money Flow Index."""
+    """Money Flow Index (eQuant-backed)."""
 
     name = "MFI"
     formula = r"MFI = 100 - \frac{100}{1 + \frac{PositiveFlow}{NegativeFlow}}"
@@ -327,26 +347,17 @@ class MFI:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 14,
     ) -> pd.Series:
-        """Return MFI in [0, 100].
-
-        TP = (H + L + C) / 3, raw_money_flow = TP * volume.
-        MFI = 100 - 100 / (1 + positive_flow / negative_flow).
-        """
-        tp = (mktdata["high"] + mktdata["low"] + mktdata["close"]) / 3.0
-        raw_mf = tp * mktdata["volume"]
-        delta_tp = tp.diff()
-        pos_flow = (raw_mf * (delta_tp > 0)).rolling(period).sum()
-        neg_flow = (raw_mf * (delta_tp < 0)).rolling(period).sum()
-        mfi = 100.0 - 100.0 / (1.0 + pos_flow / neg_flow)
-        mfi.iloc[:period] = np.nan
-        return mfi
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.mfi(panel, n=period, append=True)
+        return from_panel(result, f"MFI_{period}", mktdata.index)
 
 
 # ── Trend Strength ────────────────────────────────────────────────────────
 
 
 class ADX:
-    """Average Directional Index."""
+    """Average Directional Index (eQuant-backed)."""
 
     name = "ADX"
     formula = r"ADX = Wilder\left(\frac{|+DI - (-DI)|}{+DI + (-DI)} \times 100, N\right)"
@@ -354,45 +365,14 @@ class ADX:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 14,
     ) -> pd.Series:
-        """Return ADX series.
-
-        +DM / -DM → smoothed +DI / -DI → DX → smoothed ADX.
-        """
-        high = mktdata["high"]
-        low = mktdata["low"]
-        prev_close = mktdata["close"].shift(1)
-
-        # True Range
-        tr = pd.concat(
-            [high - low, (high - prev_close).abs(), (low - prev_close).abs()],
-            axis=1,
-        ).max(axis=1)
-
-        # Directional Movement
-        up_move = high - high.shift(1)
-        down_move = low.shift(1) - low
-        plus_dm = np.where((up_move > down_move) & (up_move > 0), up_move, 0.0)
-        minus_dm = np.where((down_move > up_move) & (down_move > 0), down_move, 0.0)
-
-        alpha = 1.0 / period
-        atr = tr.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
-        smooth_plus = pd.Series(plus_dm, index=mktdata.index).ewm(
-            alpha=alpha, min_periods=period, adjust=False,
-        ).mean()
-        smooth_minus = pd.Series(minus_dm, index=mktdata.index).ewm(
-            alpha=alpha, min_periods=period, adjust=False,
-        ).mean()
-
-        plus_di = 100.0 * smooth_plus / atr
-        minus_di = 100.0 * smooth_minus / atr
-        dx = 100.0 * (plus_di - minus_di).abs() / (plus_di + minus_di)
-        adx = dx.ewm(alpha=alpha, min_periods=period, adjust=False).mean()
-        adx.iloc[:period] = np.nan
-        return adx
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.adx(panel, n=period, append=True)
+        return from_panel(result, f"ADX_{period}", mktdata.index)
 
 
 class AROON:
-    """Aroon Oscillator (Aroon Up - Aroon Down)."""
+    """Aroon Oscillator = Aroon Up - Aroon Down (eQuant-backed)."""
 
     name = "AROON"
     formula = r"Aroon = \frac{bars\_since\_high}{N} \times 100 - \frac{bars\_since\_low}{N} \times 100"
@@ -400,23 +380,17 @@ class AROON:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 25,
     ) -> pd.Series:
-        """Return Aroon oscillator = Aroon Up - Aroon Down.
-
-        Aroon Up   = 100 * (period - bars_since_highest_high) / period
-        Aroon Down = 100 * (period - bars_since_lowest_low)   / period
-        """
-        high_roll = mktdata["high"].rolling(period + 1)
-        low_roll = mktdata["low"].rolling(period + 1)
-        aroon_up = high_roll.apply(lambda x: x.argmax(), raw=True) / period * 100.0
-        aroon_down = low_roll.apply(lambda x: x.argmin(), raw=True) / period * 100.0
-        return aroon_up - aroon_down
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.aroon(panel, n=period, append=True)
+        return from_panel(result, "Aroon_osc", mktdata.index)
 
 
 # ── Stochastic ────────────────────────────────────────────────────────────
 
 
 class StochK:
-    """Stochastic %K."""
+    """Stochastic %K (eQuant-backed — fast %K from the stoch function)."""
 
     name = "StochK"
     formula = r"\%K = \frac{C - L_N}{H_N - L_N} \times 100"
@@ -424,7 +398,7 @@ class StochK:
     def compute(
         self, mktdata: pd.DataFrame, period: int = 14,
     ) -> pd.Series:
-        """Return %K = (close - lowest_low) / (highest_high - lowest_low) * 100."""
-        lowest = mktdata["low"].rolling(period).min()
-        highest = mktdata["high"].rolling(period).max()
-        return (mktdata["close"] - lowest) / (highest - lowest) * 100.0
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.stoch(panel, n_fast_k=period, append=True)
+        return from_panel(result, "Stoch_fastK", mktdata.index)

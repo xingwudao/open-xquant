@@ -378,7 +378,13 @@ def _entry_points() -> dict[str, list[Any]]:
     """Wrapper for importlib.metadata.entry_points (mockable in tests)."""
     result: dict[str, list[Any]] = {}
     for group in ("oxq.indicators", "oxq.signals", "oxq.portfolio_optimizers", "oxq.rules"):
-        eps = importlib.metadata.entry_points(group=group)
+        try:
+            # Python 3.12+
+            eps = importlib.metadata.entry_points(group=group)
+        except TypeError:
+            # Python 3.9-3.11: entry_points() returns dict-like
+            all_eps = importlib.metadata.entry_points()
+            eps = all_eps.select(group=group) if hasattr(all_eps, "select") else all_eps.get(group, [])
         if eps:
             result[group] = list(eps)
     return result

@@ -29,6 +29,12 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.0",
     "exchange-calendars>=4.5",
+    "eTTR>=0.1.0",
+    "eClassic>=0.1.0",
+    "eFactorCraft>=0.1.0",
+    "eBacktestCraft>=0.1.0",
+    "edatatools>=0.1.0",
+    "equant>=0.1.0",
 ]
 
 [project.scripts]
@@ -37,6 +43,11 @@ oxq = "oxq.cli.main:main"
 [project.optional-dependencies]
 mcp = [
     "mcp>=1.0",
+]
+equant = [
+    "eAlpha101>=0.1.0",
+    "eCandleSticks>=0.1.0",
+    "eFinCharts>=0.1.0",
 ]
 yfinance = [
     "yfinance>=0.2",

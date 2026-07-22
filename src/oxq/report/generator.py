@@ -9,7 +9,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from pathlib import Path
 
 import yaml

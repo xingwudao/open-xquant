@@ -33,7 +33,7 @@ import unicodedata
 from collections.abc import Callable, Collection, Iterator, Mapping
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 

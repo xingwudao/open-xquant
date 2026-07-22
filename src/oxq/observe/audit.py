@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import asdict, dataclass
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from pathlib import Path
 from typing import Any
 

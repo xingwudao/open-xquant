@@ -1,9 +1,10 @@
-"""Momentum indicator."""
+"""Momentum factor — (ln(P_t) - ln(P_{t-N})) / N (eQuant-backed via eclassic)."""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
+
+from oxq.adapters.equant import to_panel, from_panel
 
 
 class Momentum:
@@ -19,5 +20,8 @@ class Momentum:
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
         """Return N-day momentum (first ``period`` values will be NaN)."""
-        log_prices = np.log(mktdata[column])
-        return log_prices.diff(period) / period
+        import eclassic
+        panel = to_panel(mktdata)
+        result = eclassic.momentum(panel, close_col=column, n=period,
+                                   type="log", new_col="mom", append=True)
+        return from_panel(result, f"mom_{period}", mktdata.index)

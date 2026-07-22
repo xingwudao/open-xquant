@@ -1,9 +1,10 @@
-"""N-day Return indicator."""
+"""N-day Return — log return over N days (eQuant-backed via eclassic)."""
 
 from __future__ import annotations
 
-import numpy as np
 import pandas as pd
+
+from oxq.adapters.equant import to_panel, from_panel
 
 
 class NdayReturn:
@@ -16,5 +17,8 @@ class NdayReturn:
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
         """Return N-day log returns (first ``period`` values will be NaN)."""
-        log_prices = np.log(mktdata[column])
-        return log_prices.diff(period)
+        import eclassic
+        panel = to_panel(mktdata)
+        result = eclassic.return_(panel, close_col=column, n=period,
+                                  type="log", new_col="ret", append=True)
+        return from_panel(result, f"ret_{period}", mktdata.index)

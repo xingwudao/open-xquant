@@ -1,8 +1,10 @@
-"""Simple Moving Average indicator."""
+"""SMA — Simple Moving Average (eQuant-backed)."""
 
 from __future__ import annotations
 
 import pandas as pd
+
+from oxq.adapters.equant import to_panel, from_panel
 
 
 class SMA:
@@ -18,4 +20,7 @@ class SMA:
         self, mktdata: pd.DataFrame, column: str = "close", period: int = 20,
     ) -> pd.Series:
         """Return the SMA series (first ``period - 1`` values will be NaN)."""
-        return mktdata[column].rolling(period).mean()
+        import ettr
+        panel = to_panel(mktdata)
+        result = ettr.sma(panel, close_col=column, n=period, append=True)
+        return from_panel(result, f"SMA_{period}", mktdata.index)

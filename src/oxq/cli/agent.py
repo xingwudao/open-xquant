@@ -16,7 +16,7 @@ import unicodedata
 from collections.abc import Callable, Iterator
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from functools import wraps
 from pathlib import Path
 from typing import Any

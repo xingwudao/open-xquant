@@ -15,7 +15,7 @@ import re
 import stat
 import tempfile
 import unicodedata
-from datetime import UTC, datetime
+from datetime import datetime, timezone; UTC = timezone.utc  # py3.9 compat
 from pathlib import Path
 from typing import Any
 

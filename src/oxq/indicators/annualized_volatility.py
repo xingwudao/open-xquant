@@ -1,9 +1,11 @@
-"""AnnualizedVolatility indicator — population stddev of simple returns, annualized."""
+"""AnnualizedVolatility — annualized population stddev (eQuant-backed via eclassic)."""
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+
+from oxq.adapters.equant import to_panel, from_panel
 
 
 class AnnualizedVolatility:
@@ -24,5 +26,9 @@ class AnnualizedVolatility:
         period: int = 20,
     ) -> pd.Series:
         """Return rolling annualized volatility (population stddev)."""
-        simple_returns = mktdata[column].pct_change()
-        return simple_returns.rolling(period).std(ddof=0) * np.sqrt(252)
+        import eclassic
+        panel = to_panel(mktdata)
+        result = eclassic.volatility(panel, close_col=column, n=period,
+                                     type="sd", trading_days=252,
+                                     new_col="vol", append=True)
+        return from_panel(result, f"vol_{period}", mktdata.index)
