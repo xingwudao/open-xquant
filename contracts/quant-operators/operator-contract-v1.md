@@ -7,7 +7,7 @@
 >
 > 首个目标实现：eQuant-Py。
 
-![Quant Operator Contract v1 信息图](../../infographic/quant-operator-contract/infographic.png)
+![Quant Operator Contract v1 信息图](../../docs/infographic/quant-operator-contract/infographic.png)
 
 ## 1. 文档目的
 

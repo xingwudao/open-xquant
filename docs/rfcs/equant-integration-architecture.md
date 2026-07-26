@@ -3,13 +3,13 @@
 > 状态：方案 B 已由用户确认
 >
 > 前提：eQuant-Py 已完整满足
-> [Quant Operator Contract v1](2026-07-26-quant-operator-contract-design.md)。
+> [Quant Operator Contract v1](../../contracts/quant-operators/operator-contract-v1.md)。
 >
 > 目标：在两个仓库继续独立演进的前提下，将 eQuant-Py 作为
 > open-xquant 的官方量化计算层，同时保持 open-xquant 对研究语义、
 > 因果执行、审计、机器学习和 Agent 工作流的控制权。
 
-![open-xquant 与 eQuant-Py 整合架构信息图](../../infographic/equant-integration-architecture/infographic.png)
+![open-xquant 与 eQuant-Py 整合架构信息图](../infographic/equant-integration-architecture/infographic.png)
 
 ## 1. 结论
 
