@@ -9,8 +9,6 @@
 > open-xquant 的官方量化计算层，同时保持 open-xquant 对研究语义、
 > 因果执行、审计、机器学习和 Agent 工作流的控制权。
 
-![open-xquant 与 eQuant-Py 整合架构信息图](../../infographic/equant-integration-architecture/infographic.png)
-
 ## 1. 结论
 
 open-xquant 不应合并 eQuant-Py 仓库，也不应把 eQuant-Py 直接设置为

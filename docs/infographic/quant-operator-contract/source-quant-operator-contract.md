@@ -7,8 +7,6 @@
 >
 > 首个目标实现：eQuant-Py。
 
-![Quant Operator Contract v1 信息图](../../infographic/quant-operator-contract/infographic.png)
-
 ## 1. 文档目的
 
 本规范定义 open-xquant 与外部量化计算层之间的稳定契约。
