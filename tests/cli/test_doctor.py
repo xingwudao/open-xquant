@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,19 @@ def _write_source(root: Path) -> None:
         "---\nname: build-strategy-spec\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
         encoding="utf-8",
     )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_doctor_fails_closed_for_broken_workspace_marker(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    (config_dir / "workspace.yaml").symlink_to(tmp_path / "missing.yaml")
+    monkeypatch.chdir(tmp_path)
+
+    result = _check_workspace()
+
+    assert result["status"] == "fail"
+    assert "symlink" in result["error"]
 
 
 def _write_governed_workspace(work: Path, *, active_phase: str = "01_brainstorm") -> Path:

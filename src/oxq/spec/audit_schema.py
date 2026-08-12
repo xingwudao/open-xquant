@@ -9,7 +9,7 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
-import yaml
+from oxq.core.workspace_config import WorkspaceConfigError, load_workspace_config
 
 SPEC_AUDIT_SCHEMA_VERSION = 4
 
@@ -991,13 +991,11 @@ def _audit_workspace_root(audit_path: Path) -> Path:
 def _configured_conversations_path(workspace_root: Path) -> tuple[Path | None, str | None]:
     config_path = workspace_root / ".open-xquant" / "workspace.yaml"
     configured_value: Any = "conversations"
-    if config_path.exists():
+    if config_path.exists() or config_path.is_symlink():
         try:
-            workspace = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, yaml.YAMLError) as exc:
+            workspace = load_workspace_config(config_path)
+        except WorkspaceConfigError as exc:
             return None, f"could not read .open-xquant/workspace.yaml: {exc}"
-        if not isinstance(workspace, dict):
-            return None, ".open-xquant/workspace.yaml must contain an object"
         paths = workspace.get("paths")
         if paths is not None and not isinstance(paths, dict):
             return None, ".open-xquant/workspace.yaml paths must contain an object"
@@ -1257,14 +1255,12 @@ def _active_governed_provenance_paths(
     workspace_root: Path,
 ) -> tuple[dict[str, Path] | None, list[dict[str, str]]]:
     config_path = workspace_root / ".open-xquant/workspace.yaml"
-    if not config_path.is_file():
+    if not config_path.exists() and not config_path.is_symlink():
         return None, []
     try:
-        workspace = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError) as exc:
+        workspace = load_workspace_config(config_path)
+    except WorkspaceConfigError as exc:
         return None, [{"path": "workspace", "message": f"could not read workspace config: {exc}"}]
-    if not isinstance(workspace, dict):
-        return None, [{"path": "workspace", "message": "workspace config must contain an object"}]
     from oxq.cli.research import (
         _classify_workspace_governance,
         _workflow_manifest_path_mismatches,

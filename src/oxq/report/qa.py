@@ -16,12 +16,11 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
-import yaml
-
 from oxq.audit.reproducibility import (
     audit_reproducibility,
     validate_run_artifact_path,
 )
+from oxq.core.workspace_config import WorkspaceConfigError, load_workspace_config
 from oxq.report.artifacts import RunArtifacts, require_governed_report_source_hashes
 from oxq.report.assets import report_publication_read_transaction, safe_asset_id
 from oxq.report.facts import ReportFacts, build_report_facts
@@ -291,11 +290,9 @@ def _workspace_owned_version_manifest(report_path: Path) -> Path | None:
     if workspace_path is None:
         return None
     try:
-        workspace = yaml.safe_load(workspace_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
+        workspace = load_workspace_config(workspace_path)
+    except WorkspaceConfigError as exc:
         raise ValueError("workspace.yaml must contain a valid YAML object") from exc
-    if not isinstance(workspace, dict):
-        raise ValueError("workspace.yaml must contain a valid YAML object")
     workflow = workspace.get("workflow")
     paths = workspace.get("paths")
     is_governed = isinstance(workflow, dict) and workflow.get("layout") == "version_governed"

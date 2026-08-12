@@ -73,6 +73,23 @@ def _workspace_snapshot(root: Path) -> dict[str, bytes | None]:
     return {path.relative_to(root).as_posix(): path.read_bytes() if path.is_file() else None for path in sorted(root.rglob("*"))}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_research_init_rejects_broken_workspace_marker_without_overwrite(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        workspace = tmp_path / cwd
+        config_dir = workspace / ".open-xquant"
+        config_dir.mkdir()
+        marker = config_dir / "workspace.yaml"
+        marker.symlink_to(workspace / "missing.yaml")
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code != 0
+        assert "symlink" in str(result.exception)
+        assert marker.is_symlink()
+
+
 @pytest.mark.parametrize("instruction_file", ["AGENTS.md", "CLAUDE.md"])
 @pytest.mark.parametrize("marker", ["open-xquant-workspace", "open-xquant-subagents"])
 def test_research_init_rejects_malformed_managed_markers_without_mutation(

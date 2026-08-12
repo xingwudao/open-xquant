@@ -12,6 +12,7 @@ from typing import Any
 
 import yaml
 
+from oxq.core.workspace_config import WorkspaceConfigError, load_workspace_config
 from oxq.spec.schema import StrategySpec
 
 RUNTIME_AUDIT_SCHEMA_VERSION = 2
@@ -525,11 +526,11 @@ def _runtime_workspace(runtime_audit_path: Path) -> tuple[Path, dict[str, Any]]:
     resolved = runtime_audit_path.resolve(strict=False)
     for parent in resolved.parents:
         config_path = parent / ".open-xquant" / "workspace.yaml"
-        if config_path.is_file():
-            payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-            if not isinstance(payload, dict):
-                raise ValueError(".open-xquant/workspace.yaml must contain an object")
-            return parent, payload
+        if config_path.exists() or config_path.is_symlink():
+            try:
+                return parent, load_workspace_config(config_path)
+            except WorkspaceConfigError as exc:
+                raise ValueError(str(exc)) from exc
     return resolved.parent, {}
 
 

@@ -14,7 +14,7 @@ from typing import Any
 import click
 
 from oxq.cli.agent import agent_lifecycle_lock, manifest_path
-from oxq.cli.agent_manifest import read_json_file, read_yaml_file
+from oxq.cli.agent_manifest import read_json_file
 from oxq.cli.research import (
     _LINEAGE_STATUSES,
     VERSION_PHASE_DIRS,
@@ -31,6 +31,7 @@ from oxq.cli.research import (
 from oxq.cli.research import (
     _phase_state_is_valid as _active_phase_state_is_valid,
 )
+from oxq.core.workspace_config import load_workspace_config
 
 _WORKSPACE_VERSION_RE = re.compile(r"^v[0-9][A-Za-z0-9_-]*$")
 
@@ -120,10 +121,10 @@ def _check_agent_locked() -> dict[str, Any]:
 
 def _check_workspace() -> dict[str, Any]:
     workspace = Path.cwd() / ".open-xquant" / "workspace.yaml"
-    if not workspace.exists():
+    if not workspace.exists() and not workspace.is_symlink():
         return {"status": "missing", "fixes": ["oxq research init"]}
     try:
-        config = read_yaml_file(workspace)
+        config = load_workspace_config(workspace, allow_empty=True)
     except Exception as exc:
         return {
             "status": "fail",

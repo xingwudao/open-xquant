@@ -28,6 +28,7 @@ from oxq.cli.agent_manifest import (
     write_yaml_file,
 )
 from oxq.cli.sdk_bundle import install_workspace_sdk
+from oxq.core.workspace_config import load_workspace_config
 from oxq.process_lock import ProcessFileLock, stable_path_location_identity, verified_user_runtime_root
 
 AGENT_PROFILE_MULTI = "multi-agent"
@@ -190,9 +191,9 @@ def _initialize_workspace_locked(
     sdk_state = None
     workspace_config: dict[str, object] | None = None
     created_workspace_config = False
-    if workspace_file.exists() and not force:
+    if (workspace_file.exists() or workspace_file.is_symlink()) and not force:
         click.echo("open-xquant workspace already initialized")
-        workspace_config = read_yaml_file(workspace_file)
+        workspace_config = load_workspace_config(workspace_file, allow_empty=True)
     else:
         workspace_config = _workspace_payload(cwd, name, data_dir)
         created_workspace_config = True

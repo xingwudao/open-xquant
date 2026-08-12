@@ -45,6 +45,17 @@ def _write_experiment_identity(run_dir: Path, strategy_id: str) -> None:
     (run_dir / "spec_hash.txt").write_text(spec.compute_hash() + "\n", encoding="utf-8")
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_active_workspace_state_rejects_broken_workspace_marker(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    (config_dir / "workspace.yaml").symlink_to(tmp_path / "missing.yaml")
+    monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(Exception, match="symlink"):
+        main_module._active_workspace_state()
+
+
 def _spec_audit_context() -> dict[str, object]:
     return {
         "strategy_idea_brief": "versions/v001/01_brainstorm/strategy_idea_brief.json",

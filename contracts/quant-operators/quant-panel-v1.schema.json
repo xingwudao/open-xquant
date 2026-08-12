@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-xquant.org/contracts/quant-operators/quant-panel-v1.schema.json",
+  "title": "open-xquant Serialized QuantPanel v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "context", "rows"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "timezone",
+        "calendar",
+        "frequency",
+        "timestamp_semantics",
+        "currency",
+        "price_adjustment",
+        "data_version",
+        "source"
+      ],
+      "properties": {
+        "timezone": {"type": "string", "minLength": 1},
+        "calendar": {"type": "string", "minLength": 1},
+        "frequency": {"type": "string", "minLength": 1},
+        "timestamp_semantics": {
+          "enum": ["session_date", "bar_open", "bar_close", "event_time", "publication_time"]
+        },
+        "currency": {"type": "string", "minLength": 1},
+        "price_adjustment": {
+          "enum": ["raw", "forward_adjusted", "backward_adjusted", "total_return_adjusted"]
+        },
+        "data_version": {"type": "string", "minLength": 1},
+        "source": {"type": "string", "minLength": 1}
+      }
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["date", "code"],
+        "properties": {
+          "date": {
+            "anyOf": [
+              {"type": "string", "format": "date"},
+              {"type": "string", "format": "date-time"}
+            ]
+          },
+          "code": {"type": "string", "minLength": 1}
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

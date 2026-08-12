@@ -1,0 +1,1 @@
+"""Quant operator contract tests."""

@@ -27,6 +27,7 @@ from oxq.cli.research import (
 from oxq.cli.research import (
     research as research_group,
 )
+from oxq.core.workspace_config import WorkspaceConfigError, load_workspace_config
 from oxq.process_lock import ProcessFileLock, ProcessLockError, stable_filesystem_identity
 from oxq.run_digests import (
     RunDigestError,
@@ -158,7 +159,7 @@ def _default_spec_init_output_path() -> Path:
 
 def _active_workspace_state() -> tuple[str, Path] | None:
     workspace_file = Path(".open-xquant") / "workspace.yaml"
-    if not workspace_file.exists():
+    if not workspace_file.exists() and not workspace_file.is_symlink():
         return None
     workspace = _read_workspace_config(workspace_file)
     if not _is_version_governed_workspace(workspace):
@@ -3682,19 +3683,10 @@ def _workspace_root_manifest_path(paths: dict, key: str, filename: str) -> Path:
 
 
 def _read_workspace_config(path: Path) -> dict:
-    if not path.exists():
-        return {}
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except OSError as exc:
+        return load_workspace_config(path, missing_ok=True, allow_empty=True)
+    except WorkspaceConfigError as exc:
         raise click.ClickException(f"workspace config is invalid: {path}: {exc}") from exc
-    except yaml.YAMLError as exc:
-        raise click.ClickException(f"workspace config is invalid: {path}: {exc}") from exc
-    if payload is None:
-        return {}
-    if not isinstance(payload, dict):
-        raise click.ClickException(f"workspace config must be a YAML object: {path}")
-    return payload
 
 
 def _read_json_object(path: Path) -> dict:

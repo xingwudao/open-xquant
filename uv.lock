@@ -1532,6 +1532,7 @@ source = { editable = "." }
 dependencies = [
     { name = "click" },
     { name = "exchange-calendars" },
+    { name = "jsonschema" },
     { name = "numpy" },
     { name = "pandas" },
     { name = "pyarrow" },
@@ -1592,6 +1593,7 @@ requires-dist = [
     { name = "exchange-calendars", specifier = ">=4.5" },
     { name = "httpx", extras = ["socks"], marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "httpx", extras = ["socks"], marker = "extra == 'live'", specifier = ">=0.27" },
+    { name = "jsonschema", specifier = ">=4.23" },
     { name = "matplotlib", marker = "extra == 'chart'", specifier = ">=3.7" },
     { name = "mcp", marker = "extra == 'agent'", specifier = ">=1.0" },
     { name = "mcp", marker = "extra == 'dev'", specifier = ">=1.0" },

@@ -9,8 +9,7 @@ from contextlib import contextmanager
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
-
+from oxq.core.workspace_config import WorkspaceConfigError, load_workspace_config
 from oxq.process_lock import ProcessFileLock
 
 FINAL_SELECTION_LOCK_RELATIVE_PATH = Path(".open-xquant/locks/final-selection.lock")
@@ -185,19 +184,12 @@ def _resolve_subject(path: str | Path) -> Path:
 
 
 def _read_workspace_config(workspace: Path, config_path: Path) -> Mapping[str, Any]:
-    config_dir = workspace / ".open-xquant"
-    canonical_config = config_dir / "workspace.yaml"
-    if config_dir.is_symlink() or not config_dir.is_dir() or config_path != canonical_config:
-        raise SelectionLockError(f"workspace configuration path is unsafe: {config_path}")
-    if config_path.is_symlink() or not config_path.is_file():
-        raise SelectionLockError(f"workspace configuration must be a regular non-symlink file: {config_path}")
     try:
-        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError) as exc:
-        raise SelectionLockError(f"workspace configuration is invalid: {config_path}: {exc}") from exc
-    if not isinstance(payload, Mapping):
-        raise SelectionLockError(f"workspace configuration must contain a mapping: {config_path}")
-    return payload
+        if config_path != workspace / _WORKSPACE_CONFIG_RELATIVE_PATH:
+            raise WorkspaceConfigError(f"workspace configuration path is unsafe: {config_path}")
+        return load_workspace_config(config_path)
+    except WorkspaceConfigError as exc:
+        raise SelectionLockError(str(exc)) from exc
 
 
 def _is_governed_workspace(workspace: Path, config: Mapping[str, Any]) -> bool:
