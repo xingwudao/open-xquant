@@ -169,9 +169,11 @@ def test_rejects_unsupported_dividend_type(dividend_type: str) -> None:
         TdxQuantDownloader(dividend_type=dividend_type)
 
 
-@pytest.mark.parametrize("timeout", [0.0, -1.0])
-def test_rejects_non_positive_timeout(timeout: float) -> None:
-    with pytest.raises(ValueError, match="greater than zero"):
+@pytest.mark.parametrize(
+    "timeout", [0.0, -1.0, float("nan"), float("inf"), float("-inf")]
+)
+def test_rejects_non_finite_or_non_positive_timeout(timeout: float) -> None:
+    with pytest.raises(ValueError, match="finite.*greater than zero"):
         TdxQuantDownloader(timeout=timeout)
 
 
@@ -190,6 +192,7 @@ def test_rejects_invalid_symbol(symbol: str, tmp_path: Path) -> None:
     ("start", "end"),
     [
         ("20240102", "2024-01-03"),
+        ("2024-1-2", "2024-01-03"),
         ("2024-02-30", "2024-03-01"),
         ("2024-01-03", "2024-01-02"),
     ],
@@ -203,7 +206,10 @@ def test_rejects_invalid_date_range(start: str, end: str, tmp_path: Path) -> Non
     ("side_effect", "message"),
     [
         (URLError("connection refused"), "start.*TdxQuant.*17709"),
-        (socket.timeout("timed out"), "timed out.*10.0"),  # noqa: UP041
+        (
+            socket.timeout("timed out"),  # noqa: UP041
+            "timed out.*http://127.0.0.1:17709/.*10.0",
+        ),  # noqa: UP041
         (
             HTTPError(
                 "http://127.0.0.1:17709/", 503, "unavailable", {}, None
@@ -228,6 +234,28 @@ def test_transport_errors_are_wrapped(
     assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
 
 
+@pytest.mark.parametrize(
+    "reason",
+    [TimeoutError("timed out"), socket.timeout("timed out")],  # noqa: UP041
+)
+def test_wrapped_timeout_errors_include_endpoint_and_duration(
+    reason: BaseException,
+    tmp_path: Path,
+) -> None:
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        side_effect=URLError(reason),
+    ):
+        with pytest.raises(
+            DownloadError,
+            match="timed out.*http://127.0.0.1:17709/.*10.0",
+        ):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+    assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
+
+
 def test_invalid_json_is_rejected_without_writes(tmp_path: Path) -> None:
     response = FakeResponse({})
     response.read = lambda: b"not-json"  # type: ignore[method-assign]
@@ -244,6 +272,7 @@ def test_invalid_json_is_rejected_without_writes(tmp_path: Path) -> None:
 
 def test_non_2xx_response_is_rejected_without_reading_body(tmp_path: Path) -> None:
     response = FakeResponse({}, status=503)
+    response.read = MagicMock(side_effect=AssertionError("body must not be read"))
     with patch(
         "examples.custom_data_sources.tdxquant_downloader.urlopen",
         return_value=response,
@@ -479,6 +508,46 @@ def test_rejects_invalid_out_of_window_market_data(
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match=message):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+    assert not (tmp_path / "600519.SH.parquet").exists()
+
+
+@pytest.mark.parametrize(
+    ("date", "value"),
+    [
+        ("20240102", True),
+        ("20240104", False),
+    ],
+)
+def test_rejects_boolean_ohlc_before_date_range_filtering(
+    date: str,
+    value: bool,
+    tmp_path: Path,
+) -> None:
+    payload = market_payload()
+    result = payload["result"]
+    assert isinstance(result, dict)
+    values = result["Value"]
+    assert isinstance(values, dict)
+    bars = values["600519.SH"]
+    assert isinstance(bars, dict)
+    if date == "20240104":
+        bars["Date"] = [date, *bars["Date"]]
+        for field in ("Open", "High", "Low", "Close", "Volume"):
+            items = bars[field]
+            assert isinstance(items, list)
+            bars[field] = [items[0], *items]
+    items = bars["Open"]
+    assert isinstance(items, list)
+    bars["Open"] = [value, *items[1:]]
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=FakeResponse(payload),
+    ):
+        with pytest.raises(DownloadError, match="invalid dates or OHLCV"):
             TdxQuantDownloader().download(
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
             )

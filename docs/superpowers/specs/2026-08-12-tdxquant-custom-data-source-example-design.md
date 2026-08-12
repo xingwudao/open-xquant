@@ -82,11 +82,13 @@ class TdxQuantDownloader:
 
 - `symbol` 必须使用 `代码.市场`，例如 `600519.SH` 或 `000001.SZ`。
 - 市场后缀仅接受 `SH`、`SZ` 和 `BJ`，输入统一转为大写。
-- `start` 和 `end` 接受 ISO 日期，发送前转为 `YYYYMMDD`。
+- `start` 和 `end` 必须是规范的 `YYYY-MM-DD` 日期字符串，发送前转为
+  `YYYYMMDD`。
 - `start` 不得晚于 `end`。
 - `dividend_type` 仅接受 `front` 或 `none`。
-- endpoint 仅接受 HTTP 回环地址：`127.0.0.1`、`localhost` 或 `::1`。
-- `timeout` 必须大于零。
+- endpoint 仅接受端口为 `17709` 的 HTTP 回环地址：`127.0.0.1`、
+  `localhost` 或 `::1`。
+- `timeout` 必须有限且大于零。
 
 要求显式市场后缀可以避免随证券规则变化而失效的代码前缀推断。限制回环
 地址可防止示例被误用为任意远程 HTTP 客户端，并符合官方本地接口定位。
@@ -106,10 +108,11 @@ class TdxQuantDownloader:
    - `fill_data`: `false`
 4. 检查顶层 `id`、`result.ErrorId` 和证券级 `ErrorId`。
 5. 从 `result.Value[symbol]` 读取 `Date` 和 OHLCV 数组。
-6. 将数字字符串转为数值，并验证所有数组等长。
+6. 将数字字符串转为数值，拒绝布尔 OHLC 值，并验证所有数组等长。
 7. 用 `Date` 构造 `DatetimeIndex`，本地化到 `Asia/Shanghai`。
-8. 按日期升序排序，并按请求区间再次过滤。
-9. 验证数据非空、日期唯一、OHLCV 非空且成交量可安全转为 `int64`。
+8. 在日期范围过滤前验证完整响应：日期唯一、OHLCV 均为有限值，且成交量可
+   精确安全地转为 `int64`。
+9. 按日期升序排序，按请求区间再次过滤，并验证过滤后的数据非空。
 10. 写入 `{symbol}.parquet`。
 11. 写入 manifest，provider 为 `tdxquant`。
 12. 返回 Parquet 路径。
@@ -158,7 +161,7 @@ open, high, low, close, volume
 - 非 JSON 或结构缺失：报告响应结构无效。
 - TdxQuant `ErrorId` 非 `0`：包含 symbol 和官方错误信息。
 - 空数据：报告请求 symbol 和日期范围。
-- 数组长度不一致、非法日期或非数值字段：拒绝写文件。
+- 数组长度不一致、非法日期、布尔 OHLC、非数值或非有限字段：拒绝写文件。
 - 写入失败：保留原始异常链，避免留下成功 manifest。
 
 第一版不做自动重试。连接失败、终端未启动和数据未下载是不同原因，静默
@@ -180,17 +183,18 @@ Parquet 和 manifest。响应验证必须在任何写入之前完成。
 
 - `TdxQuantDownloader` 满足 `Downloader` 协议。
 - 请求方法、endpoint 和 JSON 参数正确。
-- ISO 日期正确转为 `YYYYMMDD`。
+- 规范 `YYYY-MM-DD` 日期正确转为 `YYYYMMDD`，非规范日期被拒绝。
 - OHLCV 字符串正确转换和排序。
 - 输出索引为 `Asia/Shanghai`。
 - Parquet 和 `tdxquant` manifest 正确写入。
 - `front` 与 `none` 正确传递。
 - `download_many` 串行生成多个文件。
 - 非回环 endpoint 被拒绝。
-- 非法 symbol、日期和 timeout 被拒绝。
+- 非法 symbol、日期和非有限或非正 timeout 被拒绝。
 - 连接拒绝、超时、HTTP 错误和非法 JSON 转为清晰错误。
 - 顶层和证券级 TdxQuant 错误被拒绝。
-- 空数据、数组长度不一致、非法数字和重复日期均被拒绝。
+- 空数据、数组长度不一致、布尔或非法数字、非有限数据和重复日期均被拒绝；
+  完整响应先验证再按日期范围过滤。
 
 可选人工 smoke test 写入 README，不进入默认 pytest：
 

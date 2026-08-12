@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import re
 import socket
 from collections.abc import Mapping
@@ -60,6 +61,8 @@ def _parse_date_range(start: str, end: str) -> tuple[date, date]:
         end_date = datetime.strptime(end, "%Y-%m-%d").date()
     except ValueError as exc:
         raise ValueError("start and end must be valid YYYY-MM-DD dates") from exc
+    if start != start_date.isoformat() or end != end_date.isoformat():
+        raise ValueError("start and end must be canonical YYYY-MM-DD dates")
     if start_date > end_date:
         raise ValueError("start date must not be later than end date")
     return start_date, end_date
@@ -78,8 +81,8 @@ class TdxQuantDownloader:
         _validate_endpoint(endpoint)
         if dividend_type not in {"front", "none"}:
             raise ValueError("dividend_type must be 'front' or 'none'")
-        if timeout <= 0:
-            raise ValueError("timeout must be greater than zero")
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("timeout must be finite and greater than zero")
         self.endpoint = endpoint
         self.dividend_type = dividend_type
         self.timeout = timeout
@@ -149,9 +152,15 @@ class TdxQuantDownloader:
             raise DownloadError(f"TdxQuant returned HTTP {exc.code}.") from exc
         except (socket.timeout, TimeoutError) as exc:  # noqa: UP041
             raise DownloadError(
-                f"TdxQuant request timed out after {self.timeout} seconds."
+                f"TdxQuant request timed out for {self.endpoint} after "
+                f"{self.timeout} seconds."
             ) from exc
         except URLError as exc:
+            if isinstance(exc.reason, (socket.timeout, TimeoutError)):
+                raise DownloadError(
+                    f"TdxQuant request timed out for {self.endpoint} after "
+                    f"{self.timeout} seconds."
+                ) from exc
             raise DownloadError(
                 "Cannot connect to TdxQuant; start a supported TdxQuant client "
                 "and verify the local endpoint on port 17709."
@@ -232,6 +241,22 @@ def _volume_values(values: list[object], symbol: str) -> list[int]:
     return volume
 
 
+def _ohlc_values(values: list[object], symbol: str) -> list[float]:
+    parsed_values: list[float] = []
+    try:
+        for value in values:
+            if isinstance(value, bool):
+                raise TypeError("boolean OHLC value")
+            if not isinstance(value, (str, int, float)):
+                raise TypeError("unsupported OHLC value")
+            parsed_values.append(float(value))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise DownloadError(
+            f"TdxQuant returned invalid dates or OHLCV values for '{symbol}'."
+        ) from exc
+    return parsed_values
+
+
 def _frame_from_payload(
     payload: Mapping[str, object], symbol: str, start: str, end: str
 ) -> pd.DataFrame:
@@ -259,12 +284,12 @@ def _frame_from_payload(
         volume = _volume_values(series["Volume"], symbol)
         frame = pd.DataFrame(
             {
-                field.lower(): pd.Series(series[field], dtype="object")
-                .astype("float64")
-                .to_numpy()
-                if field != "Volume"
-                else volume
-                for field in _FIELDS
+                **{
+                    field.lower(): _ohlc_values(series[field], symbol)
+                    for field in _FIELDS
+                    if field != "Volume"
+                },
+                "volume": volume,
             },
             index=index,
         )
