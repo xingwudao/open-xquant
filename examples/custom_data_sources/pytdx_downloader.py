@@ -498,17 +498,19 @@ class PyTdxDownloader:
             raise ValueError("port must be an integer from 1 to 65535")
         if not isinstance(auto_adjust, bool):
             raise ValueError("auto_adjust must be a boolean")
-        if (
-            isinstance(timeout, bool)
-            or not isinstance(timeout, (int, float))
-            or not math.isfinite(timeout)
-            or timeout <= 0
-        ):
+        timeout_message = "timeout must be finite and greater than zero"
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError(timeout_message)
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(timeout_message) from exc
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
             raise ValueError("timeout must be finite and greater than zero")
         self.host = host
         self.port = port
         self.auto_adjust = auto_adjust
-        self.timeout = float(timeout)
+        self.timeout = normalized_timeout
 
     def _download_connected(
         self,

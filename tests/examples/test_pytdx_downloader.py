@@ -100,7 +100,7 @@ def test_rejects_invalid_port(port: object) -> None:
 
 @pytest.mark.parametrize(
     "timeout",
-    [True, "5", object(), 0.0, -1.0, float("nan"), float("inf")],
+    [True, "5", object(), 10**1000, 0.0, -1.0, float("nan"), float("inf")],
 )
 def test_rejects_invalid_timeout(timeout: object) -> None:
     with pytest.raises(ValueError, match="timeout"):
