@@ -1,4 +1,23 @@
-# 自定义数据源示例：通达信 TdxQuant
+# 自定义数据源示例：通达信
+
+本目录提供两个相互独立的通达信 Downloader example。它们都只演示如何扩展
+`oxq.data.providers.Downloader`，不是 SDK 内置或承诺长期兼容的数据源。
+
+[TdxQuantDownloader]
+
+- Pros: 使用通达信官方本地 HTTP 接口，由终端提供前复权结果。
+- Cons: 必须安装并启动支持 TQ 的通达信客户端，并准备盘后数据。
+- Best for: 已有合适通达信客户端和官方本地接口的研究环境。
+- Risk: 受客户端版本、账号、接口权限和本地数据状态影响。
+
+[PyTdxDownloader]
+
+- Pros: [直接连接行情服务器](PYTDX.md)，不需要安装或启动客户端。
+- Cons: 必须显式提供服务器，且依赖已归档的第三方 `pytdx==1.72`。
+- Best for: 需要研究自定义网络数据源和本地比例复权的非生产示例。
+- Risk: 用户自行承担服务器条款、行情许可、稳定性和协议兼容风险。
+
+## TdxQuantDownloader：官方本地 HTTP
 
 本目录演示如何实现 `oxq.data.providers.Downloader`，通过通达信官方
 TdxQuant 本地 HTTP 接口下载 A 股日线并生成 open-xquant 可读取的数据文件。
