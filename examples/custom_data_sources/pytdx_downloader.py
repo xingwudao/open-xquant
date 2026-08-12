@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib
 import math
 import re
@@ -10,12 +11,15 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from importlib import metadata
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
 import pandas as pd
 
 from oxq.core.errors import DownloadError
+from oxq.data.loaders import resolve_data_dir
+from oxq.data.manifest import write_manifest
 
 _SYMBOL_PATTERN = re.compile(r"^[0-9]{6}\.(SH|SZ)$")
 _HOST_PATTERN = re.compile(
@@ -43,6 +47,17 @@ class _Action:
     peigu: float
 
 
+@dataclass(frozen=True)
+class _DownloadRequest:
+    symbol: str
+    market: int
+    code: str
+    start_text: str
+    end_text: str
+    start_date: date
+    end_date: date
+
+
 def _normalize_symbol(symbol: str) -> tuple[str, int, str]:
     normalized = symbol.upper()
     match = _SYMBOL_PATTERN.fullmatch(normalized)
@@ -67,6 +82,20 @@ def _parse_date_range(start: str, end: str) -> tuple[date, date]:
     if start_date > end_date:
         raise ValueError("start date must not be later than end date")
     return start_date, end_date
+
+
+def _prepare_request(symbol: str, start: str, end: str) -> _DownloadRequest:
+    normalized, market, code = _normalize_symbol(symbol)
+    start_date, end_date = _parse_date_range(start, end)
+    return _DownloadRequest(
+        symbol=normalized,
+        market=market,
+        code=code,
+        start_text=start,
+        end_text=end,
+        start_date=start_date,
+        end_date=end_date,
+    )
 
 
 def _load_pytdx() -> tuple[type[Any], str]:
@@ -463,3 +492,150 @@ class PyTdxDownloader:
         self.port = port
         self.auto_adjust = auto_adjust
         self.timeout = timeout
+
+    def _download_connected(
+        self,
+        api: Any,
+        pytdx_version: str,
+        request: _DownloadRequest,
+        dest_dir: Path | None,
+    ) -> Path:
+        raw = _fetch_raw_bars(
+            api,
+            request.market,
+            request.code,
+            request.start_date,
+            request.symbol,
+        )
+        index = pd.DatetimeIndex(raw.index)
+        lower = pd.Timestamp(request.start_date, tz="Asia/Shanghai")
+        upper = pd.Timestamp(request.end_date, tz="Asia/Shanghai")
+        output_mask = (index >= lower) & (index <= upper)
+        requested_raw = raw.loc[output_mask]
+        if requested_raw.empty:
+            raise DownloadError(
+                f"No data returned for '{request.symbol}' "
+                f"({request.start_text} to {request.end_text})."
+            )
+
+        if self.auto_adjust:
+            try:
+                actions = api.get_xdxr_info(request.market, request.code)
+            except Exception as exc:
+                raise DownloadError(
+                    f"TDX corporate-action request failed for '{request.symbol}'."
+                ) from exc
+            adjusted, event_count = _adjust_bars(
+                raw,
+                actions,
+                pd.DatetimeIndex(requested_raw.index)[0].date(),
+                request.symbol,
+            )
+            adjustment_method = "xdxr_ratio_yfinance_semantics"
+        else:
+            adjusted = raw.copy()
+            event_count = 0
+            adjustment_method = "none"
+        frame = adjusted.loc[output_mask, list(_COLUMNS)].copy()
+        prices = frame.loc[:, list(_OHLC)].to_numpy(dtype="float64")
+        if (
+            frame.index.has_duplicates
+            or not frame.index.is_monotonic_increasing
+            or not np.isfinite(prices).all()
+            or (prices <= 0).any()
+            or (frame["volume"] < 0).any()
+        ):
+            raise DownloadError(
+                f"TDX produced an invalid output frame for '{request.symbol}'."
+            )
+
+        data_dir = resolve_data_dir(dest_dir)
+        data_dir.mkdir(parents=True, exist_ok=True)
+        path = data_dir / f"{request.symbol}.parquet"
+        frame.to_parquet(path)
+        write_manifest(
+            parquet_path=path,
+            symbol=request.symbol,
+            provider="pytdx",
+            start=request.start_text,
+            end=request.end_text,
+            rows=len(frame),
+            extra={
+                "auto_adjust": self.auto_adjust,
+                "adjustment_method": adjustment_method,
+                "adjustment_reference_date": index[-1].date().isoformat(),
+                "applied_event_count": event_count,
+                "bar_category": _BAR_CATEGORY,
+                "host": self.host,
+                "period": "1d",
+                "port": self.port,
+                "pytdx_version": pytdx_version,
+                "transport": "tdx_hq_tcp",
+            },
+        )
+        return path
+
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        request = _prepare_request(symbol, start, end)
+        with _connected_api(self.host, self.port, self.timeout) as (api, version):
+            return self._download_connected(api, version, request, dest_dir)
+
+    def download_many(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> dict[str, Path]:
+        requests = [
+            (symbol, _prepare_request(symbol, start, end)) for symbol in symbols
+        ]
+        if not requests:
+            return {}
+        results: dict[str, Path] = {}
+        with _connected_api(self.host, self.port, self.timeout) as (api, version):
+            for original_symbol, request in requests:
+                results[original_symbol] = self._download_connected(
+                    api,
+                    version,
+                    request,
+                    dest_dir,
+                )
+        return results
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Download daily bars directly from a TDX quote server."
+    )
+    parser.add_argument("symbol", help="Six-digit symbol with .SH or .SZ")
+    parser.add_argument("start", help="Inclusive start date (YYYY-MM-DD)")
+    parser.add_argument("end", help="Inclusive end date (YYYY-MM-DD)")
+    parser.add_argument(
+        "--host",
+        required=True,
+        help="Explicit TDX server hostname or IPv4 address",
+    )
+    parser.add_argument("--port", type=int, default=7709)
+    parser.add_argument("--timeout", type=float, default=5.0)
+    parser.add_argument("--no-auto-adjust", action="store_true")
+    parser.add_argument("--dest-dir", type=Path)
+    args = parser.parse_args(argv)
+    path = PyTdxDownloader(
+        host=args.host,
+        port=args.port,
+        timeout=args.timeout,
+        auto_adjust=not args.no_auto_adjust,
+    ).download(args.symbol, args.start, args.end, args.dest_dir)
+    print(path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

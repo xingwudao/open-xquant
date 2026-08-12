@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import examples.custom_data_sources.pytdx_downloader as module
@@ -9,6 +10,8 @@ import pytest
 from examples.custom_data_sources.pytdx_downloader import PyTdxDownloader
 
 from oxq.core.errors import DownloadError
+from oxq.data.manifest import read_manifest, verify_manifest
+from oxq.data.providers import Downloader
 
 
 class FakeApi:
@@ -632,3 +635,201 @@ def test_rejects_non_positive_adjustment_reference() -> None:
             module.date(2024, 1, 1),
             "510300.SH",
         )
+
+
+def test_download_writes_standard_adjusted_artifacts(tmp_path: Path) -> None:
+    api = FakeApi(
+        pages={
+            0: [
+                bar("2024-01-04", 9.9),
+                bar("2024-01-03", 9.8),
+                bar("2024-01-02", 10.2),
+            ]
+        },
+        actions=[xdxr("2024-01-03", fenhong=2.0)],
+    )
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        path = PyTdxDownloader(host="quote.example").download(
+            "510300.sh",
+            "2024-01-02",
+            "2024-01-03",
+            tmp_path,
+        )
+
+    assert path == tmp_path / "510300.SH.parquet"
+    frame = pd.read_parquet(path)
+    assert list(frame.columns) == ["open", "high", "low", "close", "volume"]
+    assert frame.index.strftime("%Y-%m-%d").tolist() == [
+        "2024-01-02",
+        "2024-01-03",
+    ]
+    assert str(frame.index.tz) == "Asia/Shanghai"
+    assert frame["volume"].dtype == "int64"
+
+    manifest = read_manifest(tmp_path / "510300.SH.manifest.json")
+    assert manifest is not None
+    assert manifest["provider"] == "pytdx"
+    assert manifest["rows"] == 2
+    assert manifest["extra"] == {
+        "auto_adjust": True,
+        "adjustment_method": "xdxr_ratio_yfinance_semantics",
+        "adjustment_reference_date": "2024-01-04",
+        "applied_event_count": 1,
+        "bar_category": 9,
+        "host": "quote.example",
+        "period": "1d",
+        "port": 7709,
+        "pytdx_version": "1.72",
+        "transport": "tdx_hq_tcp",
+    }
+    assert verify_manifest(path).status == "real"
+
+
+def test_downloader_satisfies_protocol() -> None:
+    downloader: Downloader = PyTdxDownloader(host="quote.example")
+    assert isinstance(downloader, Downloader)
+
+
+def test_no_auto_adjust_skips_actions_and_preserves_raw_prices(
+    tmp_path: Path,
+) -> None:
+    api = FakeApi(
+        pages={0: [bar("2024-01-02", 10.2), bar("2024-01-01", 10.0)]},
+        actions=None,
+    )
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        path = PyTdxDownloader(
+            host="quote.example",
+            auto_adjust=False,
+        ).download("510300.SH", "2024-01-01", "2024-01-02", tmp_path)
+
+    frame = pd.read_parquet(path)
+    assert frame.loc["2024-01-01", "close"] == pytest.approx(10.0)
+    assert api.action_calls == []
+    manifest = read_manifest(tmp_path / "510300.SH.manifest.json")
+    assert manifest is not None
+    assert manifest["extra"]["auto_adjust"] is False
+    assert manifest["extra"]["adjustment_method"] == "none"
+    assert manifest["extra"]["applied_event_count"] == 0
+
+
+def test_empty_requested_range_does_not_create_destination(tmp_path: Path) -> None:
+    destination = tmp_path / "not-created"
+    api = FakeApi(pages={0: [bar("2024-01-01", 10.0)]})
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        with pytest.raises(DownloadError, match="No data"):
+            PyTdxDownloader(host="quote.example").download(
+                "510300.SH",
+                "2025-01-01",
+                "2025-01-02",
+                destination,
+            )
+
+    assert not destination.exists()
+
+
+def test_wraps_corporate_action_request_error(tmp_path: Path) -> None:
+    api = FakeApi(pages={0: [bar("2024-01-01", 10.0)]})
+    api.get_xdxr_info = MagicMock(side_effect=RuntimeError("protocol failed"))
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        with pytest.raises(DownloadError, match="corporate-action request failed"):
+            PyTdxDownloader(host="quote.example").download(
+                "510300.SH",
+                "2024-01-01",
+                "2024-01-01",
+                tmp_path / "not-created",
+            )
+
+
+def test_download_many_uses_one_connection_and_both_market_mappings(
+    tmp_path: Path,
+) -> None:
+    api = FakeApi(pages={0: [bar("2024-01-01", 10.0)]})
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        paths = PyTdxDownloader(host="quote.example").download_many(
+            ["510300.SH", "159919.sz"],
+            "2024-01-01",
+            "2024-01-01",
+            tmp_path,
+        )
+
+    assert list(paths) == ["510300.SH", "159919.sz"]
+    assert connected.call_count == 1
+    assert api.bar_calls == [
+        (9, 1, "510300", 0, 800),
+        (9, 0, "159919", 0, 800),
+    ]
+    assert api.action_calls == [(1, "510300"), (0, "159919")]
+
+
+def test_empty_download_many_does_not_connect() -> None:
+    with patch.object(module, "_connected_api") as connected:
+        result = PyTdxDownloader(host="quote.example").download_many(
+            [],
+            "2024-01-01",
+            "2024-01-01",
+        )
+
+    assert result == {}
+    connected.assert_not_called()
+
+
+def test_main_downloads_with_default_adjustment_and_prints_path(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "510300.SH.parquet"
+    downloader = MagicMock()
+    downloader.download.return_value = output
+
+    with patch.object(module, "PyTdxDownloader", return_value=downloader) as cls:
+        result = module.main(
+            [
+                "510300.SH",
+                "2020-05-01",
+                "2026-01-01",
+                "--host",
+                "quote.example",
+                "--dest-dir",
+                str(tmp_path),
+            ]
+        )
+
+    assert result == 0
+    cls.assert_called_once_with(
+        host="quote.example",
+        port=7709,
+        timeout=5.0,
+        auto_adjust=True,
+    )
+    downloader.download.assert_called_once_with(
+        "510300.SH",
+        "2020-05-01",
+        "2026-01-01",
+        tmp_path,
+    )
+    assert capsys.readouterr().out.strip() == str(output)
+
+
+def test_main_no_auto_adjust_flag_is_forwarded(tmp_path: Path) -> None:
+    downloader = MagicMock()
+    downloader.download.return_value = tmp_path / "510300.SH.parquet"
+
+    with patch.object(module, "PyTdxDownloader", return_value=downloader) as cls:
+        module.main(
+            [
+                "510300.SH",
+                "2020-05-01",
+                "2026-01-01",
+                "--host",
+                "quote.example",
+                "--no-auto-adjust",
+            ]
+        )
+
+    assert cls.call_args.kwargs["auto_adjust"] is False
