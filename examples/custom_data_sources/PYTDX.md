@@ -100,7 +100,9 @@ data/market/510300.SH.manifest.json
 
 Parquet 列顺序固定为 `open`、`high`、`low`、`close`、`volume`。索引名为
 `date`，唯一、升序，时区为 `Asia/Shanghai`；OHLC 是 `float64`，volume 是
-`int64` 且不参与复权。
+`int64` 且不参与复权。`pytdx` 的成交量解码器可能返回微小浮点误差或
+半整数；示例会先要求其有限且非负，再按“五入”规则归一化为最近的
+`int64`。这只是数据类型归一化，不是复权调整。
 
 manifest 的 provider 为 `pytdx`，并记录：
 

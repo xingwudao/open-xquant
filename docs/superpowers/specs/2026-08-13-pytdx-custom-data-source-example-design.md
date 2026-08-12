@@ -166,7 +166,8 @@ OHLCV 完全一致时去重；内容冲突时失败。
 - `datetime` 可解析为日期；日内时间被规范到交易日零点。
 - `open`、`high`、`low`、`close` 是有限正数。
 - `low <= open <= high`、`low <= close <= high`。
-- `vol` 是有限、非负、可精确转换到 `int64` 的整数值。
+- `vol` 必须有限且非负；针对 `pytdx` 解码器的浮点误差，按半向上
+  规则归一化到最近的 `int64`，溢出时拒绝。
 
 合并结果按日期升序，以 `Asia/Shanghai` 构造名为 `date` 的
 `DatetimeIndex`。复权完成后才按双端包含的 `[start, end]` 过滤。若过滤结果

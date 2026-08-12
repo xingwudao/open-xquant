@@ -98,10 +98,13 @@ def test_rejects_invalid_port(port: object) -> None:
         PyTdxDownloader(host="quote.example", port=port)  # type: ignore[arg-type]
 
 
-@pytest.mark.parametrize("timeout", [0.0, -1.0, float("nan"), float("inf")])
-def test_rejects_invalid_timeout(timeout: float) -> None:
+@pytest.mark.parametrize(
+    "timeout",
+    [True, "5", object(), 0.0, -1.0, float("nan"), float("inf")],
+)
+def test_rejects_invalid_timeout(timeout: object) -> None:
     with pytest.raises(ValueError, match="timeout"):
-        PyTdxDownloader(host="quote.example", timeout=timeout)
+        PyTdxDownloader(host="quote.example", timeout=timeout)  # type: ignore[arg-type]
 
 
 def test_rejects_non_boolean_auto_adjust() -> None:
@@ -173,6 +176,30 @@ def test_connected_api_rejects_false_connect_result() -> None:
             with module._connected_api("quote.example", 7709, 5.0):
                 pass
 
+    api.disconnect.assert_called_once_with()
+
+
+def test_connected_api_cleans_up_after_connect_exception() -> None:
+    api = MagicMock()
+    api.connect.side_effect = RuntimeError("connect failed")
+    api_class = MagicMock(return_value=api)
+
+    with patch.object(module, "_load_pytdx", return_value=(api_class, "1.72")):
+        with pytest.raises(DownloadError, match=r"quote\.example:7709"):
+            with module._connected_api("quote.example", 7709, 5.0):
+                pass
+
+    api.disconnect.assert_called_once_with()
+
+
+def test_connected_api_wraps_constructor_failure_with_endpoint() -> None:
+    api_class = MagicMock(side_effect=RuntimeError("constructor failed"))
+
+    with patch.object(module, "_load_pytdx", return_value=(api_class, "1.72")):
+        with pytest.raises(DownloadError, match=r"quote\.example:7709"):
+            with module._connected_api("quote.example", 7709, 5.0):
+                pass
+
 
 def test_disconnect_failure_is_a_download_error() -> None:
     api = MagicMock()
@@ -232,7 +259,6 @@ def test_fetches_800_bar_pages_backward_until_before_start() -> None:
         ([{"datetime": "bad"}], "required bar fields"),
         ([bar("2024-01-01", float("nan"))], "finite positive OHLC"),
         ([bar("2024-01-01", 10.0, True)], "safe non-negative integer volume"),
-        ([bar("2024-01-01", 10.0, 1.5)], "safe non-negative integer volume"),
         ([bar("2024-01-01", 10.0, -1)], "safe non-negative integer volume"),
         ([bar("2024-01-01", 10.0, 2**63)], "safe non-negative integer volume"),
     ],
@@ -248,6 +274,21 @@ def test_rejects_invalid_bar_payload(payload: object, message: str) -> None:
             module.date(2020, 5, 1),
             "510300.SH",
         )
+
+
+@pytest.mark.parametrize(
+    ("decoded", "expected"),
+    [
+        (5.877471754111438e-39, 0),
+        (32768.5, 32769),
+        (1000.49, 1000),
+    ],
+)
+def test_normalizes_lossy_pytdx_volume_decode(
+    decoded: float,
+    expected: int,
+) -> None:
+    assert module._volume(decoded, "510300.SH") == expected
 
 
 def test_rejects_invalid_bar_date() -> None:
@@ -686,6 +727,37 @@ def test_download_writes_standard_adjusted_artifacts(tmp_path: Path) -> None:
     assert verify_manifest(path).status == "real"
 
 
+def test_event_after_requested_end_adjusts_earlier_output(tmp_path: Path) -> None:
+    api = FakeApi(
+        pages={
+            0: [
+                bar("2024-01-04", 9.9),
+                bar("2024-01-03", 9.8),
+                bar("2024-01-02", 10.2),
+                bar("2024-01-01", 10.0),
+            ]
+        },
+        actions=[xdxr("2024-01-03", fenhong=2.0)],
+    )
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        path = PyTdxDownloader(host="quote.example").download(
+            "510300.SH",
+            "2024-01-01",
+            "2024-01-02",
+            tmp_path,
+        )
+
+    frame = pd.read_parquet(path)
+    expected_ratio = (10.2 - 0.2) / 10.2
+    assert frame.loc["2024-01-02", "close"] == pytest.approx(
+        10.2 * expected_ratio
+    )
+    manifest = read_manifest(tmp_path / "510300.SH.manifest.json")
+    assert manifest is not None
+    assert manifest["extra"]["applied_event_count"] == 1
+
+
 def test_downloader_satisfies_protocol() -> None:
     downloader: Downloader = PyTdxDownloader(host="quote.example")
     assert isinstance(downloader, Downloader)
@@ -725,6 +797,34 @@ def test_empty_requested_range_does_not_create_destination(tmp_path: Path) -> No
                 "510300.SH",
                 "2025-01-01",
                 "2025-01-02",
+                destination,
+            )
+
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
+    ("pages", "actions", "message"),
+    [
+        ({0: [bar("2024-01-01", 10.0, volume=-1)]}, [], "volume"),
+        ({0: [bar("2024-01-01", 10.0)]}, {}, "corporate-action response"),
+    ],
+)
+def test_invalid_payload_does_not_create_destination(
+    tmp_path: Path,
+    pages: dict[int, object],
+    actions: object,
+    message: str,
+) -> None:
+    destination = tmp_path / "not-created"
+    api = FakeApi(pages=pages, actions=actions)
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        with pytest.raises(DownloadError, match=message):
+            PyTdxDownloader(host="quote.example").download(
+                "510300.SH",
+                "2024-01-01",
+                "2024-01-01",
                 destination,
             )
 
@@ -777,6 +877,46 @@ def test_empty_download_many_does_not_connect() -> None:
 
     assert result == {}
     connected.assert_not_called()
+
+
+def test_download_many_retains_first_result_and_stops_after_failure(
+    tmp_path: Path,
+) -> None:
+    api = MagicMock()
+    requested_codes: list[str] = []
+
+    def get_bars(
+        category: int,
+        market: int,
+        code: str,
+        offset: int,
+        count: int,
+    ) -> object:
+        del category, market, count
+        requested_codes.append(code)
+        if code == "510300":
+            return [bar("2024-01-01", 10.0)] if offset == 0 else []
+        if code == "159919":
+            raise RuntimeError("second symbol failed")
+        raise AssertionError("third symbol must not be requested")
+
+    api.get_security_bars.side_effect = get_bars
+    with patch.object(module, "_connected_api") as connected:
+        connected.return_value.__enter__.return_value = (api, "1.72")
+        with pytest.raises(DownloadError, match="bar request failed"):
+            PyTdxDownloader(
+                host="quote.example",
+                auto_adjust=False,
+            ).download_many(
+                ["510300.SH", "159919.SZ", "512000.SH"],
+                "2024-01-01",
+                "2024-01-01",
+                tmp_path,
+            )
+
+    assert (tmp_path / "510300.SH.parquet").is_file()
+    assert not (tmp_path / "512000.SH.parquet").exists()
+    assert requested_codes == ["510300", "159919"]
 
 
 def test_main_downloads_with_default_adjustment_and_prints_path(
@@ -833,3 +973,11 @@ def test_main_no_auto_adjust_flag_is_forwarded(tmp_path: Path) -> None:
         )
 
     assert cls.call_args.kwargs["auto_adjust"] is False
+
+
+def test_main_requires_explicit_host(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        module.main(["510300.SH", "2020-05-01", "2026-01-01"])
+
+    assert exc_info.value.code == 2
+    assert "--host" in capsys.readouterr().err

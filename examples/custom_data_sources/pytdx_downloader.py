@@ -9,7 +9,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import date, datetime
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from importlib import metadata
 from pathlib import Path
 from typing import Any, cast
@@ -141,14 +141,12 @@ def _volume(value: object, symbol: str) -> int:
         parsed = Decimal(str(value))
     except (InvalidOperation, ValueError) as exc:
         raise DownloadError(message) from exc
-    if (
-        not parsed.is_finite()
-        or parsed < 0
-        or parsed != parsed.to_integral_value()
-        or parsed > np.iinfo(np.int64).max
-    ):
+    if not parsed.is_finite() or parsed < 0:
         raise DownloadError(message)
-    return int(parsed)
+    normalized = parsed.to_integral_value(rounding=ROUND_HALF_UP)
+    if normalized > np.iinfo(np.int64).max:
+        raise DownloadError(message)
+    return int(normalized)
 
 
 def _parse_bar_page(payload: object, symbol: str) -> pd.DataFrame:
@@ -434,19 +432,33 @@ def _connected_api(
     timeout: float,
 ) -> Iterator[tuple[Any, str]]:
     api_class, version = _load_pytdx()
-    api = api_class(
-        multithread=False,
-        heartbeat=False,
-        auto_retry=False,
-        raise_exception=True,
-    )
+    try:
+        api = api_class(
+            multithread=False,
+            heartbeat=False,
+            auto_retry=False,
+            raise_exception=True,
+        )
+    except Exception as exc:
+        raise DownloadError(
+            f"Cannot initialize TDX quote connection for {host}:{port}."
+        ) from exc
+
+    def disconnect_quietly() -> None:
+        try:
+            api.disconnect()
+        except Exception:
+            pass
+
     try:
         result = api.connect(host, port, time_out=timeout)
     except Exception as exc:
+        disconnect_quietly()
         raise DownloadError(
             f"Cannot connect to TDX quote server {host}:{port}."
         ) from exc
     if result is False or result is None:
+        disconnect_quietly()
         raise DownloadError(
             f"Cannot connect to TDX quote server {host}:{port}."
         )
@@ -486,12 +498,17 @@ class PyTdxDownloader:
             raise ValueError("port must be an integer from 1 to 65535")
         if not isinstance(auto_adjust, bool):
             raise ValueError("auto_adjust must be a boolean")
-        if not math.isfinite(timeout) or timeout <= 0:
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout)
+            or timeout <= 0
+        ):
             raise ValueError("timeout must be finite and greater than zero")
         self.host = host
         self.port = port
         self.auto_adjust = auto_adjust
-        self.timeout = timeout
+        self.timeout = float(timeout)
 
     def _download_connected(
         self,
