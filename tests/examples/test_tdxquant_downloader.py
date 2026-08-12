@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import importlib
 import json
 import socket
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError, URLError
+from urllib.request import Request
 
+import examples.custom_data_sources.tdxquant_downloader as tdxquant_downloader
 import pandas as pd
 import pytest
 from examples.custom_data_sources.tdxquant_downloader import TdxQuantDownloader, main
@@ -29,6 +33,21 @@ class FakeResponse:
 
     def read(self) -> bytes:
         return json.dumps(self.payload).encode("utf-8")
+
+
+class RawResponse:
+    def __init__(self, raw: bytes, status: int = 200) -> None:
+        self.raw = raw
+        self.status = status
+
+    def __enter__(self) -> RawResponse:
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        return None
+
+    def read(self) -> bytes:
+        return self.raw
 
 
 def market_payload(
@@ -60,6 +79,42 @@ def market_payload(
 def test_downloader_satisfies_protocol() -> None:
     downloader: Downloader = TdxQuantDownloader()
     assert isinstance(downloader, Downloader)
+
+
+def test_local_transport_disables_environment_proxies_and_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("http_proxy", "http://proxy.invalid:8080")
+    monkeypatch.delenv("no_proxy", raising=False)
+    module = importlib.reload(tdxquant_downloader)
+    opener = getattr(module.urlopen, "__self__", None)
+
+    assert opener is not None
+    assert all(
+        handler.__class__.__name__ != "ProxyHandler" for handler in opener.handlers
+    )
+    redirect_handler = next(
+        handler
+        for handler in opener.handlers
+        if handler.__class__.__name__ == "_NoRedirectHandler"
+    )
+    assert (
+        redirect_handler.redirect_request(
+            Request("http://127.0.0.1:17709/"),
+            None,
+            302,
+            "Found",
+            {},
+            "http://127.0.0.1:17709/redirected",
+        )
+        is None
+    )
+
+
+def test_ohlc_values_accept_finite_decimal() -> None:
+    assert tdxquant_downloader._ohlc_values([Decimal("1810.25")], "600519.SH") == [
+        1810.25
+    ]
 
 
 def test_download_posts_expected_request_and_writes_standard_files(
@@ -270,6 +325,24 @@ def test_invalid_json_is_rejected_without_writes(tmp_path: Path) -> None:
     assert not (tmp_path / "600519.SH.parquet").exists()
 
 
+def test_raw_non_integral_large_json_volume_is_rejected_without_writes(
+    tmp_path: Path,
+) -> None:
+    raw = json.dumps(market_payload()).replace(
+        '"51000.00"', "9007199254740993.0"
+    ).encode("utf-8")
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=RawResponse(raw),
+    ):
+        with pytest.raises(DownloadError, match="unsafe volume"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+    assert not (tmp_path / "600519.SH.parquet").exists()
+    assert not (tmp_path / "600519.SH.manifest.json").exists()
+
+
 def test_non_2xx_response_is_rejected_without_reading_body(tmp_path: Path) -> None:
     response = FakeResponse({}, status=503)
     response.read = MagicMock(side_effect=AssertionError("body must not be read"))
@@ -288,6 +361,7 @@ def test_non_2xx_response_is_rejected_without_reading_body(tmp_path: Path) -> No
     ("payload", "message"),
     [
         ({"id": 2, "result": {}}, "request id"),
+        ({"id": True, "result": {}}, "request id"),
         ({"id": 1}, "result"),
         (
             {"id": 1, "result": {"ErrorId": "100", "ErrorMsg": "failed"}},

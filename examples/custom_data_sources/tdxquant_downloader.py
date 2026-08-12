@@ -8,11 +8,12 @@ import socket
 from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
+from email.message import Message
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
 
 import numpy as np
 import pandas as pd
@@ -25,6 +26,23 @@ _FIELDS = ("Open", "High", "Low", "Close", "Volume")
 _REQUEST_ID = 1
 _SYMBOL_PATTERN = re.compile(r"^[0-9]{6}\.(?:SH|SZ|BJ)$")
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
+
+
+class _NoRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Message,
+        newurl: str,
+    ) -> None:
+        return None
+
+
+_LOCAL_OPENER = build_opener(ProxyHandler({}), _NoRedirectHandler())
+urlopen = _LOCAL_OPENER.open
 
 
 def _validate_endpoint(endpoint: str) -> None:
@@ -167,7 +185,7 @@ class TdxQuantDownloader:
             ) from exc
 
         try:
-            decoded: object = json.loads(raw.decode("utf-8"))
+            decoded: object = json.loads(raw.decode("utf-8"), parse_float=Decimal)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
             raise DownloadError("TdxQuant did not return valid JSON.") from exc
         if not isinstance(decoded, dict):
@@ -204,7 +222,8 @@ def _error_text(value: Mapping[str, object]) -> str:
 def _bars_from_payload(
     payload: Mapping[str, object], symbol: str
 ) -> Mapping[str, object]:
-    if payload.get("id") != _REQUEST_ID:
+    response_id = payload.get("id")
+    if type(response_id) is not int or response_id != _REQUEST_ID:
         raise DownloadError("TdxQuant returned an unexpected request id.")
     result = _mapping(payload.get("result"), "result")
     top_error = str(result.get("ErrorId", "missing"))
@@ -226,6 +245,8 @@ def _volume_values(values: list[object], symbol: str) -> list[int]:
     limits = np.iinfo(np.int64)
     volume: list[int] = []
     for value in values:
+        if isinstance(value, (bool, Decimal)):
+            raise DownloadError(f"TdxQuant returned unsafe volume for '{symbol}'.")
         try:
             parsed = Decimal(str(value))
         except (InvalidOperation, ValueError) as exc:
@@ -247,7 +268,7 @@ def _ohlc_values(values: list[object], symbol: str) -> list[float]:
         for value in values:
             if isinstance(value, bool):
                 raise TypeError("boolean OHLC value")
-            if not isinstance(value, (str, int, float)):
+            if not isinstance(value, (str, int, float, Decimal)):
                 raise TypeError("unsupported OHLC value")
             parsed_values.append(float(value))
     except (TypeError, ValueError, OverflowError) as exc:
