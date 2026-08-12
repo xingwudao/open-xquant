@@ -5,6 +5,7 @@ import re
 import socket
 from collections.abc import Mapping
 from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import cast
 from urllib.error import HTTPError, URLError
@@ -26,14 +27,20 @@ _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 def _validate_endpoint(endpoint: str) -> None:
     parsed = urlsplit(endpoint)
-    if (
-        parsed.scheme != "http"
-        or parsed.hostname not in _LOOPBACK_HOSTS
-        or parsed.username is not None
-        or parsed.password is not None
-    ):
+    try:
+        valid = (
+            parsed.scheme == "http"
+            and parsed.hostname in _LOOPBACK_HOSTS
+            and parsed.port == 17709
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        valid = False
+    if not valid:
         raise ValueError(
-            "endpoint must be a loopback HTTP URL using 127.0.0.1, localhost, or ::1"
+            "endpoint must be a loopback HTTP URL on port 17709 using 127.0.0.1, "
+            "localhost, or ::1"
         )
 
 
@@ -205,6 +212,25 @@ def _bars_from_payload(
     return bars
 
 
+def _volume_values(values: list[object], symbol: str) -> list[int]:
+    limits = np.iinfo(np.int64)
+    volume: list[int] = []
+    for value in values:
+        try:
+            parsed = Decimal(str(value))
+        except (InvalidOperation, ValueError) as exc:
+            raise DownloadError(
+                f"TdxQuant returned unsafe volume for '{symbol}'."
+            ) from exc
+        if not parsed.is_finite() or parsed != parsed.to_integral_value():
+            raise DownloadError(f"TdxQuant returned unsafe volume for '{symbol}'.")
+        integer = int(parsed)
+        if integer < limits.min or integer > limits.max:
+            raise DownloadError(f"TdxQuant returned unsafe volume for '{symbol}'.")
+        volume.append(integer)
+    return volume
+
+
 def _frame_from_payload(
     payload: Mapping[str, object], symbol: str, start: str, end: str
 ) -> pd.DataFrame:
@@ -228,11 +254,14 @@ def _frame_from_payload(
             pd.to_datetime(series["Date"], format="%Y%m%d", errors="raise"),
             name="date",
         ).tz_localize("Asia/Shanghai")
+        volume = _volume_values(series["Volume"], symbol)
         frame = pd.DataFrame(
             {
                 field.lower(): pd.Series(series[field], dtype="object")
                 .astype("float64")
                 .to_numpy()
+                if field != "Volume"
+                else volume
                 for field in _FIELDS
             },
             index=index,
@@ -242,12 +271,6 @@ def _frame_from_payload(
             f"TdxQuant returned invalid dates or OHLCV values for '{symbol}'."
         ) from exc
 
-    frame = frame.sort_index()
-    lower = pd.Timestamp(start, tz="Asia/Shanghai")
-    upper = pd.Timestamp(end, tz="Asia/Shanghai")
-    frame = frame.loc[(frame.index >= lower) & (frame.index <= upper)]
-    if frame.empty:
-        raise DownloadError(f"No data returned for '{symbol}' ({start} to {end}).")
     if frame.index.has_duplicates:
         raise DownloadError(f"TdxQuant returned duplicate dates for '{symbol}'.")
 
@@ -256,16 +279,15 @@ def _frame_from_payload(
     )
     if not np.isfinite(numeric).all():
         raise DownloadError(f"TdxQuant returned non-finite OHLCV data for '{symbol}'.")
-    volume = frame["volume"].to_numpy(dtype="float64")
-    limits = np.iinfo(np.int64)
-    if (
-        not np.equal(volume, np.floor(volume)).all()
-        or (volume < limits.min).any()
-        or (volume > limits.max).any()
-    ):
-        raise DownloadError(f"TdxQuant returned unsafe volume for '{symbol}'.")
+
+    frame = frame.sort_index()
+    lower = pd.Timestamp(start, tz="Asia/Shanghai")
+    upper = pd.Timestamp(end, tz="Asia/Shanghai")
+    frame = frame.loc[(frame.index >= lower) & (frame.index <= upper)]
+    if frame.empty:
+        raise DownloadError(f"No data returned for '{symbol}' ({start} to {end}).")
     frame[["open", "high", "low", "close"]] = frame[
         ["open", "high", "low", "close"]
     ].astype("float64")
-    frame["volume"] = volume.astype("int64")
+    frame["volume"] = frame["volume"].astype("int64")
     return frame

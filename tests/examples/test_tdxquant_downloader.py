@@ -391,3 +391,120 @@ def test_parquet_write_failure_does_not_write_success_manifest(
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
             )
     mock_manifest.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "http://127.0.0.1:7709/",
+        "http://localhost:80/",
+        "http://[::1]:17710/",
+    ],
+)
+def test_rejects_loopback_endpoint_without_official_port(endpoint: str) -> None:
+    with pytest.raises(ValueError, match="17709"):
+        TdxQuantDownloader(endpoint=endpoint)
+
+
+@pytest.mark.parametrize(
+    ("volume", "accepted"),
+    [
+        ("-9223372036854775808", True),
+        ("9223372036854775807", True),
+        ("-9223372036854775809", False),
+        ("9223372036854775808", False),
+    ],
+)
+def test_validates_volume_at_exact_int64_bounds(
+    volume: str,
+    accepted: bool,
+    tmp_path: Path,
+) -> None:
+    payload = market_payload()
+    result = payload["result"]
+    assert isinstance(result, dict)
+    values = result["Value"]
+    assert isinstance(values, dict)
+    bars = values["600519.SH"]
+    assert isinstance(bars, dict)
+    bars["Volume"] = [volume, volume]
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=FakeResponse(payload),
+    ):
+        if accepted:
+            path = TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+        else:
+            with pytest.raises(DownloadError, match="unsafe volume"):
+                TdxQuantDownloader().download(
+                    "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+                )
+            return
+
+    assert pd.read_parquet(path)["volume"].tolist() == [int(volume), int(volume)]
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("Open", "bad", "invalid dates or OHLCV"),
+        ("Close", "NaN", "non-finite OHLCV"),
+        ("Volume", "1.5", "unsafe volume"),
+    ],
+)
+def test_rejects_invalid_out_of_window_market_data(
+    field: str,
+    value: str,
+    message: str,
+    tmp_path: Path,
+) -> None:
+    payload = market_payload()
+    result = payload["result"]
+    assert isinstance(result, dict)
+    values = result["Value"]
+    assert isinstance(values, dict)
+    bars = values["600519.SH"]
+    assert isinstance(bars, dict)
+    bars["Date"] = ["20240104", *bars["Date"]]
+    for market_field in ("Open", "High", "Low", "Close", "Volume"):
+        items = bars[market_field]
+        assert isinstance(items, list)
+        bars[market_field] = [value if market_field == field else items[0], *items]
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=FakeResponse(payload),
+    ):
+        with pytest.raises(DownloadError, match=message):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+    assert not (tmp_path / "600519.SH.parquet").exists()
+
+
+def test_rejects_duplicate_dates_outside_requested_window(tmp_path: Path) -> None:
+    payload = market_payload()
+    result = payload["result"]
+    assert isinstance(result, dict)
+    values = result["Value"]
+    assert isinstance(values, dict)
+    bars = values["600519.SH"]
+    assert isinstance(bars, dict)
+    bars["Date"] = ["20240104", "20240104", *bars["Date"]]
+    for field in ("Open", "High", "Low", "Close", "Volume"):
+        items = bars[field]
+        assert isinstance(items, list)
+        bars[field] = [items[0], items[0], *items]
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=FakeResponse(payload),
+    ):
+        with pytest.raises(DownloadError, match="duplicate dates"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+    assert not (tmp_path / "600519.SH.parquet").exists()
