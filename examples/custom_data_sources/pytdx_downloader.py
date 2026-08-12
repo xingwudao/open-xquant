@@ -6,10 +6,11 @@ import re
 import sys
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from importlib import metadata
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 import pandas as pd
@@ -31,6 +32,15 @@ _PAGE_SIZE = 800
 _MAX_PAGES = 128
 _OHLC = ("open", "high", "low", "close")
 _COLUMNS = (*_OHLC, "volume")
+
+
+@dataclass(frozen=True)
+class _Action:
+    day: date
+    fenhong: float
+    peigujia: float
+    songzhuangu: float
+    peigu: float
 
 
 def _normalize_symbol(symbol: str) -> tuple[str, int, str]:
@@ -221,6 +231,171 @@ def _fetch_raw_bars(
     if not pages:
         raise DownloadError(f"No data returned for '{symbol}'.")
     return _merge_bar_pages(pages, symbol)
+
+
+def _parse_actions(
+    payload: object,
+    first_output_date: date,
+    latest_date: date,
+    symbol: str,
+) -> list[_Action]:
+    if payload is None or not isinstance(payload, list):
+        raise DownloadError(
+            f"TDX returned an invalid corporate-action response for '{symbol}'."
+        )
+    ignored_categories = {2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14}
+    actions_by_day: dict[date, _Action] = {}
+    for record in payload:
+        if not isinstance(record, Mapping):
+            raise DownloadError(
+                f"TDX returned an invalid corporate action for '{symbol}'."
+            )
+        date_parts: list[int] = []
+        for key in ("year", "month", "day"):
+            value = record.get(key)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise DownloadError(
+                    f"TDX returned an invalid corporate-action date for '{symbol}'."
+                )
+            date_parts.append(value)
+        try:
+            action_day = date(*date_parts)
+        except ValueError as exc:
+            raise DownloadError(
+                f"TDX returned an invalid corporate-action date for '{symbol}'."
+            ) from exc
+
+        category = record.get("category")
+        if isinstance(category, bool) or not isinstance(category, int):
+            raise DownloadError(
+                f"TDX returned an invalid corporate-action category for '{symbol}'."
+            )
+        if action_day <= first_output_date or action_day > latest_date:
+            continue
+        if category in ignored_categories:
+            continue
+        if category != 1:
+            raise DownloadError(
+                f"TDX returned unsupported corporate-action category {category} "
+                f"for '{symbol}'."
+            )
+
+        parsed: dict[str, float] = {}
+        for key in ("fenhong", "peigujia", "songzhuangu", "peigu"):
+            value = record.get(key)
+            if isinstance(value, bool) or not isinstance(
+                value, (str, int, float, Decimal)
+            ):
+                raise DownloadError(
+                    f"TDX returned invalid adjustment fields for '{symbol}'."
+                )
+            try:
+                number = float(value)
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise DownloadError(
+                    f"TDX returned invalid adjustment fields for '{symbol}'."
+                ) from exc
+            if not math.isfinite(number) or number < 0:
+                raise DownloadError(
+                    f"TDX returned invalid adjustment fields for '{symbol}'."
+                )
+            parsed[key] = number
+
+        action = _Action(
+            day=action_day,
+            fenhong=parsed["fenhong"],
+            peigujia=parsed["peigujia"],
+            songzhuangu=parsed["songzhuangu"],
+            peigu=parsed["peigu"],
+        )
+        previous = actions_by_day.get(action_day)
+        if previous is not None and previous != action:
+            raise DownloadError(
+                f"TDX returned conflicting corporate actions for '{symbol}'."
+            )
+        actions_by_day[action_day] = action
+    return sorted(actions_by_day.values(), key=lambda action: action.day)
+
+
+def _event_ratio(
+    action: _Action,
+    previous_close: float,
+    symbol: str,
+) -> float:
+    if not math.isfinite(previous_close) or previous_close <= 0:
+        raise DownloadError(
+            f"TDX returned an invalid previous close for '{symbol}'."
+        )
+    cash = action.fenhong / 10.0
+    bonus = action.songzhuangu / 10.0
+    rights = action.peigu / 10.0
+    denominator = 1.0 + bonus + rights
+    if not math.isfinite(denominator) or denominator <= 0:
+        raise DownloadError(
+            f"TDX returned an invalid adjustment denominator for '{symbol}'."
+        )
+    reference = (
+        previous_close - cash + rights * action.peigujia
+    ) / denominator
+    ratio = reference / previous_close
+    if (
+        not math.isfinite(reference)
+        or reference <= 0
+        or not math.isfinite(ratio)
+        or ratio <= 0
+    ):
+        raise DownloadError(
+            f"TDX returned an invalid adjustment factor for '{symbol}'."
+        )
+    return ratio
+
+
+def _adjust_bars(
+    frame: pd.DataFrame,
+    payload: object,
+    first_output_date: date,
+    symbol: str,
+) -> tuple[pd.DataFrame, int]:
+    index = pd.DatetimeIndex(frame.index)
+    latest_date = index[-1].date()
+    actions = _parse_actions(
+        payload,
+        first_output_date,
+        latest_date,
+        symbol,
+    )
+    events: list[tuple[date, float]] = []
+    for action in actions:
+        prior = frame.loc[index < pd.Timestamp(action.day, tz="Asia/Shanghai")]
+        if prior.empty:
+            raise DownloadError(
+                f"No previous close exists for an adjustment of '{symbol}'."
+            )
+        previous_close = float(prior.iloc[-1]["close"])
+        events.append(
+            (action.day, _event_ratio(action, previous_close, symbol))
+        )
+
+    adjusted = frame.copy()
+    column_positions = {
+        field: cast(int, frame.columns.get_loc(field)) for field in _OHLC
+    }
+    for row_position, timestamp in enumerate(index):
+        ratio = math.prod(
+            event_ratio
+            for event_day, event_ratio in events
+            if event_day > timestamp.date()
+        )
+        for field, column_position in column_positions.items():
+            raw_value = cast(float, frame.iat[row_position, column_position])
+            adjusted.iat[row_position, column_position] = (
+                raw_value * ratio
+            )
+    prices = adjusted.loc[:, list(_OHLC)].to_numpy(dtype="float64")
+    if not np.isfinite(prices).all() or (prices <= 0).any():
+        raise DownloadError(f"Adjustment produced invalid OHLC for '{symbol}'.")
+    adjusted[list(_OHLC)] = adjusted[list(_OHLC)].astype("float64")
+    return adjusted, len(actions)
 
 
 @contextmanager

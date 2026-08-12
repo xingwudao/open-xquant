@@ -50,6 +50,28 @@ def bar(day: str, close: float, volume: object = 1000) -> dict[str, object]:
     }
 
 
+def xdxr(
+    day: str,
+    *,
+    category: int = 1,
+    fenhong: object = 0.0,
+    peigujia: object = 0.0,
+    songzhuangu: object = 0.0,
+    peigu: object = 0.0,
+) -> dict[str, object]:
+    parsed = module.datetime.strptime(day, "%Y-%m-%d")
+    return {
+        "year": parsed.year,
+        "month": parsed.month,
+        "day": parsed.day,
+        "category": category,
+        "fenhong": fenhong,
+        "peigujia": peigujia,
+        "songzhuangu": songzhuangu,
+        "peigu": peigu,
+    }
+
+
 @pytest.fixture(autouse=True)
 def forbid_real_sockets(monkeypatch: pytest.MonkeyPatch) -> None:
     def fail_socket(*args: object, **kwargs: object) -> None:
@@ -319,5 +341,294 @@ def test_rejects_pagination_limit_exhaustion(
             1,
             "510300",
             module.date(1900, 1, 1),
+            "510300.SH",
+        )
+
+
+def test_cash_dividend_adjusts_ohlc_by_one_ratio_and_preserves_volume() -> None:
+    frame = module._parse_bar_page(
+        [
+            bar("2024-01-01", 10.0),
+            bar("2024-01-02", 10.2),
+            bar("2024-01-03", 9.8),
+        ],
+        "510300.SH",
+    )
+    original_volume = frame["volume"].copy()
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [xdxr("2024-01-03", fenhong=2.0)],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    ratio = 10.0 / 10.2
+    assert adjusted.loc["2024-01-02", "close"] == pytest.approx(10.2 * ratio)
+    assert adjusted.loc["2024-01-03", "close"] == pytest.approx(9.8)
+    assert adjusted.loc["2024-01-02", "open"] == pytest.approx(10.1 * ratio)
+    pd.testing.assert_series_equal(adjusted["volume"], original_volume)
+    assert count == 1
+
+
+def test_bonus_shares_use_theoretical_ex_price_ratio() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 12.0), bar("2024-01-02", 10.0)],
+        "510300.SH",
+    )
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [xdxr("2024-01-02", songzhuangu=2.0)],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    assert adjusted.loc["2024-01-01", "close"] == pytest.approx(10.0)
+    assert count == 1
+
+
+def test_rights_issue_uses_price_and_share_ratio() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 12.0), bar("2024-01-02", 10.8)],
+        "510300.SH",
+    )
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [xdxr("2024-01-02", peigu=2.0, peigujia=5.0)],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    assert adjusted.loc["2024-01-01", "close"] == pytest.approx(13.0 / 1.2)
+    assert count == 1
+
+
+def test_multiple_events_multiply_ratios_for_earlier_bars() -> None:
+    frame = module._parse_bar_page(
+        [
+            bar("2024-01-01", 10.0),
+            bar("2024-01-02", 10.2),
+            bar("2024-01-03", 10.0),
+            bar("2024-01-04", 9.0),
+        ],
+        "510300.SH",
+    )
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [
+            xdxr("2024-01-03", fenhong=2.0),
+            xdxr("2024-01-04", songzhuangu=1.0),
+        ],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    expected = 10.0 * (10.0 / 10.2) * ((10.0 / 1.1) / 10.0)
+    assert adjusted.loc["2024-01-01", "close"] == pytest.approx(expected)
+    assert count == 2
+
+
+def test_future_events_are_ignored_before_validation() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 10.1)],
+        "510300.SH",
+    )
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [
+            {
+                "year": 2025,
+                "month": 1,
+                "day": 1,
+                "category": 99,
+            }
+        ],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    pd.testing.assert_frame_equal(adjusted, frame)
+    assert count == 0
+
+
+def test_events_on_or_before_first_output_date_are_ignored() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 10.1)],
+        "510300.SH",
+    )
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [{"year": 2024, "month": 1, "day": 1, "category": 99}],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    pd.testing.assert_frame_equal(adjusted, frame)
+    assert count == 0
+
+
+def test_identical_same_day_actions_are_deduplicated() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+    action = xdxr("2024-01-02", fenhong=1.0)
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [action, dict(action)],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    assert adjusted.loc["2024-01-01", "close"] == pytest.approx(9.9)
+    assert count == 1
+
+
+def test_conflicting_same_day_actions_are_rejected() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+
+    with pytest.raises(DownloadError, match="conflicting corporate actions"):
+        module._adjust_bars(
+            frame,
+            [
+                xdxr("2024-01-02", fenhong=1.0),
+                xdxr("2024-01-02", fenhong=2.0),
+            ],
+            module.date(2024, 1, 1),
+            "510300.SH",
+        )
+
+
+@pytest.mark.parametrize("payload", [None, {}, "invalid"])
+def test_rejects_invalid_action_response(payload: object) -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+
+    with pytest.raises(DownloadError, match="corporate-action response"):
+        module._adjust_bars(
+            frame,
+            payload,
+            module.date(2024, 1, 1),
+            "510300.SH",
+        )
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"year": True, "month": 1, "day": 2, "category": 1},
+        {"year": 2024, "month": 13, "day": 2, "category": 1},
+        {"year": 2024, "month": 1, "day": 2, "category": True},
+    ],
+)
+def test_rejects_invalid_action_date_or_category(
+    record: dict[str, object],
+) -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+
+    with pytest.raises(DownloadError, match="corporate-action"):
+        module._adjust_bars(
+            frame,
+            [record],
+            module.date(2024, 1, 1),
+            "510300.SH",
+        )
+
+
+@pytest.mark.parametrize(
+    ("category", "message"),
+    [(11, "category 11"), (12, "category 12"), (99, "category 99")],
+)
+def test_rejects_relevant_unsupported_action_category(
+    category: int,
+    message: str,
+) -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+
+    with pytest.raises(DownloadError, match=message):
+        module._adjust_bars(
+            frame,
+            [xdxr("2024-01-02", category=category)],
+            module.date(2024, 1, 1),
+            "510300.SH",
+        )
+
+
+def test_ignores_documented_non_price_action_category() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+
+    adjusted, count = module._adjust_bars(
+        frame,
+        [xdxr("2024-01-02", category=5)],
+        module.date(2024, 1, 1),
+        "510300.SH",
+    )
+
+    pd.testing.assert_frame_equal(adjusted, frame)
+    assert count == 0
+
+
+@pytest.mark.parametrize(
+    "value",
+    [True, -1.0, float("nan"), float("inf"), None],
+)
+def test_rejects_invalid_adjustment_fields(value: object) -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 10.0), bar("2024-01-02", 9.9)],
+        "510300.SH",
+    )
+
+    with pytest.raises(DownloadError, match="adjustment fields"):
+        module._adjust_bars(
+            frame,
+            [xdxr("2024-01-02", fenhong=value)],
+            module.date(2024, 1, 1),
+            "510300.SH",
+        )
+
+
+def test_rejects_action_without_previous_close() -> None:
+    frame = module._parse_bar_page([bar("2024-01-02", 9.9)], "510300.SH")
+
+    with pytest.raises(DownloadError, match="No previous close"):
+        module._adjust_bars(
+            frame,
+            [xdxr("2024-01-02", fenhong=1.0)],
+            module.date(2024, 1, 1),
+            "510300.SH",
+        )
+
+
+def test_rejects_non_positive_adjustment_reference() -> None:
+    frame = module._parse_bar_page(
+        [bar("2024-01-01", 1.0), bar("2024-01-02", 1.0)],
+        "510300.SH",
+    )
+
+    with pytest.raises(DownloadError, match="invalid adjustment factor"):
+        module._adjust_bars(
+            frame,
+            [xdxr("2024-01-02", fenhong=20.0)],
+            module.date(2024, 1, 1),
             "510300.SH",
         )
