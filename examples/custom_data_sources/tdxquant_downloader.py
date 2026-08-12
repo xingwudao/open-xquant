@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import re
 import socket
@@ -250,8 +251,9 @@ def _frame_from_payload(
         raise DownloadError(f"TdxQuant returned uneven field lengths for '{symbol}'.")
 
     try:
+        date_values = cast(list[str], series["Date"])
         index = pd.DatetimeIndex(
-            pd.to_datetime(series["Date"], format="%Y%m%d", errors="raise"),
+            pd.to_datetime(date_values, format="%Y%m%d", errors="raise"),
             name="date",
         ).tz_localize("Asia/Shanghai")
         volume = _volume_values(series["Volume"], symbol)
@@ -291,3 +293,36 @@ def _frame_from_payload(
     ].astype("float64")
     frame["volume"] = frame["volume"].astype("int64")
     return frame
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(
+        description="Download daily bars through the local TdxQuant HTTP API."
+    )
+    parser.add_argument("symbol", help="Six-digit symbol with .SH, .SZ, or .BJ")
+    parser.add_argument("start", help="Inclusive start date (YYYY-MM-DD)")
+    parser.add_argument("end", help="Inclusive end date (YYYY-MM-DD)")
+    parser.add_argument("--dest-dir", type=Path)
+    parser.add_argument(
+        "--endpoint", default="http://127.0.0.1:17709/"
+    )
+    parser.add_argument(
+        "--dividend-type", choices=("front", "none"), default="front"
+    )
+    parser.add_argument("--timeout", type=float, default=10.0)
+    args = parser.parse_args(argv)
+
+    downloader = TdxQuantDownloader(
+        endpoint=args.endpoint,
+        dividend_type=args.dividend_type,
+        timeout=args.timeout,
+    )
+    path = downloader.download(
+        args.symbol, args.start, args.end, args.dest_dir
+    )
+    print(path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

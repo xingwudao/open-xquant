@@ -4,12 +4,12 @@ import json
 import socket
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError, URLError
 
 import pandas as pd
 import pytest
-from examples.custom_data_sources.tdxquant_downloader import TdxQuantDownloader
+from examples.custom_data_sources.tdxquant_downloader import TdxQuantDownloader, main
 
 from oxq.core.errors import DownloadError
 from oxq.data.manifest import read_manifest
@@ -508,3 +508,61 @@ def test_rejects_duplicate_dates_outside_requested_window(tmp_path: Path) -> Non
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
             )
     assert not (tmp_path / "600519.SH.parquet").exists()
+
+
+def test_download_many_is_serial_and_preserves_requested_keys(tmp_path: Path) -> None:
+    downloader = TdxQuantDownloader(dividend_type="none")
+    with patch.object(downloader, "download") as mock_download:
+        mock_download.side_effect = [
+            tmp_path / "600519.SH.parquet",
+            tmp_path / "000001.SZ.parquet",
+        ]
+        result = downloader.download_many(
+            ["600519.SH", "000001.SZ"],
+            "2024-01-02",
+            "2024-01-03",
+            tmp_path,
+        )
+
+    assert list(result) == ["600519.SH", "000001.SZ"]
+    assert mock_download.call_args_list == [
+        call("600519.SH", "2024-01-02", "2024-01-03", tmp_path),
+        call("000001.SZ", "2024-01-02", "2024-01-03", tmp_path),
+    ]
+
+
+def test_main_downloads_one_symbol_and_prints_path(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output = tmp_path / "600519.SH.parquet"
+    fake_downloader = MagicMock()
+    fake_downloader.download.return_value = output
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.TdxQuantDownloader",
+        return_value=fake_downloader,
+    ) as downloader_type:
+        result = main(
+            [
+                "600519.SH",
+                "2024-01-02",
+                "2024-01-03",
+                "--dest-dir",
+                str(tmp_path),
+                "--dividend-type",
+                "none",
+                "--timeout",
+                "2.5",
+            ]
+        )
+
+    assert result == 0
+    downloader_type.assert_called_once_with(
+        endpoint="http://127.0.0.1:17709/",
+        dividend_type="none",
+        timeout=2.5,
+    )
+    fake_downloader.download.assert_called_once_with(
+        "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+    )
+    assert capsys.readouterr().out.strip() == str(output)
