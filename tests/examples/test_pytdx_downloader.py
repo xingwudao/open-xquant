@@ -4,10 +4,50 @@ import socket
 from unittest.mock import MagicMock, patch
 
 import examples.custom_data_sources.pytdx_downloader as module
+import pandas as pd
 import pytest
 from examples.custom_data_sources.pytdx_downloader import PyTdxDownloader
 
 from oxq.core.errors import DownloadError
+
+
+class FakeApi:
+    def __init__(
+        self,
+        *,
+        pages: dict[int, object],
+        actions: object | None = None,
+    ) -> None:
+        self.pages = pages
+        self.actions = [] if actions is None else actions
+        self.bar_calls: list[tuple[int, int, str, int, int]] = []
+        self.action_calls: list[tuple[int, str]] = []
+
+    def get_security_bars(
+        self,
+        category: int,
+        market: int,
+        code: str,
+        offset: int,
+        count: int,
+    ) -> object:
+        self.bar_calls.append((category, market, code, offset, count))
+        return self.pages.get(offset, [])
+
+    def get_xdxr_info(self, market: int, code: str) -> object:
+        self.action_calls.append((market, code))
+        return self.actions
+
+
+def bar(day: str, close: float, volume: object = 1000) -> dict[str, object]:
+    return {
+        "datetime": f"{day} 15:00",
+        "open": close - 0.1,
+        "high": close + 0.2,
+        "low": close - 0.2,
+        "close": close,
+        "vol": volume,
+    }
 
 
 @pytest.fixture(autouse=True)
@@ -131,3 +171,153 @@ def test_disconnect_failure_does_not_mask_body_error() -> None:
         with pytest.raises(LookupError, match="body failed"):
             with module._connected_api("quote.example", 7709, 5.0):
                 raise LookupError("body failed")
+
+
+def test_fetches_800_bar_pages_backward_until_before_start() -> None:
+    newest_days = pd.date_range("2022-01-01", periods=800, freq="D")
+    newest = [
+        bar(day.strftime("%Y-%m-%d"), 10.0 + number / 1000)
+        for number, day in enumerate(reversed(newest_days))
+    ]
+    older = [bar("2020-05-01", 9.1), bar("2020-04-30", 9.0)]
+    api = FakeApi(pages={0: newest, 800: older})
+
+    frame = module._fetch_raw_bars(
+        api,
+        market=1,
+        code="510300",
+        start_date=module.date(2020, 5, 1),
+        symbol="510300.SH",
+    )
+
+    assert api.bar_calls == [
+        (9, 1, "510300", 0, 800),
+        (9, 1, "510300", 800, 800),
+    ]
+    assert frame.index.is_monotonic_increasing
+    assert frame.index.min().date().isoformat() == "2020-04-30"
+    assert frame.index.max().date() == newest_days[-1].date()
+
+
+@pytest.mark.parametrize(
+    ("payload", "message"),
+    [
+        (None, "no bar response"),
+        ({"datetime": "2024-01-01"}, "must be a list"),
+        ([{"datetime": "bad"}], "required bar fields"),
+        ([bar("2024-01-01", float("nan"))], "finite positive OHLC"),
+        ([bar("2024-01-01", 10.0, True)], "safe non-negative integer volume"),
+        ([bar("2024-01-01", 10.0, 1.5)], "safe non-negative integer volume"),
+        ([bar("2024-01-01", 10.0, -1)], "safe non-negative integer volume"),
+        ([bar("2024-01-01", 10.0, 2**63)], "safe non-negative integer volume"),
+    ],
+)
+def test_rejects_invalid_bar_payload(payload: object, message: str) -> None:
+    api = FakeApi(pages={0: payload})
+
+    with pytest.raises(DownloadError, match=message):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
+
+
+def test_rejects_invalid_bar_date() -> None:
+    payload = [bar("not-a-date", 10.0)]
+    api = FakeApi(pages={0: payload})
+
+    with pytest.raises(DownloadError, match="invalid bar date"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
+
+
+def test_rejects_inconsistent_ohlc() -> None:
+    invalid = bar("2024-01-01", 10.0)
+    invalid["high"] = 9.5
+    api = FakeApi(pages={0: [invalid]})
+
+    with pytest.raises(DownloadError, match="inconsistent OHLC"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
+
+
+def test_wraps_bar_request_errors() -> None:
+    api = MagicMock()
+    api.get_security_bars.side_effect = RuntimeError("protocol failed")
+
+    with pytest.raises(DownloadError, match="bar request failed"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
+
+
+def test_rejects_repeated_full_page() -> None:
+    days = pd.date_range("2022-01-01", periods=800, freq="D")
+    page = [bar(day.strftime("%Y-%m-%d"), 10.0) for day in days]
+    api = FakeApi(pages={0: page, 800: page})
+
+    with pytest.raises(DownloadError, match="repeated a bar page"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(1900, 1, 1),
+            "510300.SH",
+        )
+
+
+def test_deduplicates_exact_cross_page_overlap() -> None:
+    first = module._parse_bar_page([bar("2024-01-01", 10.0)], "510300.SH")
+    second = module._parse_bar_page([bar("2024-01-01", 10.0)], "510300.SH")
+
+    merged = module._merge_bar_pages([first, second], "510300.SH")
+
+    assert len(merged) == 1
+
+
+def test_rejects_conflicting_cross_page_dates() -> None:
+    first = module._parse_bar_page([bar("2024-01-01", 10.0)], "510300.SH")
+    second = module._parse_bar_page([bar("2024-01-01", 11.0)], "510300.SH")
+
+    with pytest.raises(DownloadError, match="conflicting bars"):
+        module._merge_bar_pages([first, second], "510300.SH")
+
+
+def test_rejects_pagination_limit_exhaustion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(module, "_MAX_PAGES", 2)
+    newer_days = pd.date_range("2022-01-01", periods=800, freq="D")
+    older_days = pd.date_range("2019-01-01", periods=800, freq="D")
+    api = FakeApi(
+        pages={
+            0: [bar(day.strftime("%Y-%m-%d"), 10.0) for day in newer_days],
+            800: [bar(day.strftime("%Y-%m-%d"), 9.0) for day in older_days],
+        }
+    )
+
+    with pytest.raises(DownloadError, match="exceeded 2 pages"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(1900, 1, 1),
+            "510300.SH",
+        )
