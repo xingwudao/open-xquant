@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Any
@@ -10,23 +11,63 @@ from typing import Any
 import numpy as np
 
 
-def _freeze_details(value: Any) -> Any:
+def _freeze_details(value: Any, *, path: str = "details", active: set[int] | None = None) -> Any:
+    if active is None:
+        active = set()
     if isinstance(value, np.ndarray):
-        if value.dtype.hasobject:
-            return _freeze_details(value.tolist())
-        contiguous = np.ascontiguousarray(value)
-        return np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(contiguous.shape)
+        identity = id(value)
+        if identity in active:
+            raise TypeError(f"{path} must form a finite JSON-compatible tree")
+        active.add(identity)
+        try:
+            if value.dtype.hasobject:
+                return _freeze_details(value.tolist(), path=path, active=active)
+            _freeze_details(value.tolist(), path=path, active=active)
+            contiguous = np.ascontiguousarray(value)
+            return np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(contiguous.shape)
+        finally:
+            active.remove(identity)
     if isinstance(value, np.generic):
-        return _freeze_details(value.item())
+        return _freeze_details(value.item(), path=path, active=active)
     if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze_details(item) for key, item in value.items()})
+        identity = id(value)
+        if identity in active:
+            raise TypeError(f"{path} must form a finite JSON-compatible tree")
+        active.add(identity)
+        try:
+            frozen = {}
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    raise TypeError(f"{path} mapping keys must be strings for JSON compatibility; got {type(key).__name__} key {key!r}")
+                frozen[key] = _freeze_details(item, path=f"{path}[{key!r}]", active=active)
+            return MappingProxyType(frozen)
+        finally:
+            active.remove(identity)
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze_details(item) for item in value)
+        identity = id(value)
+        if identity in active:
+            raise TypeError(f"{path} must form a finite JSON-compatible tree")
+        active.add(identity)
+        try:
+            return tuple(_freeze_details(item, path=f"{path}[{index}]", active=active) for index, item in enumerate(value))
+        finally:
+            active.remove(identity)
     if isinstance(value, (set, frozenset)):
-        return frozenset(_freeze_details(item) for item in value)
-    if isinstance(value, bytearray):
-        return bytes(value)
-    return copy.deepcopy(value)
+        identity = id(value)
+        if identity in active:
+            raise TypeError(f"{path} must form a finite JSON-compatible tree")
+        active.add(identity)
+        try:
+            return frozenset(_freeze_details(item, path=f"{path} set item", active=active) for item in value)
+        finally:
+            active.remove(identity)
+    if value is None or type(value) in (bool, int, str):
+        return value
+    if type(value) is float:
+        if math.isfinite(value):
+            return value
+        raise TypeError(f"{path} contains a non-finite number that is not strict JSON-compatible")
+    raise TypeError(f"{path} contains unsupported JSON leaf type {type(value).__name__}")
 
 
 def _materialize_details(value: Any) -> Any:
@@ -56,6 +97,8 @@ class OperatorError(ValueError):
         retryable: bool = False,
     ) -> None:
         super().__init__(message)
+        if details is not None and not isinstance(details, Mapping):
+            raise TypeError("details must be a mapping")
         self.operator_id = operator_id
         self.details = _freeze_details(details if details is not None else {})
         self.retryable = retryable

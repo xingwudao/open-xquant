@@ -4,6 +4,7 @@ import copy
 import json
 import re
 from dataclasses import FrozenInstanceError, replace
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 
@@ -134,6 +135,38 @@ def test_operator_error_recursively_freezes_exposed_details() -> None:
         output["thresholds"].setflags(write=True)
 
     assert error.to_dict() == expected
+
+
+@pytest.mark.parametrize(
+    "details",
+    [
+        {"nested": {1: "value"}},
+        {"when": datetime(2025, 1, 1)},
+        {"value": 1 + 2j},
+        {"payload": b"binary"},
+        {"custom": object()},
+        {"value": float("nan")},
+    ],
+    ids=["non-string-key", "datetime", "complex", "bytes", "custom", "non-finite-float"],
+)
+def test_operator_error_rejects_details_that_cannot_form_strict_json(details: dict[str, Any]) -> None:
+    with pytest.raises(TypeError, match="details.*JSON"):
+        OperatorError("invalid output", details=details)
+
+
+def test_operator_error_materializes_details_as_strict_json() -> None:
+    error = OperatorError(
+        "invalid output",
+        details={
+            "values": np.array([1, 2]),
+            "groups": {"large", "small"},
+            "nested": (True, None, 1.5),
+        },
+    )
+
+    payload = error.to_dict()
+
+    assert json.loads(json.dumps(payload, allow_nan=False, sort_keys=True)) == payload
 
 
 def test_operator_request_snapshots_parameters_and_is_frozen(daily_context) -> None:
@@ -559,6 +592,27 @@ def test_operator_result_requires_matching_provenance(daily_context) -> None:
             data=pd.DataFrame({"date": [], "code": []}),
             diagnostics=diagnostics,
             provenance=provenance,
+        )
+
+
+def test_operator_result_factory_requires_diagnostics_for_request_input_rows(daily_context) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={},
+        input_panel=pd.DataFrame({"date": ["2025-01-01", "2025-01-02"], "code": ["000001", "000001"]}),
+        context=daily_context,
+    )
+
+    with pytest.raises(ValueError, match="diagnostics.input_rows must match request input_panel rows"):
+        OperatorResult.for_request(
+            request,
+            data=pd.DataFrame({"value": [1.0]}),
+            diagnostics=OperatorDiagnostics(input_rows=1, output_rows=1),
+            provenance=OperatorProvenance(
+                operator_id=request.operator_id,
+                operator_version="1.0.0",
+                implementation_digest="sha256:" + "a" * 64,
+            ),
         )
 
 

@@ -1024,6 +1024,41 @@ def test_manifest_converts_default_output_format_failures_to_manifest_errors(val
         load_operator_manifest(payload)
 
 
+def test_manifest_rejects_output_format_incompatible_with_required_parameter_type(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{suffix:d}"
+
+    with pytest.raises(InvalidManifestError, match="format.*parameter type"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_accepts_output_format_compatible_with_required_parameter_type(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{suffix:>4s}"
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.raw["outputs"]["fields"][0]["name_template"] == "sma_{suffix:>4s}"
+
+
 def test_manifest_rejects_composite_parameter_attribute_access_in_output_template(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["parameters"]["options"] = {

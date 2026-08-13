@@ -241,7 +241,8 @@ def verify_operator_contract(
                 details={"allowed": list(allowed_dtypes)},
             )
     _validate_object_input_values(manifest, normalized.input_panel, present_declared_columns)
-    input_dtypes = MappingProxyType({column: str(normalized.input_panel[column].dtype) for column in present_declared_columns})
+    reported_input_columns = sorted({"date", "code", *present_declared_columns})
+    input_dtypes = MappingProxyType({column: str(normalized.input_panel[column].dtype) for column in reported_input_columns})
     input_dtypes_digest = _canonical_mapping_digest(
         input_dtypes,
         manifest.operator_id,
@@ -284,10 +285,17 @@ def verify_operator_contract(
         )
     checks.extend(("output_contract", "provenance"))
 
-    _verify_required_column_failures(manifest, operator, normalized, required_columns)
+    declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
+    _verify_required_column_failures(
+        manifest,
+        operator,
+        normalized,
+        declared_panel,
+        required_columns,
+        optional_columns,
+    )
     checks.append("required_inputs")
 
-    declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
     for present_count in range(len(optional_columns)):
         for present_subset in combinations(optional_columns, present_count):
             omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
@@ -328,7 +336,7 @@ def verify_operator_contract(
         )
         _validate_result(manifest, declared_request, declared_result, expected_implementation_digest)
         declared_data = _deepcopy_frame(declared_result.data)
-        _require_exact_data(
+        _require_deterministic_data(
             _canonical(first_data),
             _canonical(declared_data),
             manifest,
@@ -460,11 +468,13 @@ def _validate_result(
                 operator_id=manifest.operator_id,
             )
         non_null = result.data[name].dropna()
-        if pd.api.types.is_numeric_dtype(result.data[name].dtype) and not np.isfinite(non_null.to_numpy()).all():
-            raise ContractViolationError(
-                f"output column {name} must contain only finite numeric values",
-                operator_id=manifest.operator_id,
-            )
+        if pd.api.types.is_numeric_dtype(result.data[name].dtype):
+            numeric_values = non_null.to_numpy(dtype=np.complex128, na_value=np.nan)
+            if not np.isfinite(numeric_values).all():
+                raise ContractViolationError(
+                    f"output column {name} must contain only finite numeric values",
+                    operator_id=manifest.operator_id,
+                )
         try:
             below_minimum = "minimum" in declaration and non_null.lt(declaration["minimum"]).any()
             above_maximum = "maximum" in declaration and non_null.gt(declaration["maximum"]).any()
@@ -637,31 +647,41 @@ def _verify_required_column_failures(
     manifest: OperatorManifest,
     operator: OperatorCallable,
     request: OperatorRequest,
+    declared_panel: pd.DataFrame,
     required_columns: set[str],
+    optional_columns: tuple[str, ...],
 ) -> None:
     for column in sorted(required_columns):
-        probe_request = _copy_request(request, panel=request.input_panel.drop(columns=[column]))
-        try:
-            operator(probe_request)
-        except MissingColumnError as exc:
-            if exc.details.get("column") == column:
-                continue
-            raise ContractViolationError(
-                f"missing required input column {column} must identify that column in MissingColumnError details",
-                operator_id=manifest.operator_id,
-                details={"column": column},
-            ) from exc
-        except Exception as exc:
-            raise ContractViolationError(
-                f"missing required input column {column} must raise MissingColumnError",
-                operator_id=manifest.operator_id,
-                details={"column": column},
-            ) from exc
-        raise ContractViolationError(
-            f"missing required input column {column} must raise MissingColumnError",
-            operator_id=manifest.operator_id,
-            details={"column": column},
-        )
+        for present_count in range(len(optional_columns) + 1):
+            for present_subset in combinations(optional_columns, present_count):
+                omitted_columns = [optional for optional in optional_columns if optional not in present_subset]
+                probe_panel = declared_panel.drop(columns=[column, *omitted_columns])
+                probe_request = _copy_request(request, panel=probe_panel)
+                snapshot = _deepcopy_frame(probe_request.input_panel)
+                try:
+                    operator(probe_request)
+                except MissingColumnError as exc:
+                    _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+                    if exc.details.get("column") == column:
+                        continue
+                    raise ContractViolationError(
+                        f"missing required input column {column} must identify that column in MissingColumnError details",
+                        operator_id=manifest.operator_id,
+                        details={"column": column},
+                    ) from exc
+                except Exception as exc:
+                    _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+                    raise ContractViolationError(
+                        f"missing required input column {column} must raise MissingColumnError",
+                        operator_id=manifest.operator_id,
+                        details={"column": column},
+                    ) from exc
+                _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+                raise ContractViolationError(
+                    f"missing required input column {column} must raise MissingColumnError",
+                    operator_id=manifest.operator_id,
+                    details={"column": column},
+                )
 
 
 def _optional_probe_failure(omitted_columns: tuple[str, ...]) -> tuple[str, Mapping[str, Any]]:
@@ -697,14 +717,22 @@ def _invoke_operator(
             operator_id=manifest.operator_id,
             details=failure_details,
         ) from exc
+    _assert_input_unchanged(manifest, request.input_panel, snapshot)
+    return result
+
+
+def _assert_input_unchanged(
+    manifest: OperatorManifest,
+    panel: pd.DataFrame,
+    snapshot: pd.DataFrame,
+) -> None:
     try:
-        _assert_frame_bitwise_equal(request.input_panel, snapshot)
+        _assert_frame_bitwise_equal(panel, snapshot)
     except AssertionError as exc:
         raise ContractViolationError(
             "operator mutated input_panel",
             operator_id=manifest.operator_id,
         ) from exc
-    return result
 
 
 def _verify_shape(
@@ -1177,6 +1205,14 @@ def _assert_object_value_representation_equal(left: Any, right: Any) -> None:
         if left is not right:
             raise AssertionError("missing value representation differs")
         return
+    if isinstance(left, pd.Timestamp) or isinstance(right, pd.Timestamp):
+        if not isinstance(left, pd.Timestamp) or not isinstance(right, pd.Timestamp):
+            raise AssertionError("timestamp representation differs")
+        left_value = np.asarray(left.asm8)
+        right_value = np.asarray(right.asm8)
+        if left.tz != right.tz or left_value.dtype != right_value.dtype or left_value.tobytes() != right_value.tobytes():
+            raise AssertionError("timestamp representation differs")
+        return
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         left_items = list(left.items())
         right_items = list(right.items())
@@ -1220,15 +1256,3 @@ def _scalar_representation(value: Any) -> tuple[str, bytes]:
 
 def _is_numeric_scalar(value: Any) -> bool:
     return isinstance(value, (int, float, np.number)) and not isinstance(value, (bool, np.bool_))
-
-
-def _require_exact_data(
-    left: pd.DataFrame,
-    right: pd.DataFrame,
-    manifest: OperatorManifest,
-    message: str,
-) -> None:
-    try:
-        pd.testing.assert_frame_equal(left, right, check_exact=True)
-    except AssertionError as exc:
-        raise ContractViolationError(message, operator_id=manifest.operator_id) from exc

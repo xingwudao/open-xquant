@@ -115,7 +115,11 @@ def test_fake_provider_passes_reusable_contract_suite(
     assert report.parameters_digest == "sha256:" + hashlib.sha256(b'{"period":2}').hexdigest()
     with pytest.raises(TypeError):
         report.parameters["period"] = 3
-    expected_input_dtypes = {"close": "float64"}
+    expected_input_dtypes = {
+        "close": "float64",
+        "code": "string",
+        "date": "datetime64[ns]",
+    }
     canonical_input_dtypes = json.dumps(
         expected_input_dtypes,
         ensure_ascii=True,
@@ -2970,6 +2974,279 @@ def test_contract_suite_bitwise_determinism_compares_float_payload_bits(
 
     with pytest.raises(ContractViolationError, match="deterministic"):
         verify_operator_contract(load_operator_manifest(payload), bit_changing_provider, request)
+
+
+def test_contract_suite_accepts_timezone_aware_dates_in_bitwise_input_checks(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    context = replace(
+        daily_context,
+        frequency="1min",
+        timestamp_semantics="bar_close",
+        price_adjustment="raw",
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, context).drop(columns=["volume"]),
+        context=context,
+    )
+
+    report = verify_operator_contract(
+        _load_contract_manifest(valid_manifest_payload),
+        sma,
+        request,
+    )
+
+    assert report.passed is True
+    assert report.input_dtypes["date"] == "datetime64[ns, UTC]"
+
+
+def test_contract_suite_bitwise_compares_undeclared_column_outputs_by_representation(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def representation_dependent_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        sign = 0.0 if "volume" in provider_request.input_panel else -0.0
+        result.data.loc[result.data["sma_2"].notna(), "sma_2"] = sign
+        return result
+
+    with pytest.raises(ContractViolationError, match="depend on undeclared input columns"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            representation_dependent_provider,
+            request,
+        )
+
+
+def test_contract_suite_applies_tolerance_to_undeclared_column_output_comparison(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["determinism"] = {
+        "bitwise": False,
+        "absolute_tolerance": 1e-5,
+        "relative_tolerance": 0.0,
+    }
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def tolerance_dependent_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        if "volume" in provider_request.input_panel:
+            result.data.loc[result.data["sma_2"].notna(), "sma_2"] += 1e-7
+        return result
+
+    report = verify_operator_contract(
+        load_operator_manifest(payload),
+        tolerance_dependent_provider,
+        request,
+    )
+
+    assert report.passed is True
+
+
+@pytest.mark.parametrize("dtype", ["Float64", "Int64"])
+def test_contract_suite_accepts_finite_nullable_numeric_extension_outputs(
+    dtype,
+    monkeypatch,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["outputs"]["fields"][0]["dtype"] = dtype
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    panel["close"] *= 2
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    original_to_numpy = pd.Series.to_numpy
+
+    def extension_as_object(series, *args, **kwargs):
+        if series.name == "sma_2" and str(series.dtype) == dtype and not args and not kwargs:
+            return np.asarray(series.tolist(), dtype=object)
+        return original_to_numpy(series, *args, **kwargs)
+
+    monkeypatch.setattr(pd.Series, "to_numpy", extension_as_object)
+
+    def nullable_numeric_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        result.data["sma_2"] = result.data["sma_2"].astype(dtype)
+        return result
+
+    report = verify_operator_contract(
+        load_operator_manifest(payload),
+        nullable_numeric_provider,
+        request,
+    )
+
+    assert report.passed is True
+
+
+def test_contract_suite_required_failure_probes_use_all_declared_optional_shapes(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["inputs"]["optional_columns"] = ["volume", "quality"]
+    payload["inputs"]["dtypes"].update({"volume": ["int64"], "quality": ["float64"]})
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel["quality"] = 1.0
+    panel["helper"] = 2.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    observed_shapes: set[tuple[str, ...]] = set()
+
+    def shape_recording_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            assert "helper" not in provider_request.input_panel
+            observed_shapes.add(tuple(column for column in ("volume", "quality") if column in provider_request.input_panel))
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        return sma(provider_request)
+
+    report = _verify_operator_contract(
+        load_operator_manifest(payload),
+        shape_recording_provider,
+        request,
+        expected_distribution_version="1.0.0",
+        expected_implementation_digest=IMPLEMENTATION_DIGEST,
+    )
+
+    assert report.passed is True
+    assert observed_shapes == {(), ("volume",), ("quality",), ("volume", "quality")}
+
+
+def test_contract_suite_rejects_required_failure_behavior_dependent_on_undeclared_columns(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def undeclared_dependent_failure_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            if "volume" not in provider_request.input_panel:
+                raise KeyError("close")
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="required input column close.*MissingColumnError"):
+        _verify_operator_contract(
+            _load_contract_manifest(valid_manifest_payload),
+            undeclared_dependent_failure_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+
+def test_contract_suite_checks_input_immutability_when_required_column_is_missing(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+
+    def mutating_failure_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            provider_request.input_panel.loc[0, "code"] = "MUTATED"
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="mutated input_panel"):
+        _verify_operator_contract(
+            _load_contract_manifest(valid_manifest_payload),
+            mutating_failure_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+
+def test_contract_suite_binds_quant_panel_key_dtypes_in_report_identity(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    object_request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel.assign(code=panel["code"].astype(object)),
+        context=daily_context,
+    )
+    string_request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel.assign(code=panel["code"].astype("string")),
+        context=daily_context,
+    )
+    manifest = _load_contract_manifest(valid_manifest_payload)
+
+    object_report = verify_operator_contract(manifest, sma, object_request)
+    string_report = verify_operator_contract(manifest, sma, string_request)
+
+    assert object_report.input_dtypes["code"] == "object"
+    assert string_report.input_dtypes["code"] == "string"
+    assert object_report.input_dtypes_digest != string_report.input_dtypes_digest
 
 
 def test_contract_suite_applies_declared_determinism_tolerances(

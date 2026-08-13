@@ -573,6 +573,13 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 "output field template parameters must set affects_output_fields=true: " + ", ".join(inconsistent),
                 operator_id=operator_id,
             )
+        try:
+            _validate_template_parameter_types(field["name_template"], references, parameters)
+        except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
+            raise InvalidManifestError(
+                f"output field template format is incompatible with declared parameter types: {field['name_template']}",
+                operator_id=operator_id,
+            ) from exc
         if not references or all("default" in parameters[name] for name in references):
             defaults = {name: parameters[name]["default"] for name in references}
             try:
@@ -610,6 +617,21 @@ def _template_references(template: str) -> set[str]:
         if format_spec:
             references.update(_template_references(format_spec))
     return references
+
+
+def _validate_template_parameter_types(
+    template: str,
+    references: set[str],
+    parameters: Mapping[str, Mapping[str, Any]],
+) -> None:
+    representative_values = {
+        "integer": 0,
+        "number": 0.0,
+        "string": "",
+        "boolean": False,
+    }
+    samples = {name: representative_values[parameters[name]["type"]] for name in references}
+    template.format(**samples)
 
 
 def _is_ordered_numeric_dtype(dtype: str) -> bool:

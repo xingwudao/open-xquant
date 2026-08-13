@@ -330,6 +330,8 @@ class OperatorResult:
     ) -> OperatorResult:
         if provenance.operator_id != request.operator_id:
             raise ValueError("provenance operator_id must match request operator_id")
+        if diagnostics.input_rows != len(request.input_panel):
+            raise ValueError("diagnostics.input_rows must match request input_panel rows")
         return cls(
             data=data,
             diagnostics=diagnostics,
