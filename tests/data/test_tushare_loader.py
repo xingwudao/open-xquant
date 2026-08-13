@@ -107,22 +107,22 @@ def test_tushare_download_writes_qfq_share_volume_and_manifest(tmp_path: Path) -
     )
 
 
-def test_tushare_ignores_factors_after_requested_end(tmp_path: Path) -> None:
+def test_tushare_rejects_factor_after_requested_end_without_output(
+    tmp_path: Path,
+) -> None:
     client = MagicMock()
     client.daily.return_value = _daily()
     client.adj_factor.return_value = _factors_with_later_reference()
     tushare = _module(client)
+    output_dir = tmp_path / "new-output"
 
     with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
-        path = TushareDownloader(token="secret").download(
-            "600519.SH", "2024-01-02", "2024-01-03", dest_dir=tmp_path
-        )
+        with pytest.raises(DownloadError, match="requested date range"):
+            TushareDownloader(token="secret").download(
+                "600519.SH", "2024-01-02", "2024-01-03", dest_dir=output_dir
+            )
 
-    result = pd.read_parquet(path)
-    manifest = json.loads(path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
-    assert result["open"].tolist() == pytest.approx([100.0 / 1.5, 110.0])
-    assert manifest["extra"]["adjustment_reference_date"] == "20240103"
-    assert manifest["extra"]["adjustment_reference_factor"] == 1.5
+    assert not output_dir.exists()
 
 
 def test_tushare_rejects_volume_outside_int64_range(tmp_path: Path) -> None:
@@ -235,6 +235,27 @@ def test_missing_tushare_dependency_has_install_hint_and_no_exception_chain(
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
     assert not list(tmp_path.iterdir())
+
+
+def test_generic_tushare_import_error_is_sanitized_and_unchained(
+    tmp_path: Path,
+) -> None:
+    token = "import" + "-secret"
+    import_error = ImportError(f"binary loader included {token}")
+    output_dir = tmp_path / "new-output"
+
+    with patch("oxq.data.loaders.importlib.import_module", side_effect=import_error):
+        with pytest.raises(DownloadError, match="Tushare import failed") as captured:
+            TushareDownloader(token=token).download(
+                "600519.SH", "20240102", "20240104", output_dir
+            )
+
+    rendered = "".join(traceback.format_exception(captured.value))
+    assert token not in rendered
+    assert "***" in str(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert not output_dir.exists()
 
 
 def test_client_creation_error_removes_token_from_exception_graph(
@@ -459,6 +480,36 @@ def test_invalid_adjustment_factor_is_rejected(
         _download_with_responses(tmp_path, _daily(), factors)
 
     assert not list(tmp_path.iterdir())
+
+
+@pytest.mark.parametrize(
+    ("source", "column"),
+    [
+        ("daily", "open"),
+        ("daily", "high"),
+        ("daily", "low"),
+        ("daily", "close"),
+        ("daily", "vol"),
+        ("factors", "adj_factor"),
+    ],
+)
+def test_complex_numeric_response_is_rejected_without_output(
+    tmp_path: Path, source: str, column: str
+) -> None:
+    daily = _daily()
+    factors = _factors_with_later_reference()
+    if source == "daily":
+        daily[column] = daily[column].astype(complex)
+        daily.loc[0, column] = 1 + 2j
+    else:
+        factors[column] = factors[column].astype(complex)
+        factors.loc[0, column] = 1 + 2j
+    output_dir = tmp_path / "new-output"
+
+    with pytest.raises(DownloadError, match="complex"):
+        _download_with_responses(output_dir, daily, factors)
+
+    assert not output_dir.exists()
 
 
 @pytest.mark.parametrize(
