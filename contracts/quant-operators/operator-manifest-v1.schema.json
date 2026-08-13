@@ -4,6 +4,21 @@
   "title": "open-xquant Operator Manifest v1",
   "type": "object",
   "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {"execution_scope": {"const": "cross_section"}},
+        "required": ["execution_scope"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "properties": {"min_history": {"const": 1}}
+          }
+        }
+      }
+    }
+  ],
   "required": [
     "schema_version",
     "operator_id",
@@ -31,7 +46,7 @@
       "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
     },
     "semantic_name": {"type": "string", "minLength": 1},
-    "distribution": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
+    "distribution": {"type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"},
     "module": {
       "type": "string",
       "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$"

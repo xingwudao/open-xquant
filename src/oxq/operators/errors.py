@@ -96,6 +96,10 @@ class OperatorError(ValueError):
         details: Mapping[str, Any] | None = None,
         retryable: bool = False,
     ) -> None:
+        if not isinstance(message, str):
+            raise TypeError("message must be a string")
+        if not message.strip():
+            raise ValueError("message must be a non-empty string")
         super().__init__(message)
         if operator_id is not None and not isinstance(operator_id, str):
             raise TypeError("operator_id must be a string or None")

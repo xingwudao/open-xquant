@@ -169,6 +169,22 @@ def test_operator_error_materializes_details_as_strict_json() -> None:
     assert json.loads(json.dumps(payload, allow_nan=False, sort_keys=True)) == payload
 
 
+@pytest.mark.parametrize(
+    "message",
+    [None, 1, True, b"invalid output", ["invalid output"]],
+    ids=["none", "integer", "boolean", "bytes", "list"],
+)
+def test_operator_error_requires_string_message(message: Any) -> None:
+    with pytest.raises(TypeError, match="message must be a string"):
+        OperatorError(message)
+
+
+@pytest.mark.parametrize("message", ["", " ", "\t\n"], ids=["empty", "space", "whitespace"])
+def test_operator_error_requires_non_empty_message(message: str) -> None:
+    with pytest.raises(ValueError, match="message must be a non-empty string"):
+        OperatorError(message)
+
+
 @pytest.mark.parametrize("operator_id", [1, True, ["fake.operator"]], ids=["integer", "boolean", "list"])
 def test_operator_error_requires_string_or_none_operator_id(operator_id: Any) -> None:
     with pytest.raises(TypeError, match="operator_id must be a string or None"):

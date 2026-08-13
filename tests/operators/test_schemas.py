@@ -47,6 +47,41 @@ def test_operator_schema_rejects_invalid_operator_id_segments(valid_manifest_pay
     assert not Draft202012Validator(schema).is_valid(payload)
 
 
+@pytest.mark.parametrize("min_history", [0, 2])
+def test_operator_schema_requires_exactly_one_history_row_for_cross_section_scope(
+    valid_manifest_payload,
+    min_history,
+) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {
+        **valid_manifest_payload,
+        "execution_scope": "cross_section",
+        "inputs": {**valid_manifest_payload["inputs"], "min_history": min_history},
+    }
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
+@pytest.mark.parametrize(
+    "distribution",
+    [
+        "Fake-Quant-Operators",
+        "fake_quant_operators",
+        "fake.quant.operators",
+        "fake--quant-operators",
+        "fake-quant-operators-",
+    ],
+)
+def test_operator_schema_rejects_noncanonical_python_distribution_names(
+    valid_manifest_payload,
+    distribution,
+) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {**valid_manifest_payload, "distribution": distribution}
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
 def test_quant_panel_schema_accepts_serialized_daily_panel() -> None:
     schema = json.loads((SCHEMA_DIR / "quant-panel-v1.schema.json").read_text(encoding="utf-8"))
     payload = {

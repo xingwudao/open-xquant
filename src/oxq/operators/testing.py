@@ -93,14 +93,13 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
         )
     if not isinstance(expected_distribution_version, str) or not is_semantic_version(expected_distribution_version):
+        details = {"distribution_version": expected_distribution_version} if isinstance(expected_distribution_version, str) else None
         raise ContractViolationError(
             "expected_distribution_version must be semantic versioning",
             operator_id=manifest.operator_id,
-            details={"distribution_version": expected_distribution_version},
+            details=details,
         )
-    if not isinstance(expected_implementation_digest, str) or not _IMPLEMENTATION_DIGEST_RE.fullmatch(
-        expected_implementation_digest
-    ):
+    if not isinstance(expected_implementation_digest, str) or not _IMPLEMENTATION_DIGEST_RE.fullmatch(expected_implementation_digest):
         raise ContractViolationError(
             "expected_implementation_digest must be a lowercase SHA-256 digest",
             operator_id=manifest.operator_id,
@@ -320,11 +319,17 @@ def verify_operator_contract(
             omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
             optional_shapes.append((omitted_columns, declared_panel.drop(columns=list(omitted_columns))))
 
-    for _, shape_panel in optional_shapes:
+    invalid_size_shapes: list[pd.DataFrame] = []
+    for omitted_columns, declared_shape_panel in optional_shapes:
+        invalid_size_shapes.append(declared_shape_panel)
+        if undeclared_columns:
+            invalid_size_shapes.append(normalized.input_panel.drop(columns=list(omitted_columns)))
+
+    for shape_panel in invalid_size_shapes:
         _verify_empty_input_failure(manifest, operator, normalized, shape_panel)
     checks.append("empty_input")
 
-    for _, shape_panel in optional_shapes:
+    for shape_panel in invalid_size_shapes:
         _verify_minimum_boundary_failures(manifest, operator, normalized, shape_panel)
     checks.append("minimum_boundaries")
 
@@ -397,6 +402,25 @@ def verify_operator_contract(
                 manifest,
                 dependence_message,
             )
+            if raw_shape_result.diagnostics != optional_result.diagnostics:
+                raise ContractViolationError(
+                    f"{dependence_message} through diagnostics",
+                    operator_id=manifest.operator_id,
+                )
+            if raw_shape_result.provenance != optional_result.provenance:
+                raise ContractViolationError(
+                    f"{dependence_message} through provenance",
+                    operator_id=manifest.operator_id,
+                )
+            if not _metadata_equal(
+                _snapshot_metadata(raw_shape_result.metadata),
+                _snapshot_metadata(optional_result.metadata),
+                manifest,
+            ):
+                raise ContractViolationError(
+                    f"{dependence_message} through metadata",
+                    operator_id=manifest.operator_id,
+                )
             _verify_shape(
                 manifest,
                 operator,
@@ -1046,6 +1070,26 @@ def _structured_value_equal(
     relative_tolerance: float,
 ) -> bool:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
+        if bitwise:
+            left_items = list(left.items())
+            right_items = list(right.items())
+            return len(left_items) == len(right_items) and all(
+                _structured_value_equal(
+                    left_key,
+                    right_key,
+                    bitwise=True,
+                    absolute_tolerance=absolute_tolerance,
+                    relative_tolerance=relative_tolerance,
+                )
+                and _structured_value_equal(
+                    left_value,
+                    right_value,
+                    bitwise=True,
+                    absolute_tolerance=absolute_tolerance,
+                    relative_tolerance=relative_tolerance,
+                )
+                for (left_key, left_value), (right_key, right_value) in zip(left_items, right_items, strict=True)
+            )
         if set(left) != set(right):
             return False
         return all(
@@ -1194,8 +1238,9 @@ def _validate_object_input_values(
 ) -> None:
     unsupported_columns = sorted(
         column
-        for column in panel.select_dtypes(include="object").columns
-        if any(not _is_certifiable_object_value(value) for value in panel[column])
+        for column in panel.columns
+        if panel[column].to_numpy(copy=False).dtype.hasobject
+        and any(not _is_certifiable_object_value(value) for value in panel[column].to_numpy(copy=False).flat)
     )
     if unsupported_columns:
         raise ContractViolationError(
@@ -1218,8 +1263,7 @@ def _is_certifiable_object_value(value: Any, active_container_ids: set[int] | No
     try:
         if isinstance(value, Mapping):
             return all(
-                _is_certifiable_object_value(key, active) and _is_certifiable_object_value(item, active)
-                for key, item in value.items()
+                _is_certifiable_object_value(key, active) and _is_certifiable_object_value(item, active) for key, item in value.items()
             )
         if isinstance(value, (list, tuple)):
             return all(_is_certifiable_object_value(item, active) for item in value)
@@ -1227,7 +1271,7 @@ def _is_certifiable_object_value(value: Any, active_container_ids: set[int] | No
             if value.dtype.hasobject:
                 return all(_is_certifiable_object_value(item, active) for item in value.flat)
             return True
-        return value is None or value is pd.NA or isinstance(value, (bool, int, float, str, bytes, np.generic))
+        return value is None or value is pd.NA or isinstance(value, (bool, int, float, str, bytes, np.generic, pd.Timestamp))
     finally:
         if container_id is not None:
             active.remove(container_id)
@@ -1263,17 +1307,10 @@ def _validate_certification_probe_budget(
     behavioral_probe_upper_bound = shape_variant_count * per_shape_behavioral_upper_bound
     shape_invocation_upper_bound = shape_variant_count * 2
     required_probe_upper_bound = required_column_count * shape_count * (2 if has_undeclared_columns else 1)
-    boundary_probe_upper_bound = shape_count * (
-        1
-        + int(manifest.raw["inputs"]["min_history"] > 1)
-        + int(manifest.raw["inputs"]["min_assets"] > 1)
+    boundary_probe_upper_bound = shape_variant_count * (
+        1 + int(manifest.raw["inputs"]["min_history"] > 1) + int(manifest.raw["inputs"]["min_assets"] > 1)
     )
-    upper_bound = (
-        behavioral_probe_upper_bound
-        + shape_invocation_upper_bound
-        + required_probe_upper_bound
-        + boundary_probe_upper_bound
-    )
+    upper_bound = behavioral_probe_upper_bound + shape_invocation_upper_bound + required_probe_upper_bound + boundary_probe_upper_bound
     if upper_bound > _MAX_CERTIFIED_PROBES:
         raise ContractViolationError(
             "contract checker certification probe budget exceeded",
@@ -1306,8 +1343,7 @@ def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorR
         codes = tuple(request.input_panel["code"].drop_duplicates())
         min_assets = manifest.raw["inputs"]["min_assets"]
         probe_count += sum(
-            len(_overlapping_symbol_subsets(codes, asset_count))
-            for asset_count in range(len(codes) - 1, min_assets - 1, -1)
+            len(_overlapping_symbol_subsets(codes, asset_count)) for asset_count in range(len(codes) - 1, min_assets - 1, -1)
         )
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
         probe_count += int(request.input_panel["date"].nunique())

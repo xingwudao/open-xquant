@@ -24,6 +24,7 @@ from oxq.operators.errors import InvalidManifestError, InvalidParameterError
 from oxq.operators.types import OperatorAvailability, OperatorCausality, OperatorLifecycle, OperatorScope
 
 _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS = 256
+_MAX_DYNAMIC_FORMAT_SPEC_DEPTH = 8
 _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH = 256
 _FORMAT_SPEC_PATTERN = re.compile(
     r"(?:(?P<fill>.)?(?P<align>[<>=^]))?"
@@ -40,6 +41,10 @@ _FORMAT_SPEC_PATTERN = re.compile(
 
 
 class _OutputFormatResourceLimitError(ValueError):
+    pass
+
+
+class _OutputFormatNestingError(ValueError):
     pass
 
 
@@ -117,6 +122,13 @@ class OperatorManifest:
     def validate_parameters(self, supplied: Mapping[str, Any]) -> dict[str, Any]:
         declarations = self.raw["parameters"]
         assert isinstance(declarations, Mapping)
+        non_string_names = sorted(repr(name) for name in supplied if not isinstance(name, str))
+        if non_string_names:
+            raise InvalidParameterError(
+                "parameter names must be strings: " + ", ".join(non_string_names),
+                operator_id=self.operator_id,
+                details={"parameters": non_string_names},
+            )
         unknown = sorted(set(supplied) - set(declarations))
         if unknown:
             raise InvalidParameterError(
@@ -177,6 +189,11 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
         if list(error.absolute_path) == ["operator_version"]:
             raise InvalidManifestError(
                 "operator_version must be semantic versioning",
+                operator_id=_optional_operator_id(payload),
+            )
+        if list(error.absolute_path) == ["inputs", "min_history"] and payload.get("execution_scope") == "cross_section":
+            raise InvalidManifestError(
+                "cross_section execution_scope requires inputs min_history=1",
                 operator_id=_optional_operator_id(payload),
             )
         path = ".".join(str(part) for part in error.absolute_path)
@@ -453,7 +470,7 @@ def _validate_resolved_output_names(
 def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
     operator_id = payload["operator_id"]
     inputs = payload["inputs"]
-    if payload["execution_scope"] == "cross_section" and inputs["min_history"] > 1:
+    if payload["execution_scope"] == "cross_section" and inputs["min_history"] != 1:
         raise InvalidManifestError(
             "cross_section execution_scope requires inputs min_history=1",
             operator_id=operator_id,
@@ -612,6 +629,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             )
         try:
             references = _template_references(field["name_template"])
+        except _OutputFormatNestingError as exc:
+            raise InvalidManifestError(
+                f"output field template nesting depth exceeds maximum {_MAX_DYNAMIC_FORMAT_SPEC_DEPTH}: {field['name_template']}",
+                operator_id=operator_id,
+                details={"maximum_depth": _MAX_DYNAMIC_FORMAT_SPEC_DEPTH},
+            ) from exc
         except ValueError as exc:
             raise InvalidManifestError(
                 f"output field template is invalid: {field['name_template']}: {exc}",
@@ -691,7 +714,8 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             resolved_output_names.add(resolved_name)
 
 
-def _template_references(template: str) -> set[str]:
+def _template_references(template: str, *, depth: int = 0) -> set[str]:
+    _validate_dynamic_format_spec_depth(depth)
     references: set[str] = set()
     for _, field_name, format_spec, _ in string.Formatter().parse(template):
         if field_name is not None:
@@ -699,8 +723,13 @@ def _template_references(template: str) -> set[str]:
                 raise ValueError("template fields must reference parameters directly")
             references.add(field_name)
         if format_spec:
-            references.update(_template_references(format_spec))
+            references.update(_template_references(format_spec, depth=depth + 1))
     return references
+
+
+def _validate_dynamic_format_spec_depth(depth: int) -> None:
+    if depth > _MAX_DYNAMIC_FORMAT_SPEC_DEPTH:
+        raise _OutputFormatNestingError(f"dynamic format specification nesting depth exceeds maximum {_MAX_DYNAMIC_FORMAT_SPEC_DEPTH}")
 
 
 def _validate_template_parameter_types(
@@ -727,8 +756,7 @@ def _validate_template_resource_bounds(
         minimum_resolved_length += len(literal_text)
         if minimum_resolved_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
             raise _OutputFormatResourceLimitError(
-                f"resolved output field name exceeds maximum length "
-                f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+                f"resolved output field name exceeds maximum length {_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
             )
         if field_name is None:
             continue
@@ -739,15 +767,17 @@ def _validate_template_resource_bounds(
         minimum_resolved_length += maximum_width
         if minimum_resolved_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
             raise _OutputFormatResourceLimitError(
-                f"resolved output field name exceeds maximum length "
-                f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+                f"resolved output field name exceeds maximum length {_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
             )
 
 
 def _validate_template_parameter_domains(
     template: str,
     parameters: Mapping[str, Mapping[str, Any]],
+    *,
+    depth: int = 0,
 ) -> None:
+    _validate_dynamic_format_spec_depth(depth)
     representative_values = {
         "integer": 0,
         "number": 0.0,
@@ -763,7 +793,7 @@ def _validate_template_parameter_domains(
             if resolved_format_spec.endswith("c") and parameters[field_name]["type"] == "integer":
                 _validate_code_point_parameter_domain(parameters[field_name])
         if format_spec:
-            _validate_template_parameter_domains(format_spec, parameters)
+            _validate_template_parameter_domains(format_spec, parameters, depth=depth + 1)
 
 
 def _resolve_finite_format_specs(
@@ -806,14 +836,12 @@ def _bounded_format_size(value: str | None, label: str) -> int:
     normalized = value.lstrip("0") or "0"
     maximum = str(_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH)
     if len(normalized) > len(maximum) or (len(normalized) == len(maximum) and normalized > maximum):
-        raise _OutputFormatResourceLimitError(
-            f"format {label} exceeds resource limit "
-            f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
-        )
+        raise _OutputFormatResourceLimitError(f"format {label} exceeds resource limit {_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}")
     return int(normalized)
 
 
-def _format_bounded(template: str, values: Mapping[str, Any]) -> str:
+def _format_bounded(template: str, values: Mapping[str, Any], *, depth: int = 0) -> str:
+    _validate_dynamic_format_spec_depth(depth)
     formatter = string.Formatter()
     parts: list[str] = []
     resolved_length = 0
@@ -824,7 +852,7 @@ def _format_bounded(template: str, values: Mapping[str, Any]) -> str:
         if "." in field_name or "[" in field_name:
             raise ValueError("template fields must reference parameters directly")
         value = values[field_name]
-        resolved_format_spec = _format_bounded(format_spec, values) if format_spec else ""
+        resolved_format_spec = _format_bounded(format_spec, values, depth=depth + 1) if format_spec else ""
         width, precision = _validate_format_spec_resource_bounds(resolved_format_spec)
         converted = formatter.convert_field(value, conversion) if conversion is not None else value
         minimum_field_length = width
@@ -833,8 +861,7 @@ def _format_bounded(template: str, values: Mapping[str, Any]) -> str:
             minimum_field_length = max(minimum_field_length, value_length)
         if resolved_length + minimum_field_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
             raise _OutputFormatResourceLimitError(
-                f"resolved output field name exceeds maximum length "
-                f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+                f"resolved output field name exceeds maximum length {_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
             )
         if not resolved_format_spec and conversion is None and isinstance(converted, (str, int, float, bool)):
             rendered = converted if isinstance(converted, str) else str(converted)
@@ -847,10 +874,7 @@ def _format_bounded(template: str, values: Mapping[str, Any]) -> str:
 def _append_bounded_part(parts: list[str], part: str, current_length: int) -> int:
     resolved_length = current_length + len(part)
     if resolved_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
-        raise _OutputFormatResourceLimitError(
-            f"resolved output field name exceeds maximum length "
-            f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
-        )
+        raise _OutputFormatResourceLimitError(f"resolved output field name exceeds maximum length {_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}")
     parts.append(part)
     return resolved_length
 

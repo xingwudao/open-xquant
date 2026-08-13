@@ -35,6 +35,17 @@ def test_manifest_validates_parameters_and_rejects_unknowns(valid_manifest_paylo
         manifest.validate_parameters({"period": 0})
 
 
+def test_manifest_rejects_non_string_supplied_parameter_keys(valid_manifest_payload) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+
+    with pytest.raises(InvalidParameterError, match="parameter names must be strings") as exc_info:
+        manifest.validate_parameters({1: 5})
+
+    assert exc_info.value.code == "invalid_parameter"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+    assert exc_info.value.to_dict()["details"] == {"parameters": ["1"]}
+
+
 def test_manifest_resolves_output_name_from_arbitrary_required_string_at_parameter_boundary(
     valid_manifest_payload,
 ) -> None:
@@ -441,11 +452,38 @@ def test_manifest_rejects_non_int_parameter_warmup_offset(valid_manifest_payload
         load_operator_manifest(payload)
 
 
-def test_manifest_rejects_cross_section_scope_with_multi_row_history(valid_manifest_payload) -> None:
+@pytest.mark.parametrize("min_history", [0, 2])
+def test_manifest_requires_exactly_one_history_row_for_cross_section_scope(
+    valid_manifest_payload,
+    min_history,
+) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["execution_scope"] = "cross_section"
+    payload["inputs"]["min_history"] = min_history
 
-    with pytest.raises(InvalidManifestError, match="cross_section.*min_history"):
+    with pytest.raises(InvalidManifestError, match="cross_section.*min_history=1"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    "distribution",
+    [
+        "Fake-Quant-Operators",
+        "fake_quant_operators",
+        "fake.quant.operators",
+        "fake--quant-operators",
+        "fake-quant-operators-",
+    ],
+    ids=["uppercase", "underscore", "dot", "repeated-separator", "trailing-separator"],
+)
+def test_manifest_rejects_noncanonical_python_distribution_names(
+    valid_manifest_payload,
+    distribution,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["distribution"] = distribution
+
+    with pytest.raises(InvalidManifestError, match="distribution"):
         load_operator_manifest(payload)
 
 
@@ -749,6 +787,34 @@ def test_manifest_validates_nested_output_format_references(valid_manifest_paylo
 
     with pytest.raises(InvalidManifestError, match="unknown parameters: width"):
         load_operator_manifest(payload)
+
+
+def test_manifest_converts_excessive_dynamic_format_nesting_to_structured_error(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["spec"] = {
+        "type": "string",
+        "default": "d",
+        "required": False,
+        "enum": ["d"],
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    nested_spec = "{spec}"
+    for _ in range(1_100):
+        nested_spec = "{spec:" + nested_spec + "}"
+    payload["outputs"]["fields"][0]["name_template"] = "{period:" + nested_spec + "}"
+
+    with pytest.raises(InvalidManifestError, match="nesting depth") as exc_info:
+        load_operator_manifest(payload)
+
+    assert exc_info.value.code == "invalid_manifest"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+    assert exc_info.value.to_dict()["details"] == {"maximum_depth": 8}
 
 
 @pytest.mark.parametrize("reserved_name", ["date", "code"])
