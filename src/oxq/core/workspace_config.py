@@ -346,7 +346,7 @@ def _open_directory_nofollow(
 
 def _read_regular_file_at(name: str, path: Path, directory_descriptor: int, nofollow: int) -> str:
     try:
-        descriptor = os.open(name, os.O_RDONLY | nofollow, dir_fd=directory_descriptor)
+        descriptor = os.open(name, os.O_RDONLY | os.O_NONBLOCK | nofollow, dir_fd=directory_descriptor)
     except (NotImplementedError, TypeError) as exc:
         raise _nofollow_unavailable() from exc
     except OSError as exc:

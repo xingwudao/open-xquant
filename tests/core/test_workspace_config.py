@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -153,6 +155,40 @@ def test_load_workspace_config_rejects_broken_symlink_marker(tmp_path: Path) -> 
 
     with pytest.raises(WorkspaceConfigError, match="symlink"):
         load_workspace_config(path, missing_ok=True)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX FIFO support")
+def test_load_workspace_config_rejects_fifo_without_blocking(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    os.mkfifo(config_path)
+    script = """
+import sys
+
+from oxq.core.workspace_config import WorkspaceConfigError, load_workspace_config
+
+try:
+    load_workspace_config(sys.argv[1])
+except WorkspaceConfigError as exc:
+    if "regular file" not in str(exc):
+        raise
+else:
+    raise AssertionError("FIFO workspace configuration was accepted")
+"""
+
+    try:
+        completed = subprocess.run(
+            [sys.executable, "-c", script, str(config_path)],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+    except subprocess.TimeoutExpired:
+        pytest.fail("loading a FIFO workspace configuration blocked")
+
+    assert completed.returncode == 0, completed.stderr
 
 
 def test_load_workspace_config_rejects_symlinked_ancestor(tmp_path: Path) -> None:

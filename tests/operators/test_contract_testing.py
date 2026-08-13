@@ -1568,6 +1568,7 @@ def test_contract_suite_budgets_all_three_unordered_probes_for_three_rows(
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).iloc[:3].reset_index(drop=True)
     for column in [*required_columns[1:], *optional_columns]:
         panel[column] = 1.0
+    panel["helper"] = 1.0
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 1},
@@ -3458,6 +3459,7 @@ def test_contract_suite_bounds_required_column_probes_across_optional_shapes(
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
     for column in [*required_columns[1:], *optional_columns]:
         panel[column] = 1.0
+    panel["helper"] = 1.0
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
@@ -3477,7 +3479,7 @@ def test_contract_suite_bounds_required_column_probes_across_optional_shapes(
     assert provider_calls == 0
     details = exc_info.value.to_dict()["details"]
     assert details["shape_count"] == 256
-    assert details["required_probe_upper_bound"] == len(required_columns) * details["shape_count"]
+    assert details["required_probe_upper_bound"] == len(required_columns) * details["shape_count"] * 2
     assert details["upper_bound"] > details["maximum"]
 
 
@@ -3761,13 +3763,17 @@ def test_contract_suite_required_failure_probes_use_all_declared_optional_shapes
         input_panel=panel,
         context=daily_context,
     )
-    observed_shapes: set[tuple[str, ...]] = set()
+    observed_shapes: set[tuple[tuple[str, ...], bool]] = set()
     manifest = load_operator_manifest(payload)
 
     def shape_recording_provider(provider_request: OperatorRequest):
         if "close" not in provider_request.input_panel:
-            assert "helper" not in provider_request.input_panel
-            observed_shapes.add(tuple(column for column in ("volume", "quality") if column in provider_request.input_panel))
+            observed_shapes.add(
+                (
+                    tuple(column for column in ("volume", "quality") if column in provider_request.input_panel),
+                    "helper" in provider_request.input_panel,
+                )
+            )
             raise MissingColumnError(
                 "missing required input column close",
                 operator_id=provider_request.operator_id,
@@ -3785,7 +3791,11 @@ def test_contract_suite_required_failure_probes_use_all_declared_optional_shapes
     )
 
     assert report.passed is True
-    assert observed_shapes == {(), ("volume",), ("quality",), ("volume", "quality")}
+    assert observed_shapes == {
+        (optional_shape, has_helper)
+        for optional_shape in ((), ("volume",), ("quality",), ("volume", "quality"))
+        for has_helper in (False, True)
+    }
 
 
 def test_contract_suite_rejects_required_failure_behavior_dependent_on_undeclared_columns(
@@ -3815,6 +3825,43 @@ def test_contract_suite_rejects_required_failure_behavior_dependent_on_undeclare
         _verify_operator_contract(
             _load_contract_manifest(valid_manifest_payload),
             undeclared_dependent_failure_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+
+def test_contract_suite_rejects_required_failure_bypassed_by_undeclared_column(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel["helper"] = 1.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    manifest = _load_contract_manifest(valid_manifest_payload)
+
+    def undeclared_bypass_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            if "helper" in provider_request.input_panel:
+                return sma(replace(provider_request, input_panel=provider_request.input_panel.assign(close=0.0)))
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        _reject_empty_input(manifest, provider_request)
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="required input column close.*MissingColumnError"):
+        _verify_operator_contract(
+            manifest,
+            undeclared_bypass_provider,
             request,
             expected_distribution_version="1.0.0",
             expected_implementation_digest=IMPLEMENTATION_DIGEST,

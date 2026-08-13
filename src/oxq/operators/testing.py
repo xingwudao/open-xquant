@@ -307,9 +307,10 @@ def verify_operator_contract(
         manifest,
         operator,
         normalized,
-        declared_panel,
+        normalized.input_panel,
         required_columns,
         optional_columns,
+        undeclared_columns,
     )
     checks.append("required_inputs")
 
@@ -697,53 +698,58 @@ def _verify_required_column_failures(
     manifest: OperatorManifest,
     operator: OperatorCallable,
     request: OperatorRequest,
-    declared_panel: pd.DataFrame,
+    input_panel: pd.DataFrame,
     required_columns: set[str],
     optional_columns: tuple[str, ...],
+    undeclared_columns: list[str],
 ) -> None:
     for column in sorted(required_columns):
         for present_count in range(len(optional_columns) + 1):
             for present_subset in combinations(optional_columns, present_count):
                 omitted_columns = [optional for optional in optional_columns if optional not in present_subset]
-                probe_panel = declared_panel.drop(columns=[column, *omitted_columns])
-                probe_request = _copy_request(request, panel=probe_panel)
-                snapshot = _deepcopy_frame(probe_request.input_panel)
-                try:
-                    operator(probe_request)
-                except MissingColumnError as exc:
-                    _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
-                    if exc.operator_id != manifest.operator_id:
+                for omit_undeclared in range(2 if undeclared_columns else 1):
+                    removed_columns = [column, *omitted_columns]
+                    if omit_undeclared:
+                        removed_columns.extend(undeclared_columns)
+                    probe_panel = input_panel.drop(columns=removed_columns)
+                    probe_request = _copy_request(request, panel=probe_panel)
+                    snapshot = _deepcopy_frame(probe_request.input_panel)
+                    try:
+                        operator(probe_request)
+                    except MissingColumnError as exc:
+                        _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+                        if exc.operator_id != manifest.operator_id:
+                            raise ContractViolationError(
+                                f"missing required input column {column} error must identify the manifest operator",
+                                operator_id=manifest.operator_id,
+                                details={"column": column},
+                            ) from exc
+                        if not str(exc).strip():
+                            raise ContractViolationError(
+                                f"missing required input column {column} error must contain a human-readable message",
+                                operator_id=manifest.operator_id,
+                                details={"column": column},
+                            ) from exc
+                        if exc.details.get("column") != column:
+                            raise ContractViolationError(
+                                f"missing required input column {column} must identify that column in MissingColumnError details",
+                                operator_id=manifest.operator_id,
+                                details={"column": column},
+                            ) from exc
+                        continue
+                    except Exception as exc:
+                        _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
                         raise ContractViolationError(
-                            f"missing required input column {column} error must identify the manifest operator",
+                            f"missing required input column {column} must raise MissingColumnError",
                             operator_id=manifest.operator_id,
                             details={"column": column},
                         ) from exc
-                    if not str(exc).strip():
-                        raise ContractViolationError(
-                            f"missing required input column {column} error must contain a human-readable message",
-                            operator_id=manifest.operator_id,
-                            details={"column": column},
-                        ) from exc
-                    if exc.details.get("column") != column:
-                        raise ContractViolationError(
-                            f"missing required input column {column} must identify that column in MissingColumnError details",
-                            operator_id=manifest.operator_id,
-                            details={"column": column},
-                        ) from exc
-                    continue
-                except Exception as exc:
                     _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
                     raise ContractViolationError(
                         f"missing required input column {column} must raise MissingColumnError",
                         operator_id=manifest.operator_id,
                         details={"column": column},
-                    ) from exc
-                _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
-                raise ContractViolationError(
-                    f"missing required input column {column} must raise MissingColumnError",
-                    operator_id=manifest.operator_id,
-                    details={"column": column},
-                )
+                    )
 
 
 def _verify_empty_input_failure(
@@ -1256,7 +1262,7 @@ def _validate_certification_probe_budget(
     shape_variant_count = shape_count * (2 if has_undeclared_columns else 1)
     behavioral_probe_upper_bound = shape_variant_count * per_shape_behavioral_upper_bound
     shape_invocation_upper_bound = shape_variant_count * 2
-    required_probe_upper_bound = required_column_count * shape_count
+    required_probe_upper_bound = required_column_count * shape_count * (2 if has_undeclared_columns else 1)
     boundary_probe_upper_bound = shape_count * (
         1
         + int(manifest.raw["inputs"]["min_history"] > 1)

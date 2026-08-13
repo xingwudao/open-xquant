@@ -15,6 +15,8 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import numpy as np
 import pandas as pd
 
+from oxq.operators._version import is_semantic_version
+
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _ISO_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
 _ISO_DATETIME_RE = re.compile(
@@ -262,6 +264,8 @@ class OperatorProvenance:
                 raise TypeError(f"{name} must be a string")
             if not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        if not is_semantic_version(self.operator_version):
+            raise ValueError("operator_version must be semantic versioning")
         if not _DIGEST_RE.fullmatch(self.implementation_digest):
             raise ValueError("implementation_digest must be a sha256 digest")
 
@@ -288,6 +292,8 @@ class FittedOperatorState:
                 raise TypeError(f"{name} must be a string")
             if not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        if not is_semantic_version(self.operator_version):
+            raise ValueError("operator_version must be semantic versioning")
         start_kind, training_start = _parse_training_boundary(self.training_start)
         end_kind, training_end = _parse_training_boundary(self.training_end)
         if start_kind != end_kind:

@@ -283,6 +283,43 @@ def test_operator_provenance_identity_fields_require_strings(field: str, invalid
         OperatorProvenance(**values)
 
 
+def _versioned_public_type(boundary: str, operator_version: str) -> OperatorProvenance | FittedOperatorState:
+    if boundary == "provenance":
+        return OperatorProvenance(
+            operator_id="fake.indicators.sma",
+            operator_version=operator_version,
+            implementation_digest="sha256:" + "a" * 64,
+        )
+    return _fitted_state(operator_version=operator_version)
+
+
+@pytest.mark.parametrize("boundary", ["provenance", "fitted-state"])
+@pytest.mark.parametrize(
+    "operator_version",
+    ["1", "01.0.0", "1.0.0-01", "1.0.0-alpha..1", "1.0.0-", "1\u0660.0.0"],
+)
+def test_public_operator_version_boundaries_reject_invalid_semantic_versions(
+    boundary: str,
+    operator_version: str,
+) -> None:
+    with pytest.raises(ValueError, match="operator_version must be semantic versioning"):
+        _versioned_public_type(boundary, operator_version)
+
+
+@pytest.mark.parametrize("boundary", ["provenance", "fitted-state"])
+@pytest.mark.parametrize(
+    "operator_version",
+    ["0.0.0", "1.0.0-alpha.1", "1.0.0-1a", "1.0.0+001"],
+)
+def test_public_operator_version_boundaries_accept_valid_semantic_versions(
+    boundary: str,
+    operator_version: str,
+) -> None:
+    value = _versioned_public_type(boundary, operator_version)
+
+    assert value.operator_version == operator_version
+
+
 @pytest.mark.parametrize(
     "parameters",
     [[("period", 2)], ("period", 2), "period=2"],

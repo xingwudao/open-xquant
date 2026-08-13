@@ -548,6 +548,7 @@ def test_manifest_accepts_arbitrary_size_integer_default(valid_manifest_payload)
     payload = copy.deepcopy(valid_manifest_payload)
     huge_integer = 10**1000
     payload["parameters"]["period"]["default"] = huge_integer
+    payload["outputs"]["fields"][0]["name_template"] = "sma"
 
     manifest = load_operator_manifest(payload)
 
@@ -565,7 +566,9 @@ def test_manifest_accepts_arbitrary_size_integer_enum_member(valid_manifest_payl
 
 
 def test_manifest_accepts_arbitrary_size_integer_request(valid_manifest_payload) -> None:
-    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"][0]["name_template"] = "sma"
+    manifest = load_operator_manifest(payload)
     huge_integer = 10**1000
 
     assert manifest.validate_parameters({"period": huge_integer}) == {"period": huge_integer}
@@ -1327,6 +1330,76 @@ def test_manifest_rejects_excessive_dynamic_output_format_combinations(valid_man
     payload["outputs"]["fields"][0]["name_template"] = "{value:{width}.{precision}f}"
 
     with pytest.raises(InvalidManifestError, match="format.*declared parameter domain"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("name_template", "size_parameter"),
+    [
+        ("{value:{width}d}", "width"),
+        ("{value:.{precision}f}", "precision"),
+    ],
+    ids=["width", "precision"],
+)
+def test_manifest_rejects_oversized_dynamic_format_sizes_before_rendering(
+    valid_manifest_payload,
+    monkeypatch,
+    name_template,
+    size_parameter,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer" if size_parameter == "width" else "number",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["parameters"][size_parameter] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        "enum": [1_000_000_000],
+    }
+    payload["outputs"]["fields"][0]["name_template"] = name_template
+
+    def fail_if_rendered(*args, **kwargs):
+        raise AssertionError("format() must not run before size validation")
+
+    monkeypatch.setattr("builtins.format", fail_if_rendered)
+
+    with pytest.raises(InvalidManifestError, match="resource limit.*width|resource limit.*precision"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_oversized_resolved_output_name_before_rendering(
+    valid_manifest_payload,
+    monkeypatch,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "x" * 250 + "{value:10d}"
+
+    def fail_if_rendered(*args, **kwargs):
+        raise AssertionError("format() must not run before output-name length validation")
+
+    monkeypatch.setattr("builtins.format", fail_if_rendered)
+
+    with pytest.raises(InvalidManifestError, match="resource limit.*maximum length"):
         load_operator_manifest(payload)
 
 

@@ -6,6 +6,7 @@ import copy
 import hashlib
 import json
 import math
+import re
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,6 +24,23 @@ from oxq.operators.errors import InvalidManifestError, InvalidParameterError
 from oxq.operators.types import OperatorAvailability, OperatorCausality, OperatorLifecycle, OperatorScope
 
 _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS = 256
+_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH = 256
+_FORMAT_SPEC_PATTERN = re.compile(
+    r"(?:(?P<fill>.)?(?P<align>[<>=^]))?"
+    r"(?P<sign>[+\- ])?"
+    r"(?P<z>z)?"
+    r"(?P<alternate>#)?"
+    r"(?P<zero>0)?"
+    r"(?P<width>[0-9]+)?"
+    r"(?P<grouping>[_,])?"
+    r"(?:\.(?P<precision>[0-9]+))?"
+    r"(?P<type>[bcdeEfFgGnosxX%]?)\Z",
+    re.DOTALL,
+)
+
+
+class _OutputFormatResourceLimitError(ValueError):
+    pass
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
@@ -404,10 +422,10 @@ def _validate_resolved_output_names(
     for field in outputs["fields"]:
         template = field["name_template"]
         try:
-            resolved_name = template.format(**parameters)
+            resolved_name = _format_bounded(template, parameters)
         except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
             raise InvalidParameterError(
-                f"output field template cannot format resolved parameters: {template}",
+                f"output field template cannot format resolved parameters: {template}: {exc}",
                 operator_id=operator_id,
                 details={"name_template": template},
             ) from exc
@@ -624,6 +642,15 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 operator_id=operator_id,
             )
         try:
+            _validate_template_resource_bounds(field["name_template"], parameters)
+        except _OutputFormatResourceLimitError as exc:
+            raise InvalidManifestError(
+                f"output field template exceeds resource limits: {field['name_template']}: {exc}",
+                operator_id=operator_id,
+            ) from exc
+        except ValueError:
+            pass
+        try:
             _validate_template_parameter_types(field["name_template"], references, parameters)
         except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
             raise InvalidManifestError(
@@ -640,10 +667,10 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
         if not references or all("default" in parameters[name] for name in references):
             defaults = {name: parameters[name]["default"] for name in references}
             try:
-                resolved_name = field["name_template"].format(**defaults)
+                resolved_name = _format_bounded(field["name_template"], defaults)
             except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
                 raise InvalidManifestError(
-                    f"output field template cannot format declared defaults: {field['name_template']}",
+                    f"output field template cannot format declared defaults: {field['name_template']}: {exc}",
                     operator_id=operator_id,
                 ) from exc
             if not resolved_name:
@@ -688,7 +715,33 @@ def _validate_template_parameter_types(
         "boolean": False,
     }
     samples = {name: representative_values[parameters[name]["type"]] for name in references}
-    template.format(**samples)
+    _format_bounded(template, samples)
+
+
+def _validate_template_resource_bounds(
+    template: str,
+    parameters: Mapping[str, Mapping[str, Any]],
+) -> None:
+    minimum_resolved_length = 0
+    for literal_text, field_name, format_spec, _ in string.Formatter().parse(template):
+        minimum_resolved_length += len(literal_text)
+        if minimum_resolved_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
+            raise _OutputFormatResourceLimitError(
+                f"resolved output field name exceeds maximum length "
+                f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+            )
+        if field_name is None:
+            continue
+        maximum_width = 0
+        for resolved_format_spec in _resolve_finite_format_specs(format_spec or "", parameters):
+            width, _ = _validate_format_spec_resource_bounds(resolved_format_spec)
+            maximum_width = max(maximum_width, width)
+        minimum_resolved_length += maximum_width
+        if minimum_resolved_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
+            raise _OutputFormatResourceLimitError(
+                f"resolved output field name exceeds maximum length "
+                f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+            )
 
 
 def _validate_template_parameter_domains(
@@ -705,6 +758,7 @@ def _validate_template_parameter_domains(
         if field_name is None:
             continue
         for resolved_format_spec in _resolve_finite_format_specs(format_spec or "", parameters):
+            _validate_format_spec_resource_bounds(resolved_format_spec)
             format(representative_values[parameters[field_name]["type"]], resolved_format_spec)
             if resolved_format_spec.endswith("c") and parameters[field_name]["type"] == "integer":
                 _validate_code_point_parameter_domain(parameters[field_name])
@@ -733,7 +787,72 @@ def _resolve_finite_format_specs(
     combinations: list[dict[str, Any]] = [{}]
     for name, domain in zip(references, domains, strict=True):
         combinations = [{**values, name: item} for values in combinations for item in domain]
-    return tuple(format_spec.format(**values) for values in combinations)
+    return tuple(_format_bounded(format_spec, values) for values in combinations)
+
+
+def _validate_format_spec_resource_bounds(format_spec: str) -> tuple[int, int | None]:
+    match = _FORMAT_SPEC_PATTERN.fullmatch(format_spec)
+    if match is None:
+        raise ValueError("format specification is invalid or unsupported")
+    width = _bounded_format_size(match.group("width"), "width")
+    precision_text = match.group("precision")
+    precision = _bounded_format_size(precision_text, "precision") if precision_text is not None else None
+    return width, precision
+
+
+def _bounded_format_size(value: str | None, label: str) -> int:
+    if value is None:
+        return 0
+    normalized = value.lstrip("0") or "0"
+    maximum = str(_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH)
+    if len(normalized) > len(maximum) or (len(normalized) == len(maximum) and normalized > maximum):
+        raise _OutputFormatResourceLimitError(
+            f"format {label} exceeds resource limit "
+            f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+        )
+    return int(normalized)
+
+
+def _format_bounded(template: str, values: Mapping[str, Any]) -> str:
+    formatter = string.Formatter()
+    parts: list[str] = []
+    resolved_length = 0
+    for literal_text, field_name, format_spec, conversion in formatter.parse(template):
+        resolved_length = _append_bounded_part(parts, literal_text, resolved_length)
+        if field_name is None:
+            continue
+        if "." in field_name or "[" in field_name:
+            raise ValueError("template fields must reference parameters directly")
+        value = values[field_name]
+        resolved_format_spec = _format_bounded(format_spec, values) if format_spec else ""
+        width, precision = _validate_format_spec_resource_bounds(resolved_format_spec)
+        converted = formatter.convert_field(value, conversion) if conversion is not None else value
+        minimum_field_length = width
+        if isinstance(converted, str):
+            value_length = len(converted) if precision is None else min(len(converted), precision)
+            minimum_field_length = max(minimum_field_length, value_length)
+        if resolved_length + minimum_field_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
+            raise _OutputFormatResourceLimitError(
+                f"resolved output field name exceeds maximum length "
+                f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+            )
+        if not resolved_format_spec and conversion is None and isinstance(converted, (str, int, float, bool)):
+            rendered = converted if isinstance(converted, str) else str(converted)
+        else:
+            rendered = formatter.format_field(converted, resolved_format_spec)
+        resolved_length = _append_bounded_part(parts, rendered, resolved_length)
+    return "".join(parts)
+
+
+def _append_bounded_part(parts: list[str], part: str, current_length: int) -> int:
+    resolved_length = current_length + len(part)
+    if resolved_length > _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH:
+        raise _OutputFormatResourceLimitError(
+            f"resolved output field name exceeds maximum length "
+            f"{_MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH}"
+        )
+    parts.append(part)
+    return resolved_length
 
 
 def _validate_code_point_parameter_domain(declaration: Mapping[str, Any]) -> None:
