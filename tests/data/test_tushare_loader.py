@@ -121,3 +121,16 @@ def test_tushare_rejects_volume_outside_int64_range(tmp_path: Path) -> None:
             TushareDownloader(token="secret").download(
                 "600519.SH", "2024-01-02", "2024-01-03", dest_dir=tmp_path
             )
+
+
+def test_tushare_rejects_volume_at_int64_overflow_boundary(tmp_path: Path) -> None:
+    client = MagicMock()
+    client.daily.return_value = _daily().assign(vol=[float(2**63) / 100] * 2)
+    client.adj_factor.return_value = _factors_with_later_reference().iloc[:2]
+    tushare = _module(client)
+
+    with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
+        with pytest.raises(DownloadError, match="int64"):
+            TushareDownloader(token="secret").download(
+                "600519.SH", "2024-01-02", "2024-01-03", dest_dir=tmp_path
+            )

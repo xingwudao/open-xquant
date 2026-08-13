@@ -124,13 +124,15 @@ def _normalize_tushare_frames(
         np.abs(scaled_volume - rounded_volume) <= 1e-6
     ):
         raise DownloadError("Tushare volume must convert from lots to whole shares.")
+    rounded_volume_ints = [int(value) for value in rounded_volume]
     int64_limits = np.iinfo(np.int64)
-    if not np.all(
-        (rounded_volume >= int64_limits.min) & (rounded_volume <= int64_limits.max)
+    if any(
+        value < int64_limits.min or value > int64_limits.max
+        for value in rounded_volume_ints
     ):
         raise DownloadError("Tushare volume must fit within int64 share limits.")
 
-    frame = values.assign(volume=rounded_volume.astype("int64"))
+    frame = values.assign(volume=np.asarray(rounded_volume_ints, dtype="int64"))
     frame.index = pd.DatetimeIndex(
         pd.to_datetime(merged["trade_date"], format="%Y%m%d")
     ).tz_localize("Asia/Shanghai")
