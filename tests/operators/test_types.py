@@ -674,6 +674,16 @@ def test_fitted_state_requires_string_dependency_names_and_versions(dependency_v
         _fitted_state(dependency_versions=dependency_versions)
 
 
+@pytest.mark.parametrize(
+    "dependency_versions",
+    [{"": "2.4.2"}, {"numpy": ""}],
+    ids=["empty-name", "empty-version"],
+)
+def test_fitted_state_rejects_empty_dependency_names_and_versions(dependency_versions: dict[str, str]) -> None:
+    with pytest.raises(ValueError, match="dependency_versions.*non-empty strings"):
+        _fitted_state(dependency_versions=dependency_versions)
+
+
 def test_operator_result_requires_matching_provenance(daily_context) -> None:
     request = OperatorRequest(
         operator_id="fake.indicators.sma",

@@ -323,6 +323,8 @@ class FittedOperatorState:
             not isinstance(name, str) or not isinstance(version, str) for name, version in self.dependency_versions.items()
         ):
             raise TypeError("dependency_versions must be a mapping of strings to strings")
+        if any(not name or not version for name, version in self.dependency_versions.items()):
+            raise ValueError("dependency_versions must contain non-empty strings")
         object.__setattr__(
             self,
             "dependency_versions",

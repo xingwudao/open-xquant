@@ -43,7 +43,11 @@ _WORKSPACE_VERSION_RE = re.compile(r"^v[0-9][A-Za-z0-9_-]*$")
 def doctor(as_json: bool, fix: bool) -> None:
     """Check CLI, Agent, workspace, data, and optional dependency readiness."""
 
-    if fix and not (Path.cwd() / ".open-xquant" / "workspace.yaml").exists():
+    if (
+        fix
+        and not (Path.cwd() / ".open-xquant" / "workspace.yaml").exists()
+        and not _workspace_config_directory_is_link(Path.cwd())
+    ):
         if as_json:
             with redirect_stdout(StringIO()):
                 initialize_workspace(Path.cwd())
@@ -122,6 +126,13 @@ def _check_agent_locked() -> dict[str, Any]:
 
 def _check_workspace() -> dict[str, Any]:
     workspace = Path.cwd() / ".open-xquant" / "workspace.yaml"
+    if _workspace_config_directory_is_link(Path.cwd()):
+        return {
+            "status": "fail",
+            "path": str(workspace),
+            "error": "workspace configuration directory must not be a symlink or reparse point",
+            "fixes": ["Replace the .open-xquant symlink with a real directory, then run oxq research init"],
+        }
     if not workspace.exists() and not workspace.is_symlink():
         return {"status": "missing", "fixes": ["oxq research init"]}
     try:

@@ -1084,11 +1084,15 @@ def _structured_value_equal(
             return False
         return True
     if _both_scalar_missing(left, right):
+        if bitwise and type(left) is not type(right):
+            return False
         if bitwise and _is_representation_scalar(left) and _is_representation_scalar(right):
             return _scalar_representation(left) == _scalar_representation(right)
         return True
     if bitwise and _is_representation_scalar(left) and _is_representation_scalar(right):
         return _scalar_representation(left) == _scalar_representation(right)
+    if bitwise and pd.api.types.is_scalar(left) and pd.api.types.is_scalar(right) and type(left) is not type(right):
+        return False
     if not bitwise and _is_numeric_scalar(left) and _is_numeric_scalar(right):
         try:
             return bool(
@@ -1251,7 +1255,7 @@ def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorR
     }:
         probe_count += max(0, int(request.input_panel["date"].nunique()) - 1)
     if not manifest.raw["inputs"]["requires_sorted"]:
-        probe_count += 1 if len(request.input_panel) == 2 else min(3, max(0, len(request.input_panel) - 1))
+        probe_count += 1 if len(request.input_panel) == 2 else 3
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
         codes = tuple(request.input_panel["code"].drop_duplicates())
         min_assets = manifest.raw["inputs"]["min_assets"]

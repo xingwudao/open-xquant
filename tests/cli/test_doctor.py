@@ -57,6 +57,25 @@ def test_doctor_does_not_suggest_force_init_for_symlinked_config_directory(monke
     assert "oxq research init --force" not in result["fixes"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+@pytest.mark.parametrize("fix", [False, True], ids=["check", "fix"])
+def test_doctor_fails_closed_for_dangling_workspace_config_directory(monkeypatch, tmp_path, fix: bool) -> None:
+    (tmp_path / ".open-xquant").symlink_to(tmp_path / "missing-config", target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+
+    args = ["doctor", "--json"]
+    if fix:
+        args.append("--fix")
+    result = CliRunner().invoke(main, args)
+
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    workspace = payload["checks"]["workspace"]
+    assert workspace["status"] == "fail"
+    assert workspace["fixes"] == ["Replace the .open-xquant symlink with a real directory, then run oxq research init"]
+    assert "oxq research init --force" not in payload["fixes"]
+
+
 def _write_governed_workspace(work: Path, *, active_phase: str = "01_brainstorm") -> Path:
     config_dir = work / ".open-xquant"
     version_dir = work / "versions/v001"
