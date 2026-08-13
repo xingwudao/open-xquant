@@ -26,6 +26,18 @@ __all__ = [
 
 _TUSHARE_SYMBOL_RE = re.compile(r"^[0-9]{6}\.(SH|SZ|BJ)$")
 _TUSHARE_DATE_RE = re.compile(r"^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8})$")
+_TUSHARE_RESPONSE_DATE_RE = re.compile(r"^[0-9]{8}$")
+_TUSHARE_DAILY_COLUMNS = {
+    "ts_code",
+    "trade_date",
+    "open",
+    "high",
+    "low",
+    "close",
+    "vol",
+}
+_TUSHARE_FACTOR_COLUMNS = {"ts_code", "trade_date", "adj_factor"}
+_TUSHARE_PRICE_COLUMNS = ["open", "high", "low", "close"]
 importlib = SimpleNamespace(import_module=_import_module)
 
 
@@ -70,6 +82,109 @@ def _normalize_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
+def _valid_price_envelope(values: pd.DataFrame) -> bool:
+    return bool(
+        (
+            values["high"].ge(values[["open", "close"]].max(axis="columns"))
+            & values["low"].le(values[["open", "close"]].min(axis="columns"))
+            & values["high"].ge(values["low"])
+        ).all()
+    )
+
+
+def _validate_tushare_daily_frame(
+    frame: object, *, symbol: str, start: str, end: str
+) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame):
+        raise DownloadError("Tushare daily response must be a pandas DataFrame.")
+    if frame.empty:
+        raise DownloadError(
+            f"No Tushare daily data returned for '{symbol}' ({start} to {end})."
+        )
+    missing = sorted(_TUSHARE_DAILY_COLUMNS.difference(frame.columns))
+    if missing:
+        raise DownloadError(
+            f"Tushare daily response is missing required fields: {', '.join(missing)}."
+        )
+    if not frame["ts_code"].eq(symbol).fillna(False).all():
+        raise DownloadError("Tushare daily response contains an unexpected ts_code.")
+
+    validated = frame.copy()
+    dates = validated["trade_date"].astype(str)
+    if (
+        not dates.str.fullmatch(_TUSHARE_RESPONSE_DATE_RE).all()
+        or pd.to_datetime(dates, format="%Y%m%d", errors="coerce").isna().any()
+    ):
+        raise DownloadError("Tushare daily response contains an invalid trade_date.")
+    if dates.duplicated().any():
+        raise DownloadError("Tushare daily response contains duplicate trade_date values.")
+    if not dates.between(start, end).all():
+        raise DownloadError("Tushare daily response is outside the requested date range.")
+
+    prices = validated.loc[:, _TUSHARE_PRICE_COLUMNS].apply(
+        pd.to_numeric, errors="coerce"
+    )
+    if not np.isfinite(prices.to_numpy(dtype=float)).all() or not prices.gt(0).all().all():
+        raise DownloadError("Tushare prices must be positive and finite.")
+    if not _valid_price_envelope(prices):
+        raise DownloadError("Tushare unadjusted price envelope is invalid.")
+
+    volume = pd.to_numeric(validated["vol"], errors="coerce")
+    if not np.isfinite(volume.to_numpy(dtype=float)).all():
+        raise DownloadError("Tushare volume must be finite.")
+    if volume.lt(0).any():
+        raise DownloadError("Tushare volume must be non-negative.")
+
+    validated["trade_date"] = dates
+    validated[_TUSHARE_PRICE_COLUMNS] = prices
+    validated["vol"] = volume
+    return validated
+
+
+def _validate_tushare_factor_frame(
+    frame: object, *, symbol: str, start: str
+) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame):
+        raise DownloadError("Tushare adjustment response must be a pandas DataFrame.")
+    if frame.empty:
+        raise DownloadError(
+            f"No Tushare adjustment factors returned for '{symbol}'."
+        )
+    missing = sorted(_TUSHARE_FACTOR_COLUMNS.difference(frame.columns))
+    if missing:
+        raise DownloadError(
+            "Tushare adjustment response is missing required fields: "
+            f"{', '.join(missing)}."
+        )
+    if not frame["ts_code"].eq(symbol).fillna(False).all():
+        raise DownloadError("Tushare adjustment response contains an unexpected ts_code.")
+
+    validated = frame.copy()
+    dates = validated["trade_date"].astype(str)
+    if (
+        not dates.str.fullmatch(_TUSHARE_RESPONSE_DATE_RE).all()
+        or pd.to_datetime(dates, format="%Y%m%d", errors="coerce").isna().any()
+    ):
+        raise DownloadError("Tushare adjustment response contains an invalid trade_date.")
+    if dates.duplicated().any():
+        raise DownloadError(
+            "Tushare adjustment response contains duplicate trade_date values."
+        )
+    if (dates < start).any():
+        raise DownloadError("Tushare adjustment response precedes the requested date range.")
+
+    adjustment_factors = pd.to_numeric(validated["adj_factor"], errors="coerce")
+    if (
+        not np.isfinite(adjustment_factors.to_numpy(dtype=float)).all()
+        or adjustment_factors.le(0).any()
+    ):
+        raise DownloadError("Tushare adjustment factors must be positive and finite.")
+
+    validated["trade_date"] = dates
+    validated["adj_factor"] = adjustment_factors
+    return validated.reset_index(drop=True)
+
+
 def _normalize_tushare_frames(
     daily: pd.DataFrame,
     factors: pd.DataFrame,
@@ -78,19 +193,10 @@ def _normalize_tushare_frames(
     start: str,
     end: str,
 ) -> tuple[pd.DataFrame, str, float]:
-    if daily.empty:
-        raise DownloadError(f"No Tushare daily data returned for '{symbol}' ({start} to {end}).")
-    if factors.empty:
-        raise DownloadError(
-            f"No Tushare adjustment factors returned for '{symbol}' ({start} to {end})."
-        )
-
-    daily_columns = {"trade_date", "open", "high", "low", "close", "vol"}
-    factor_columns = {"trade_date", "adj_factor"}
-    if not daily_columns.issubset(daily.columns):
-        raise DownloadError("Tushare daily response is missing required fields.")
-    if not factor_columns.issubset(factors.columns):
-        raise DownloadError("Tushare adjustment response is missing required fields.")
+    daily = _validate_tushare_daily_frame(
+        daily, symbol=symbol, start=start, end=end
+    )
+    factors = _validate_tushare_factor_frame(factors, symbol=symbol, start=start)
 
     factor_dates = factors["trade_date"].astype(str)
     eligible_factors = factors.loc[factor_dates <= end].copy()
@@ -114,15 +220,23 @@ def _normalize_tushare_frames(
     if merged["adj_factor"].isna().any():
         raise DownloadError("Tushare daily data is missing adjustment factors.")
 
-    adjustment = merged["adj_factor"].astype(float) / reference_factor
-    values = merged.loc[:, ["open", "high", "low", "close"]].astype(float)
-    values = values.mul(adjustment, axis="index")
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore", under="ignore"):
+        adjustment = merged["adj_factor"] / reference_factor
+        values = merged.loc[:, _TUSHARE_PRICE_COLUMNS].mul(
+            adjustment, axis="index"
+        )
+    if not np.isfinite(values.to_numpy(dtype=float)).all():
+        raise DownloadError(
+            "Tushare qfq arithmetic overflow produced non-finite adjusted prices."
+        )
+    if not values.gt(0).all().all() or not _valid_price_envelope(values):
+        raise DownloadError("Tushare adjusted price envelope is invalid.")
 
-    scaled_volume = merged["vol"].astype(float).to_numpy() * 100
+    scaled_volume = merged["vol"].to_numpy(dtype=float) * 100
     rounded_volume = np.rint(scaled_volume)
-    if not np.all(np.isfinite(scaled_volume)) or not np.all(
-        np.abs(scaled_volume - rounded_volume) <= 1e-6
-    ):
+    if not np.all(np.isfinite(scaled_volume)):
+        raise DownloadError("Tushare volume must fit within int64 share limits.")
+    if not np.all(np.abs(scaled_volume - rounded_volume) <= 1e-6):
         raise DownloadError("Tushare volume must convert from lots to whole shares.")
     rounded_volume_ints = [int(value) for value in rounded_volume]
     int64_limits = np.iinfo(np.int64)
@@ -160,8 +274,24 @@ class TushareDownloader:
             raise DownloadError(
                 "Tushare token is required; pass token or set TUSHARE_TOKEN."
             )
-        module = importlib.import_module("tushare")
-        client = module.pro_api(token)
+        import_failed = False
+        try:
+            module = importlib.import_module("tushare")
+        except ModuleNotFoundError:
+            import_failed = True
+        if import_failed:
+            raise DownloadError(
+                "Tushare is not installed; run `uv sync --extra tushare`."
+            )
+        client_error: str | None = None
+        try:
+            client = module.pro_api(token)
+        except Exception as exc:
+            client_error = str(exc).replace(token, "***")
+        if client_error is not None:
+            raise DownloadError(
+                f"Tushare client initialization failed: {client_error}"
+            )
         self._resolved_token = token
         self._module = module
         self._client = client
@@ -181,12 +311,20 @@ class TushareDownloader:
         if normalized_start > normalized_end:
             raise DownloadError("Tushare start date must not be after end date.")
         module, client = self._get_module_and_client()
-        daily = client.daily(
-            ts_code=symbol, start_date=normalized_start, end_date=normalized_end
-        )
-        factors = client.adj_factor(
-            ts_code=symbol, start_date=normalized_start, end_date=normalized_end
-        )
+        request_error: str | None = None
+        try:
+            daily = client.daily(
+                ts_code=symbol, start_date=normalized_start, end_date=normalized_end
+            )
+            factors = client.adj_factor(
+                ts_code=symbol, start_date=normalized_start, end_date=normalized_end
+            )
+        except Exception as exc:
+            request_error = str(exc).replace(self._resolved_token or "", "***")
+        if request_error is not None:
+            raise DownloadError(
+                f"Tushare request failed for '{symbol}': {request_error}"
+            )
         frame, reference_date, reference_factor = _normalize_tushare_frames(
             daily,
             factors,
