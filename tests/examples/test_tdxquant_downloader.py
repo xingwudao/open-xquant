@@ -626,6 +626,19 @@ def test_validates_volume_at_exact_int64_bounds(
     assert pd.read_parquet(path)["volume"].tolist() == [int(volume), int(volume)]
 
 
+def test_rejects_huge_decimal_volume_before_integer_materialization() -> None:
+    with (
+        patch.object(
+            tdxquant_downloader,
+            "int",
+            side_effect=AssertionError("unsafe integer materialization"),
+            create=True,
+        ),
+        pytest.raises(DownloadError, match="unsafe volume"),
+    ):
+        tdxquant_downloader._volume_values(["1e100000000"], "600519.SH")
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [

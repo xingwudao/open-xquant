@@ -112,6 +112,10 @@ def _load_pytdx() -> tuple[type[Any], str]:
         raise DownloadError(
             f"pytdx==1.72 is required; run: {_INSTALL_HINT}"
         ) from exc
+    if version != "1.72":
+        raise DownloadError(
+            f"pytdx==1.72 is required; found {version}; run: {_INSTALL_HINT}"
+        )
     return api_class, version
 
 
@@ -174,6 +178,17 @@ def _parse_bar_page(payload: object, symbol: str) -> pd.DataFrame:
             raise DownloadError(
                 f"TDX returned an invalid bar date for '{symbol}'."
             )
+        try:
+            naive_timestamp = timestamp.tz_localize(None)
+            normalized_date = naive_timestamp.normalize()
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise DownloadError(
+                f"TDX returned an invalid bar date for '{symbol}'."
+            ) from exc
+        if normalized_date.date() != naive_timestamp.date():
+            raise DownloadError(
+                f"TDX returned an invalid bar date for '{symbol}'."
+            )
         values = {field: _price(item[field], symbol) for field in _OHLC}
         if not (
             values["low"] <= values["open"] <= values["high"]
@@ -182,7 +197,7 @@ def _parse_bar_page(payload: object, symbol: str) -> pd.DataFrame:
             raise DownloadError(f"TDX returned inconsistent OHLC for '{symbol}'.")
         rows.append(
             {
-                "date": timestamp.tz_localize(None).normalize(),
+                "date": normalized_date,
                 **values,
                 "volume": _volume(item["vol"], symbol),
             }

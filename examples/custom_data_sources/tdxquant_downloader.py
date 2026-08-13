@@ -259,6 +259,8 @@ def _bars_from_payload(
 
 def _volume_values(values: list[object], symbol: str) -> list[int]:
     limits = np.iinfo(np.int64)
+    minimum = Decimal(str(limits.min))
+    maximum = Decimal(str(limits.max))
     volume: list[int] = []
     for value in values:
         if isinstance(value, (bool, Decimal)):
@@ -269,11 +271,14 @@ def _volume_values(values: list[object], symbol: str) -> list[int]:
             raise DownloadError(
                 f"TdxQuant returned unsafe volume for '{symbol}'."
             ) from exc
-        if not parsed.is_finite() or parsed != parsed.to_integral_value():
+        if (
+            not parsed.is_finite()
+            or parsed != parsed.to_integral_value()
+            or parsed < minimum
+            or parsed > maximum
+        ):
             raise DownloadError(f"TdxQuant returned unsafe volume for '{symbol}'.")
         integer = int(parsed)
-        if integer < limits.min or integer > limits.max:
-            raise DownloadError(f"TdxQuant returned unsafe volume for '{symbol}'.")
         volume.append(integer)
     return volume
 

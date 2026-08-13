@@ -146,6 +146,18 @@ def test_missing_pytdx_has_actionable_error(monkeypatch: pytest.MonkeyPatch) -> 
         module._load_pytdx()
 
 
+def test_rejects_unreviewed_pytdx_version() -> None:
+    hq = MagicMock()
+    hq.TdxHq_API = MagicMock()
+
+    with (
+        patch.object(module.importlib, "import_module", return_value=hq),
+        patch.object(module.metadata, "version", return_value="1.71"),
+        pytest.raises(DownloadError, match=r"pytdx==1\.72"),
+    ):
+        module._load_pytdx()
+
+
 def test_connected_api_uses_conservative_options_and_disconnects() -> None:
     api = MagicMock()
     api.connect.return_value = api
@@ -308,6 +320,14 @@ def test_rejects_invalid_bar_date() -> None:
 def test_rejects_nat_bar_date() -> None:
     payload = bar("2024-01-01", 10.0)
     payload["datetime"] = "NaT"
+
+    with pytest.raises(DownloadError, match="invalid bar date"):
+        module._parse_bar_page([payload], "510300.SH")
+
+
+def test_rejects_bar_date_that_overflows_midnight_normalization() -> None:
+    payload = bar("2024-01-01", 10.0)
+    payload["datetime"] = "1677-09-21 15:00"
 
     with pytest.raises(DownloadError, match="invalid bar date"):
         module._parse_bar_page([payload], "510300.SH")
