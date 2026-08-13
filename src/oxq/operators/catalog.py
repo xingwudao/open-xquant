@@ -20,7 +20,7 @@ from oxq.operators.manifest import OperatorManifest, load_operator_manifest
 
 _CATALOG_KEYS = {"schema_version", "contract_version", "package", "operators", "catalog_digest"}
 _PACKAGE_KEYS = {"distribution", "version", "source_commit", "source_tree_digest", "build_identifier"}
-_COMMIT_RE = re.compile(r"^[0-9a-f]{40,64}$")
+_COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 

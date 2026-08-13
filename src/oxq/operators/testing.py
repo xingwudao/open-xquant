@@ -100,7 +100,16 @@ def verify_operator_contract(
             details={"rows_by_code": {str(code): int(rows) for code, rows in history.items()}},
         )
     declared_columns = required_columns | set(input_spec["optional_columns"])
-    for column in sorted(declared_columns & set(normalized.input_panel.columns)):
+    present_declared_columns = sorted(declared_columns & set(normalized.input_panel.columns))
+    if input_spec["missing_value_policy"]["kind"] == "require_complete":
+        incomplete_columns = [column for column in present_declared_columns if normalized.input_panel[column].isna().any()]
+        if incomplete_columns:
+            raise ContractViolationError(
+                "input violates missing_value_policy=require_complete",
+                operator_id=manifest.operator_id,
+                details={"columns": incomplete_columns},
+            )
+    for column in present_declared_columns:
         actual_dtype = str(normalized.input_panel[column].dtype)
         allowed_dtypes = input_spec["dtypes"][column]
         if actual_dtype not in allowed_dtypes:
@@ -111,21 +120,13 @@ def verify_operator_contract(
             )
     checks = ["request"]
 
-    snapshot = normalized.input_panel.copy(deep=True)
-    result = operator(normalized)
-    try:
-        pd.testing.assert_frame_equal(normalized.input_panel, snapshot)
-    except AssertionError as exc:
-        raise ContractViolationError(
-            "operator mutated input_panel",
-            operator_id=manifest.operator_id,
-        ) from exc
+    result = _invoke_operator(manifest, operator, normalized)
     checks.append("input_immutability")
 
     _validate_result(manifest, normalized, result)
     checks.extend(("output_contract", "provenance"))
 
-    repeated = operator(_copy_request(normalized))
+    repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated)
     _require_equal_data(result.data, repeated.data, manifest, "operator output must be deterministic")
     if result.diagnostics != repeated.diagnostics:
@@ -143,7 +144,7 @@ def verify_operator_contract(
     if not input_spec["requires_sorted"]:
         shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
         shuffled_request = _copy_request(normalized, panel=shuffled_panel)
-        shuffled_result = operator(shuffled_request)
+        shuffled_result = _invoke_operator(manifest, operator, shuffled_request)
         _validate_result(manifest, shuffled_request, shuffled_result)
         _require_equal_data(
             _canonical(result.data),
@@ -158,7 +159,7 @@ def verify_operator_contract(
         for code in normalized.input_panel["code"].drop_duplicates():
             symbol_panel = normalized.input_panel.loc[normalized.input_panel["code"] == code].reset_index(drop=True)
             symbol_request = _copy_request(normalized, panel=symbol_panel)
-            symbol_result = operator(symbol_request)
+            symbol_result = _invoke_operator(manifest, operator, symbol_request)
             _validate_result(manifest, symbol_request, symbol_result)
             pieces.append(symbol_result.data)
         per_symbol = pd.concat(pieces, ignore_index=True) if pieces else result.data.iloc[0:0].copy()
@@ -191,10 +192,17 @@ def _validate_result(
     outputs = manifest.raw["outputs"]
     alignment = outputs["alignment"]
     QuantPanelAdapter.validate_output(request.input_panel, result.data, request.context, alignment=alignment)
-    expected_fields = {
+    resolved_fields = [
         field["name_template"].format(**request.parameters)
         for field in outputs["fields"]
-    }
+    ]
+    if len(set(resolved_fields)) != len(resolved_fields):
+        raise ContractViolationError(
+            "operator manifest contains duplicate resolved output fields",
+            operator_id=manifest.operator_id,
+            details={"fields": resolved_fields},
+        )
+    expected_fields = set(resolved_fields)
     actual_fields = set(result.data.columns) - {"date", "code"}
     if actual_fields != expected_fields:
         raise ContractViolationError(
@@ -202,10 +210,7 @@ def _validate_result(
             operator_id=manifest.operator_id,
             details={"expected": sorted(expected_fields), "actual": sorted(actual_fields)},
         )
-    declarations = {
-        field["name_template"].format(**request.parameters): field
-        for field in outputs["fields"]
-    }
+    declarations = dict(zip(resolved_fields, outputs["fields"], strict=True))
     for name, declaration in declarations.items():
         actual_dtype = str(result.data[name].dtype)
         if actual_dtype != declaration["dtype"]:
@@ -232,7 +237,23 @@ def _validate_result(
                 f"output column {name} contains values above declared maximum {declaration['maximum']}",
                 operator_id=manifest.operator_id,
             )
-    _validate_nan_policy(manifest, request, result, tuple(declarations))
+    warmup_rows = _resolve_warmup_rows(manifest, request)
+    warmup_mask = _output_warmup_mask(request.input_panel, result.data, warmup_rows)
+    expected_warmup_rows = int(warmup_mask.sum())
+    if result.diagnostics.warmup_rows != expected_warmup_rows:
+        raise ContractViolationError(
+            "diagnostics.warmup_rows mismatch",
+            operator_id=manifest.operator_id,
+            details={"expected": expected_warmup_rows, "actual": result.diagnostics.warmup_rows},
+        )
+    expected_dropped_rows = len(request.input_panel) - len(result.data)
+    if result.diagnostics.dropped_rows != expected_dropped_rows:
+        raise ContractViolationError(
+            "diagnostics.dropped_rows mismatch",
+            operator_id=manifest.operator_id,
+            details={"expected": expected_dropped_rows, "actual": result.diagnostics.dropped_rows},
+        )
+    _validate_nan_policy(manifest, result, tuple(declarations), warmup_mask)
 
 
 def _validate_availability(manifest: OperatorManifest, request: OperatorRequest) -> None:
@@ -252,9 +273,9 @@ def _validate_availability(manifest: OperatorManifest, request: OperatorRequest)
 
 def _validate_nan_policy(
     manifest: OperatorManifest,
-    request: OperatorRequest,
     result: OperatorResult,
     output_fields: tuple[str, ...],
+    warmup_mask: pd.Series,
 ) -> None:
     outputs = manifest.raw["outputs"]
     nan_policy = outputs["nan_policy"]
@@ -266,25 +287,55 @@ def _validate_nan_policy(
         )
     if nan_policy != "warmup_only" or not missing.any().any():
         return
-    warmup = outputs["warmup"]
-    if warmup["kind"] == "fixed":
-        warmup_rows = warmup["rows"]
-    else:
-        warmup_rows = request.parameters[warmup["parameter"]] + warmup.get("offset", 0)
-    if not isinstance(warmup_rows, int) or isinstance(warmup_rows, bool) or warmup_rows < 0:
-        raise ContractViolationError(
-            "declared warmup must resolve to a non-negative integer",
-            operator_id=manifest.operator_id,
-        )
-    ordered = result.data[["date", "code"]].assign(_row_id=range(len(result.data)))
-    ordered = ordered.sort_values(["code", "date"], kind="stable")
-    ordered["_position"] = ordered.groupby("code", sort=False, observed=True).cumcount()
-    outside_warmup = ordered.sort_values("_row_id", kind="stable")["_position"].ge(warmup_rows).reset_index(drop=True)
-    if missing.reset_index(drop=True).loc[outside_warmup].any().any():
+    if missing.reset_index(drop=True).loc[~warmup_mask].any().any():
         raise ContractViolationError(
             "operator output contains NaN values outside declared warmup",
             operator_id=manifest.operator_id,
         )
+
+
+def _resolve_warmup_rows(manifest: OperatorManifest, request: OperatorRequest) -> int:
+    warmup = manifest.raw["outputs"]["warmup"]
+    if warmup["kind"] == "fixed":
+        value = warmup["rows"]
+    else:
+        value = request.parameters[warmup["parameter"]] + warmup.get("offset", 0)
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ContractViolationError(
+            "declared warmup must resolve to a non-negative integer",
+            operator_id=manifest.operator_id,
+        )
+    return value
+
+
+def _output_warmup_mask(
+    input_panel: pd.DataFrame,
+    output_panel: pd.DataFrame,
+    warmup_rows: int,
+) -> pd.Series:
+    ordered = input_panel[["date", "code"]].sort_values(["code", "date"], kind="stable").copy()
+    positions = ordered.groupby("code", sort=False, observed=True).cumcount()
+    positions.index = pd.MultiIndex.from_frame(ordered[["date", "code"]])
+    output_keys = pd.MultiIndex.from_frame(output_panel[["date", "code"]])
+    output_positions = positions.reindex(output_keys)
+    return pd.Series(output_positions.to_numpy() < warmup_rows, dtype="bool")
+
+
+def _invoke_operator(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+) -> OperatorResult:
+    snapshot = request.input_panel.copy(deep=True)
+    result = operator(request)
+    try:
+        pd.testing.assert_frame_equal(request.input_panel, snapshot)
+    except AssertionError as exc:
+        raise ContractViolationError(
+            "operator mutated input_panel",
+            operator_id=manifest.operator_id,
+        ) from exc
+    return result
 
 
 def _copy_request(

@@ -258,3 +258,22 @@ def test_catalog_rejects_invalid_package_semantic_version(valid_manifest_payload
 
     with pytest.raises(InvalidManifestError, match="semantic versioning"):
         load_operator_catalog(payload)
+
+
+def test_catalog_rejects_unsupported_source_commit_lengths(valid_manifest_payload) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 41,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+
+    with pytest.raises(InvalidManifestError, match="full hexadecimal commit"):
+        load_operator_catalog(payload)
