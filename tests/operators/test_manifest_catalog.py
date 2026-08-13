@@ -106,6 +106,46 @@ def test_manifest_rejects_non_json_leaves_loaded_from_yaml(valid_manifest_payloa
         load_operator_manifest(source)
 
 
+@pytest.mark.parametrize("suffix", [".json", ".yaml"])
+def test_manifest_rejects_nested_duplicate_mapping_keys(valid_manifest_payload, tmp_path, suffix) -> None:
+    source = tmp_path / f"operator{suffix}"
+    if suffix == ".json":
+        raw = json.dumps(valid_manifest_payload, separators=(",", ":"))
+        raw = raw.replace('"min_assets":1', '"min_assets":1,"min_assets":2')
+    else:
+        raw = yaml.safe_dump(valid_manifest_payload, sort_keys=False)
+        raw = raw.replace("  min_assets: 1\n", "  min_assets: 1\n  min_assets: 2\n")
+    source.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(InvalidManifestError, match=r"manifest\.inputs.*duplicate.*min_assets") as exc_info:
+        load_operator_manifest(source)
+
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
+@pytest.mark.parametrize("suffix", [".json", ".yaml"])
+def test_manifest_accepts_normal_file_mapping_keys(valid_manifest_payload, tmp_path, suffix) -> None:
+    source = tmp_path / f"operator{suffix}"
+    if suffix == ".json":
+        source.write_text(json.dumps(valid_manifest_payload), encoding="utf-8")
+    else:
+        source.write_text(yaml.safe_dump(valid_manifest_payload, sort_keys=False), encoding="utf-8")
+
+    assert load_operator_manifest(source).operator_id == valid_manifest_payload["operator_id"]
+
+
+def test_manifest_preserves_safe_yaml_merge_keys(valid_manifest_payload, tmp_path) -> None:
+    raw = yaml.safe_dump(valid_manifest_payload, sort_keys=False)
+    raw = raw.replace("  period:\n", "  period: &period\n", 1)
+    raw = raw.replace("outputs:\n", "  alias:\n    <<: *period\noutputs:\n", 1)
+    source = tmp_path / "operator.yaml"
+    source.write_text(raw, encoding="utf-8")
+
+    manifest = load_operator_manifest(source)
+
+    assert manifest.raw["parameters"]["alias"] == manifest.raw["parameters"]["period"]
+
+
 @pytest.mark.parametrize("version", ["1.0.0-01", "1.0.0-alpha..1", "1.0.0-"])
 def test_manifest_rejects_invalid_semantic_versions(valid_manifest_payload, version) -> None:
     payload = copy.deepcopy(valid_manifest_payload)

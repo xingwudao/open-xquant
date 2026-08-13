@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import re
 from dataclasses import FrozenInstanceError, replace
 from typing import Any
 
@@ -226,6 +227,19 @@ def test_operator_context_identity_fields_require_strings(daily_context, field: 
         replace(daily_context, **{field: 1})
 
 
+@pytest.mark.parametrize("timezone", ["UTC", "America/New_York", "Asia/Shanghai"])
+def test_operator_context_accepts_supported_zoneinfo_timezones(daily_context, timezone: str) -> None:
+    context = replace(daily_context, timezone=timezone)
+
+    assert context.timezone == timezone
+
+
+@pytest.mark.parametrize("timezone", ["Mars/Olympus", "/etc/passwd"])
+def test_operator_context_rejects_unsupported_zoneinfo_timezones(daily_context, timezone: str) -> None:
+    with pytest.raises(ValueError, match=rf"timezone.*{re.escape(timezone)}.*zoneinfo"):
+        replace(daily_context, timezone=timezone)
+
+
 def test_fitted_state_snapshots_training_metadata() -> None:
     learned = {"mean": [1.0, 2.0], "serialized": b"model"}
     state = FittedOperatorState(
@@ -253,6 +267,25 @@ def test_fitted_state_snapshots_training_metadata() -> None:
 def test_fitted_state_requires_non_empty_string_feature_names(feature_order: tuple[Any, ...]) -> None:
     with pytest.raises((TypeError, ValueError), match="feature_order"):
         _fitted_state(feature_order=feature_order)
+
+
+@pytest.mark.parametrize(
+    "feature_order",
+    ["value", b"value", {"value"}, {"value": 1}, (feature for feature in ["value"]), 1],
+    ids=["string", "bytes", "set", "mapping", "generator", "integer"],
+)
+def test_fitted_state_requires_feature_order_sequence(feature_order: Any) -> None:
+    with pytest.raises(TypeError, match="feature_order must be a non-string sequence"):
+        _fitted_state(feature_order=feature_order)
+
+
+def test_fitted_state_snapshots_feature_order_sequence() -> None:
+    feature_order = ["open", "close"]
+
+    state = _fitted_state(feature_order=feature_order)
+    feature_order.append("volume")
+
+    assert state.feature_order == ("open", "close")
 
 
 @pytest.mark.parametrize("random_seed", [None, 0, -7])
@@ -328,6 +361,17 @@ def test_fitted_state_rejects_object_dtype_arrays_in_all_state_mappings(field: s
 def test_fitted_state_rejects_non_string_nested_keys_in_all_state_mappings(field: str) -> None:
     with pytest.raises(TypeError, match=rf"{field}\['nested'\].*mapping keys must be strings.*int.*1"):
         _fitted_state(**{field: {"nested": {1: "numeric", "1": "string"}}})
+
+
+@pytest.mark.parametrize("field", ["training_data_summary", "parameters", "learned_state"])
+@pytest.mark.parametrize(
+    "value",
+    [[("key", "value")], ("key", "value"), "key=value"],
+    ids=["list", "tuple", "string"],
+)
+def test_fitted_state_requires_state_mappings(field: str, value: Any) -> None:
+    with pytest.raises(TypeError, match=rf"{field} must be a mapping"):
+        _fitted_state(**{field: value})
 
 
 @pytest.mark.parametrize(

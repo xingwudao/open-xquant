@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -47,6 +49,8 @@ class ContractReport:
     distribution_version: str
     manifest_digest: str
     implementation_digest: str
+    parameters: Mapping[str, Any]
+    parameters_digest: str
     passed: bool
     checks: tuple[str, ...]
 
@@ -120,8 +124,27 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"nan_policy": nan_policy},
         )
+    missing_value_policy = manifest.raw["inputs"]["missing_value_policy"]["kind"]
+    if missing_value_policy != "require_complete":
+        raise ContractViolationError(
+            f"contract checker cannot certify input missing_value_policy={missing_value_policy}",
+            operator_id=manifest.operator_id,
+            details={"missing_value_policy": missing_value_policy},
+        )
     parameters = manifest.validate_parameters(request.parameters)
+    parameters_digest = _resolved_parameters_digest(parameters, manifest.operator_id)
     normalized = _copy_request(request, parameters=parameters)
+    determinism = manifest.raw.get("determinism", {})
+    if determinism.get("bitwise", True):
+        object_fields = [
+            field["name_template"].format(**parameters) for field in manifest.raw["outputs"]["fields"] if field["dtype"] == "object"
+        ]
+        if object_fields:
+            raise ContractViolationError(
+                "contract checker cannot certify object output fields with bitwise determinism",
+                operator_id=manifest.operator_id,
+                details={"fields": object_fields},
+            )
     _validate_availability(manifest, normalized)
     input_spec = manifest.raw["inputs"]
     try:
@@ -233,15 +256,46 @@ def verify_operator_contract(
     for column in present_optional_columns:
         panel_without_optional = normalized.input_panel.drop(columns=[column])
         optional_request = _copy_request(normalized, panel=panel_without_optional)
-        try:
-            optional_result = _invoke_operator(manifest, operator, optional_request)
-        except Exception as exc:
-            raise ContractViolationError(
-                f"operator failed without optional input column {column}",
-                operator_id=manifest.operator_id,
-                details={"column": column},
-            ) from exc
+        failure_message = f"operator failed without optional input column {column}"
+        optional_result = _invoke_operator(
+            manifest,
+            operator,
+            optional_request,
+            failure_message=failure_message,
+            failure_details={"column": column},
+        )
         _validate_result(manifest, optional_request, optional_result, expected_implementation_digest)
+        optional_data = _deepcopy_frame(optional_result.data)
+        optional_metadata = _snapshot_metadata(optional_result.metadata)
+        optional_repeated = _invoke_operator(
+            manifest,
+            operator,
+            _copy_request(optional_request),
+            failure_message=failure_message,
+            failure_details={"column": column},
+        )
+        _validate_result(manifest, optional_request, optional_repeated, expected_implementation_digest)
+        _require_deterministic_data(
+            optional_data,
+            optional_repeated.data,
+            manifest,
+            f"operator without optional input column {column} must be deterministic",
+        )
+        if optional_result.diagnostics != optional_repeated.diagnostics:
+            raise ContractViolationError(
+                f"operator diagnostics without optional input column {column} must be deterministic",
+                operator_id=manifest.operator_id,
+            )
+        if optional_result.provenance != optional_repeated.provenance:
+            raise ContractViolationError(
+                f"operator provenance without optional input column {column} must be deterministic",
+                operator_id=manifest.operator_id,
+            )
+        if not _metadata_equal(optional_metadata, optional_repeated.metadata):
+            raise ContractViolationError(
+                f"operator metadata without optional input column {column} must be deterministic",
+                operator_id=manifest.operator_id,
+            )
     if present_optional_columns:
         checks.append("optional_inputs")
 
@@ -249,14 +303,13 @@ def verify_operator_contract(
     if undeclared_columns:
         declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
         declared_request = _copy_request(normalized, panel=declared_panel)
-        try:
-            declared_result = _invoke_operator(manifest, operator, declared_request)
-        except Exception as exc:
-            raise ContractViolationError(
-                "operator failed without undeclared input columns",
-                operator_id=manifest.operator_id,
-                details={"columns": undeclared_columns},
-            ) from exc
+        declared_result = _invoke_operator(
+            manifest,
+            operator,
+            declared_request,
+            failure_message="operator failed without undeclared input columns",
+            failure_details={"columns": undeclared_columns},
+        )
         _validate_result(manifest, declared_request, declared_result, expected_implementation_digest)
         _require_exact_data(
             _canonical(first_data),
@@ -300,19 +353,24 @@ def verify_operator_contract(
         checks.append("causality")
 
     if not input_spec["requires_sorted"]:
-        permuted_panel = pd.concat(
-            (normalized.input_panel.iloc[1:], normalized.input_panel.iloc[:1]),
-            ignore_index=True,
-        )
-        permuted_request = _copy_request(normalized, panel=permuted_panel)
-        permuted_result = _invoke_operator(manifest, operator, permuted_request)
-        _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
-        _require_exact_data(
-            _canonical(first_data),
-            _canonical(permuted_result.data),
-            manifest,
-            "operator output must not depend on incidental input order",
-        )
+        permuted_panels = [normalized.input_panel.iloc[::-1].reset_index(drop=True)]
+        if len(normalized.input_panel) >= 3:
+            permuted_panels.append(
+                pd.concat(
+                    (normalized.input_panel.iloc[1:], normalized.input_panel.iloc[:1]),
+                    ignore_index=True,
+                )
+            )
+        for permuted_panel in permuted_panels:
+            permuted_request = _copy_request(normalized, panel=permuted_panel)
+            permuted_result = _invoke_operator(manifest, operator, permuted_request)
+            _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
+            _require_exact_data(
+                _canonical(first_data),
+                _canonical(permuted_result.data),
+                manifest,
+                "operator output must not depend on incidental input order",
+            )
         checks.append("unordered_input")
 
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
@@ -347,6 +405,8 @@ def verify_operator_contract(
         distribution_version=expected_distribution_version,
         manifest_digest=manifest.digest,
         implementation_digest=expected_implementation_digest,
+        parameters=normalized.parameters,
+        parameters_digest=parameters_digest,
         passed=True,
         checks=tuple(checks),
     )
@@ -555,13 +615,42 @@ def _expected_warmup_rows(input_panel: pd.DataFrame, warmup_rows: int) -> int:
     return int(history.clip(upper=warmup_rows).sum())
 
 
+def _resolved_parameters_digest(parameters: Mapping[str, Any], operator_id: str) -> str:
+    try:
+        canonical = json.dumps(
+            parameters,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ContractViolationError(
+            "resolved parameters must be canonically serializable",
+            operator_id=operator_id,
+        ) from exc
+    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+
+
 def _invoke_operator(
     manifest: OperatorManifest,
     operator: OperatorCallable,
     request: OperatorRequest,
+    *,
+    failure_message: str = "operator invocation failed",
+    failure_details: Mapping[str, Any] | None = None,
 ) -> OperatorResult:
     snapshot = _deepcopy_frame(request.input_panel)
-    result = operator(request)
+    try:
+        result = operator(request)
+    except OperatorError:
+        raise
+    except Exception as exc:
+        raise ContractViolationError(
+            failure_message,
+            operator_id=manifest.operator_id,
+            details=failure_details,
+        ) from exc
     try:
         pd.testing.assert_frame_equal(request.input_panel, snapshot)
     except AssertionError as exc:

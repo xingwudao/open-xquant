@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import numpy as np
 import pandas as pd
@@ -138,6 +139,10 @@ class OperatorContext:
             value = getattr(self, name)
             if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        try:
+            ZoneInfo(self.timezone)
+        except (ValueError, ZoneInfoNotFoundError) as exc:
+            raise ValueError(f"timezone {self.timezone!r} is not supported by the zoneinfo database") from exc
         object.__setattr__(self, "timestamp_semantics", TimestampSemantics(self.timestamp_semantics))
         object.__setattr__(self, "price_adjustment", PriceAdjustment(self.price_adjustment))
         object.__setattr__(self, "evaluation_time", OperatorAvailability(self.evaluation_time))
@@ -227,17 +232,22 @@ class FittedOperatorState:
         for name in ("training_data_digest", "state_digest"):
             if not _DIGEST_RE.fullmatch(getattr(self, name)):
                 raise ValueError(f"{name} must be a sha256 digest")
+        if isinstance(self.feature_order, (str, bytes)) or not isinstance(self.feature_order, Sequence):
+            raise TypeError("feature_order must be a non-string sequence")
         if not self.feature_order or any(not isinstance(feature, str) or not feature for feature in self.feature_order):
             raise ValueError("feature_order must contain non-empty feature names")
         object.__setattr__(self, "feature_order", tuple(self.feature_order))
         if self.random_seed is not None and type(self.random_seed) is not int:
             raise TypeError("random_seed must be an integer or None")
         for name in ("training_data_summary", "parameters", "learned_state"):
+            value = getattr(self, name)
+            if not isinstance(value, Mapping):
+                raise TypeError(f"{name} must be a mapping")
             object.__setattr__(
                 self,
                 name,
                 _freeze(
-                    getattr(self, name),
+                    value,
                     permanent_arrays=True,
                     string_keys_only=True,
                     immutable_leaves_only=True,
