@@ -6,10 +6,10 @@ import importlib.util
 from pathlib import Path
 from types import ModuleType
 
+import examples.modules.tdxquant_downloader as tdxquant_downloader
 import pandas as pd
 import pytest
 from examples.modules.pytdx_downloader import PyTdxDownloader
-from examples.modules.tdxquant_downloader import TdxQuantDownloader
 
 from oxq.core.errors import DownloadError, SymbolNotFoundError
 from oxq.data.providers import Downloader
@@ -199,7 +199,7 @@ def test_create_downloader_selects_tdxquant_with_explicit_options() -> None:
 
     downloader = module.create_downloader(args)
 
-    assert isinstance(downloader, TdxQuantDownloader)
+    assert isinstance(downloader, tdxquant_downloader.TdxQuantDownloader)
     assert downloader.endpoint == "http://localhost:17709/"
     assert downloader.timeout == 8.0
     assert downloader.dividend_type == "none"
@@ -241,7 +241,7 @@ def test_create_downloader_uses_tdxquant_defaults() -> None:
 
     downloader = module.create_downloader(args)
 
-    assert isinstance(downloader, TdxQuantDownloader)
+    assert isinstance(downloader, tdxquant_downloader.TdxQuantDownloader)
     assert downloader.endpoint == "http://127.0.0.1:17709/"
     assert downloader.dividend_type == "front"
     assert downloader.timeout == 10.0

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from oxq.core.errors import DownloadError
 from oxq.data.loaders import resolve_data_dir
@@ -10,7 +11,10 @@ from oxq.data.market import LocalMarketDataProvider
 from oxq.data.providers import Downloader
 from oxq.universe.static import StaticUniverse
 
-if __package__:
+if TYPE_CHECKING:
+    from examples.modules.pytdx_downloader import PyTdxDownloader
+    from examples.modules.tdxquant_downloader import TdxQuantDownloader
+elif __package__:
     from .pytdx_downloader import PyTdxDownloader
     from .tdxquant_downloader import TdxQuantDownloader
 else:
