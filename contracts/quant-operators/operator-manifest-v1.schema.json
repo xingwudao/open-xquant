@@ -17,6 +17,26 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {"lifecycle": {"const": "fit_transform"}},
+        "required": ["lifecycle"]
+      },
+      "then": {
+        "required": ["ml"],
+        "properties": {
+          "ml": {
+            "required": ["usable_as_feature", "requires_fit", "fit_scope", "state_serializable"],
+            "properties": {
+              "usable_as_feature": {"const": true},
+              "requires_fit": {"const": true},
+              "fit_scope": {"const": "training_window_only"},
+              "state_serializable": {"const": true}
+            }
+          }
+        }
+      }
     }
   ],
   "required": [

@@ -82,6 +82,106 @@ def test_operator_schema_rejects_noncanonical_python_distribution_names(
     assert not Draft202012Validator(schema).is_valid(payload)
 
 
+@pytest.mark.parametrize(
+    "ml",
+    [
+        None,
+        {
+            "requires_fit": True,
+            "fit_scope": "training_window_only",
+            "state_serializable": True,
+        },
+        {
+            "usable_as_feature": True,
+            "fit_scope": "training_window_only",
+            "state_serializable": True,
+        },
+        {
+            "usable_as_feature": True,
+            "requires_fit": True,
+            "state_serializable": True,
+        },
+        {
+            "usable_as_feature": True,
+            "requires_fit": True,
+            "fit_scope": "training_window_only",
+        },
+    ],
+    ids=[
+        "missing-ml-block",
+        "missing-usable-as-feature",
+        "missing-requires-fit",
+        "missing-fit-scope",
+        "missing-state-serializable",
+    ],
+)
+def test_operator_schema_requires_complete_ml_metadata_for_fit_transform_lifecycle(
+    valid_manifest_payload,
+    ml,
+) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {
+        **valid_manifest_payload,
+        "lifecycle": "fit_transform",
+        "fitted_state": {"serializable": True, "format": "json"},
+    }
+    if ml is not None:
+        payload["ml"] = ml
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("usable_as_feature", False),
+        ("requires_fit", False),
+        ("fit_scope", "full_sample"),
+        ("state_serializable", False),
+    ],
+)
+def test_operator_schema_rejects_lifecycle_inconsistent_ml_metadata_for_fit_transform(
+    valid_manifest_payload,
+    field,
+    value,
+) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    ml = {
+        "usable_as_feature": True,
+        "requires_fit": True,
+        "fit_scope": "training_window_only",
+        "state_serializable": True,
+    }
+    ml[field] = value
+    payload = {
+        **valid_manifest_payload,
+        "lifecycle": "fit_transform",
+        "fitted_state": {"serializable": True, "format": "json"},
+        "ml": ml,
+    }
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
+def test_operator_schema_accepts_lifecycle_consistent_ml_metadata_for_fit_transform(
+    valid_manifest_payload,
+) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {
+        **valid_manifest_payload,
+        "lifecycle": "fit_transform",
+        "fitted_state": {"serializable": True, "format": "json"},
+        "ml": {
+            "usable_as_feature": True,
+            "requires_fit": True,
+            "fit_scope": "training_window_only",
+            "state_serializable": True,
+        },
+    }
+
+    Draft202012Validator(schema).validate(payload)
+
+
 def test_quant_panel_schema_accepts_serialized_daily_panel() -> None:
     schema = json.loads((SCHEMA_DIR / "quant-panel-v1.schema.json").read_text(encoding="utf-8"))
     payload = {

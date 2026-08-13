@@ -177,8 +177,8 @@ class QuantPanelAdapter:
 def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
     """Validate the JSON Schema and composite-key semantics of a serialized QuantPanel."""
 
-    _validate_json_tree(payload, "payload", set(), depth=0)
-    materialized_payload = _materialize_json_tree(payload)
+    _validate_json_tree(payload, "payload", set(), {}, depth=0)
+    materialized_payload = _materialize_json_tree(payload, {})
     schema = load_contract_schema("quant-panel-v1.schema.json")
     errors = sorted(
         Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(materialized_payload),
@@ -213,29 +213,48 @@ def _validate_serialized_context(context: Mapping[str, Any]) -> None:
         raise InvalidPanelError(f"serialized QuantPanel context is invalid: {exc}") from exc
 
 
-def _materialize_json_tree(value: Any) -> Any:
+def _materialize_json_tree(value: Any, completed_containers: dict[int, Any]) -> Any:
     if isinstance(value, Mapping):
-        return {key: _materialize_json_tree(item) for key, item in value.items()}
+        container_id = id(value)
+        if container_id in completed_containers:
+            return completed_containers[container_id]
+        materialized: dict[str, Any] = {}
+        completed_containers[container_id] = materialized
+        materialized.update((key, _materialize_json_tree(item, completed_containers)) for key, item in value.items())
+        return materialized
     if isinstance(value, list):
-        return [_materialize_json_tree(item) for item in value]
+        container_id = id(value)
+        if container_id in completed_containers:
+            return completed_containers[container_id]
+        materialized_list: list[Any] = []
+        completed_containers[container_id] = materialized_list
+        materialized_list.extend(_materialize_json_tree(item, completed_containers) for item in value)
+        return materialized_list
     return value
 
 
-def _validate_json_tree(value: Any, path: str, active_containers: set[int], *, depth: int) -> None:
+def _validate_json_tree(
+    value: Any,
+    path: str,
+    active_containers: set[int],
+    completed_containers: dict[int, int],
+    *,
+    depth: int,
+) -> int:
     if depth > _MAX_JSON_TREE_DEPTH:
         raise InvalidPanelError(
             f"serialized QuantPanel {path} nesting depth exceeds maximum {_MAX_JSON_TREE_DEPTH}",
             details={"path": path, "maximum_depth": _MAX_JSON_TREE_DEPTH},
         )
     if value is None or isinstance(value, (bool, int, str)):
-        return
+        return 0
     if isinstance(value, float):
         if not math.isfinite(value):
             raise InvalidPanelError(
                 f"serialized QuantPanel {path} numeric value must be finite",
                 details={"path": path, "type": type(value).__name__},
             )
-        return
+        return 0
     if not isinstance(value, (Mapping, list)):
         raise InvalidPanelError(
             f"serialized QuantPanel {path} must contain only JSON-compatible values; got {type(value).__name__}",
@@ -248,7 +267,17 @@ def _validate_json_tree(value: Any, path: str, active_containers: set[int], *, d
             f"serialized QuantPanel {path} contains a cyclic JSON tree",
             details={"path": path},
         )
+    completed_height = completed_containers.get(container_id)
+    if completed_height is not None:
+        if depth + completed_height > _MAX_JSON_TREE_DEPTH:
+            raise InvalidPanelError(
+                f"serialized QuantPanel {path} nesting depth exceeds maximum {_MAX_JSON_TREE_DEPTH}",
+                details={"path": path, "maximum_depth": _MAX_JSON_TREE_DEPTH},
+            )
+        return completed_height
+
     active_containers.add(container_id)
+    height = 0
     try:
         if isinstance(value, Mapping):
             for key, item in value.items():
@@ -258,12 +287,28 @@ def _validate_json_tree(value: Any, path: str, active_containers: set[int], *, d
                         f"serialized QuantPanel {key_path} object key must be a string",
                         details={"path": key_path, "type": type(key).__name__},
                     )
-                _validate_json_tree(item, f"{path}.{key}", active_containers, depth=depth + 1)
+                child_height = _validate_json_tree(
+                    item,
+                    f"{path}.{key}",
+                    active_containers,
+                    completed_containers,
+                    depth=depth + 1,
+                )
+                height = max(height, child_height + 1)
         else:
             for index, item in enumerate(value):
-                _validate_json_tree(item, f"{path}[{index}]", active_containers, depth=depth + 1)
+                child_height = _validate_json_tree(
+                    item,
+                    f"{path}[{index}]",
+                    active_containers,
+                    completed_containers,
+                    depth=depth + 1,
+                )
+                height = max(height, child_height + 1)
     finally:
         active_containers.remove(container_id)
+    completed_containers[container_id] = height
+    return height
 
 
 def _validate_serialized_date(value: str, timestamp_semantics: str) -> str | datetime:

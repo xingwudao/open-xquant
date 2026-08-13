@@ -26,6 +26,7 @@ from oxq.operators.types import OperatorAvailability, OperatorCausality, Operato
 
 _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS = 256
 _MAX_DYNAMIC_FORMAT_SPEC_DEPTH = 8
+_MAX_PARAMETER_JSON_DEPTH = 64
 _MAX_RESOLVED_OUTPUT_FIELD_NAME_LENGTH = 256
 _FORMAT_SPEC_PATTERN = re.compile(
     r"(?:(?P<fill>.)?(?P<align>[<>=^]))?"
@@ -173,12 +174,8 @@ class OperatorManifest:
             declaration = declaration_value
             if name in supplied:
                 value = supplied[name]
-                if isinstance(supplied, MappingProxyType):
-                    if _find_recursive_container(value, f"parameter {name}") is not None:
-                        raise InvalidParameterError(
-                            f"parameter {name} must form a finite JSON tree",
-                            operator_id=self.operator_id,
-                        )
+                if isinstance(supplied, MappingProxyType) and declaration["type"] in {"array", "object"}:
+                    _validate_parameter_json_tree(name, value, self.operator_id, allow_frozen_sequences=True)
                     value = _thaw(value)
             elif "default" in declaration:
                 value = _thaw(declaration["default"])
@@ -213,6 +210,7 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
             f"manifest values must form a JSON tree: {path} contains {type_name}",
             operator_id=_optional_operator_id(payload),
         )
+    _validate_fit_transform_metadata(payload)
     schema = load_contract_schema("operator-manifest-v1.schema.json")
     errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.absolute_path))
     if errors:
@@ -232,8 +230,6 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
         raise InvalidManifestError(f"{location}: {error.message}", operator_id=_optional_operator_id(payload))
     if not is_semantic_version(payload["operator_version"]):
         raise InvalidManifestError("operator_version must be semantic versioning", operator_id=payload["operator_id"])
-    if payload["lifecycle"] == "fit_transform" and "fitted_state" not in payload:
-        raise InvalidManifestError("fit_transform manifest requires fitted_state", operator_id=payload["operator_id"])
     _validate_manifest_semantics(payload)
     actual_digest = manifest_digest(payload)
     declared_digest = payload.get("manifest_digest")
@@ -258,6 +254,29 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
         raw=_freeze(payload),
         digest=actual_digest,
     )
+
+
+def _validate_fit_transform_metadata(payload: Mapping[str, Any]) -> None:
+    if payload.get("lifecycle") != "fit_transform":
+        return
+    operator_id = _optional_operator_id(payload)
+    if "fitted_state" not in payload:
+        raise InvalidManifestError("fit_transform manifest requires fitted_state", operator_id=operator_id)
+    ml = payload.get("ml")
+    required_ml = {
+        "usable_as_feature": True,
+        "requires_fit": True,
+        "fit_scope": "training_window_only",
+        "state_serializable": True,
+    }
+    if not isinstance(ml, Mapping):
+        raise InvalidManifestError("fit_transform manifest requires ml metadata", operator_id=operator_id)
+    inconsistent = [name for name, expected in required_ml.items() if ml.get(name) != expected]
+    if inconsistent:
+        raise InvalidManifestError(
+            "fit_transform manifest requires lifecycle-consistent ml metadata: " + ", ".join(inconsistent),
+            operator_id=operator_id,
+        )
 
 
 def _read_payload(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
@@ -446,29 +465,64 @@ def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, A
         raise InvalidParameterError(f"parameter {name} exceeds maximum {declaration['maximum']}", operator_id=operator_id)
 
 
-def _validate_parameter_json_tree(name: str, value: Any, operator_id: str) -> None:
-    path = f"parameter {name}"
-    if _find_recursive_container(value, path) is not None:
-        raise InvalidParameterError(f"parameter {name} must form a finite JSON tree", operator_id=operator_id)
-    non_string_key_path = _find_non_string_mapping_key(value, path)
-    if non_string_key_path is not None:
-        raise InvalidParameterError(
-            f"parameter {name} JSON object must use string keys: {non_string_key_path}",
-            operator_id=operator_id,
-        )
-    nonfinite_path = _find_nonfinite_number(value, path)
-    if nonfinite_path is not None:
-        raise InvalidParameterError(
-            f"parameter {name} JSON numbers must be finite: {nonfinite_path}",
-            operator_id=operator_id,
-        )
-    non_json_value = _find_non_json_value(value, path)
-    if non_json_value is not None:
-        invalid_path, type_name = non_json_value
-        raise InvalidParameterError(
-            f"parameter {name} must form a JSON tree: {invalid_path} contains {type_name}",
-            operator_id=operator_id,
-        )
+def _validate_parameter_json_tree(
+    name: str,
+    value: Any,
+    operator_id: str,
+    *,
+    allow_frozen_sequences: bool = False,
+) -> None:
+    root_path = f"parameter {name}"
+    stack: list[tuple[Any, str, int, bool]] = [(value, root_path, 0, False)]
+    active: set[int] = set()
+    completed: set[int] = set()
+    while stack:
+        current, path, depth, exiting = stack.pop()
+        if current is None or isinstance(current, (bool, int, str)):
+            continue
+        if isinstance(current, float):
+            if not math.isfinite(current):
+                raise InvalidParameterError(
+                    f"parameter {name} JSON numbers must be finite: {path}",
+                    operator_id=operator_id,
+                )
+            continue
+        sequence_types = (list, tuple) if allow_frozen_sequences else (list,)
+        if not isinstance(current, (Mapping, *sequence_types)):
+            raise InvalidParameterError(
+                f"parameter {name} must form a JSON tree: {path} contains {type(current).__name__}",
+                operator_id=operator_id,
+            )
+        identity = id(current)
+        if exiting:
+            active.remove(identity)
+            completed.add(identity)
+            continue
+        if identity in completed:
+            continue
+        if identity in active:
+            raise InvalidParameterError(f"parameter {name} must form a finite JSON tree", operator_id=operator_id)
+        if depth > _MAX_PARAMETER_JSON_DEPTH:
+            raise InvalidParameterError(
+                f"parameter {name} JSON tree exceeds maximum depth {_MAX_PARAMETER_JSON_DEPTH}",
+                operator_id=operator_id,
+                details={"maximum_depth": _MAX_PARAMETER_JSON_DEPTH},
+            )
+        active.add(identity)
+        stack.append((current, path, depth, True))
+        if isinstance(current, Mapping):
+            children: list[tuple[Any, str]] = []
+            for key, item in current.items():
+                if not isinstance(key, str):
+                    raise InvalidParameterError(
+                        f"parameter {name} JSON object must use string keys: {path}[{key!r}]",
+                        operator_id=operator_id,
+                    )
+                children.append((item, f"{path}.{key}"))
+        else:
+            children = [(item, f"{path}[{index}]") for index, item in enumerate(current)]
+        for child, child_path in reversed(children):
+            stack.append((child, child_path, depth + 1, False))
 
 
 def _validate_resolved_output_names(
@@ -779,13 +833,22 @@ def _validate_finite_output_template_satisfiability(
     operator_id: str,
 ) -> None:
     templates = tuple(field["name_template"] for field in outputs["fields"])
+    if len(templates) < 2:
+        return
     references = sorted(set().union(*(_template_references(template) for template in templates)))
     if not references or any("enum" not in parameters[name] for name in references):
         return
     domains = [tuple(parameters[name]["enum"]) for name in references]
     combination_count = math.prod(len(domain) for domain in domains)
     if combination_count > _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS:
-        return
+        raise InvalidManifestError(
+            "finite output template domain is too large to certify",
+            operator_id=operator_id,
+            details={
+                "combination_count": combination_count,
+                "maximum_combinations": _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS,
+            },
+        )
     for combination in product(*domains):
         values = dict(zip(references, combination, strict=True))
         resolved = tuple(_format_bounded(template, values) for template in templates)

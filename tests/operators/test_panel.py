@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import ItemsView, Iterator, Mapping
 from types import MappingProxyType
 
 import pandas as pd
@@ -35,6 +36,43 @@ def _deep_json_object(depth: int) -> dict[str, object]:
         current["nested"] = child
         current = child
     return root
+
+
+class _VisitBudget:
+    def __init__(self, limit: int) -> None:
+        self.limit = limit
+        self.visits = 0
+
+    def record(self) -> None:
+        self.visits += 1
+        if self.visits > self.limit:
+            raise AssertionError("shared JSON DAG traversal exceeded its visit budget")
+
+
+class _BudgetedMapping(Mapping[str, object]):
+    def __init__(self, values: dict[str, object], budget: _VisitBudget) -> None:
+        self._values = values
+        self._budget = budget
+
+    def __getitem__(self, key: str) -> object:
+        return self._values[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._values)
+
+    def __len__(self) -> int:
+        return len(self._values)
+
+    def items(self) -> ItemsView[str, object]:
+        self._budget.record()
+        return self._values.items()
+
+
+def _compact_shared_json_dag(depth: int, budget: _VisitBudget) -> Mapping[str, object]:
+    node: Mapping[str, object] = _BudgetedMapping({"leaf": 1}, budget)
+    for _ in range(depth):
+        node = _BudgetedMapping({"left": node, "right": node}, budget)
+    return node
 
 
 def test_daily_frames_round_trip_without_mutating_input(daily_context, daily_symbol_frames) -> None:
@@ -350,6 +388,37 @@ def test_serialized_panel_accepts_nested_json_values() -> None:
     )
 
     validate_serialized_quant_panel(payload)
+
+
+def test_serialized_panel_visits_shared_containers_once_per_phase() -> None:
+    budget = _VisitBudget(limit=4)
+    shared = _BudgetedMapping({"count": 2}, budget)
+    payload = _serialized_daily_panel(metadata={"primary": shared, "copy": shared})
+
+    validate_serialized_quant_panel(payload)
+
+    assert budget.visits == 2
+
+
+def test_serialized_panel_handles_compact_shared_dag_with_bounded_work() -> None:
+    depth = 48
+    budget = _VisitBudget(limit=2 * (depth + 1))
+    payload = _serialized_daily_panel(metadata=_compact_shared_json_dag(depth, budget))
+
+    validate_serialized_quant_panel(payload)
+
+    assert budget.visits == 2 * (depth + 1)
+
+
+def test_serialized_panel_rechecks_depth_when_reusing_completed_container() -> None:
+    shared: object = {"nested": {"leaf": 1}}
+    deep_reference = shared
+    for _ in range(59):
+        deep_reference = {"nested": deep_reference}
+    payload = _serialized_daily_panel(metadata={"shallow": shared, "deep": deep_reference})
+
+    with pytest.raises(InvalidPanelError, match="nesting depth"):
+        validate_serialized_quant_panel(payload)
 
 
 def test_serialized_panel_accepts_nested_read_only_mappings() -> None:

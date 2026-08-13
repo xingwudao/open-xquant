@@ -200,6 +200,33 @@ def test_manifest_rejects_recursive_supplied_composite_parameters(valid_manifest
         manifest.validate_parameters({"options": {"nested": recursive}})
 
 
+@pytest.mark.parametrize("parameter_type", ["array", "object"])
+def test_manifest_rejects_deep_acyclic_supplied_composite_parameters_without_recursion_error(
+    valid_manifest_payload,
+    parameter_type,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": parameter_type,
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    manifest = load_operator_manifest(payload)
+    supplied: object = [] if parameter_type == "array" else {}
+    for _ in range(1_100):
+        supplied = [supplied] if parameter_type == "array" else {"nested": supplied}
+
+    with pytest.raises(InvalidParameterError, match="maximum depth") as exc_info:
+        manifest.validate_parameters({"options": supplied})
+
+    assert exc_info.value.code == "invalid_parameter"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+
+
 def test_manifest_accepts_supplied_composite_parameters_as_plain_json_tree(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["parameters"]["options"] = {
@@ -368,6 +395,38 @@ def test_fit_transform_manifest_requires_serializable_state(valid_manifest_paylo
     payload["lifecycle"] = "fit_transform"
 
     with pytest.raises(InvalidManifestError, match="fitted_state"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        (None, None),
+        ("usable_as_feature", False),
+        ("requires_fit", False),
+        ("fit_scope", "full_sample"),
+        ("state_serializable", False),
+    ],
+    ids=["missing-ml", "feature", "requires-fit", "fit-scope", "serializable"],
+)
+def test_fit_transform_manifest_requires_lifecycle_consistent_ml_metadata(
+    valid_manifest_payload,
+    field,
+    value,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["lifecycle"] = "fit_transform"
+    payload["fitted_state"] = {"serializable": True, "format": "json"}
+    if field is not None:
+        payload["ml"] = {
+            "usable_as_feature": True,
+            "requires_fit": True,
+            "fit_scope": "training_window_only",
+            "state_serializable": True,
+        }
+        payload["ml"][field] = value
+
+    with pytest.raises(InvalidManifestError, match="ml metadata"):
         load_operator_manifest(payload)
 
 
@@ -1001,6 +1060,62 @@ def test_manifest_rejects_distinct_templates_that_collide_across_finite_paramete
 
     with pytest.raises(InvalidManifestError, match="no parameter assignment produces unique output field names"):
         load_operator_manifest(payload)
+
+
+def test_manifest_rejects_uncertifiable_large_finite_output_template_domain(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    for name in ("value", "suffix"):
+        payload["parameters"][name] = {
+            "type": "integer",
+            "required": True,
+            "enum": list(range(1, 18)),
+            "unit": None,
+            "affects_warmup": False,
+            "affects_output_fields": True,
+            "affects_causality": False,
+            "affects_availability": False,
+        }
+    payload["outputs"]["fields"] = [
+        {"name_template": "{value:d}_{suffix}", "dtype": "float64"},
+        {"name_template": "{value:01d}_{suffix}", "dtype": "float64"},
+    ]
+    payload["outputs"]["multiple"] = True
+
+    with pytest.raises(InvalidManifestError, match="finite output template domain is too large") as exc_info:
+        load_operator_manifest(payload)
+
+    assert exc_info.value.code == "invalid_manifest"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+    assert exc_info.value.to_dict()["details"] == {
+        "combination_count": 289,
+        "maximum_combinations": 256,
+    }
+
+
+def test_manifest_accepts_large_finite_domain_for_single_output_template(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    for name in ("value", "suffix"):
+        payload["parameters"][name] = {
+            "type": "integer",
+            "required": True,
+            "enum": list(range(1, 18)),
+            "unit": None,
+            "affects_warmup": False,
+            "affects_output_fields": True,
+            "affects_causality": False,
+            "affects_availability": False,
+        }
+    payload["outputs"]["fields"] = [
+        {"name_template": "{value:d}_{suffix}", "dtype": "float64"},
+    ]
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.raw["outputs"]["fields"][0]["name_template"] == "{value:d}_{suffix}"
 
 
 def test_catalog_requires_and_verifies_manifest_digests(valid_manifest_payload) -> None:
