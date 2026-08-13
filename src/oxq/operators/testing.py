@@ -299,6 +299,9 @@ def verify_operator_contract(
     _verify_empty_input_failure(manifest, operator, normalized, declared_panel)
     checks.append("empty_input")
 
+    _verify_minimum_boundary_failures(manifest, operator, normalized, declared_panel)
+    checks.append("minimum_boundaries")
+
     for present_count in range(len(optional_columns)):
         for present_subset in combinations(optional_columns, present_count):
             omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
@@ -665,13 +668,25 @@ def _verify_required_column_failures(
                     operator(probe_request)
                 except MissingColumnError as exc:
                     _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
-                    if exc.details.get("column") == column:
-                        continue
-                    raise ContractViolationError(
-                        f"missing required input column {column} must identify that column in MissingColumnError details",
-                        operator_id=manifest.operator_id,
-                        details={"column": column},
-                    ) from exc
+                    if exc.operator_id != manifest.operator_id:
+                        raise ContractViolationError(
+                            f"missing required input column {column} error must identify the manifest operator",
+                            operator_id=manifest.operator_id,
+                            details={"column": column},
+                        ) from exc
+                    if not str(exc).strip():
+                        raise ContractViolationError(
+                            f"missing required input column {column} error must contain a human-readable message",
+                            operator_id=manifest.operator_id,
+                            details={"column": column},
+                        ) from exc
+                    if exc.details.get("column") != column:
+                        raise ContractViolationError(
+                            f"missing required input column {column} must identify that column in MissingColumnError details",
+                            operator_id=manifest.operator_id,
+                            details={"column": column},
+                        ) from exc
+                    continue
                 except Exception as exc:
                     _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
                     raise ContractViolationError(
@@ -758,6 +773,98 @@ def _verify_empty_input_failure(
     _assert_input_unchanged(manifest, empty_request.input_panel, snapshot)
     raise ContractViolationError(
         "empty input must raise a structured insufficient-input error",
+        operator_id=manifest.operator_id,
+        details=failure_details,
+    )
+
+
+def _verify_minimum_boundary_failures(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    declared_panel: pd.DataFrame,
+) -> None:
+    input_spec = manifest.raw["inputs"]
+    min_history = input_spec["min_history"]
+    if min_history > 1:
+        history_panel = declared_panel.groupby("code", sort=False, observed=True, group_keys=False).head(min_history - 1).copy(deep=True)
+        _verify_minimum_boundary_failure(
+            manifest,
+            operator,
+            request,
+            history_panel,
+            error_type=InsufficientHistoryError,
+            minimum_name="min_history",
+            minimum_value=min_history,
+        )
+
+    min_assets = input_spec["min_assets"]
+    if min_assets > 1:
+        retained_codes = declared_panel["code"].drop_duplicates().iloc[: min_assets - 1]
+        assets_panel = declared_panel.loc[declared_panel["code"].isin(retained_codes)].copy(deep=True)
+        _verify_minimum_boundary_failure(
+            manifest,
+            operator,
+            request,
+            assets_panel,
+            error_type=InsufficientCrossSectionError,
+            minimum_name="min_assets",
+            minimum_value=min_assets,
+        )
+
+
+def _verify_minimum_boundary_failure(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    panel: pd.DataFrame,
+    *,
+    error_type: type[OperatorError],
+    minimum_name: str,
+    minimum_value: int,
+) -> None:
+    probe_request = _copy_request(request, panel=panel)
+    snapshot = _deepcopy_frame(probe_request.input_panel)
+    failure_message = f"nonempty input below declared {minimum_name} must raise {error_type.__name__}"
+    failure_details = {
+        "minimum": minimum_name,
+        "expected": minimum_value,
+        "available_rows": len(panel),
+        "available_assets": int(panel["code"].nunique()),
+    }
+    try:
+        operator(probe_request)
+    except error_type as exc:
+        _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+        if exc.operator_id != manifest.operator_id:
+            raise ContractViolationError(
+                f"nonempty input below declared {minimum_name} error must identify the manifest operator",
+                operator_id=manifest.operator_id,
+                details=failure_details,
+            ) from exc
+        if not str(exc).strip():
+            raise ContractViolationError(
+                f"nonempty input below declared {minimum_name} error must contain a human-readable message",
+                operator_id=manifest.operator_id,
+                details=failure_details,
+            ) from exc
+        if exc.details.get(minimum_name) != minimum_value:
+            raise ContractViolationError(
+                f"nonempty input below declared {minimum_name} error must identify the declared minimum",
+                operator_id=manifest.operator_id,
+                details={**failure_details, "actual": exc.details.get(minimum_name)},
+            ) from exc
+        return
+    except Exception as exc:
+        _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+        raise ContractViolationError(
+            failure_message,
+            operator_id=manifest.operator_id,
+            details={**failure_details, "actual_error": type(exc).__name__},
+        ) from exc
+    _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+    raise ContractViolationError(
+        failure_message,
         operator_id=manifest.operator_id,
         details=failure_details,
     )

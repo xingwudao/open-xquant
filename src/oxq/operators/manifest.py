@@ -125,6 +125,7 @@ class OperatorManifest:
                 continue
             _validate_parameter_value(name, value, declaration, self.operator_id)
             resolved[name] = _thaw(value)
+        _validate_resolved_output_names(self.raw["outputs"], resolved, self.operator_id)
         return resolved
 
 
@@ -390,6 +391,43 @@ def _validate_parameter_json_tree(name: str, value: Any, operator_id: str) -> No
             f"parameter {name} must form a JSON tree: {invalid_path} contains {type_name}",
             operator_id=operator_id,
         )
+
+
+def _validate_resolved_output_names(
+    outputs: Mapping[str, Any],
+    parameters: Mapping[str, Any],
+    operator_id: str,
+) -> None:
+    resolved_names: set[str] = set()
+    for field in outputs["fields"]:
+        template = field["name_template"]
+        try:
+            resolved_name = template.format(**parameters)
+        except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
+            raise InvalidParameterError(
+                f"output field template cannot format resolved parameters: {template}",
+                operator_id=operator_id,
+                details={"name_template": template},
+            ) from exc
+        if not resolved_name:
+            raise InvalidParameterError(
+                "output field name must not be empty",
+                operator_id=operator_id,
+                details={"name_template": template},
+            )
+        if resolved_name in {"date", "code"}:
+            raise InvalidParameterError(
+                f"output field resolves to reserved QuantPanel key: {resolved_name}",
+                operator_id=operator_id,
+                details={"name_template": template, "resolved_name": resolved_name},
+            )
+        if resolved_name in resolved_names:
+            raise InvalidParameterError(
+                f"duplicate output field name: {resolved_name}",
+                operator_id=operator_id,
+                details={"name_template": template, "resolved_name": resolved_name},
+            )
+        resolved_names.add(resolved_name)
 
 
 def _validate_manifest_semantics(payload: dict[str, Any]) -> None:

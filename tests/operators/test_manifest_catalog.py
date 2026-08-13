@@ -35,6 +35,102 @@ def test_manifest_validates_parameters_and_rejects_unknowns(valid_manifest_paylo
         manifest.validate_parameters({"period": 0})
 
 
+def test_manifest_resolves_output_name_from_arbitrary_required_string_at_parameter_boundary(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"] = [{"name_template": "{field}", "dtype": "float64"}]
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.validate_parameters({"field": "custom_signal"}) == {
+        "period": 2,
+        "field": "custom_signal",
+    }
+
+
+@pytest.mark.parametrize("resolved_name", ["", "date", "code"], ids=["empty", "date", "code"])
+def test_manifest_rejects_invalid_output_name_resolved_from_required_parameter(
+    valid_manifest_payload,
+    resolved_name,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"] = [{"name_template": "{field}", "dtype": "float64"}]
+    manifest = load_operator_manifest(payload)
+
+    with pytest.raises(InvalidParameterError) as exc_info:
+        manifest.validate_parameters({"field": resolved_name})
+
+    assert exc_info.value.code == "invalid_parameter"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+    assert "output field" in str(exc_info.value)
+
+
+def test_manifest_rejects_duplicate_output_name_resolved_from_required_parameter(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"].append({"name_template": "{field}", "dtype": "float64"})
+    payload["outputs"]["multiple"] = True
+    manifest = load_operator_manifest(payload)
+
+    with pytest.raises(InvalidParameterError, match="duplicate output field name") as exc_info:
+        manifest.validate_parameters({"field": "sma_2"})
+
+    assert exc_info.value.code == "invalid_parameter"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+
+
+def test_manifest_converts_required_output_format_failure_to_parameter_error(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    for name in ("value", "spec"):
+        payload["parameters"][name] = {
+            "type": "string",
+            "required": True,
+            "unit": None,
+            "affects_warmup": False,
+            "affects_output_fields": True,
+            "affects_causality": False,
+            "affects_availability": False,
+        }
+    payload["outputs"]["fields"] = [{"name_template": "{value:{spec}}", "dtype": "float64"}]
+    manifest = load_operator_manifest(payload)
+
+    with pytest.raises(InvalidParameterError, match="cannot format") as exc_info:
+        manifest.validate_parameters({"value": "fast", "spec": "d"})
+
+    assert exc_info.value.code == "invalid_parameter"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+
+
 @pytest.mark.parametrize(
     ("parameter_type", "supplied"),
     [

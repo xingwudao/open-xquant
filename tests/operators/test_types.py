@@ -299,6 +299,8 @@ def test_frozen_request_parameters_remain_compatible_with_manifest_validation_an
 def test_diagnostics_reject_impossible_row_counts() -> None:
     with pytest.raises(ValueError, match="non-negative"):
         OperatorDiagnostics(input_rows=-1, output_rows=0)
+    with pytest.raises(ValueError, match="output_rows cannot exceed input_rows"):
+        OperatorDiagnostics(input_rows=1, output_rows=2)
     with pytest.raises(ValueError, match="cannot exceed"):
         OperatorDiagnostics(input_rows=2, output_rows=1, dropped_rows=3)
     with pytest.raises(ValueError, match="warmup_rows cannot exceed input_rows"):
@@ -628,6 +630,19 @@ def test_operator_result_requires_matching_provenance(daily_context) -> None:
             data=pd.DataFrame({"date": [], "code": []}),
             diagnostics=diagnostics,
             provenance=provenance,
+        )
+
+
+def test_operator_result_rejects_diagnostics_with_more_output_rows_than_input() -> None:
+    with pytest.raises(ValueError, match="output_rows cannot exceed input_rows"):
+        OperatorResult(
+            data=pd.DataFrame({"value": [1.0, 2.0]}),
+            diagnostics=OperatorDiagnostics(input_rows=1, output_rows=2),
+            provenance=OperatorProvenance(
+                operator_id="fake.indicators.sma",
+                operator_version="1.0.0",
+                implementation_digest="sha256:" + "a" * 64,
+            ),
         )
 
 

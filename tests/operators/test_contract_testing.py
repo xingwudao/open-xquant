@@ -69,20 +69,34 @@ def verify_operator_contract(
 
 
 def _reject_empty_input(manifest, request: OperatorRequest) -> None:
-    if not request.input_panel.empty:
-        return
     input_spec = manifest.raw["inputs"]
-    if manifest.execution_scope is OperatorScope.CROSS_SECTION or input_spec["min_history"] == 0:
-        raise InsufficientCrossSectionError(
-            "empty input does not satisfy the declared asset minimum",
+    panel = request.input_panel
+    if panel.empty:
+        if manifest.execution_scope is OperatorScope.CROSS_SECTION or input_spec["min_history"] == 0:
+            raise InsufficientCrossSectionError(
+                "empty input does not satisfy the declared asset minimum",
+                operator_id=request.operator_id,
+                details={"min_assets": input_spec["min_assets"], "available_assets": 0},
+            )
+        raise InsufficientHistoryError(
+            "empty input does not satisfy the declared history minimum",
             operator_id=request.operator_id,
-            details={"min_assets": input_spec["min_assets"], "available_assets": 0},
+            details={"min_history": input_spec["min_history"], "available_history": 0},
         )
-    raise InsufficientHistoryError(
-        "empty input does not satisfy the declared history minimum",
-        operator_id=request.operator_id,
-        details={"min_history": input_spec["min_history"], "available_history": 0},
-    )
+    history = panel.groupby("code", sort=False, observed=True).size()
+    if int(history.min()) < input_spec["min_history"]:
+        raise InsufficientHistoryError(
+            "input does not satisfy the declared history minimum",
+            operator_id=request.operator_id,
+            details={"min_history": input_spec["min_history"], "available_history": int(history.min())},
+        )
+    asset_count = int(panel["code"].nunique())
+    if asset_count < input_spec["min_assets"]:
+        raise InsufficientCrossSectionError(
+            "input does not satisfy the declared asset minimum",
+            operator_id=request.operator_id,
+            details={"min_assets": input_spec["min_assets"], "available_assets": asset_count},
+        )
 
 
 def _artifact_wide_payload(valid_manifest_payload, *, period: int = 2):
@@ -173,6 +187,7 @@ def test_fake_provider_passes_reusable_contract_suite(
         "provenance",
         "required_inputs",
         "empty_input",
+        "minimum_boundaries",
         "determinism",
         "causality",
         "unordered_input",
@@ -3406,6 +3421,45 @@ def test_contract_suite_checks_input_immutability_when_required_column_is_missin
         )
 
 
+@pytest.mark.parametrize("behavior", ["missing_operator_id", "wrong_operator_id", "empty_message"])
+def test_contract_suite_validates_required_column_error_envelope(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    behavior: str,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    manifest = _load_contract_manifest(valid_manifest_payload)
+
+    def malformed_error_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            operator_id = None if behavior == "missing_operator_id" else provider_request.operator_id
+            if behavior == "wrong_operator_id":
+                operator_id = "wrong.operator"
+            raise MissingColumnError(
+                "" if behavior == "empty_message" else "missing required input column close",
+                operator_id=operator_id,
+                details={"column": "close"},
+            )
+        _reject_empty_input(manifest, provider_request)
+        return sma(provider_request)
+
+    expected_message = "human-readable message" if behavior == "empty_message" else "manifest operator"
+    with pytest.raises(ContractViolationError, match=expected_message):
+        _verify_operator_contract(
+            manifest,
+            malformed_error_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+
 def test_contract_suite_binds_quant_panel_key_dtypes_in_report_identity(
     daily_context,
     daily_symbol_frames,
@@ -3515,6 +3569,7 @@ def test_contract_suite_probes_a_structurally_valid_empty_quant_panel(
                 operator_id=provider_request.operator_id,
                 details={"min_history": 2, "available_history": 0},
             )
+        _reject_empty_input(manifest, provider_request)
         return sma(provider_request)
 
     report = _verify_operator_contract(
@@ -3581,6 +3636,164 @@ def test_contract_suite_rejects_noncompliant_empty_input_behavior(
     with pytest.raises(ContractViolationError, match="empty input"):
         _verify_operator_contract(
             _load_contract_manifest(valid_manifest_payload),
+            noncompliant_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+
+def test_contract_suite_probes_nonempty_inputs_below_each_declared_minimum(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["min_history"] = 3
+    manifest = load_operator_manifest(payload)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    observed_boundaries: list[tuple[int, int]] = []
+
+    def minimum_enforcing_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        panel = provider_request.input_panel
+        if panel.empty:
+            raise InsufficientHistoryError(
+                "empty input does not satisfy the declared history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        asset_count = int(panel["code"].nunique())
+        minimum_history = int(panel.groupby("code", sort=False, observed=True).size().min())
+        if minimum_history == 2:
+            observed_boundaries.append((asset_count, minimum_history))
+            raise InsufficientHistoryError(
+                "input is immediately below the declared history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        if asset_count == 1:
+            observed_boundaries.append((asset_count, minimum_history))
+            raise InsufficientCrossSectionError(
+                "input is immediately below the declared asset minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_assets": 2},
+            )
+        return sma(provider_request)
+
+    report = _verify_operator_contract(
+        manifest,
+        minimum_enforcing_provider,
+        request,
+        expected_distribution_version="1.0.0",
+        expected_implementation_digest=IMPLEMENTATION_DIGEST,
+    )
+
+    assert report.passed is True
+    assert "minimum_boundaries" in report.checks
+    assert observed_boundaries == [(2, 2), (1, 3)]
+
+
+@pytest.mark.parametrize("minimum", ["min_history", "min_assets"])
+@pytest.mark.parametrize(
+    "behavior",
+    [
+        "raw_error",
+        "silent",
+        "wrong_error",
+        "missing_operator_id",
+        "wrong_operator_id",
+        "empty_message",
+        "wrong_minimum",
+        "mutates",
+    ],
+)
+def test_contract_suite_rejects_noncompliant_nonempty_minimum_boundary_behavior(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    minimum: str,
+    behavior: str,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["min_history"] = 3
+    manifest = load_operator_manifest(payload)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def noncompliant_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        panel = provider_request.input_panel
+        if panel.empty:
+            raise InsufficientHistoryError(
+                "empty input does not satisfy the declared history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        asset_count = int(panel["code"].nunique())
+        minimum_history = int(panel.groupby("code", sort=False, observed=True).size().min())
+        boundary = "min_history" if minimum_history == 2 else "min_assets" if asset_count == 1 else None
+        if boundary is not None:
+            expected_error = InsufficientHistoryError if boundary == "min_history" else InsufficientCrossSectionError
+            expected_minimum = 3 if boundary == "min_history" else 2
+            if boundary != minimum:
+                raise expected_error(
+                    "input is immediately below a declared minimum",
+                    operator_id=provider_request.operator_id,
+                    details={boundary: expected_minimum},
+                )
+            if behavior == "raw_error":
+                raise IndexError("unstructured minimum failure")
+            if behavior == "silent":
+                return sma(provider_request)
+            if behavior == "mutates":
+                provider_request.input_panel.loc[provider_request.input_panel.index[0], "close"] = -999.0
+            actual_error = (
+                InsufficientCrossSectionError
+                if behavior == "wrong_error" and boundary == "min_history"
+                else InsufficientHistoryError
+                if behavior == "wrong_error"
+                else expected_error
+            )
+            operator_id = None if behavior == "missing_operator_id" else provider_request.operator_id
+            if behavior == "wrong_operator_id":
+                operator_id = "wrong.operator"
+            raise actual_error(
+                "" if behavior == "empty_message" else "input is immediately below a declared minimum",
+                operator_id=operator_id,
+                details={boundary: 999 if behavior == "wrong_minimum" else expected_minimum},
+            )
+        return sma(provider_request)
+
+    expected_violation = "mutated input_panel" if behavior == "mutates" else "nonempty input below"
+    with pytest.raises(ContractViolationError, match=expected_violation):
+        _verify_operator_contract(
+            manifest,
             noncompliant_provider,
             request,
             expected_distribution_version="1.0.0",
