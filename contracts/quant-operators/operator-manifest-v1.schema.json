@@ -24,7 +24,7 @@
     "schema_version": {"const": 1},
     "operator_id": {
       "type": "string",
-      "pattern": "^[a-z0-9](?:[a-z0-9_-]*\\.)+[a-z0-9][a-z0-9_-]*$"
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)+$"
     },
     "operator_version": {
       "type": "string",

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Literal
 
 import pandas as pd
@@ -41,9 +41,7 @@ class QuantPanelAdapter:
             frame_columns = [str(column) for column in frame.columns]
             reserved = sorted(set(frame_columns) & set(_KEY_COLUMNS))
             if reserved:
-                raise InvalidPanelError(
-                    f"symbol frame uses reserved QuantPanel columns: {', '.join(reserved)}"
-                )
+                raise InvalidPanelError(f"symbol frame uses reserved QuantPanel columns: {', '.join(reserved)}")
             if columns is None:
                 columns = frame_columns
             elif frame_columns != columns:
@@ -178,13 +176,13 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
         raise InvalidPanelError(f"serialized QuantPanel {path or 'payload'}: {error.message}")
     rows = payload["rows"]
     timestamp_semantics = payload["context"]["timestamp_semantics"]
-    seen: set[tuple[str, str]] = set()
+    seen: set[tuple[str | datetime, str]] = set()
     duplicates: list[tuple[str, str]] = []
     for row in rows:
-        _validate_serialized_date(row["date"], timestamp_semantics)
-        key = (row["date"], row["code"])
+        parsed_date = _validate_serialized_date(row["date"], timestamp_semantics)
+        key = (parsed_date, row["code"])
         if key in seen:
-            duplicates.append(key)
+            duplicates.append((row["date"], row["code"]))
         seen.add(key)
     if duplicates:
         raise DuplicateKeyError(
@@ -193,17 +191,17 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
         )
 
 
-def _validate_serialized_date(value: str, timestamp_semantics: str) -> None:
+def _validate_serialized_date(value: str, timestamp_semantics: str) -> str | datetime:
     try:
         if timestamp_semantics == TimestampSemantics.SESSION_DATE:
             parsed = date.fromisoformat(value)
             if parsed.isoformat() != value:
                 raise ValueError
+            return value
         else:
             parsed_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
             if parsed_datetime.tzinfo is None:
                 raise ValueError
+            return parsed_datetime.astimezone(UTC)
     except ValueError as exc:
-        raise InvalidPanelError(
-            f"serialized QuantPanel date is invalid for timestamp_semantics={timestamp_semantics}: {value}"
-        ) from exc
+        raise InvalidPanelError(f"serialized QuantPanel date is invalid for timestamp_semantics={timestamp_semantics}: {value}") from exc

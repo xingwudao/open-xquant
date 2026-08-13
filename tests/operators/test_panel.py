@@ -4,7 +4,7 @@ import pandas as pd
 import pytest
 
 from oxq.operators.errors import DuplicateKeyError, InvalidPanelError, MissingColumnError
-from oxq.operators.panel import QuantPanelAdapter
+from oxq.operators.panel import QuantPanelAdapter, validate_serialized_quant_panel
 from oxq.operators.types import OperatorContext
 
 
@@ -120,9 +120,7 @@ def test_symbol_frames_reject_reserved_quant_panel_columns(daily_context) -> Non
 
 
 def test_panel_rejects_non_session_daily_timestamps(daily_context) -> None:
-    panel = pd.DataFrame(
-        {"date": [pd.Timestamp("2026-01-05 12:00")], "code": ["000001.SZ"], "close": [10.0]}
-    )
+    panel = pd.DataFrame({"date": [pd.Timestamp("2026-01-05 12:00")], "code": ["000001.SZ"], "close": [10.0]})
     with pytest.raises(InvalidPanelError, match="normalized session dates"):
         QuantPanelAdapter.validate_panel(panel, daily_context)
 
@@ -174,3 +172,26 @@ def test_explicit_keyed_output_allows_unique_subset(daily_context, daily_symbol_
         daily_context,
         alignment="explicit_keyed_output",
     )
+
+
+def test_serialized_intraday_panel_rejects_duplicate_instants_across_timezones() -> None:
+    payload = {
+        "schema_version": 1,
+        "context": {
+            "timezone": "UTC",
+            "calendar": "XNYS",
+            "frequency": "1min",
+            "timestamp_semantics": "bar_close",
+            "currency": "USD",
+            "price_adjustment": "raw",
+            "data_version": "fixture-v1",
+            "source": "fake",
+        },
+        "rows": [
+            {"date": "2026-01-01T00:00:00Z", "code": "AAPL", "close": 10.0},
+            {"date": "2025-12-31T19:00:00-05:00", "code": "AAPL", "close": 11.0},
+        ],
+    }
+
+    with pytest.raises(DuplicateKeyError, match="duplicate"):
+        validate_serialized_quant_panel(payload)

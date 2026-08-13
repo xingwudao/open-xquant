@@ -24,6 +24,14 @@ def test_operator_schema_accepts_contract_manifest(valid_manifest_payload) -> No
     Draft202012Validator(schema).validate(valid_manifest_payload)
 
 
+@pytest.mark.parametrize("operator_id", ["vendor..sma", "vendor.-.sma", "vendor._.sma"])
+def test_operator_schema_rejects_invalid_operator_id_segments(valid_manifest_payload, operator_id) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {**valid_manifest_payload, "operator_id": operator_id}
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
 def test_quant_panel_schema_accepts_serialized_daily_panel() -> None:
     schema = json.loads((SCHEMA_DIR / "quant-panel-v1.schema.json").read_text(encoding="utf-8"))
     payload = {

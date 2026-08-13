@@ -67,6 +67,23 @@ def test_manifest_preserves_json_collection_types_when_resolving_defaults(valid_
     assert isinstance(resolved["options"], dict)
 
 
+def test_manifest_rejects_non_string_keys_in_nested_mappings(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": "object",
+        "default": {"nested": [{1: "invalid"}]},
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+
+    with pytest.raises(InvalidManifestError, match="mapping keys must be strings"):
+        load_operator_manifest(payload)
+
+
 @pytest.mark.parametrize("version", ["1.0.0-01", "1.0.0-alpha..1", "1.0.0-"])
 def test_manifest_rejects_invalid_semantic_versions(valid_manifest_payload, version) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
@@ -135,6 +152,14 @@ def test_manifest_rejects_inverted_parameter_bounds(valid_manifest_payload) -> N
     payload["parameters"]["period"].update({"minimum": 5, "maximum": 2})
 
     with pytest.raises(InvalidManifestError, match="minimum must not exceed maximum"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_inverted_output_bounds(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"][0].update({"minimum": 2, "maximum": 1})
+
+    with pytest.raises(InvalidManifestError, match="output field minimum must not exceed maximum"):
         load_operator_manifest(payload)
 
 
@@ -233,6 +258,24 @@ def test_manifest_rejects_reserved_output_name_resolved_from_defaults(valid_mani
     payload["outputs"]["fields"][0]["name_template"] = "{field}"
 
     with pytest.raises(InvalidManifestError, match="reserved QuantPanel key"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_empty_output_name_resolved_from_defaults(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "default": "",
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{field}"
+
+    with pytest.raises(InvalidManifestError, match="output field name must not be empty"):
         load_operator_manifest(payload)
 
 
@@ -373,7 +416,7 @@ def test_manifest_converts_default_output_format_failures_to_manifest_errors(val
 
 @pytest.mark.parametrize(
     ("path", "value"),
-    [(('outputs', 'fields', 0, 'minimum'), float('nan')), (('determinism', 'absolute_tolerance'), float('inf'))],
+    [(("outputs", "fields", 0, "minimum"), float("nan")), (("determinism", "absolute_tolerance"), float("inf"))],
 )
 def test_manifest_converts_nonfinite_declarations_to_manifest_errors(valid_manifest_payload, path, value) -> None:
     payload = copy.deepcopy(valid_manifest_payload)

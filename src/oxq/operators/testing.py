@@ -86,6 +86,17 @@ def verify_operator_contract(
             f"input has {asset_count} assets; minimum is {input_spec['min_assets']}",
             operator_id=manifest.operator_id,
         )
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        assets_per_date = normalized.input_panel.groupby("date", sort=False, observed=True)["code"].nunique()
+        if assets_per_date.lt(input_spec["min_assets"]).any():
+            raise InsufficientCrossSectionError(
+                f"input requires minimum {input_spec['min_assets']} at every date",
+                operator_id=manifest.operator_id,
+                details={
+                    "min_assets": input_spec["min_assets"],
+                    "assets_by_date": {str(date): int(count) for date, count in assets_per_date.items()},
+                },
+            )
     if input_spec["requires_complete_cross_section"]:
         assets_per_date = normalized.input_panel.groupby("date", sort=False, observed=True)["code"].nunique()
         if not assets_per_date.eq(asset_count).all():
@@ -130,7 +141,7 @@ def verify_operator_contract(
     checks.extend(("output_contract", "provenance"))
 
     first_data = _deepcopy_frame(result.data)
-    first_metadata = copy.deepcopy(dict(result.metadata))
+    first_metadata = _snapshot_metadata(result.metadata)
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated)
     _require_equal_data(first_data, repeated.data, manifest, "operator output must be deterministic")
@@ -151,7 +162,10 @@ def verify_operator_contract(
         )
     checks.append("determinism")
 
-    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope is OperatorScope.TIME_SERIES:
+    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
+        OperatorScope.TIME_SERIES,
+        OperatorScope.PANEL,
+    }:
         _verify_past_only_causality(manifest, operator, normalized, first_data)
         checks.append("causality")
 
@@ -211,15 +225,19 @@ def _validate_result(
     alignment = outputs["alignment"]
     QuantPanelAdapter.validate_output(request.input_panel, result.data, request.context, alignment=alignment)
     try:
-        resolved_fields = [
-            field["name_template"].format(**request.parameters)
-            for field in outputs["fields"]
-        ]
+        resolved_fields = [field["name_template"].format(**request.parameters) for field in outputs["fields"]]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
         raise ContractViolationError(
             "operator output field template could not be resolved",
             operator_id=manifest.operator_id,
         ) from exc
+    empty_fields = [name for name in resolved_fields if not name]
+    if empty_fields:
+        raise ContractViolationError(
+            "resolved operator output field names must be non-empty",
+            operator_id=manifest.operator_id,
+            details={"fields": empty_fields},
+        )
     if len(set(resolved_fields)) != len(resolved_fields):
         raise ContractViolationError(
             "operator manifest contains duplicate resolved output fields",
@@ -409,6 +427,16 @@ def _metadata_equal(left: Any, right: Any) -> bool:
     return False
 
 
+def _snapshot_metadata(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _snapshot_metadata(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return tuple(_snapshot_metadata(item) for item in value)
+    if isinstance(value, list):
+        return [_snapshot_metadata(item) for item in value]
+    return copy.deepcopy(value)
+
+
 def _both_scalar_missing(left: Any, right: Any) -> bool:
     if not pd.api.types.is_scalar(left) or not pd.api.types.is_scalar(right):
         return False
@@ -433,11 +461,13 @@ def _verify_past_only_causality(
 ) -> None:
     dates = request.input_panel["date"].drop_duplicates().sort_values()
     input_spec = manifest.raw["inputs"]
+    probe_executed = False
     for cutoff in dates.iloc[:-1]:
         prefix = request.input_panel.loc[request.input_panel["date"] <= cutoff].reset_index(drop=True)
         history = prefix.groupby("code", sort=False, observed=True).size()
         if history.empty or int(history.min()) < input_spec["min_history"]:
             continue
+        probe_executed = True
         prefix_request = _copy_request(request, panel=prefix)
         prefix_result = _invoke_operator(manifest, operator, prefix_request)
         _validate_result(manifest, prefix_request, prefix_result)
@@ -447,6 +477,12 @@ def _verify_past_only_causality(
             _canonical(prefix_result.data),
             manifest,
             "past_only output changed when future history was truncated",
+        )
+    if not probe_executed:
+        raise ContractViolationError(
+            "past_only causality probe requires at least one valid proper prefix",
+            operator_id=manifest.operator_id,
+            details={"min_history": input_spec["min_history"], "available_dates": len(dates)},
         )
 
 

@@ -92,6 +92,12 @@ class OperatorManifest:
 
 def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorManifest:
     payload = _read_payload(source)
+    non_string_key_path = _find_non_string_mapping_key(payload)
+    if non_string_key_path is not None:
+        raise InvalidManifestError(
+            f"manifest mapping keys must be strings: {non_string_key_path}",
+            operator_id=_optional_operator_id(payload),
+        )
     nonfinite_path = _find_nonfinite_number(payload)
     if nonfinite_path is not None:
         raise InvalidManifestError(
@@ -159,6 +165,22 @@ def _optional_operator_id(payload: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _find_non_string_mapping_key(value: Any, path: str = "manifest") -> str | None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return f"{path}[{key!r}]"
+            found = _find_non_string_mapping_key(item, f"{path}.{key}")
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found = _find_non_string_mapping_key(item, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None
+
+
 def _find_nonfinite_number(value: Any, path: str = "manifest") -> str | None:
     if isinstance(value, float) and not math.isfinite(value):
         return path
@@ -216,18 +238,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
         )
     parameters = payload["parameters"]
     for name, declaration in parameters.items():
-        if declaration["type"] not in {"integer", "number"} and (
-            "minimum" in declaration or "maximum" in declaration
-        ):
+        if declaration["type"] not in {"integer", "number"} and ("minimum" in declaration or "maximum" in declaration):
             raise InvalidManifestError(
                 f"parameter {name} bounds require a numeric parameter type",
                 operator_id=operator_id,
             )
-        if (
-            "minimum" in declaration
-            and "maximum" in declaration
-            and declaration["minimum"] > declaration["maximum"]
-        ):
+        if "minimum" in declaration and "maximum" in declaration and declaration["minimum"] > declaration["maximum"]:
             raise InvalidManifestError(
                 f"parameter {name} minimum must not exceed maximum",
                 operator_id=operator_id,
@@ -281,6 +297,11 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 operator_id=operator_id,
             )
     for field in outputs["fields"]:
+        if "minimum" in field and "maximum" in field and field["minimum"] > field["maximum"]:
+            raise InvalidManifestError(
+                "output field minimum must not exceed maximum",
+                operator_id=operator_id,
+            )
         try:
             references = _template_references(field["name_template"])
         except ValueError as exc:
@@ -294,22 +315,16 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"output field template references unknown parameters: {', '.join(unknown)}",
                 operator_id=operator_id,
             )
-        unresolved = sorted(
-            name
-            for name in references
-            if not parameters[name]["required"] and "default" not in parameters[name]
-        )
+        unresolved = sorted(name for name in references if not parameters[name]["required"] and "default" not in parameters[name])
         if unresolved:
             raise InvalidManifestError(
-                "output field template parameters must be required or declare a default: "
-                + ", ".join(unresolved),
+                "output field template parameters must be required or declare a default: " + ", ".join(unresolved),
                 operator_id=operator_id,
             )
         inconsistent = sorted(name for name in references if not parameters[name]["affects_output_fields"])
         if inconsistent:
             raise InvalidManifestError(
-                "output field template parameters must set affects_output_fields=true: "
-                + ", ".join(inconsistent),
+                "output field template parameters must set affects_output_fields=true: " + ", ".join(inconsistent),
                 operator_id=operator_id,
             )
         if not references or all("default" in parameters[name] for name in references):
@@ -321,6 +336,11 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                     f"output field template cannot format declared defaults: {field['name_template']}",
                     operator_id=operator_id,
                 ) from exc
+            if not resolved_name:
+                raise InvalidManifestError(
+                    "output field name must not be empty",
+                    operator_id=operator_id,
+                )
             if resolved_name in {"date", "code"}:
                 raise InvalidManifestError(
                     f"output field resolves to reserved QuantPanel key: {resolved_name}",
