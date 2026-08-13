@@ -274,6 +274,57 @@ def test_operator_request_allows_shared_acyclic_parameter_containers(daily_conte
     assert request.parameters == {"left": (1, 2), "right": (1, 2)}
 
 
+def test_operator_request_freezes_shared_parameter_graph_once_per_container(daily_context) -> None:
+    visits = 0
+
+    class VisitBudgetMapping(dict[str, Any]):
+        def items(self):
+            nonlocal visits
+            visits += 1
+            if visits > 64:
+                raise AssertionError("shared parameter graph was traversed repeatedly")
+            return super().items()
+
+    shared: dict[str, Any] = VisitBudgetMapping(value=1)
+    for _ in range(30):
+        shared = VisitBudgetMapping(left=shared, right=shared)
+
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"shared": shared},
+        input_panel=pd.DataFrame({"date": [], "code": []}),
+        context=daily_context,
+    )
+
+    frozen = request.parameters["shared"]
+    for _ in range(30):
+        assert frozen["left"] is frozen["right"]
+        frozen = frozen["left"]
+    assert frozen == {"value": 1}
+    assert visits == 31
+    with pytest.raises(TypeError):
+        frozen["value"] = 2
+
+
+def test_operator_request_rejects_cached_subtree_beyond_freeze_depth_limit(daily_context) -> None:
+    shared = {"child": {}}
+    deep: dict[str, Any] = {}
+    nested = deep
+    for _ in range(62):
+        child: dict[str, Any] = {}
+        nested["child"] = child
+        nested = child
+    nested["shared"] = shared
+
+    with pytest.raises(TypeError, match="parameters.*nesting depth exceeds maximum 64"):
+        OperatorRequest(
+            operator_id="fake.indicators.sma",
+            parameters={"shallow": shared, "deep": deep},
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=daily_context,
+        )
+
+
 @pytest.mark.parametrize("operator_id", [1, True, ["fake.operator"], None])
 def test_operator_request_requires_string_operator_id(daily_context, operator_id: Any) -> None:
     with pytest.raises(TypeError, match="operator_id must be a string"):

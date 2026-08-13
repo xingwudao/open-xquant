@@ -430,6 +430,64 @@ def test_fit_transform_manifest_requires_lifecycle_consistent_ml_metadata(
         load_operator_manifest(payload)
 
 
+@pytest.mark.parametrize("lifecycle", ["stateless", "evaluation", "data_access", "visualization"])
+def test_non_fitting_lifecycle_rejects_fitted_state(valid_manifest_payload, lifecycle) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["lifecycle"] = lifecycle
+    payload["fitted_state"] = {"serializable": True, "format": "json"}
+
+    with pytest.raises(InvalidManifestError, match="must not declare fitted_state"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("lifecycle", ["stateless", "evaluation", "data_access", "visualization"])
+def test_non_fitting_lifecycle_rejects_ml_requires_fit(valid_manifest_payload, lifecycle) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["lifecycle"] = lifecycle
+    payload["ml"] = {
+        "usable_as_feature": True,
+        "requires_fit": True,
+        "fit_scope": "training_window_only",
+        "state_serializable": True,
+    }
+
+    with pytest.raises(InvalidManifestError, match="must not require fitting"):
+        load_operator_manifest(payload)
+
+
+def test_time_series_manifest_requires_single_asset_support(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "time_series"
+    payload["inputs"]["min_assets"] = 2
+
+    with pytest.raises(InvalidManifestError, match="min_assets=1"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_prevalidation_memoizes_shared_alias_dag(valid_manifest_payload, tmp_path, monkeypatch) -> None:
+    shared: object = {"leaf": 1}
+    for _ in range(30):
+        shared = [shared, shared]
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["unknown"] = shared
+    path = tmp_path / "manifest.yaml"
+    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    visits = 0
+    original_children = manifest_module._container_children
+
+    def counting_children(value, path):
+        nonlocal visits
+        visits += 1
+        return original_children(value, path)
+
+    monkeypatch.setattr(manifest_module, "_container_children", counting_children)
+
+    with pytest.raises(InvalidManifestError, match="Additional properties"):
+        load_operator_manifest(path)
+
+    assert visits < 500
+
+
 def test_manifest_rejects_invalid_default_and_warmup_reference(valid_manifest_payload) -> None:
     invalid_default = copy.deepcopy(valid_manifest_payload)
     invalid_default["parameters"]["period"]["default"] = 0
@@ -1364,6 +1422,47 @@ def test_catalog_memoizes_completed_yaml_alias_nodes_during_duplicate_key_scan(
         return original(node, **kwargs)
 
     monkeypatch.setattr(catalog_module, "_reject_duplicate_catalog_yaml_keys", count_visits)
+
+    with pytest.raises(InvalidManifestError, match="unknown fields"):
+        load_operator_catalog(source)
+
+    assert visits <= 256
+
+
+def test_catalog_memoizes_completed_yaml_aliases_during_mapping_key_scan(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    aliases = ["shared_0: &shared_0 {leaf: value}"]
+    for index in range(1, 17):
+        aliases.append(f"shared_{index}: &shared_{index} [*shared_{index - 1}, *shared_{index - 1}]")
+    raw = "\n".join(
+        [
+            "schema_version: 1",
+            "contract_version: 1",
+            "package:",
+            "  distribution: fake-quant-operators",
+            "  version: 1.0.0",
+            f"  source_commit: {'a' * 40}",
+            f"  source_tree_digest: sha256:{'b' * 64}",
+            "  build_identifier: ci-42",
+            "operators: []",
+            *aliases,
+        ]
+    )
+    source = tmp_path / "catalog.yaml"
+    source.write_text(raw, encoding="utf-8")
+    original = catalog_module._find_non_string_mapping_key
+    visits = 0
+
+    def count_visits(value, path="catalog", **kwargs):
+        nonlocal visits
+        visits += 1
+        if visits > 256:
+            raise AssertionError("mapping-key scan revisited completed YAML aliases")
+        return original(value, path, **kwargs)
+
+    monkeypatch.setattr(catalog_module, "_find_non_string_mapping_key", count_visits)
 
     with pytest.raises(InvalidManifestError, match="unknown fields"):
         load_operator_catalog(source)

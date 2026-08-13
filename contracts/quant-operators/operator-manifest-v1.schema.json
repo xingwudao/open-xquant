@@ -37,6 +37,33 @@
           }
         }
       }
+    },
+    {
+      "if": {
+        "properties": {"lifecycle": {"not": {"const": "fit_transform"}}},
+        "required": ["lifecycle"]
+      },
+      "then": {
+        "not": {"required": ["fitted_state"]},
+        "properties": {
+          "ml": {
+            "properties": {"requires_fit": {"const": false}}
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {"execution_scope": {"const": "time_series"}},
+        "required": ["execution_scope"]
+      },
+      "then": {
+        "properties": {
+          "inputs": {
+            "properties": {"min_assets": {"const": 1}}
+          }
+        }
+      }
     }
   ],
   "required": [

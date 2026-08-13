@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -180,6 +181,42 @@ def test_operator_schema_accepts_lifecycle_consistent_ml_metadata_for_fit_transf
     }
 
     Draft202012Validator(schema).validate(payload)
+
+
+def test_operator_schema_rejects_fitted_state_for_non_fitting_lifecycle(valid_manifest_payload) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {
+        **valid_manifest_payload,
+        "lifecycle": "stateless",
+        "fitted_state": {"serializable": True, "format": "json"},
+    }
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
+def test_operator_schema_rejects_requires_fit_for_non_fitting_lifecycle(valid_manifest_payload) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {
+        **valid_manifest_payload,
+        "lifecycle": "stateless",
+        "ml": {
+            "usable_as_feature": True,
+            "requires_fit": True,
+            "fit_scope": "training_window_only",
+            "state_serializable": True,
+        },
+    }
+
+    assert not Draft202012Validator(schema).is_valid(payload)
+
+
+def test_operator_schema_requires_single_asset_support_for_time_series(valid_manifest_payload) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "time_series"
+    payload["inputs"]["min_assets"] = 2
+
+    assert not Draft202012Validator(schema).is_valid(payload)
 
 
 def test_quant_panel_schema_accepts_serialized_daily_panel() -> None:

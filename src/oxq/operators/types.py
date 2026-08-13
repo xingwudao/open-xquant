@@ -25,6 +25,7 @@ _ISO_DATETIME_RE = re.compile(
     r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 _IMMUTABLE_LEAF_TYPES = (type(None), bool, int, float, complex, str, bytes)
+_MAX_FREEZE_DEPTH = 64
 
 
 def _validate_operator_id(value: Any) -> None:
@@ -57,27 +58,40 @@ def _freeze(
     immutable_leaves_only: bool = False,
     path: str = "value",
     _active_container_ids: set[int] | None = None,
+    _completed_containers: dict[int, tuple[Any, int]] | None = None,
+    _depth: int = 0,
 ) -> Any:
+    if _depth > _MAX_FREEZE_DEPTH:
+        raise TypeError(f"{path} nesting depth exceeds maximum {_MAX_FREEZE_DEPTH}")
     active = set() if _active_container_ids is None else _active_container_ids
+    completed = {} if _completed_containers is None else _completed_containers
     is_container = isinstance(value, (np.ndarray, Mapping, list, tuple, set, frozenset))
     if is_container:
         container_id = id(value)
         if container_id in active:
             raise TypeError(f"{path} contains a cyclic container")
+        cached = completed.get(container_id)
+        if cached is not None:
+            frozen, height = cached
+            if _depth + height > _MAX_FREEZE_DEPTH:
+                raise TypeError(f"{path} nesting depth exceeds maximum {_MAX_FREEZE_DEPTH}")
+            return frozen
         active.add(container_id)
     else:
         container_id = None
+    frozen_value: Any
+    height = 0
     try:
         if isinstance(value, np.ndarray):
             if permanent_arrays:
                 if value.dtype.hasobject:
                     raise TypeError("object-dtype arrays cannot be frozen")
                 contiguous = np.ascontiguousarray(value)
-                return np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(contiguous.shape)
-            frozen = copy.deepcopy(value)
-            frozen.setflags(write=False)
-            return frozen
-        if immutable_leaves_only and isinstance(value, np.generic):
+                frozen_value = np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(contiguous.shape)
+            else:
+                frozen_value = copy.deepcopy(value)
+                frozen_value.setflags(write=False)
+        elif immutable_leaves_only and isinstance(value, np.generic):
             return _freeze(
                 value.item(),
                 permanent_arrays=permanent_arrays,
@@ -85,53 +99,75 @@ def _freeze(
                 immutable_leaves_only=True,
                 path=path,
                 _active_container_ids=active,
+                _completed_containers=completed,
+                _depth=_depth,
             )
-        if isinstance(value, Mapping):
-            frozen_items = {}
+        elif isinstance(value, Mapping):
+            frozen_mapping = {}
             for key, item in value.items():
                 if string_keys_only and not isinstance(key, str):
                     raise TypeError(f"{path} mapping keys must be strings; got {type(key).__name__} key {key!r}")
-                frozen_items[key] = _freeze(
+                frozen_mapping[key] = _freeze(
                     item,
                     permanent_arrays=permanent_arrays,
                     string_keys_only=string_keys_only,
                     immutable_leaves_only=immutable_leaves_only,
                     path=f"{path}[{key!r}]",
                     _active_container_ids=active,
+                    _completed_containers=completed,
+                    _depth=_depth + 1,
                 )
-            return MappingProxyType(frozen_items)
-        if isinstance(value, (list, tuple)):
-            return tuple(
-                _freeze(
-                    item,
-                    permanent_arrays=permanent_arrays,
-                    string_keys_only=string_keys_only,
-                    immutable_leaves_only=immutable_leaves_only,
-                    path=f"{path}[{index}]",
-                    _active_container_ids=active,
+                child_height = completed[id(item)][1] if isinstance(item, (np.ndarray, Mapping, list, tuple, set, frozenset)) else 0
+                height = max(height, child_height + 1)
+            frozen_value = MappingProxyType(frozen_mapping)
+        elif isinstance(value, (list, tuple)):
+            frozen_sequence = []
+            for index, item in enumerate(value):
+                frozen_sequence.append(
+                    _freeze(
+                        item,
+                        permanent_arrays=permanent_arrays,
+                        string_keys_only=string_keys_only,
+                        immutable_leaves_only=immutable_leaves_only,
+                        path=f"{path}[{index}]",
+                        _active_container_ids=active,
+                        _completed_containers=completed,
+                        _depth=_depth + 1,
+                    )
                 )
-                for index, item in enumerate(value)
-            )
-        if isinstance(value, (set, frozenset)):
-            return frozenset(
-                _freeze(
-                    item,
-                    permanent_arrays=permanent_arrays,
-                    string_keys_only=string_keys_only,
-                    immutable_leaves_only=immutable_leaves_only,
-                    path=f"{path} set item",
-                    _active_container_ids=active,
+                child_height = completed[id(item)][1] if isinstance(item, (np.ndarray, Mapping, list, tuple, set, frozenset)) else 0
+                height = max(height, child_height + 1)
+            frozen_value = tuple(frozen_sequence)
+        elif isinstance(value, (set, frozenset)):
+            frozen_set_items = []
+            for item in value:
+                frozen_set_items.append(
+                    _freeze(
+                        item,
+                        permanent_arrays=permanent_arrays,
+                        string_keys_only=string_keys_only,
+                        immutable_leaves_only=immutable_leaves_only,
+                        path=f"{path} set item",
+                        _active_container_ids=active,
+                        _completed_containers=completed,
+                        _depth=_depth + 1,
+                    )
                 )
-                for item in value
-            )
-        if immutable_leaves_only:
+                child_height = completed[id(item)][1] if isinstance(item, (np.ndarray, Mapping, list, tuple, set, frozenset)) else 0
+                height = max(height, child_height + 1)
+            frozen_value = frozenset(frozen_set_items)
+        elif immutable_leaves_only:
             if type(value) in _IMMUTABLE_LEAF_TYPES:
                 return value
             raise TypeError(f"{path} has unsupported leaf type {type(value).__name__}")
-        return copy.deepcopy(value)
+        else:
+            return copy.deepcopy(value)
     finally:
         if container_id is not None:
             active.remove(container_id)
+    assert container_id is not None
+    completed[container_id] = (frozen_value, height)
+    return frozen_value
 
 
 class OperatorScope(StrEnum):

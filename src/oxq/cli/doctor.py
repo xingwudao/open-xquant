@@ -149,6 +149,8 @@ def _check_workspace() -> dict[str, Any]:
             fixes = ["Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"]
         elif _workspace_config_directory_is_link(Path.cwd()):
             fixes = ["Replace the .open-xquant symlink with a real directory, then run oxq research init"]
+        elif workspace.exists() and not workspace.is_file():
+            fixes = ["Remove the non-regular .open-xquant/workspace.yaml artifact, then run oxq research init"]
         else:
             fixes = ["oxq research init --force"]
         return {

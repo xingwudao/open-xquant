@@ -225,6 +225,11 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
                 "cross_section execution_scope requires inputs min_history=1",
                 operator_id=_optional_operator_id(payload),
             )
+        if list(error.absolute_path) == ["inputs", "min_assets"] and payload.get("execution_scope") == "time_series":
+            raise InvalidManifestError(
+                "time_series execution_scope requires inputs min_assets=1",
+                operator_id=_optional_operator_id(payload),
+            )
         path = ".".join(str(part) for part in error.absolute_path)
         location = path or "manifest"
         raise InvalidManifestError(f"{location}: {error.message}", operator_id=_optional_operator_id(payload))
@@ -257,9 +262,21 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
 
 
 def _validate_fit_transform_metadata(payload: Mapping[str, Any]) -> None:
-    if payload.get("lifecycle") != "fit_transform":
-        return
+    lifecycle = payload.get("lifecycle")
     operator_id = _optional_operator_id(payload)
+    if lifecycle != "fit_transform":
+        if "fitted_state" in payload:
+            raise InvalidManifestError(
+                f"{lifecycle} lifecycle must not declare fitted_state",
+                operator_id=operator_id,
+            )
+        ml = payload.get("ml")
+        if isinstance(ml, Mapping) and ml.get("requires_fit") is True:
+            raise InvalidManifestError(
+                f"{lifecycle} lifecycle must not require fitting",
+                operator_id=operator_id,
+            )
+        return
     if "fitted_state" not in payload:
         raise InvalidManifestError("fit_transform manifest requires fitted_state", operator_id=operator_id)
     ml = payload.get("ml")
@@ -391,54 +408,65 @@ def _optional_operator_id(payload: Mapping[str, Any]) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _find_non_string_mapping_key(value: Any, path: str = "manifest") -> str | None:
+def _container_children(value: Any, path: str) -> list[tuple[Any, str]]:
     if isinstance(value, Mapping):
-        for key, item in value.items():
-            if not isinstance(key, str):
-                return f"{path}[{key!r}]"
-            found = _find_non_string_mapping_key(item, f"{path}.{key}")
-            if found is not None:
-                return found
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            found = _find_non_string_mapping_key(item, f"{path}[{index}]")
-            if found is not None:
-                return found
+        return [(item, f"{path}.{key}") for key, item in value.items()]
+    if isinstance(value, (list, tuple)):
+        return [(item, f"{path}[{index}]") for index, item in enumerate(value)]
+    return []
+
+
+def _find_non_string_mapping_key(value: Any, path: str = "manifest") -> str | None:
+    stack = [(value, path)]
+    completed: set[int] = set()
+    while stack:
+        current, current_path = stack.pop()
+        if not isinstance(current, (Mapping, list, tuple)):
+            continue
+        identity = id(current)
+        if identity in completed:
+            continue
+        completed.add(identity)
+        if isinstance(current, Mapping):
+            for key in current:
+                if not isinstance(key, str):
+                    return f"{current_path}[{key!r}]"
+        stack.extend(reversed(_container_children(current, current_path)))
     return None
 
 
 def _find_nonfinite_number(value: Any, path: str = "manifest") -> str | None:
-    if isinstance(value, float) and not math.isfinite(value):
-        return path
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            found = _find_nonfinite_number(item, f"{path}.{key}")
-            if found is not None:
-                return found
-    elif isinstance(value, (list, tuple)):
-        for index, item in enumerate(value):
-            found = _find_nonfinite_number(item, f"{path}[{index}]")
-            if found is not None:
-                return found
+    stack = [(value, path)]
+    completed: set[int] = set()
+    while stack:
+        current, current_path = stack.pop()
+        if isinstance(current, float) and not math.isfinite(current):
+            return current_path
+        if not isinstance(current, (Mapping, list, tuple)):
+            continue
+        identity = id(current)
+        if identity in completed:
+            continue
+        completed.add(identity)
+        stack.extend(reversed(_container_children(current, current_path)))
     return None
 
 
 def _find_non_json_value(value: Any, path: str = "manifest") -> tuple[str, str] | None:
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return None
-    if isinstance(value, Mapping):
-        for key, item in value.items():
-            found = _find_non_json_value(item, f"{path}.{key}")
-            if found is not None:
-                return found
-        return None
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            found = _find_non_json_value(item, f"{path}[{index}]")
-            if found is not None:
-                return found
-        return None
-    return path, type(value).__name__
+    stack = [(value, path)]
+    completed: set[int] = set()
+    while stack:
+        current, current_path = stack.pop()
+        if current is None or isinstance(current, (bool, int, float, str)):
+            continue
+        if not isinstance(current, (Mapping, list)):
+            return current_path, type(current).__name__
+        identity = id(current)
+        if identity in completed:
+            continue
+        completed.add(identity)
+        stack.extend(reversed(_container_children(current, current_path)))
+    return None
 
 
 def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, Any], operator_id: str) -> None:
@@ -568,6 +596,11 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
     if payload["execution_scope"] == "cross_section" and inputs["min_history"] != 1:
         raise InvalidManifestError(
             "cross_section execution_scope requires inputs min_history=1",
+            operator_id=operator_id,
+        )
+    if payload["execution_scope"] == "time_series" and inputs["min_assets"] != 1:
+        raise InvalidManifestError(
+            "time_series execution_scope requires inputs min_assets=1",
             operator_id=operator_id,
         )
     required = set(inputs["required_columns"])

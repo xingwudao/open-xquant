@@ -75,19 +75,31 @@ def _reject_recursive_containers(value: Any) -> None:
         raise InvalidManifestError(f"catalog contains a recursive or cyclic container: {recursive_path}")
 
 
-def _find_non_string_mapping_key(value: Any, path: str = "catalog") -> str | None:
+def _find_non_string_mapping_key(
+    value: Any,
+    path: str = "catalog",
+    *,
+    completed: set[int] | None = None,
+) -> str | None:
+    if not isinstance(value, (Mapping, list, tuple)):
+        return None
+    completed = set() if completed is None else completed
+    identity = id(value)
+    if identity in completed:
+        return None
     if isinstance(value, Mapping):
         for key, item in value.items():
             if not isinstance(key, str):
                 return f"{path}[{key!r}]"
-            found = _find_non_string_mapping_key(item, f"{path}.{key}")
+            found = _find_non_string_mapping_key(item, f"{path}.{key}", completed=completed)
             if found is not None:
                 return found
-    elif isinstance(value, (list, tuple)):
+    else:
         for index, item in enumerate(value):
-            found = _find_non_string_mapping_key(item, f"{path}[{index}]")
+            found = _find_non_string_mapping_key(item, f"{path}[{index}]", completed=completed)
             if found is not None:
                 return found
+    completed.add(identity)
     return None
 
 

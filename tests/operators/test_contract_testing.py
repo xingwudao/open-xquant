@@ -3370,13 +3370,12 @@ def test_contract_suite_rejects_time_series_scope_probe_with_one_asset(
     }
 
 
-def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
+def test_contract_suite_time_series_scope_probes_include_single_asset_inputs(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
     payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     extra_symbol = panel.loc[panel["code"] == panel["code"].min()].copy()
@@ -3393,7 +3392,7 @@ def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
 
     def min_assets_enforcing_provider(provider_request: OperatorRequest):
         asset_count = int(provider_request.input_panel["code"].nunique())
-        if asset_count < 2:
+        if asset_count < 1:
             raise AssertionError("provider received a probe below manifest min_assets")
         probed_asset_counts.append(asset_count)
         return sma(provider_request)
@@ -3405,7 +3404,7 @@ def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
     )
 
     assert report.passed is True
-    assert min(probed_asset_counts) == 2
+    assert min(probed_asset_counts) == 1
 
 
 def test_contract_suite_rejects_time_series_mixing_in_specific_min_asset_subset(
@@ -3414,7 +3413,6 @@ def test_contract_suite_rejects_time_series_mixing_in_specific_min_asset_subset(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
     payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     first_symbol = panel.loc[panel["code"] == panel["code"].min()].copy()
@@ -3458,7 +3456,6 @@ def test_contract_suite_rejects_time_series_mixing_in_every_six_symbol_subset(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
     payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     template = panel.loc[panel["code"] == panel["code"].min()].copy()
@@ -3503,7 +3500,6 @@ def test_contract_suite_rejects_thirty_symbol_time_series_subset_budget_before_p
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
     payload["inputs"]["optional_columns"] = []
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
     template = panel.loc[panel["code"] == panel["code"].min()].copy()
@@ -3551,7 +3547,6 @@ def test_contract_suite_rejects_large_time_series_universe_without_materializing
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
     payload["inputs"]["optional_columns"] = []
     template = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
     template = template.loc[template["code"] == template["code"].min()].reset_index(drop=True)
@@ -3601,13 +3596,12 @@ def test_contract_suite_leave_one_out_probes_omit_every_symbol(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 29
     payload["inputs"]["optional_columns"] = []
     payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
     template = panel.loc[panel["code"] == panel["code"].min()].copy()
     extra_symbols = []
-    for offset in range(1, 29):
+    for offset in range(1, 5):
         symbol = template.copy()
         symbol.loc[:, "code"] = f"300{offset:03d}.SZ"
         symbol.loc[:, "close"] += float(offset)
@@ -3648,7 +3642,6 @@ def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
     optional_columns = [f"optional_{index}" for index in range(8)]
     payload["inputs"]["optional_columns"] = optional_columns
     payload["inputs"]["dtypes"] = {"close": ["float64"], **{column: ["float64"] for column in optional_columns}}
@@ -3778,11 +3771,12 @@ def test_contract_suite_rejects_time_series_scope_probe_without_support_assets(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["inputs"]["min_assets"] = 2
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel = panel.loc[panel["code"] == panel["code"].min()].reset_index(drop=True)
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        input_panel=panel,
         context=daily_context,
     )
     provider_calls = 0
@@ -3797,8 +3791,8 @@ def test_contract_suite_rejects_time_series_scope_probe_without_support_assets(
 
     assert provider_calls == 0
     assert exc_info.value.to_dict()["details"] == {
-        "required_assets": 3,
-        "available_assets": 2,
+        "required_assets": 2,
+        "available_assets": 1,
     }
 
 

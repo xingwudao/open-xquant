@@ -88,6 +88,31 @@ def test_doctor_fails_closed_for_workspace_file_symlink(monkeypatch, tmp_path, d
     assert "oxq research init --force" not in result["fixes"]
 
 
+@pytest.mark.parametrize("artifact_kind", ["directory", "fifo"])
+def test_doctor_does_not_suggest_force_init_for_non_regular_workspace_file(
+    monkeypatch,
+    tmp_path,
+    artifact_kind: str,
+) -> None:
+    if artifact_kind == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("requires POSIX FIFO support")
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    workspace = config_dir / "workspace.yaml"
+    if artifact_kind == "directory":
+        workspace.mkdir()
+    else:
+        os.mkfifo(workspace)
+    monkeypatch.chdir(tmp_path)
+
+    result = _check_workspace()
+
+    assert result["status"] == "fail"
+    assert "regular file" in result["error"]
+    assert result["fixes"] == ["Remove the non-regular .open-xquant/workspace.yaml artifact, then run oxq research init"]
+    assert "oxq research init --force" not in result["fixes"]
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
 def test_doctor_fix_diagnoses_dangling_workspace_marker_without_initializing(monkeypatch, tmp_path) -> None:
     config_dir = tmp_path / ".open-xquant"
