@@ -377,6 +377,26 @@ def discover_workspace_config(path: str | Path) -> DiscoveredWorkspaceConfig | N
     start = subject if subject.is_dir() else subject.parent
     for candidate in (start, *start.parents):
         config_path = candidate / WORKSPACE_CONFIG_RELATIVE_PATH
+        try:
+            config_directory_status = config_path.parent.lstat()
+        except FileNotFoundError:
+            config_directory_status = None
+        except OSError as exc:
+            raise WorkspaceConfigError(
+                f"workspace configuration directory could not be inspected: {config_path.parent}: {exc}"
+            ) from exc
+        if config_directory_status is not None:
+            attributes = getattr(config_directory_status, "st_file_attributes", 0)
+            reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
+            if stat.S_ISLNK(config_directory_status.st_mode) or bool(attributes & reparse_flag):
+                raise WorkspaceConfigError(
+                    "workspace configuration directory must not be a symlink or reparse point: "
+                    f"{config_path.parent}"
+                )
+            if not stat.S_ISDIR(config_directory_status.st_mode):
+                raise WorkspaceConfigError(
+                    f"workspace configuration directory must be a directory: {config_path.parent}"
+                )
         if not config_path.exists() and not config_path.is_symlink():
             continue
         config = load_workspace_config(config_path)

@@ -729,6 +729,86 @@ def test_contract_suite_builds_optional_shapes_without_undeclared_columns(
     assert isinstance(exc_info.value.__cause__, KeyError)
 
 
+def test_contract_suite_rejects_undeclared_dependency_for_optional_omission_shape(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["inputs"]["optional_columns"] = ["volume"]
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel["helper"] = 1.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def shape_specific_undeclared_dependency(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        if "volume" not in provider_request.input_panel and "helper" in provider_request.input_panel:
+            result.data.loc[:, "sma_2"] += provider_request.input_panel["helper"].to_numpy()
+        return result
+
+    with pytest.raises(ContractViolationError, match="undeclared input columns.*optional"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            shape_specific_undeclared_dependency,
+            request,
+        )
+
+
+@pytest.mark.parametrize("boundary", ["empty", "min_history", "min_assets"])
+def test_contract_suite_probes_invalid_sizes_for_every_optional_shape(
+    boundary: str,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["inputs"]["optional_columns"] = ["volume"]
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+    if boundary == "min_assets":
+        payload["inputs"]["min_assets"] = 2
+    manifest = load_operator_manifest(payload)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def shape_dependent_boundary_provider(provider_request: OperatorRequest):
+        panel = provider_request.input_panel
+        if "volume" not in panel:
+            is_boundary = panel.empty
+            if boundary == "min_history" and not panel.empty:
+                is_boundary = int(panel.groupby("code", sort=False, observed=True).size().min()) < 2
+            if boundary == "min_assets" and not panel.empty:
+                is_boundary = int(panel["code"].nunique()) < 2
+            if is_boundary:
+                raise RuntimeError("optional omission bypassed the structured boundary error")
+        _reject_empty_input(manifest, provider_request)
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="(empty input|declared min_)"):
+        _verify_operator_contract(
+            manifest,
+            shape_dependent_boundary_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+
 def test_contract_suite_requires_fixture_to_cover_every_declared_optional_column(
     daily_context,
     daily_symbol_frames,
@@ -3245,6 +3325,7 @@ def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
     )
     for column in optional_columns:
         panel[column] = 1.0
+    panel["helper"] = 1.0
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
@@ -3268,8 +3349,9 @@ def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
     assert provider_calls == 0
     details = exc_info.value.to_dict()["details"]
     assert details["shape_count"] == 256
+    assert details["shape_variant_count"] == 512
     assert details["behavioral_probe_upper_bound"] == (
-        details["shape_count"] * details["per_shape_behavioral_upper_bound"]
+        details["shape_variant_count"] * details["per_shape_behavioral_upper_bound"]
     )
     assert details["upper_bound"] > details["maximum"]
 

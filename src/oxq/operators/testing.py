@@ -277,7 +277,7 @@ def verify_operator_contract(
         normalized,
         required_column_count=len(required_columns),
         optional_column_count=len(optional_columns),
-        has_declared_only_shape=bool(undeclared_columns),
+        has_undeclared_columns=bool(undeclared_columns),
     )
     checks = ["request"]
 
@@ -304,18 +304,28 @@ def verify_operator_contract(
     )
     checks.append("required_inputs")
 
-    _verify_empty_input_failure(manifest, operator, normalized, declared_panel)
-    checks.append("empty_input")
-
-    _verify_minimum_boundary_failures(manifest, operator, normalized, declared_panel)
-    checks.append("minimum_boundaries")
-
-    for present_count in range(len(optional_columns)):
+    optional_shapes: list[tuple[tuple[str, ...], pd.DataFrame]] = []
+    for present_count in range(len(optional_columns) + 1):
         for present_subset in combinations(optional_columns, present_count):
             omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
-            panel_without_optional = declared_panel.drop(columns=list(omitted_columns))
-            optional_request = _copy_request(normalized, panel=panel_without_optional)
+            optional_shapes.append((omitted_columns, declared_panel.drop(columns=list(omitted_columns))))
+
+    for _, shape_panel in optional_shapes:
+        _verify_empty_input_failure(manifest, operator, normalized, shape_panel)
+    checks.append("empty_input")
+
+    for _, shape_panel in optional_shapes:
+        _verify_minimum_boundary_failures(manifest, operator, normalized, shape_panel)
+    checks.append("minimum_boundaries")
+
+    first_data = _deepcopy_frame(result.data)
+    for omitted_columns, shape_panel in optional_shapes:
+        if omitted_columns or undeclared_columns:
+            optional_request = _copy_request(normalized, panel=shape_panel)
             failure_message, failure_details = _optional_probe_failure(omitted_columns)
+            if not omitted_columns:
+                failure_message = "operator failed without undeclared input columns"
+                failure_details = {"columns": undeclared_columns}
             optional_result = _invoke_operator(
                 manifest,
                 operator,
@@ -324,56 +334,73 @@ def verify_operator_contract(
                 failure_details=failure_details,
             )
             _validate_result(manifest, optional_request, optional_result, expected_implementation_digest)
-            omission_label = _optional_omission_label(omitted_columns)
-            _verify_shape(
-                manifest,
-                operator,
-                optional_request,
-                optional_result,
-                expected_implementation_digest,
-                qualifier=f"without optional input {omission_label}",
-                failure_message=failure_message,
-                failure_details=failure_details,
-            )
-    if optional_columns:
-        checks.append("optional_inputs")
+        else:
+            optional_request = normalized
+            optional_result = result
+            failure_message = "operator invocation failed"
+            failure_details = None
 
-    first_data = _deepcopy_frame(result.data)
-    if undeclared_columns:
-        declared_request = _copy_request(normalized, panel=declared_panel)
-        declared_result = _invoke_operator(
-            manifest,
-            operator,
-            declared_request,
-            failure_message="operator failed without undeclared input columns",
-            failure_details={"columns": undeclared_columns},
-        )
-        _validate_result(manifest, declared_request, declared_result, expected_implementation_digest)
-        declared_data = _deepcopy_frame(declared_result.data)
-        _require_deterministic_data(
-            _canonical(first_data),
-            _canonical(declared_data),
-            manifest,
-            "operator output must not depend on undeclared input columns",
-        )
+        if omitted_columns:
+            omission_label = _optional_omission_label(omitted_columns)
+            qualifier = f"without optional input {omission_label}"
+        else:
+            qualifier = "with only declared input columns" if undeclared_columns else ""
         _verify_shape(
             manifest,
             operator,
-            declared_request,
-            declared_result,
+            optional_request,
+            optional_result,
             expected_implementation_digest,
-            qualifier="with only declared input columns",
-            failure_message="operator failed without undeclared input columns",
-            failure_details={"columns": undeclared_columns},
+            qualifier=qualifier,
+            failure_message=failure_message,
+            failure_details=failure_details,
         )
 
-    _verify_shape(
-        manifest,
-        operator,
-        normalized,
-        result,
-        expected_implementation_digest,
-    )
+        if undeclared_columns:
+            raw_shape_panel = normalized.input_panel.drop(columns=list(omitted_columns))
+            if omitted_columns:
+                raw_shape_request = _copy_request(normalized, panel=raw_shape_panel)
+                raw_shape_result = _invoke_operator(
+                    manifest,
+                    operator,
+                    raw_shape_request,
+                    failure_message=failure_message,
+                    failure_details=failure_details,
+                )
+                _validate_result(
+                    manifest,
+                    raw_shape_request,
+                    raw_shape_result,
+                    expected_implementation_digest,
+                )
+                raw_shape_data = _deepcopy_frame(raw_shape_result.data)
+            else:
+                raw_shape_request = normalized
+                raw_shape_result = result
+                raw_shape_data = first_data
+            dependence_message = "operator output must not depend on undeclared input columns"
+            if omitted_columns:
+                dependence_message += f" without optional input {omission_label}"
+            _require_deterministic_data(
+                _canonical(raw_shape_data),
+                _canonical(_deepcopy_frame(optional_result.data)),
+                manifest,
+                dependence_message,
+            )
+            _verify_shape(
+                manifest,
+                operator,
+                raw_shape_request,
+                raw_shape_result,
+                expected_implementation_digest,
+                qualifier=(f"with undeclared columns and without optional input {omission_label}" if omitted_columns else ""),
+                failure_message=failure_message,
+                failure_details=failure_details,
+            )
+
+    if optional_columns:
+        checks.append("optional_inputs")
+
     checks.append("determinism")
     checks.extend(_behavioral_check_names(manifest))
 
@@ -1213,21 +1240,24 @@ def _validate_certification_probe_budget(
     request: OperatorRequest,
     required_column_count: int,
     optional_column_count: int,
-    has_declared_only_shape: bool,
+    has_undeclared_columns: bool,
 ) -> None:
     per_shape_behavioral_upper_bound = _behavioral_probe_upper_bound(manifest, request)
-    shape_count = 2**optional_column_count + int(has_declared_only_shape)
-    behavioral_probe_upper_bound = shape_count * per_shape_behavioral_upper_bound
-    shape_invocation_upper_bound = shape_count * 2
-    required_probe_upper_bound = required_column_count * 2**optional_column_count
-    fixed_probe_upper_bound = 1 + int(manifest.raw["inputs"]["min_history"] > 1) + int(
-        manifest.raw["inputs"]["min_assets"] > 1
+    shape_count = 2**optional_column_count
+    shape_variant_count = shape_count * (2 if has_undeclared_columns else 1)
+    behavioral_probe_upper_bound = shape_variant_count * per_shape_behavioral_upper_bound
+    shape_invocation_upper_bound = shape_variant_count * 2
+    required_probe_upper_bound = required_column_count * shape_count
+    boundary_probe_upper_bound = shape_count * (
+        1
+        + int(manifest.raw["inputs"]["min_history"] > 1)
+        + int(manifest.raw["inputs"]["min_assets"] > 1)
     )
     upper_bound = (
         behavioral_probe_upper_bound
         + shape_invocation_upper_bound
         + required_probe_upper_bound
-        + fixed_probe_upper_bound
+        + boundary_probe_upper_bound
     )
     if upper_bound > _MAX_CERTIFIED_PROBES:
         raise ContractViolationError(
@@ -1237,11 +1267,12 @@ def _validate_certification_probe_budget(
                 "upper_bound": upper_bound,
                 "maximum": _MAX_CERTIFIED_PROBES,
                 "shape_count": shape_count,
+                "shape_variant_count": shape_variant_count,
                 "per_shape_behavioral_upper_bound": per_shape_behavioral_upper_bound,
                 "behavioral_probe_upper_bound": behavioral_probe_upper_bound,
                 "shape_invocation_upper_bound": shape_invocation_upper_bound,
                 "required_probe_upper_bound": required_probe_upper_bound,
-                "fixed_probe_upper_bound": fixed_probe_upper_bound,
+                "boundary_probe_upper_bound": boundary_probe_upper_bound,
             },
         )
 

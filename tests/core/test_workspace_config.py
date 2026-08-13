@@ -465,3 +465,31 @@ def test_discover_workspace_config_treats_unsafe_nearest_marker_as_authoritative
 
     with pytest.raises(WorkspaceConfigError, match="invalid YAML"):
         discover_workspace_config(inner)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_discover_workspace_config_rejects_dangling_nearest_config_directory(tmp_path: Path) -> None:
+    outer_config = tmp_path / ".open-xquant"
+    outer_config.mkdir()
+    (outer_config / "workspace.yaml").write_text("name: outer\n", encoding="utf-8")
+    inner = tmp_path / "research" / "run"
+    inner.mkdir(parents=True)
+    (tmp_path / "research" / ".open-xquant").symlink_to(
+        tmp_path / "missing-config",
+        target_is_directory=True,
+    )
+
+    with pytest.raises(WorkspaceConfigError, match="configuration directory.*symlink"):
+        discover_workspace_config(inner)
+
+
+def test_discover_workspace_config_rejects_nearest_config_directory_file(tmp_path: Path) -> None:
+    outer_config = tmp_path / ".open-xquant"
+    outer_config.mkdir()
+    (outer_config / "workspace.yaml").write_text("name: outer\n", encoding="utf-8")
+    inner = tmp_path / "research" / "run"
+    inner.mkdir(parents=True)
+    (tmp_path / "research" / ".open-xquant").write_text("not a directory\n", encoding="utf-8")
+
+    with pytest.raises(WorkspaceConfigError, match="configuration directory must be a directory"):
+        discover_workspace_config(inner)
