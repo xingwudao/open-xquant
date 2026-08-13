@@ -60,7 +60,7 @@ def valid_manifest_payload() -> dict[str, Any]:
                 "minimum": 1,
                 "unit": "bars",
                 "affects_warmup": True,
-                "affects_output_fields": False,
+                "affects_output_fields": True,
                 "affects_causality": False,
                 "affects_availability": False,
             }

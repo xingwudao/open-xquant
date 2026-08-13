@@ -32,6 +32,58 @@ def test_manifest_validates_parameters_and_rejects_unknowns(valid_manifest_paylo
         manifest.validate_parameters({"period": 0})
 
 
+def test_manifest_preserves_json_collection_types_when_resolving_defaults(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"].update(
+        {
+            "labels": {
+                "type": "array",
+                "default": ["fast", "slow"],
+                "required": False,
+                "unit": None,
+                "affects_warmup": False,
+                "affects_output_fields": False,
+                "affects_causality": False,
+                "affects_availability": False,
+            },
+            "options": {
+                "type": "object",
+                "default": {"adjust": True},
+                "required": False,
+                "unit": None,
+                "affects_warmup": False,
+                "affects_output_fields": False,
+                "affects_causality": False,
+                "affects_availability": False,
+            },
+        }
+    )
+
+    resolved = load_operator_manifest(payload).validate_parameters({})
+
+    assert resolved["labels"] == ["fast", "slow"]
+    assert isinstance(resolved["labels"], list)
+    assert resolved["options"] == {"adjust": True}
+    assert isinstance(resolved["options"], dict)
+
+
+@pytest.mark.parametrize("version", ["1.0.0-01", "1.0.0-alpha..1", "1.0.0-"])
+def test_manifest_rejects_invalid_semantic_versions(valid_manifest_payload, version) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["operator_version"] = version
+
+    with pytest.raises(InvalidManifestError, match="semantic versioning"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("version", ["1.0.0", "1.0.0-alpha.1", "1.0.0-1a", "1.0.0+001"])
+def test_manifest_accepts_valid_semantic_versions(valid_manifest_payload, version) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["operator_version"] = version
+
+    assert load_operator_manifest(payload).operator_version == version
+
+
 def test_manifest_metadata_snapshot_is_deeply_read_only(valid_manifest_payload) -> None:
     manifest = load_operator_manifest(valid_manifest_payload)
 
@@ -61,6 +113,23 @@ def test_manifest_rejects_invalid_default_and_warmup_reference(valid_manifest_pa
         load_operator_manifest(invalid_warmup)
 
 
+def test_manifest_rejects_bounds_on_nonnumeric_parameters(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["label"] = {
+        "type": "string",
+        "required": False,
+        "minimum": 1,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+
+    with pytest.raises(InvalidManifestError, match="numeric"):
+        load_operator_manifest(payload)
+
+
 def test_manifest_rejects_overlapping_input_columns(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["optional_columns"] = ["close"]
@@ -74,6 +143,31 @@ def test_manifest_rejects_invalid_output_template(valid_manifest_payload) -> Non
     payload["outputs"]["fields"][0]["name_template"] = "sma_{period"
 
     with pytest.raises(InvalidManifestError, match="template"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_requires_output_template_parameters_to_be_resolvable(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": "string",
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{period}_{suffix}"
+
+    with pytest.raises(InvalidManifestError, match="required or declare a default"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_requires_template_parameters_to_affect_output_fields(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["period"]["affects_output_fields"] = False
+
+    with pytest.raises(InvalidManifestError, match="affects_output_fields"):
         load_operator_manifest(payload)
 
 
@@ -144,4 +238,23 @@ def test_catalog_rejects_duplicate_operator_ids(valid_manifest_payload) -> None:
     }
 
     with pytest.raises(InvalidManifestError, match="duplicate operator_id"):
+        load_operator_catalog(payload)
+
+
+def test_catalog_rejects_invalid_package_semantic_version(valid_manifest_payload) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0-01",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+
+    with pytest.raises(InvalidManifestError, match="semantic versioning"):
         load_operator_catalog(payload)

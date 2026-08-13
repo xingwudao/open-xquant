@@ -5,7 +5,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import re
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -17,10 +16,9 @@ import yaml  # type: ignore[import-untyped]
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 
 from oxq.operators._schema import load_contract_schema
+from oxq.operators._version import is_semantic_version
 from oxq.operators.errors import InvalidManifestError, InvalidParameterError
 from oxq.operators.types import OperatorAvailability, OperatorCausality, OperatorLifecycle, OperatorScope
-
-_SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
@@ -32,6 +30,14 @@ def _freeze(value: Any) -> Any:
         return MappingProxyType({key: _freeze(item) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
         return tuple(_freeze(item) for item in value)
+    return copy.deepcopy(value)
+
+
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, tuple):
+        return [_thaw(item) for item in value]
     return copy.deepcopy(value)
 
 
@@ -71,15 +77,15 @@ class OperatorManifest:
             assert isinstance(declaration_value, Mapping)
             declaration = declaration_value
             if name in supplied:
-                value = supplied[name]
+                value = _thaw(supplied[name])
             elif "default" in declaration:
-                value = copy.deepcopy(declaration["default"])
+                value = _thaw(declaration["default"])
             elif declaration["required"]:
                 raise InvalidParameterError(f"required parameter is missing: {name}", operator_id=self.operator_id)
             else:
                 continue
             _validate_parameter_value(name, value, declaration, self.operator_id)
-            resolved[name] = copy.deepcopy(value)
+            resolved[name] = _thaw(value)
         return resolved
 
 
@@ -89,10 +95,15 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
     errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.absolute_path))
     if errors:
         error = errors[0]
+        if list(error.absolute_path) == ["operator_version"]:
+            raise InvalidManifestError(
+                "operator_version must be semantic versioning",
+                operator_id=_optional_operator_id(payload),
+            )
         path = ".".join(str(part) for part in error.absolute_path)
         location = path or "manifest"
         raise InvalidManifestError(f"{location}: {error.message}", operator_id=_optional_operator_id(payload))
-    if not _SEMVER_RE.fullmatch(payload["operator_version"]):
+    if not is_semantic_version(payload["operator_version"]):
         raise InvalidManifestError("operator_version must be semantic versioning", operator_id=payload["operator_id"])
     if payload["lifecycle"] == "fit_transform" and "fitted_state" not in payload:
         raise InvalidManifestError("fit_transform manifest requires fitted_state", operator_id=payload["operator_id"])
@@ -180,6 +191,13 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
         )
     parameters = payload["parameters"]
     for name, declaration in parameters.items():
+        if declaration["type"] not in {"integer", "number"} and (
+            "minimum" in declaration or "maximum" in declaration
+        ):
+            raise InvalidManifestError(
+                f"parameter {name} bounds require a numeric parameter type",
+                operator_id=operator_id,
+            )
         if declaration["required"] and "default" in declaration:
             raise InvalidManifestError(
                 f"required parameter {name} must not declare a default",
@@ -195,11 +213,29 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 ) from exc
     outputs = payload["outputs"]
     warmup = outputs["warmup"]
-    if warmup["kind"] == "parameter" and warmup["parameter"] not in parameters:
-        raise InvalidManifestError(
-            f"outputs warmup references unknown parameter: {warmup['parameter']}",
-            operator_id=operator_id,
-        )
+    if warmup["kind"] == "parameter":
+        warmup_name = warmup["parameter"]
+        if warmup_name not in parameters:
+            raise InvalidManifestError(
+                f"outputs warmup references unknown parameter: {warmup_name}",
+                operator_id=operator_id,
+            )
+        warmup_parameter = parameters[warmup_name]
+        if warmup_parameter["type"] != "integer":
+            raise InvalidManifestError(
+                f"outputs warmup parameter must be an integer: {warmup_name}",
+                operator_id=operator_id,
+            )
+        if not warmup_parameter["required"] and "default" not in warmup_parameter:
+            raise InvalidManifestError(
+                f"outputs warmup parameter must be required or declare a default: {warmup_name}",
+                operator_id=operator_id,
+            )
+        if not warmup_parameter["affects_warmup"]:
+            raise InvalidManifestError(
+                f"outputs warmup parameter must set affects_warmup=true: {warmup_name}",
+                operator_id=operator_id,
+            )
     for field in outputs["fields"]:
         try:
             references = {
@@ -216,5 +252,23 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
         if unknown:
             raise InvalidManifestError(
                 f"output field template references unknown parameters: {', '.join(unknown)}",
+                operator_id=operator_id,
+            )
+        unresolved = sorted(
+            name
+            for name in references
+            if not parameters[name]["required"] and "default" not in parameters[name]
+        )
+        if unresolved:
+            raise InvalidManifestError(
+                "output field template parameters must be required or declare a default: "
+                + ", ".join(unresolved),
+                operator_id=operator_id,
+            )
+        inconsistent = sorted(name for name in references if not parameters[name]["affects_output_fields"])
+        if inconsistent:
+            raise InvalidManifestError(
+                "output field template parameters must set affects_output_fields=true: "
+                + ", ".join(inconsistent),
                 operator_id=operator_id,
             )

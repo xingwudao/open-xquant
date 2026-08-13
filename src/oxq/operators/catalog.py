@@ -14,12 +14,12 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 
+from oxq.operators._version import is_semantic_version
 from oxq.operators.errors import InvalidManifestError
 from oxq.operators.manifest import OperatorManifest, load_operator_manifest
 
 _CATALOG_KEYS = {"schema_version", "contract_version", "package", "operators", "catalog_digest"}
 _PACKAGE_KEYS = {"distribution", "version", "source_commit", "source_tree_digest", "build_identifier"}
-_SEMVER_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")
 _COMMIT_RE = re.compile(r"^[0-9a-f]{40,64}$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -71,7 +71,7 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
     )
     if not valid_package:
         raise InvalidManifestError(f"catalog package must contain exactly {sorted(_PACKAGE_KEYS)}")
-    if not _SEMVER_RE.fullmatch(package["version"]):
+    if not is_semantic_version(package["version"]):
         raise InvalidManifestError("catalog package.version must be semantic versioning")
     if not _COMMIT_RE.fullmatch(package["source_commit"]):
         raise InvalidManifestError("catalog package.source_commit must be a full hexadecimal commit")

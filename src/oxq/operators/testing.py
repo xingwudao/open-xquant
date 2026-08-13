@@ -8,15 +8,29 @@ from dataclasses import dataclass
 import pandas as pd
 
 from oxq.operators.errors import (
+    CausalityViolationError,
     ContractViolationError,
     InsufficientCrossSectionError,
     InsufficientHistoryError,
 )
 from oxq.operators.manifest import OperatorManifest
 from oxq.operators.panel import QuantPanelAdapter
-from oxq.operators.types import OperatorLifecycle, OperatorRequest, OperatorResult, OperatorScope
+from oxq.operators.types import (
+    OperatorAvailability,
+    OperatorLifecycle,
+    OperatorRequest,
+    OperatorResult,
+    OperatorScope,
+)
 
 OperatorCallable = Callable[[OperatorRequest], OperatorResult]
+_TRADING_AVAILABILITY_ORDER = {
+    OperatorAvailability.PRE_OPEN: 0,
+    OperatorAvailability.OPEN: 1,
+    OperatorAvailability.INTRADAY: 2,
+    OperatorAvailability.CLOSE: 3,
+    OperatorAvailability.AFTER_CLOSE: 4,
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,7 +63,13 @@ def verify_operator_contract(
         )
     parameters = manifest.validate_parameters(request.parameters)
     normalized = _copy_request(request, parameters=parameters)
-    QuantPanelAdapter.validate_panel(normalized.input_panel, normalized.context)
+    _validate_availability(manifest, normalized)
+    input_spec = manifest.raw["inputs"]
+    QuantPanelAdapter.validate_panel(
+        normalized.input_panel,
+        normalized.context,
+        require_canonical_order=input_spec["requires_sorted"],
+    )
     required_columns = set(manifest.raw["inputs"]["required_columns"])
     missing_columns = sorted(required_columns - set(normalized.input_panel.columns))
     if missing_columns:
@@ -57,13 +77,20 @@ def verify_operator_contract(
             f"input is missing declared columns: {', '.join(missing_columns)}",
             operator_id=manifest.operator_id,
         )
-    input_spec = manifest.raw["inputs"]
     asset_count = normalized.input_panel["code"].nunique()
     if asset_count < input_spec["min_assets"]:
         raise InsufficientCrossSectionError(
             f"input has {asset_count} assets; minimum is {input_spec['min_assets']}",
             operator_id=manifest.operator_id,
         )
+    if input_spec["requires_complete_cross_section"]:
+        assets_per_date = normalized.input_panel.groupby("date", sort=False, observed=True)["code"].nunique()
+        if not assets_per_date.eq(asset_count).all():
+            raise InsufficientCrossSectionError(
+                "input does not contain a complete cross section at every date",
+                operator_id=manifest.operator_id,
+                details={"assets_by_date": {str(date): int(count) for date, count in assets_per_date.items()}},
+            )
     min_history = input_spec["min_history"]
     history = normalized.input_panel.groupby("code", sort=False, observed=True).size()
     if not history.empty and int(history.min()) < min_history:
@@ -72,7 +99,8 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"rows_by_code": {str(code): int(rows) for code, rows in history.items()}},
         )
-    for column in required_columns:
+    declared_columns = required_columns | set(input_spec["optional_columns"])
+    for column in sorted(declared_columns & set(normalized.input_panel.columns)):
         actual_dtype = str(normalized.input_panel[column].dtype)
         allowed_dtypes = input_spec["dtypes"][column]
         if actual_dtype not in allowed_dtypes:
@@ -112,17 +140,18 @@ def verify_operator_contract(
         )
     checks.append("determinism")
 
-    shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
-    shuffled_request = _copy_request(normalized, panel=shuffled_panel)
-    shuffled_result = operator(shuffled_request)
-    _validate_result(manifest, shuffled_request, shuffled_result)
-    _require_equal_data(
-        _canonical(result.data),
-        _canonical(shuffled_result.data),
-        manifest,
-        "operator output must not depend on incidental input order",
-    )
-    checks.append("unordered_input")
+    if not input_spec["requires_sorted"]:
+        shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
+        shuffled_request = _copy_request(normalized, panel=shuffled_panel)
+        shuffled_result = operator(shuffled_request)
+        _validate_result(manifest, shuffled_request, shuffled_result)
+        _require_equal_data(
+            _canonical(result.data),
+            _canonical(shuffled_result.data),
+            manifest,
+            "operator output must not depend on incidental input order",
+        )
+        checks.append("unordered_input")
 
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
         pieces: list[pd.DataFrame] = []
@@ -184,6 +213,78 @@ def _validate_result(
                 f"output column {name} dtype {actual_dtype} does not match declared dtype {declaration['dtype']}",
                 operator_id=manifest.operator_id,
             )
+        non_null = result.data[name].dropna()
+        try:
+            below_minimum = "minimum" in declaration and non_null.lt(declaration["minimum"]).any()
+            above_maximum = "maximum" in declaration and non_null.gt(declaration["maximum"]).any()
+        except TypeError as exc:
+            raise ContractViolationError(
+                f"output column {name} cannot be compared with its declared bounds",
+                operator_id=manifest.operator_id,
+            ) from exc
+        if below_minimum:
+            raise ContractViolationError(
+                f"output column {name} contains values below declared minimum {declaration['minimum']}",
+                operator_id=manifest.operator_id,
+            )
+        if above_maximum:
+            raise ContractViolationError(
+                f"output column {name} contains values above declared maximum {declaration['maximum']}",
+                operator_id=manifest.operator_id,
+            )
+    _validate_nan_policy(manifest, request, result, tuple(declarations))
+
+
+def _validate_availability(manifest: OperatorManifest, request: OperatorRequest) -> None:
+    available = manifest.availability
+    evaluation = OperatorAvailability(request.context.evaluation_time)
+    if available is OperatorAvailability.PUBLICATION_TIME or evaluation is OperatorAvailability.PUBLICATION_TIME:
+        valid = available is evaluation
+    else:
+        valid = _TRADING_AVAILABILITY_ORDER[evaluation] >= _TRADING_AVAILABILITY_ORDER[available]
+    if not valid:
+        raise CausalityViolationError(
+            f"operator output is not available at evaluation_time={evaluation.value}",
+            operator_id=manifest.operator_id,
+            details={"availability": available.value, "evaluation_time": evaluation.value},
+        )
+
+
+def _validate_nan_policy(
+    manifest: OperatorManifest,
+    request: OperatorRequest,
+    result: OperatorResult,
+    output_fields: tuple[str, ...],
+) -> None:
+    outputs = manifest.raw["outputs"]
+    nan_policy = outputs["nan_policy"]
+    missing = result.data[list(output_fields)].isna()
+    if nan_policy == "none" and missing.any().any():
+        raise ContractViolationError(
+            "operator output violates nan_policy=none",
+            operator_id=manifest.operator_id,
+        )
+    if nan_policy != "warmup_only" or not missing.any().any():
+        return
+    warmup = outputs["warmup"]
+    if warmup["kind"] == "fixed":
+        warmup_rows = warmup["rows"]
+    else:
+        warmup_rows = request.parameters[warmup["parameter"]] + warmup.get("offset", 0)
+    if not isinstance(warmup_rows, int) or isinstance(warmup_rows, bool) or warmup_rows < 0:
+        raise ContractViolationError(
+            "declared warmup must resolve to a non-negative integer",
+            operator_id=manifest.operator_id,
+        )
+    ordered = result.data[["date", "code"]].assign(_row_id=range(len(result.data)))
+    ordered = ordered.sort_values(["code", "date"], kind="stable")
+    ordered["_position"] = ordered.groupby("code", sort=False, observed=True).cumcount()
+    outside_warmup = ordered.sort_values("_row_id", kind="stable")["_position"].ge(warmup_rows).reset_index(drop=True)
+    if missing.reset_index(drop=True).loc[outside_warmup].any().any():
+        raise ContractViolationError(
+            "operator output contains NaN values outside declared warmup",
+            operator_id=manifest.operator_id,
+        )
 
 
 def _copy_request(
@@ -210,7 +311,17 @@ def _require_equal_data(
     manifest: OperatorManifest,
     message: str,
 ) -> None:
+    determinism = manifest.raw.get("determinism", {})
+    bitwise = determinism.get("bitwise", True)
+    absolute_tolerance = determinism.get("absolute_tolerance", 0.0)
+    relative_tolerance = determinism.get("relative_tolerance", 0.0)
     try:
-        pd.testing.assert_frame_equal(left, right)
+        pd.testing.assert_frame_equal(
+            left,
+            right,
+            check_exact=bitwise,
+            atol=absolute_tolerance,
+            rtol=relative_tolerance,
+        )
     except AssertionError as exc:
         raise ContractViolationError(message, operator_id=manifest.operator_id) from exc
