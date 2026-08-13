@@ -67,6 +67,13 @@ def verify_operator_contract(
             "request operator_id does not match manifest",
             operator_id=manifest.operator_id,
         )
+    causality_parameters = sorted(name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_causality"])
+    if causality_parameters:
+        raise ContractViolationError(
+            "contract checker cannot certify parameters that affect causality",
+            operator_id=manifest.operator_id,
+            details={"parameters": causality_parameters},
+        )
     parameters = manifest.validate_parameters(request.parameters)
     normalized = _copy_request(request, parameters=parameters)
     _validate_availability(manifest, normalized)
@@ -522,8 +529,7 @@ def _verify_past_only_causality(
     probe_executed = False
     for cutoff in dates.iloc[:-1]:
         prefix = request.input_panel.loc[request.input_panel["date"] <= cutoff].reset_index(drop=True)
-        history = prefix.groupby("code", sort=False, observed=True).size()
-        if history.empty or int(history.min()) < input_spec["min_history"]:
+        if not _is_valid_past_only_prefix(manifest, prefix):
             continue
         probe_executed = True
         prefix_request = _copy_request(request, panel=prefix)
@@ -542,6 +548,21 @@ def _verify_past_only_causality(
             operator_id=manifest.operator_id,
             details={"min_history": input_spec["min_history"], "available_dates": len(dates)},
         )
+
+
+def _is_valid_past_only_prefix(manifest: OperatorManifest, prefix: pd.DataFrame) -> bool:
+    input_spec = manifest.raw["inputs"]
+    history = prefix.groupby("code", sort=False, observed=True).size()
+    if history.empty or int(history.min()) < input_spec["min_history"]:
+        return False
+    asset_count = int(prefix["code"].nunique())
+    if asset_count < input_spec["min_assets"]:
+        return False
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        assets_per_date = prefix.groupby("date", sort=False, observed=True)["code"].nunique()
+        if assets_per_date.lt(input_spec["min_assets"]).any():
+            return False
+    return True
 
 
 def _verify_cross_section_scope(

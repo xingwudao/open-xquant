@@ -29,6 +29,39 @@ def test_daily_frames_round_trip_without_mutating_input(daily_context, daily_sym
         pd.testing.assert_frame_equal(restored[code], original, check_freq=False)
 
 
+def test_to_panel_recursively_copies_object_cells(daily_context) -> None:
+    frames = {
+        "600000.SH": pd.DataFrame(
+            {
+                "close": [20.0],
+                "metadata": [{"tags": ["bank"]}],
+            },
+            index=pd.DatetimeIndex(["2026-01-06"], tz="Asia/Shanghai"),
+        ),
+        "000001.SZ": pd.DataFrame(
+            {
+                "close": [10.0],
+                "metadata": [[{"tags": ["finance"]}]],
+            },
+            index=pd.DatetimeIndex(["2026-01-05"], tz="Asia/Shanghai"),
+        ),
+    }
+
+    panel = QuantPanelAdapter.to_panel(frames, daily_context)
+
+    assert panel[["date", "code"]].values.tolist() == [
+        [pd.Timestamp("2026-01-05"), "000001.SZ"],
+        [pd.Timestamp("2026-01-06"), "600000.SH"],
+    ]
+    pd.testing.assert_series_equal(panel[["close", "metadata"]].dtypes, frames["000001.SZ"].dtypes)
+
+    panel.loc[0, "metadata"][0]["tags"].append("mutated")
+    panel.loc[1, "metadata"]["tags"].append("mutated")
+
+    assert frames["000001.SZ"].loc[:, "metadata"].iloc[0] == [{"tags": ["finance"]}]
+    assert frames["600000.SH"].loc[:, "metadata"].iloc[0] == {"tags": ["bank"]}
+
+
 def test_intraday_panel_is_timezone_aware_and_canonicalized_to_utc() -> None:
     context = OperatorContext(
         timezone="Asia/Shanghai",

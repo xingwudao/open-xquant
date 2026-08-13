@@ -87,6 +87,16 @@ def test_operator_request_snapshots_parameters_and_is_frozen(daily_context) -> N
         request.operator_id = "changed"  # type: ignore[misc]
 
 
+def test_operator_request_rejects_non_string_nested_parameter_keys(daily_context) -> None:
+    with pytest.raises(TypeError, match=r"parameters\['options'\].*mapping keys must be strings.*int.*1"):
+        OperatorRequest(
+            operator_id="fake.indicators.sma",
+            parameters={"options": {1: "numeric", "1": "string"}},
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=daily_context,
+        )
+
+
 def test_frozen_request_parameters_remain_compatible_with_manifest_validation_and_copy(
     daily_context,
     valid_manifest_payload,
@@ -148,7 +158,7 @@ def test_diagnostics_require_actual_integer_row_counts(field, invalid) -> None:
 
 
 def test_fitted_state_snapshots_training_metadata() -> None:
-    learned = {"mean": [1.0, 2.0]}
+    learned = {"mean": [1.0, 2.0], "serialized": b"model"}
     state = FittedOperatorState(
         operator_id="fake.preprocessing.standardize",
         operator_version="1.0.0",
@@ -165,7 +175,7 @@ def test_fitted_state_snapshots_training_metadata() -> None:
     )
 
     learned["mean"].append(3.0)
-    assert state.learned_state == {"mean": (1.0, 2.0)}
+    assert state.learned_state == {"mean": (1.0, 2.0), "serialized": b"model"}
     with pytest.raises(TypeError):
         state.learned_state["mean"] = (0.0,)  # type: ignore[index]
 
@@ -218,6 +228,32 @@ def test_fitted_state_rejects_object_dtype_arrays() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "mutable_leaf",
+    [bytearray(b"model"), pd.DataFrame({"weight": [1.0]})],
+    ids=["bytearray", "dataframe"],
+)
+def test_fitted_state_rejects_unknown_mutable_leaves(mutable_leaf) -> None:
+    with pytest.raises(
+        TypeError,
+        match=r"learned_state\['model'\].*unsupported leaf type (bytearray|DataFrame)",
+    ):
+        FittedOperatorState(
+            operator_id="fake.models.pca",
+            operator_version="1.0.0",
+            training_start="2025-01-01",
+            training_end="2025-12-31",
+            training_data_digest="sha256:" + "a" * 64,
+            training_data_summary={"rows": 252},
+            feature_order=("value",),
+            parameters={},
+            learned_state={"model": mutable_leaf},
+            random_seed=7,
+            dependency_versions={"numpy": "2.4.2"},
+            state_digest="sha256:" + "b" * 64,
+        )
+
+
 def test_operator_result_requires_matching_provenance(daily_context) -> None:
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
@@ -239,3 +275,24 @@ def test_operator_result_requires_matching_provenance(daily_context) -> None:
             diagnostics=diagnostics,
             provenance=provenance,
         )
+
+
+def test_operator_result_metadata_allows_arbitrary_values() -> None:
+    buffer = bytearray(b"metadata")
+    frame = pd.DataFrame({"value": [1.0]})
+    result = OperatorResult(
+        data=pd.DataFrame({"value": [1.0]}),
+        diagnostics=OperatorDiagnostics(input_rows=1, output_rows=1),
+        provenance=OperatorProvenance(
+            operator_id="fake.indicators.sma",
+            operator_version="1.0.0",
+            implementation_digest="sha256:" + "a" * 64,
+        ),
+        metadata={"buffer": buffer, "frame": frame},
+    )
+
+    buffer[0] = ord("M")
+    frame.iloc[0, 0] = 2.0
+
+    assert result.metadata["buffer"] == bytearray(b"metadata")
+    pd.testing.assert_frame_equal(result.metadata["frame"], pd.DataFrame({"value": [1.0]}))

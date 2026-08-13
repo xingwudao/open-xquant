@@ -552,6 +552,7 @@ def test_contract_suite_rejects_duplicate_resolved_output_names(
         "affects_availability": False,
     }
     payload["outputs"]["fields"].append({"name_template": "sma_{alias}", "dtype": "float64", "minimum": 0.0})
+    payload["outputs"]["multiple"] = True
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2, "alias": 2},
@@ -980,6 +981,101 @@ def test_contract_suite_rejects_past_only_fixture_without_a_valid_proper_prefix(
     assert exc_info.value.to_dict()["details"] == {
         "min_history": 3,
         "available_dates": 3,
+    }
+
+
+def test_contract_suite_skips_invalid_past_only_prefixes_for_staggered_panel(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["inputs"]["min_assets"] = 2
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    original_last_date = panel["date"].max()
+    last_session = panel.loc[panel["date"] == original_last_date]
+    extensions = []
+    for offset in range(1, 4):
+        extension = last_session.copy(deep=True)
+        extension["date"] = extension["date"] + pd.offsets.BDay(offset)
+        extension["close"] = extension["close"] + float(offset)
+        extensions.append(extension)
+    panel = pd.concat([panel, *extensions], ignore_index=True)
+    staggered_code = panel["code"].max()
+    panel = panel.loc[~((panel["code"] == staggered_code) & (panel["date"] <= original_last_date))].sort_values(
+        ["date", "code"], kind="stable", ignore_index=True
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    full_last_date = panel["date"].max()
+    probed_prefixes = []
+
+    def minimum_enforcing_provider(provider_request: OperatorRequest):
+        provider_panel = provider_request.input_panel
+        if provider_panel["date"].max() < full_last_date:
+            history = provider_panel.groupby("code", sort=False, observed=True).size()
+            if provider_panel["code"].nunique() < 2 or int(history.min()) < 2:
+                raise AssertionError("provider received an invalid past_only prefix")
+            probed_prefixes.append(provider_panel["date"].max())
+        return sma(provider_request)
+
+    report = verify_operator_contract(
+        load_operator_manifest(payload),
+        minimum_enforcing_provider,
+        request,
+    )
+
+    assert "causality" in report.checks
+    assert probed_prefixes == [panel["date"].drop_duplicates().sort_values().iloc[-2]]
+
+
+@pytest.mark.parametrize("window_alignment", ["centered", "trailing"])
+def test_contract_suite_refuses_parameterized_causality_before_provider_call(
+    window_alignment,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["window_alignment"] = {
+        "type": "string",
+        "default": "trailing",
+        "required": False,
+        "enum": ["centered", "trailing"],
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": True,
+        "affects_availability": False,
+    }
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2, "window_alignment": window_alignment},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="parameters that affect causality") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict() == {
+        "code": "contract_violation",
+        "operator_id": "fake.indicators.sma",
+        "message": "contract checker cannot certify parameters that affect causality",
+        "details": {"parameters": ["window_alignment"]},
+        "retryable": False,
     }
 
 

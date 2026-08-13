@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from datetime import UTC, date, datetime
 from typing import Any, Literal
 
@@ -48,6 +49,8 @@ class QuantPanelAdapter:
                 raise InvalidPanelError("all symbol frames must have identical ordered columns")
             dates = QuantPanelAdapter._panel_dates(frame.index, context, code)
             part = frame.copy(deep=True).reset_index(drop=True)
+            for column in part.select_dtypes(include="object").columns:
+                part[column] = part[column].map(deepcopy)
             part.insert(0, "code", code)
             part.insert(0, "date", dates)
             parts.append(part)

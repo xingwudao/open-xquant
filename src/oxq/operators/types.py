@@ -14,9 +14,17 @@ import numpy as np
 import pandas as pd
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_IMMUTABLE_LEAF_TYPES = (type(None), bool, int, float, complex, str, bytes)
 
 
-def _freeze(value: Any, *, permanent_arrays: bool = False) -> Any:
+def _freeze(
+    value: Any,
+    *,
+    permanent_arrays: bool = False,
+    string_keys_only: bool = False,
+    immutable_leaves_only: bool = False,
+    path: str = "value",
+) -> Any:
     if isinstance(value, np.ndarray):
         if permanent_arrays:
             if value.dtype.hasobject:
@@ -27,11 +35,44 @@ def _freeze(value: Any, *, permanent_arrays: bool = False) -> Any:
         frozen.setflags(write=False)
         return frozen
     if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item, permanent_arrays=permanent_arrays) for key, item in value.items()})
+        frozen_items = {}
+        for key, item in value.items():
+            if string_keys_only and not isinstance(key, str):
+                raise TypeError(f"{path} mapping keys must be strings; got {type(key).__name__} key {key!r}")
+            frozen_items[key] = _freeze(
+                item,
+                permanent_arrays=permanent_arrays,
+                string_keys_only=string_keys_only,
+                immutable_leaves_only=immutable_leaves_only,
+                path=f"{path}[{key!r}]",
+            )
+        return MappingProxyType(frozen_items)
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item, permanent_arrays=permanent_arrays) for item in value)
-    if isinstance(value, set):
-        return frozenset(_freeze(item, permanent_arrays=permanent_arrays) for item in value)
+        return tuple(
+            _freeze(
+                item,
+                permanent_arrays=permanent_arrays,
+                string_keys_only=string_keys_only,
+                immutable_leaves_only=immutable_leaves_only,
+                path=f"{path}[{index}]",
+            )
+            for index, item in enumerate(value)
+        )
+    if isinstance(value, (set, frozenset)):
+        return frozenset(
+            _freeze(
+                item,
+                permanent_arrays=permanent_arrays,
+                string_keys_only=string_keys_only,
+                immutable_leaves_only=immutable_leaves_only,
+                path=f"{path} set item",
+            )
+            for item in value
+        )
+    if immutable_leaves_only:
+        if type(value) in _IMMUTABLE_LEAF_TYPES:
+            return value
+        raise TypeError(f"{path} has unsupported leaf type {type(value).__name__}")
     return copy.deepcopy(value)
 
 
@@ -113,7 +154,11 @@ class OperatorRequest:
             raise ValueError("operator_id must be a non-empty string")
         if not isinstance(self.input_panel, pd.DataFrame):
             raise TypeError("input_panel must be a pandas DataFrame")
-        object.__setattr__(self, "parameters", _freeze(self.parameters, permanent_arrays=True))
+        object.__setattr__(
+            self,
+            "parameters",
+            _freeze(self.parameters, permanent_arrays=True, string_keys_only=True, path="parameters"),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,7 +220,17 @@ class FittedOperatorState:
         object.__setattr__(self, "feature_order", tuple(self.feature_order))
         object.__setattr__(self, "training_data_summary", _freeze(self.training_data_summary))
         object.__setattr__(self, "parameters", _freeze(self.parameters))
-        object.__setattr__(self, "learned_state", _freeze(self.learned_state, permanent_arrays=True))
+        object.__setattr__(
+            self,
+            "learned_state",
+            _freeze(
+                self.learned_state,
+                permanent_arrays=True,
+                string_keys_only=True,
+                immutable_leaves_only=True,
+                path="learned_state",
+            ),
+        )
         object.__setattr__(self, "dependency_versions", _freeze(self.dependency_versions))
 
 

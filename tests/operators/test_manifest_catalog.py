@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import json
+from datetime import date
 
 import pytest
 import yaml  # type: ignore[import-untyped]
@@ -83,6 +84,25 @@ def test_manifest_rejects_non_string_keys_in_nested_mappings(valid_manifest_payl
 
     with pytest.raises(InvalidManifestError, match="mapping keys must be strings"):
         load_operator_manifest(payload)
+
+
+def test_manifest_rejects_non_json_leaves_loaded_from_yaml(valid_manifest_payload, tmp_path) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": "object",
+        "default": {"nested": [date(2026, 8, 13)]},
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    source = tmp_path / "operator.yaml"
+    source.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(InvalidManifestError, match=r"JSON.*parameters\.options\.default\.nested\[0\]"):
+        load_operator_manifest(source)
 
 
 @pytest.mark.parametrize("version", ["1.0.0-01", "1.0.0-alpha..1", "1.0.0-"])
@@ -186,6 +206,29 @@ def test_manifest_rejects_inverted_output_bounds(valid_manifest_payload) -> None
     payload["outputs"]["fields"][0].update({"minimum": 2, "maximum": 1})
 
     with pytest.raises(InvalidManifestError, match="output field minimum must not exceed maximum"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("multiple", "fields"),
+    [
+        (True, [{"name_template": "sma_{period}", "dtype": "float64"}]),
+        (
+            False,
+            [
+                {"name_template": "sma_{period}", "dtype": "float64"},
+                {"name_template": "sma_signal", "dtype": "boolean"},
+            ],
+        ),
+    ],
+    ids=["single-field-declared-multiple", "multiple-fields-declared-single"],
+)
+def test_manifest_requires_outputs_multiple_to_match_field_count(valid_manifest_payload, multiple, fields) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["multiple"] = multiple
+    payload["outputs"]["fields"] = fields
+
+    with pytest.raises(InvalidManifestError, match="outputs multiple.*fields"):
         load_operator_manifest(payload)
 
 
@@ -335,6 +378,7 @@ def test_manifest_rejects_empty_output_name_resolved_from_defaults(valid_manifes
 def test_manifest_rejects_duplicate_default_resolved_output_names(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["outputs"]["fields"].append({"name_template": "sma_2", "dtype": "float64"})
+    payload["outputs"]["multiple"] = True
 
     with pytest.raises(InvalidManifestError, match="duplicate output field name: sma_2"):
         load_operator_manifest(payload)

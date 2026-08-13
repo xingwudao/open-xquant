@@ -104,6 +104,13 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
             f"manifest numeric declaration must be finite: {nonfinite_path}",
             operator_id=_optional_operator_id(payload),
         )
+    non_json_value = _find_non_json_value(payload)
+    if non_json_value is not None:
+        path, type_name = non_json_value
+        raise InvalidManifestError(
+            f"manifest values must form a JSON tree: {path} contains {type_name}",
+            operator_id=_optional_operator_id(payload),
+        )
     schema = load_contract_schema("operator-manifest-v1.schema.json")
     errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.absolute_path))
     if errors:
@@ -199,6 +206,24 @@ def _find_nonfinite_number(value: Any, path: str = "manifest") -> str | None:
     return None
 
 
+def _find_non_json_value(value: Any, path: str = "manifest") -> tuple[str, str] | None:
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return None
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            found = _find_non_json_value(item, f"{path}.{key}")
+            if found is not None:
+                return found
+        return None
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            found = _find_non_json_value(item, f"{path}[{index}]")
+            if found is not None:
+                return found
+        return None
+    return path, type(value).__name__
+
+
 def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, Any], operator_id: str) -> None:
     expected = declaration["type"]
     valid = {
@@ -279,6 +304,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                     operator_id=operator_id,
                 ) from exc
     outputs = payload["outputs"]
+    has_multiple_fields = len(outputs["fields"]) > 1
+    if outputs["multiple"] is not has_multiple_fields:
+        raise InvalidManifestError(
+            "outputs multiple must be true if and only if fields contains more than one field",
+            operator_id=operator_id,
+        )
     warmup = outputs["warmup"]
     if warmup["kind"] == "parameter":
         warmup_name = warmup["parameter"]
