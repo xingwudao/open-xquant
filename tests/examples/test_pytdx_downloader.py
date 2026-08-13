@@ -305,6 +305,21 @@ def test_rejects_bar_page_that_does_not_progress_backward() -> None:
         )
 
 
+def test_rejects_boundary_only_overlap_without_backward_progress() -> None:
+    days = pd.date_range("2022-01-01", periods=800, freq="D")
+    first = [bar(day.strftime("%Y-%m-%d"), 10.0) for day in days]
+    api = FakeApi(pages={0: first, 800: [first[0]]})
+
+    with pytest.raises(DownloadError, match="chronological order"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [

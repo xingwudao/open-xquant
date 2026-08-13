@@ -279,7 +279,10 @@ def _fetch_raw_bars(
             or not page.index.is_monotonic_increasing
             or (
                 previous_oldest is not None
-                and page.index.max() > previous_oldest
+                and (
+                    page.index.max() > previous_oldest
+                    or page.index.min() >= previous_oldest
+                )
             )
         ):
             raise DownloadError(
