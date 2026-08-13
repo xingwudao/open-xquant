@@ -259,7 +259,7 @@ def _bars_from_payload(
 
 def _volume_values(values: list[object], symbol: str) -> list[int]:
     limits = np.iinfo(np.int64)
-    minimum = Decimal(str(limits.min))
+    minimum = Decimal(0)
     maximum = Decimal(str(limits.max))
     volume: list[int] = []
     for value in values:

@@ -588,7 +588,9 @@ def test_rejects_loopback_endpoint_without_official_port(endpoint: str) -> None:
 @pytest.mark.parametrize(
     ("volume", "accepted"),
     [
-        ("-9223372036854775808", True),
+        ("-9223372036854775808", False),
+        ("-1", False),
+        ("0", True),
         ("9223372036854775807", True),
         ("-9223372036854775809", False),
         ("9223372036854775808", False),
