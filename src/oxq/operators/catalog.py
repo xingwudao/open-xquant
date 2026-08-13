@@ -80,6 +80,10 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
     for key in ("schema_version", "contract_version", "package", "operators"):
         if key not in payload:
             raise InvalidManifestError(f"catalog requires {key}")
+    for key in ("schema_version", "contract_version"):
+        value = payload[key]
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise InvalidManifestError(f"catalog {key} must be an integer")
     if payload["schema_version"] != 1 or payload["contract_version"] != 1:
         raise InvalidManifestError("catalog only supports schema_version=1 and contract_version=1")
     package = payload["package"]

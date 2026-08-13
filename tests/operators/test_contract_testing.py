@@ -339,6 +339,66 @@ def test_contract_suite_does_not_shuffle_for_sorted_only_operators(
     assert "unordered_input" not in report.checks
 
 
+def test_contract_suite_rejects_unordered_probe_with_fewer_than_two_rows(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_history"] = 1
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).iloc[:1].reset_index(drop=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 1},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def unexpected_provider(provider_request: OperatorRequest):
+        raise AssertionError("provider must not be called for an invalid unordered probe fixture")
+
+    with pytest.raises(ContractViolationError, match="unordered input probe") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), unexpected_provider, request)
+
+    assert exc_info.value.to_dict()["details"] == {
+        "required_rows": 2,
+        "available_rows": 1,
+    }
+
+
+def test_contract_suite_rejects_unordered_probe_that_does_not_change_key_order(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    monkeypatch,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_history"] = 1
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).iloc[:2].reset_index(drop=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 1},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def unchanged_sample(frame, *, frac, random_state):
+        assert frac == 1
+        assert random_state == 731
+        return frame.copy()
+
+    monkeypatch.setattr(pd.DataFrame, "sample", unchanged_sample)
+
+    with pytest.raises(ContractViolationError, match="did not change key order") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), sma, request)
+
+    assert exc_info.value.to_dict()["details"] == {"available_rows": 2}
+
+
 def test_contract_suite_rejects_use_before_declared_availability(
     daily_context,
     daily_symbol_frames,
@@ -1020,6 +1080,7 @@ def test_contract_suite_rejects_cross_section_scope_probe_with_one_date(
     payload = copy.deepcopy(valid_manifest_payload)
     payload["execution_scope"] = "cross_section"
     payload["inputs"]["min_history"] = 1
+    payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     panel = panel.loc[panel["date"] == panel["date"].min()].reset_index(drop=True)
     request = OperatorRequest(
@@ -1028,14 +1089,21 @@ def test_contract_suite_rejects_cross_section_scope_probe_with_one_date(
         input_panel=panel,
         context=daily_context,
     )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
 
     with pytest.raises(ContractViolationError, match="cross_section scope probe") as exc_info:
         verify_operator_contract(
             load_operator_manifest(payload),
-            sma,
+            tracked_provider,
             request,
         )
 
+    assert provider_calls == 0
     assert exc_info.value.to_dict()["details"] == {
         "required_dates": 2,
         "available_dates": 1,

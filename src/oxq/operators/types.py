@@ -10,18 +10,28 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Protocol
 
+import numpy as np
 import pandas as pd
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
-def _freeze(value: Any) -> Any:
+def _freeze(value: Any, *, permanent_arrays: bool = False) -> Any:
+    if isinstance(value, np.ndarray):
+        if permanent_arrays:
+            if value.dtype.hasobject:
+                raise TypeError("object-dtype arrays cannot be frozen")
+            contiguous = np.ascontiguousarray(value)
+            return np.frombuffer(contiguous.tobytes(), dtype=contiguous.dtype).reshape(contiguous.shape)
+        frozen = copy.deepcopy(value)
+        frozen.setflags(write=False)
+        return frozen
     if isinstance(value, Mapping):
-        return MappingProxyType({str(key): _freeze(item) for key, item in value.items()})
+        return MappingProxyType({str(key): _freeze(item, permanent_arrays=permanent_arrays) for key, item in value.items()})
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
+        return tuple(_freeze(item, permanent_arrays=permanent_arrays) for item in value)
     if isinstance(value, set):
-        return frozenset(_freeze(item) for item in value)
+        return frozenset(_freeze(item, permanent_arrays=permanent_arrays) for item in value)
     return copy.deepcopy(value)
 
 
@@ -103,7 +113,7 @@ class OperatorRequest:
             raise ValueError("operator_id must be a non-empty string")
         if not isinstance(self.input_panel, pd.DataFrame):
             raise TypeError("input_panel must be a pandas DataFrame")
-        object.__setattr__(self, "parameters", MappingProxyType(copy.deepcopy(dict(self.parameters))))
+        object.__setattr__(self, "parameters", _freeze(self.parameters, permanent_arrays=True))
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,6 +126,8 @@ class OperatorDiagnostics:
 
     def __post_init__(self) -> None:
         counts = (self.input_rows, self.output_rows, self.warmup_rows, self.dropped_rows)
+        if any(type(value) is not int for value in counts):
+            raise TypeError("diagnostic row counts must be integers")
         if any(value < 0 for value in counts):
             raise ValueError("diagnostic row counts must be non-negative")
         if self.dropped_rows > self.input_rows:
@@ -163,7 +175,7 @@ class FittedOperatorState:
         object.__setattr__(self, "feature_order", tuple(self.feature_order))
         object.__setattr__(self, "training_data_summary", _freeze(self.training_data_summary))
         object.__setattr__(self, "parameters", _freeze(self.parameters))
-        object.__setattr__(self, "learned_state", _freeze(self.learned_state))
+        object.__setattr__(self, "learned_state", _freeze(self.learned_state, permanent_arrays=True))
         object.__setattr__(self, "dependency_versions", _freeze(self.dependency_versions))
 
 

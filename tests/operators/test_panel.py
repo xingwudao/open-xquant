@@ -174,7 +174,7 @@ def test_explicit_keyed_output_allows_unique_subset(daily_context, daily_symbol_
     )
 
 
-def test_serialized_intraday_panel_rejects_duplicate_instants_across_timezones() -> None:
+def test_serialized_intraday_panel_normalizes_lowercase_utc_designators_for_duplicate_keys() -> None:
     payload = {
         "schema_version": 1,
         "context": {
@@ -188,7 +188,7 @@ def test_serialized_intraday_panel_rejects_duplicate_instants_across_timezones()
             "source": "fake",
         },
         "rows": [
-            {"date": "2026-01-01T00:00:00Z", "code": "AAPL", "close": 10.0},
+            {"date": "2026-01-01t00:00:00z", "code": "AAPL", "close": 10.0},
             {"date": "2025-12-31T19:00:00-05:00", "code": "AAPL", "close": 11.0},
         ],
     }

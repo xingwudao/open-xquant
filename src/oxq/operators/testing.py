@@ -135,6 +135,20 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"allowed": list(allowed_dtypes)},
             )
+    if not input_spec["requires_sorted"] and len(normalized.input_panel) < 2:
+        raise ContractViolationError(
+            "unordered input probe requires at least two rows",
+            operator_id=manifest.operator_id,
+            details={"required_rows": 2, "available_rows": len(normalized.input_panel)},
+        )
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        available_dates = int(normalized.input_panel["date"].nunique())
+        if available_dates < 2:
+            raise ContractViolationError(
+                "cross_section scope probe requires at least two unique dates",
+                operator_id=manifest.operator_id,
+                details={"required_dates": 2, "available_dates": available_dates},
+            )
     checks = ["request"]
 
     result = _invoke_operator(manifest, operator, normalized)
@@ -181,6 +195,14 @@ def verify_operator_contract(
 
     if not input_spec["requires_sorted"]:
         shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
+        baseline_keys = normalized.input_panel[["date", "code"]].reset_index(drop=True)
+        shuffled_keys = shuffled_panel[["date", "code"]].reset_index(drop=True)
+        if shuffled_keys.equals(baseline_keys):
+            raise ContractViolationError(
+                "unordered input probe did not change key order",
+                operator_id=manifest.operator_id,
+                details={"available_rows": len(normalized.input_panel)},
+            )
         shuffled_request = _copy_request(normalized, panel=shuffled_panel)
         shuffled_result = _invoke_operator(manifest, operator, shuffled_request)
         _validate_result(manifest, shuffled_request, shuffled_result, expected_implementation_digest)
@@ -529,13 +551,6 @@ def _verify_cross_section_scope(
     baseline: pd.DataFrame,
     expected_implementation_digest: str,
 ) -> None:
-    available_dates = int(request.input_panel["date"].nunique())
-    if available_dates < 2:
-        raise ContractViolationError(
-            "cross_section scope probe requires at least two unique dates",
-            operator_id=manifest.operator_id,
-            details={"required_dates": 2, "available_dates": available_dates},
-        )
     pieces: list[pd.DataFrame] = []
     for _, date_panel in request.input_panel.groupby("date", sort=True, observed=True):
         date_request = _copy_request(request, panel=date_panel.reset_index(drop=True))

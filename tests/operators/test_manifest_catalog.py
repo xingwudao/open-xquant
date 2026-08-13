@@ -111,6 +111,15 @@ def test_manifest_metadata_snapshot_is_deeply_read_only(valid_manifest_payload) 
         manifest.raw["inputs"]["required_columns"].append("volume")
 
 
+def test_manifest_can_reload_its_deeply_read_only_raw_snapshot(valid_manifest_payload) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+
+    reloaded = load_operator_manifest(manifest.raw)
+
+    assert reloaded.operator_id == manifest.operator_id
+    assert reloaded.digest == manifest.digest
+
+
 def test_fit_transform_manifest_requires_serializable_state(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["lifecycle"] = "fit_transform"
@@ -129,6 +138,22 @@ def test_manifest_rejects_invalid_default_and_warmup_reference(valid_manifest_pa
     invalid_warmup["outputs"]["warmup"]["parameter"] = "missing"
     with pytest.raises(InvalidManifestError, match="warmup"):
         load_operator_manifest(invalid_warmup)
+
+
+def test_manifest_rejects_negative_warmup_resolved_from_parameter_default(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["warmup"]["offset"] = -3
+
+    with pytest.raises(InvalidManifestError, match="warmup.*default.*non-negative"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_cross_section_scope_with_multi_row_history(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "cross_section"
+
+    with pytest.raises(InvalidManifestError, match="cross_section.*min_history"):
+        load_operator_manifest(payload)
 
 
 def test_manifest_rejects_bounds_on_nonnumeric_parameters(valid_manifest_payload) -> None:
@@ -335,6 +360,28 @@ def test_catalog_requires_and_verifies_manifest_digests(valid_manifest_payload) 
     assert catalog.operator_ids == ("fake.indicators.sma",)
     assert catalog.digest.startswith("sha256:")
     assert json.loads(catalog.to_json())["catalog_digest"] == catalog.digest
+
+
+@pytest.mark.parametrize("field", ["schema_version", "contract_version"])
+@pytest.mark.parametrize("invalid_version", [True, 1.0])
+def test_catalog_requires_integer_version_fields(valid_manifest_payload, field, invalid_version) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+    payload[field] = invalid_version
+
+    with pytest.raises(InvalidManifestError, match=f"{field}.*integer"):
+        load_operator_catalog(payload)
 
 
 def test_catalog_digest_is_stable_across_mapping_order(valid_manifest_payload) -> None:

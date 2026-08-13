@@ -199,7 +199,8 @@ def _validate_serialized_date(value: str, timestamp_semantics: str) -> str | dat
                 raise ValueError
             return value
         else:
-            parsed_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            normalized_value = f"{value[:-1]}+00:00" if value.endswith(("Z", "z")) else value
+            parsed_datetime = datetime.fromisoformat(normalized_value)
             if parsed_datetime.tzinfo is None:
                 raise ValueError
             return parsed_datetime.astimezone(UTC)

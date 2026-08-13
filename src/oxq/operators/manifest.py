@@ -37,7 +37,7 @@ def _freeze(value: Any) -> Any:
 def _thaw(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {key: _thaw(item) for key, item in value.items()}
-    if isinstance(value, tuple):
+    if isinstance(value, (list, tuple)):
         return [_thaw(item) for item in value]
     return copy.deepcopy(value)
 
@@ -148,7 +148,9 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
 
 def _read_payload(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(source, Mapping):
-        return copy.deepcopy(dict(source))
+        payload = _thaw(source)
+        assert isinstance(payload, dict)
+        return payload
     path = Path(source)
     try:
         raw = path.read_text(encoding="utf-8")
@@ -222,6 +224,11 @@ def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, A
 def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
     operator_id = payload["operator_id"]
     inputs = payload["inputs"]
+    if payload["execution_scope"] == "cross_section" and inputs["min_history"] > 1:
+        raise InvalidManifestError(
+            "cross_section execution_scope requires inputs min_history=1",
+            operator_id=operator_id,
+        )
     required = set(inputs["required_columns"])
     optional = set(inputs["optional_columns"])
     overlap = sorted(required & optional)
@@ -294,6 +301,11 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
         if not warmup_parameter["affects_warmup"]:
             raise InvalidManifestError(
                 f"outputs warmup parameter must set affects_warmup=true: {warmup_name}",
+                operator_id=operator_id,
+            )
+        if "default" in warmup_parameter and warmup_parameter["default"] + warmup.get("offset", 0) < 0:
+            raise InvalidManifestError(
+                f"outputs warmup parameter default plus offset must be non-negative: {warmup_name}",
                 operator_id=operator_id,
             )
     resolved_output_names: set[str] = set()
