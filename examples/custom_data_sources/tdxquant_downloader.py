@@ -195,6 +195,10 @@ class TdxQuantDownloader:
                 "Cannot connect to TdxQuant; start a supported TdxQuant client "
                 "and verify the local endpoint on port 17709."
             ) from exc
+        except OSError as exc:
+            raise DownloadError(
+                "TdxQuant transport failed while reading the HTTP response."
+            ) from exc
 
         try:
             decoded: object = json.loads(raw.decode("utf-8"), parse_float=Decimal)
@@ -341,6 +345,18 @@ def _frame_from_payload(
     )
     if not np.isfinite(numeric).all():
         raise DownloadError(f"TdxQuant returned non-finite OHLCV data for '{symbol}'.")
+    if (
+        (frame[["open", "high", "low", "close"]] <= 0).to_numpy().any()
+        or not (
+            (frame["low"] <= frame["open"])
+            & (frame["open"] <= frame["high"])
+            & (frame["low"] <= frame["close"])
+            & (frame["close"] <= frame["high"])
+        ).all()
+    ):
+        raise DownloadError(
+            f"TdxQuant requires positive and consistent OHLC for '{symbol}'."
+        )
 
     frame = frame.sort_index()
     lower = pd.Timestamp(start, tz="Asia/Shanghai")

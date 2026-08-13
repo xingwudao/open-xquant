@@ -309,6 +309,24 @@ def test_truncated_http_response_is_wrapped_without_writes(tmp_path: Path) -> No
     assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
 
 
+def test_socket_read_error_is_wrapped_without_writes(tmp_path: Path) -> None:
+    response = FakeResponse(market_payload())
+    response.read = MagicMock(  # type: ignore[method-assign]
+        side_effect=ConnectionResetError("peer reset")
+    )
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=response,
+    ):
+        with pytest.raises(DownloadError, match="reading the HTTP response"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+
+    assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
+
+
 @pytest.mark.parametrize(
     "reason",
     [TimeoutError("timed out"), socket.timeout("timed out")],  # noqa: UP041
@@ -452,6 +470,43 @@ def test_malformed_market_arrays_are_rejected(
             TdxQuantDownloader().download(
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
             )
+    assert not (tmp_path / "600519.SH.parquet").exists()
+    assert not (tmp_path / "600519.SH.manifest.json").exists()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("Open", "0"),
+        ("Low", "1900.00"),
+        ("Close", "1900.00"),
+    ],
+)
+def test_non_positive_or_inconsistent_ohlc_is_rejected_without_writes(
+    field: str,
+    value: str,
+    tmp_path: Path,
+) -> None:
+    payload = market_payload()
+    result = payload["result"]
+    assert isinstance(result, dict)
+    values = result["Value"]
+    assert isinstance(values, dict)
+    bars = values["600519.SH"]
+    assert isinstance(bars, dict)
+    items = bars[field]
+    assert isinstance(items, list)
+    bars[field] = [value, *items[1:]]
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=FakeResponse(payload),
+    ):
+        with pytest.raises(DownloadError, match="positive and consistent OHLC"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+
     assert not (tmp_path / "600519.SH.parquet").exists()
     assert not (tmp_path / "600519.SH.manifest.json").exists()
 
