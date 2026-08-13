@@ -11,10 +11,10 @@ from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError, URLError
 from urllib.request import Request
 
-import examples.custom_data_sources.tdxquant_downloader as tdxquant_downloader
+import examples.modules.tdxquant_downloader as tdxquant_downloader
 import pandas as pd
 import pytest
-from examples.custom_data_sources.tdxquant_downloader import TdxQuantDownloader, main
+from examples.modules.tdxquant_downloader import TdxQuantDownloader, main
 
 from oxq.core.errors import DownloadError
 from oxq.data.manifest import read_manifest
@@ -122,7 +122,7 @@ def test_download_posts_expected_request_and_writes_standard_files(
     tmp_path: Path,
 ) -> None:
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(market_payload()),
     ) as mock_urlopen:
         path = TdxQuantDownloader().download(
@@ -176,7 +176,7 @@ def test_download_posts_expected_request_and_writes_standard_files(
 
 def test_none_dividend_type_is_forwarded(tmp_path: Path) -> None:
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(market_payload()),
     ) as mock_urlopen:
         TdxQuantDownloader(dividend_type="none").download(
@@ -261,7 +261,7 @@ def test_rejects_invalid_date_range(start: str, end: str, tmp_path: Path) -> Non
 
 def test_rejects_unlocalizable_date_before_request(tmp_path: Path) -> None:
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen"
+        "examples.modules.tdxquant_downloader.urlopen"
     ) as mock_urlopen:
         with pytest.raises(ValueError, match="date"):
             TdxQuantDownloader().download(
@@ -293,7 +293,7 @@ def test_transport_errors_are_wrapped(
     tmp_path: Path,
 ) -> None:
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         side_effect=side_effect,
     ):
         with pytest.raises(DownloadError, match=message):
@@ -310,7 +310,7 @@ def test_truncated_http_response_is_wrapped_without_writes(tmp_path: Path) -> No
     )
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=response,
     ):
         with pytest.raises(DownloadError, match="incomplete HTTP response"):
@@ -328,7 +328,7 @@ def test_socket_read_error_is_wrapped_without_writes(tmp_path: Path) -> None:
     )
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=response,
     ):
         with pytest.raises(DownloadError, match="reading the HTTP response"):
@@ -348,7 +348,7 @@ def test_wrapped_timeout_errors_include_endpoint_and_duration(
     tmp_path: Path,
 ) -> None:
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         side_effect=URLError(reason),
     ):
         with pytest.raises(
@@ -365,7 +365,7 @@ def test_invalid_json_is_rejected_without_writes(tmp_path: Path) -> None:
     response = FakeResponse({})
     response.read = lambda: b"not-json"  # type: ignore[method-assign]
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=response,
     ):
         with pytest.raises(DownloadError, match="valid JSON"):
@@ -378,7 +378,7 @@ def test_invalid_json_is_rejected_without_writes(tmp_path: Path) -> None:
 def test_oversized_json_integer_is_rejected_without_writes(tmp_path: Path) -> None:
     response = RawResponse(b'{"id":' + b"1" * 5000 + b"}")
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=response,
     ):
         with pytest.raises(DownloadError, match="valid JSON"):
@@ -392,7 +392,7 @@ def test_oversized_json_integer_is_rejected_without_writes(tmp_path: Path) -> No
 def test_deeply_nested_json_is_rejected_without_writes(tmp_path: Path) -> None:
     response = RawResponse(b"[" * 10000 + b"0" + b"]" * 10000)
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=response,
     ):
         with pytest.raises(DownloadError, match="valid JSON"):
@@ -410,7 +410,7 @@ def test_raw_non_integral_large_json_volume_is_rejected_without_writes(
         '"51000.00"', "9007199254740993.0"
     ).encode("utf-8")
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=RawResponse(raw),
     ):
         with pytest.raises(DownloadError, match="unsafe volume"):
@@ -425,7 +425,7 @@ def test_non_2xx_response_is_rejected_without_reading_body(tmp_path: Path) -> No
     response = FakeResponse({}, status=503)
     response.read = MagicMock(side_effect=AssertionError("body must not be read"))
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=response,
     ):
         with pytest.raises(DownloadError, match="HTTP 503"):
@@ -465,7 +465,7 @@ def test_response_errors_are_rejected_without_writes(
     tmp_path: Path,
 ) -> None:
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match=message):
@@ -484,7 +484,7 @@ def test_partial_has_more_response_is_rejected_without_writes(
     result["has_more"] = True
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match="has_more"):
@@ -524,7 +524,7 @@ def test_malformed_market_arrays_are_rejected(
     bars[field] = value
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match=message):
@@ -560,7 +560,7 @@ def test_non_positive_or_inconsistent_ohlc_is_rejected_without_writes(
     bars[field] = [value, *items[1:]]
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match="positive and consistent OHLC"):
@@ -584,7 +584,7 @@ def test_empty_market_arrays_are_rejected(tmp_path: Path) -> None:
         bars[field] = []
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match="No data"):
@@ -604,7 +604,7 @@ def test_non_array_market_field_is_rejected(tmp_path: Path) -> None:
     bars["Open"] = "not-an-array"
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match="valid Open array"):
@@ -618,12 +618,12 @@ def test_parquet_write_failure_does_not_write_success_manifest(
 ) -> None:
     with (
         patch(
-            "examples.custom_data_sources.tdxquant_downloader.urlopen",
+            "examples.modules.tdxquant_downloader.urlopen",
             return_value=FakeResponse(market_payload()),
         ),
         patch.object(pd.DataFrame, "to_parquet", side_effect=OSError("disk full")),
         patch(
-            "examples.custom_data_sources.tdxquant_downloader.write_manifest"
+            "examples.modules.tdxquant_downloader.write_manifest"
         ) as mock_manifest,
     ):
         with pytest.raises(OSError, match="disk full"):
@@ -672,7 +672,7 @@ def test_validates_volume_at_exact_int64_bounds(
     bars["Volume"] = [volume, volume]
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         if accepted:
@@ -730,7 +730,7 @@ def test_rejects_invalid_out_of_window_market_data(
         bars[market_field] = [value if market_field == field else items[0], *items]
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match=message):
@@ -770,7 +770,7 @@ def test_rejects_boolean_ohlc_before_date_range_filtering(
     bars["Open"] = [value, *items[1:]]
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match="invalid dates or OHLCV"):
@@ -795,7 +795,7 @@ def test_rejects_duplicate_dates_outside_requested_window(tmp_path: Path) -> Non
         bars[field] = [items[0], items[0], *items]
 
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        "examples.modules.tdxquant_downloader.urlopen",
         return_value=FakeResponse(payload),
     ):
         with pytest.raises(DownloadError, match="duplicate dates"):
@@ -834,7 +834,7 @@ def test_main_downloads_one_symbol_and_prints_path(
     fake_downloader = MagicMock()
     fake_downloader.download.return_value = output
     with patch(
-        "examples.custom_data_sources.tdxquant_downloader.TdxQuantDownloader",
+        "examples.modules.tdxquant_downloader.TdxQuantDownloader",
         return_value=fake_downloader,
     ) as downloader_type:
         result = main(

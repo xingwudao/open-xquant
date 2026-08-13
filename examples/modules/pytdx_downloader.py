@@ -29,7 +29,7 @@ _HOST_PATTERN = re.compile(
 )
 _INSTALL_HINT = (
     "uv run --with pytdx==1.72 python "
-    "examples/custom_data_sources/pytdx_downloader.py --help"
+    "examples/modules/pytdx_downloader.py --help"
 )
 _BAR_CATEGORY = 9
 _PAGE_SIZE = 800
