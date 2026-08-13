@@ -6,7 +6,9 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
+import pytest
 
+from oxq.core.errors import DownloadError
 from oxq.data.loaders import Downloader, TushareDownloader
 
 
@@ -41,6 +43,14 @@ def _module(client: MagicMock) -> SimpleNamespace:
 def test_tushare_downloader_satisfies_protocol() -> None:
     downloader: Downloader = TushareDownloader(token="secret")
     assert isinstance(downloader, Downloader)
+
+
+def test_tushare_rejects_noncanonical_date_before_token_lookup() -> None:
+    with pytest.raises(
+        DownloadError,
+        match=r"Invalid Tushare start date '2024-1-2'\. Use YYYY-MM-DD or YYYYMMDD\.",
+    ):
+        TushareDownloader().download("600519.SH", "2024-1-2", "2024-01-03")
 
 
 def test_tushare_download_writes_qfq_share_volume_and_manifest(tmp_path: Path) -> None:
@@ -80,3 +90,34 @@ def test_tushare_download_writes_qfq_share_volume_and_manifest(tmp_path: Path) -
     client.adj_factor.assert_called_once_with(
         ts_code="600519.SH", start_date="20240102", end_date="20240104"
     )
+
+
+def test_tushare_ignores_factors_after_requested_end(tmp_path: Path) -> None:
+    client = MagicMock()
+    client.daily.return_value = _daily()
+    client.adj_factor.return_value = _factors_with_later_reference()
+    tushare = _module(client)
+
+    with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
+        path = TushareDownloader(token="secret").download(
+            "600519.SH", "2024-01-02", "2024-01-03", dest_dir=tmp_path
+        )
+
+    result = pd.read_parquet(path)
+    manifest = json.loads(path.with_suffix(".manifest.json").read_text(encoding="utf-8"))
+    assert result["open"].tolist() == pytest.approx([100.0 / 1.5, 110.0])
+    assert manifest["extra"]["adjustment_reference_date"] == "20240103"
+    assert manifest["extra"]["adjustment_reference_factor"] == 1.5
+
+
+def test_tushare_rejects_volume_outside_int64_range(tmp_path: Path) -> None:
+    client = MagicMock()
+    client.daily.return_value = _daily().assign(vol=[100_000_000_000_000_000.0] * 2)
+    client.adj_factor.return_value = _factors_with_later_reference().iloc[:2]
+    tushare = _module(client)
+
+    with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
+        with pytest.raises(DownloadError, match="int64"):
+            TushareDownloader(token="secret").download(
+                "600519.SH", "2024-01-02", "2024-01-03", dest_dir=tmp_path
+            )

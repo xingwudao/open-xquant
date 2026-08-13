@@ -25,10 +25,15 @@ __all__ = [
 
 
 _TUSHARE_SYMBOL_RE = re.compile(r"^[0-9]{6}\.(SH|SZ|BJ)$")
+_TUSHARE_DATE_RE = re.compile(r"^(?:[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{8})$")
 importlib = SimpleNamespace(import_module=_import_module)
 
 
 def _normalize_tushare_date(value: str, *, field: str) -> str:
+    if not _TUSHARE_DATE_RE.fullmatch(value):
+        raise DownloadError(
+            f"Invalid Tushare {field} date '{value}'. Use YYYY-MM-DD or YYYYMMDD."
+        )
     for fmt in ("%Y-%m-%d", "%Y%m%d"):
         try:
             return datetime.strptime(value, fmt).strftime("%Y%m%d")
@@ -88,14 +93,20 @@ def _normalize_tushare_frames(
         raise DownloadError("Tushare adjustment response is missing required fields.")
 
     factor_dates = factors["trade_date"].astype(str)
-    reference_index = factor_dates.idxmax()
-    reference_date = factor_dates.loc[reference_index]
-    reference_factor = float(factors.loc[reference_index, "adj_factor"])
+    eligible_factors = factors.loc[factor_dates <= end].copy()
+    if eligible_factors.empty:
+        raise DownloadError(
+            "No Tushare adjustment factors on or before the requested end date."
+        )
+    eligible_dates = eligible_factors["trade_date"].astype(str)
+    reference_index = eligible_dates.idxmax()
+    reference_date = eligible_dates.loc[reference_index]
+    reference_factor = float(eligible_factors.loc[reference_index, "adj_factor"])
     if not np.isfinite(reference_factor) or reference_factor <= 0:
         raise DownloadError("Tushare adjustment reference factor must be positive and finite.")
 
     merged = daily.loc[:, ["trade_date", "open", "high", "low", "close", "vol"]].merge(
-        factors.loc[:, ["trade_date", "adj_factor"]],
+        eligible_factors.loc[:, ["trade_date", "adj_factor"]],
         on="trade_date",
         how="left",
         validate="one_to_one",
@@ -113,6 +124,11 @@ def _normalize_tushare_frames(
         np.abs(scaled_volume - rounded_volume) <= 1e-6
     ):
         raise DownloadError("Tushare volume must convert from lots to whole shares.")
+    int64_limits = np.iinfo(np.int64)
+    if not np.all(
+        (rounded_volume >= int64_limits.min) & (rounded_volume <= int64_limits.max)
+    ):
+        raise DownloadError("Tushare volume must fit within int64 share limits.")
 
     frame = values.assign(volume=rounded_volume.astype("int64"))
     frame.index = pd.DatetimeIndex(
