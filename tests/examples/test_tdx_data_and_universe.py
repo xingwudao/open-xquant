@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import importlib
 import importlib.util
 from pathlib import Path
@@ -104,6 +105,44 @@ class MappingOnlyDownloader:
         return self.paths
 
 
+class OutOfRangeFileWritingDownloader:
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        raise AssertionError("download must not be called")
+
+    def download_many(
+        self,
+        symbols: list[str],
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> dict[str, Path]:
+        assert dest_dir is not None
+        index = pd.DatetimeIndex(
+            ["2023-12-29"], name="date", tz="Asia/Shanghai"
+        )
+        output: dict[str, Path] = {}
+        for symbol in symbols:
+            path = dest_dir / f"{symbol}.parquet"
+            pd.DataFrame(
+                {
+                    "open": [10.0],
+                    "high": [11.0],
+                    "low": [9.0],
+                    "close": [10.5],
+                    "volume": [1000],
+                },
+                index=index,
+            ).to_parquet(path)
+            output[symbol] = path
+        return output
+
+
 def test_tdx_data_context_downloader_doubles_satisfy_downloader_protocol() -> None:
     assert isinstance(FileWritingDownloader(), Downloader)
     assert isinstance(NeverCalledDownloader(), Downloader)
@@ -164,6 +203,57 @@ def test_create_downloader_selects_tdxquant_with_explicit_options() -> None:
     assert downloader.endpoint == "http://localhost:17709/"
     assert downloader.timeout == 8.0
     assert downloader.dividend_type == "none"
+
+
+def test_create_downloader_uses_pytdx_defaults() -> None:
+    module = load_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "pytdx",
+            "2024-01-01",
+            "2024-01-31",
+            "--symbols",
+            "510300.SH",
+            "--host",
+            "quote.example",
+        ]
+    )
+
+    downloader = module.create_downloader(args)
+
+    assert isinstance(downloader, PyTdxDownloader)
+    assert downloader.port == 7709
+    assert downloader.timeout == 5.0
+    assert downloader.auto_adjust is True
+
+
+def test_create_downloader_uses_tdxquant_defaults() -> None:
+    module = load_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "tdxquant",
+            "2024-01-01",
+            "2024-01-31",
+            "--symbols",
+            "510300.SH",
+        ]
+    )
+
+    downloader = module.create_downloader(args)
+
+    assert isinstance(downloader, TdxQuantDownloader)
+    assert downloader.endpoint == "http://127.0.0.1:17709/"
+    assert downloader.dividend_type == "front"
+    assert downloader.timeout == 10.0
+
+
+def test_create_downloader_rejects_unknown_provider_explicitly() -> None:
+    module = load_example_module()
+
+    with pytest.raises(ValueError, match="unsupported-provider"):
+        module.create_downloader(
+            argparse.Namespace(provider="unsupported-provider")
+        )
 
 
 def test_create_downloader_parser_rejects_pytdx_host_for_tdxquant() -> None:
@@ -259,6 +349,24 @@ def test_build_tdx_data_context_reopens_data_and_builds_universe(
     bars = context.market.get_bars("510300.SH", "2024-01-01", "2024-01-31")
     assert list(bars["close"]) == [10.5, 11.5]
     assert str(bars.index.tz) == "Asia/Shanghai"
+
+
+def test_build_tdx_data_context_rejects_downloads_without_requested_bars(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+
+    with pytest.raises(
+        DownloadError,
+        match=r"510300\.SH.*2024-01-01.*2024-01-31",
+    ):
+        module.build_tdx_data_context(
+            OutOfRangeFileWritingDownloader(),
+            ["510300.SH"],
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
 
 
 def test_build_tdx_data_context_rejects_empty_symbols_before_downloading(

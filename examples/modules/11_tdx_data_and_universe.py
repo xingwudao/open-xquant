@@ -63,11 +63,13 @@ def create_downloader(args: argparse.Namespace) -> Downloader:
             timeout=args.timeout,
             auto_adjust=not args.no_auto_adjust,
         )
-    return TdxQuantDownloader(
-        endpoint=args.endpoint,
-        dividend_type=args.dividend_type,
-        timeout=args.timeout,
-    )
+    if args.provider == "tdxquant":
+        return TdxQuantDownloader(
+            endpoint=args.endpoint,
+            dividend_type=args.dividend_type,
+            timeout=args.timeout,
+        )
+    raise ValueError(f"unknown TDX provider: {args.provider}")
 
 
 def build_tdx_data_context(
@@ -94,7 +96,11 @@ def build_tdx_data_context(
     universe = StaticUniverse(tuple(symbols), name="tdx-example")
     snapshot = universe.get_universe(as_of_date=end)
     for symbol in snapshot.symbols:
-        market.get_bars(symbol, start, end)
+        bars = market.get_bars(symbol, start, end)
+        if bars.empty:
+            raise DownloadError(
+                f"No downloaded bars for '{symbol}' from {start} to {end}."
+            )
 
     return TdxDataContext(
         market=market,
