@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import json
 from datetime import date
+from types import MappingProxyType
 
 import pytest
 import yaml  # type: ignore[import-untyped]
@@ -422,6 +423,36 @@ def test_catalog_requires_and_verifies_manifest_digests(valid_manifest_payload) 
     assert catalog.operator_ids == ("fake.indicators.sma",)
     assert catalog.digest.startswith("sha256:")
     assert json.loads(catalog.to_json())["catalog_digest"] == catalog.digest
+
+
+def test_catalog_accepts_nested_read_only_mapping_input_without_mutability_leakage(
+    valid_manifest_payload,
+) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    package_backing = {
+        "distribution": "fake-quant-operators",
+        "version": "1.0.0",
+        "source_commit": "a" * 40,
+        "source_tree_digest": "sha256:" + "b" * 64,
+        "build_identifier": "ci-42",
+    }
+    operator_backing = {**valid_manifest_payload, "manifest_digest": manifest.digest}
+    source = MappingProxyType(
+        {
+            "schema_version": 1,
+            "contract_version": 1,
+            "package": MappingProxyType(package_backing),
+            "operators": (MappingProxyType(operator_backing),),
+        }
+    )
+
+    catalog = load_operator_catalog(source)
+    package_backing["build_identifier"] = "mutated"
+    operator_backing["semantic_name"] = "mutated"
+
+    assert catalog.package["build_identifier"] == "ci-42"
+    assert catalog.get("fake.indicators.sma").semantic_name == "SMA"
+    assert json.loads(catalog.to_json())["operators"][0]["semantic_name"] == "SMA"
 
 
 @pytest.mark.parametrize("field", ["schema_version", "contract_version"])

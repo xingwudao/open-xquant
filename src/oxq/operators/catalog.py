@@ -24,6 +24,14 @@ _COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
+def _thaw(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _thaw(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_thaw(item) for item in value]
+    return copy.deepcopy(value)
+
+
 def _find_non_string_mapping_key(value: Any, path: str = "catalog") -> str | None:
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -134,7 +142,9 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
 
 def _read_catalog(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(source, Mapping):
-        return copy.deepcopy(dict(source))
+        payload = _thaw(source)
+        assert isinstance(payload, dict)
+        return payload
     path = Path(source)
     try:
         raw = path.read_text(encoding="utf-8")

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import copy
-from dataclasses import FrozenInstanceError
+from dataclasses import FrozenInstanceError, replace
 from typing import Any
 
 import numpy as np
@@ -175,6 +175,40 @@ def test_diagnostics_require_actual_integer_row_counts(field, invalid) -> None:
 
     with pytest.raises(TypeError, match="integers"):
         OperatorDiagnostics(**counts)
+
+
+def test_diagnostics_snapshots_warning_sequences_as_tuples() -> None:
+    warnings = ["insufficient history", "partial output"]
+
+    diagnostics = OperatorDiagnostics(input_rows=2, output_rows=1, warnings=warnings)  # type: ignore[arg-type]
+    warnings.append("late mutation")
+
+    assert diagnostics.warnings == ("insufficient history", "partial output")
+
+
+@pytest.mark.parametrize(
+    "warnings",
+    [
+        "single warning",
+        {"warning": "mapped warning"},
+        ["valid warning", 1],
+        (None,),
+        (warning for warning in ["generated warning"]),
+    ],
+    ids=["string", "mapping", "non-string-item-list", "none-item-tuple", "generator"],
+)
+def test_diagnostics_require_a_sequence_of_string_warnings(warnings: Any) -> None:
+    with pytest.raises(TypeError, match="warnings must be a sequence of strings"):
+        OperatorDiagnostics(input_rows=1, output_rows=1, warnings=warnings)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["timezone", "calendar", "frequency", "currency", "data_version", "source"],
+)
+def test_operator_context_identity_fields_require_strings(daily_context, field: str) -> None:
+    with pytest.raises(ValueError, match=rf"{field} must be a non-empty string"):
+        replace(daily_context, **{field: 1})
 
 
 def test_fitted_state_snapshots_training_metadata() -> None:

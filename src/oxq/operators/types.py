@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import copy
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from types import MappingProxyType
@@ -135,7 +135,8 @@ class OperatorContext:
 
     def __post_init__(self) -> None:
         for name in ("timezone", "calendar", "frequency", "currency", "data_version", "source"):
-            if not getattr(self, name):
+            value = getattr(self, name)
+            if not isinstance(value, str) or not value:
                 raise ValueError(f"{name} must be a non-empty string")
         object.__setattr__(self, "timestamp_semantics", TimestampSemantics(self.timestamp_semantics))
         object.__setattr__(self, "price_adjustment", PriceAdjustment(self.price_adjustment))
@@ -177,6 +178,12 @@ class OperatorDiagnostics:
             raise ValueError("diagnostic row counts must be non-negative")
         if self.dropped_rows > self.input_rows:
             raise ValueError("dropped_rows cannot exceed input_rows")
+        if (
+            isinstance(self.warnings, (str, bytes))
+            or not isinstance(self.warnings, Sequence)
+            or any(not isinstance(warning, str) for warning in self.warnings)
+        ):
+            raise TypeError("warnings must be a sequence of strings")
         object.__setattr__(self, "warnings", tuple(self.warnings))
 
 

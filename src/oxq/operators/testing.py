@@ -41,6 +41,11 @@ _TRADING_AVAILABILITY_ORDER = {
 @dataclass(frozen=True, slots=True)
 class ContractReport:
     operator_id: str
+    operator_version: str
+    distribution: str
+    distribution_version: str
+    manifest_digest: str
+    implementation_digest: str
     passed: bool
     checks: tuple[str, ...]
 
@@ -50,6 +55,7 @@ def verify_operator_contract(
     operator: OperatorCallable,
     request: OperatorRequest,
     *,
+    expected_distribution_version: str,
     expected_implementation_digest: str,
 ) -> ContractReport:
     """Run provider-neutral checks for a stateless operator entry point.
@@ -66,6 +72,11 @@ def verify_operator_contract(
     if request.operator_id != manifest.operator_id:
         raise ContractViolationError(
             "request operator_id does not match manifest",
+            operator_id=manifest.operator_id,
+        )
+    if not isinstance(expected_distribution_version, str) or not expected_distribution_version:
+        raise ContractViolationError(
+            "expected_distribution_version must be a non-empty string",
             operator_id=manifest.operator_id,
         )
     causality_parameters = sorted(name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_causality"])
@@ -190,7 +201,7 @@ def verify_operator_contract(
     first_metadata = _snapshot_metadata(result.metadata)
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated, expected_implementation_digest)
-    _require_equal_data(first_data, repeated.data, manifest, "operator output must be deterministic")
+    _require_deterministic_data(first_data, repeated.data, manifest, "operator output must be deterministic")
     if result.diagnostics != repeated.diagnostics:
         raise ContractViolationError(
             "operator diagnostics must be deterministic",
@@ -235,7 +246,7 @@ def verify_operator_contract(
         shuffled_request = _copy_request(normalized, panel=shuffled_panel)
         shuffled_result = _invoke_operator(manifest, operator, shuffled_request)
         _validate_result(manifest, shuffled_request, shuffled_result, expected_implementation_digest)
-        _require_equal_data(
+        _require_exact_data(
             _canonical(first_data),
             _canonical(shuffled_result.data),
             manifest,
@@ -250,7 +261,7 @@ def verify_operator_contract(
             isolated_result = _invoke_operator(manifest, operator, isolated_request)
             _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
             expected = first_data.loc[first_data["code"] != excluded_code]
-            _require_equal_data(
+            _require_exact_data(
                 _canonical(expected),
                 _canonical(isolated_result.data),
                 manifest,
@@ -268,7 +279,16 @@ def verify_operator_contract(
         )
         checks.append("scope_consistency")
 
-    return ContractReport(operator_id=manifest.operator_id, passed=True, checks=tuple(checks))
+    return ContractReport(
+        operator_id=manifest.operator_id,
+        operator_version=manifest.operator_version,
+        distribution=manifest.distribution,
+        distribution_version=expected_distribution_version,
+        manifest_digest=manifest.digest,
+        implementation_digest=expected_implementation_digest,
+        passed=True,
+        checks=tuple(checks),
+    )
 
 
 def _validate_result(
@@ -296,6 +316,18 @@ def _validate_result(
         raise ContractViolationError("diagnostics.input_rows mismatch", operator_id=manifest.operator_id)
     if result.diagnostics.output_rows != len(result.data):
         raise ContractViolationError("diagnostics.output_rows mismatch", operator_id=manifest.operator_id)
+    if isinstance(result.data, pd.DataFrame):
+        invalid_columns = [
+            {"position": position, "type": type(column).__name__}
+            for position, column in enumerate(result.data.columns)
+            if not isinstance(column, str)
+        ]
+        if invalid_columns:
+            raise ContractViolationError(
+                "operator output column labels must be strings",
+                operator_id=manifest.operator_id,
+                details={"columns": invalid_columns},
+            )
     outputs = manifest.raw["outputs"]
     alignment = outputs["alignment"]
     try:
@@ -604,7 +636,7 @@ def _verify_cross_section_scope(
         _validate_result(manifest, date_request, date_result, expected_implementation_digest)
         pieces.append(date_result.data)
     per_date = pd.concat(pieces, ignore_index=True) if pieces else baseline.iloc[0:0].copy()
-    _require_equal_data(
+    _require_exact_data(
         _canonical(baseline),
         _canonical(per_date),
         manifest,
@@ -630,7 +662,7 @@ def _canonical(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.sort_values(["date", "code"], kind="stable", ignore_index=True)
 
 
-def _require_equal_data(
+def _require_deterministic_data(
     left: pd.DataFrame,
     right: pd.DataFrame,
     manifest: OperatorManifest,
