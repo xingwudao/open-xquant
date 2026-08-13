@@ -487,6 +487,83 @@ def test_contract_suite_rejects_output_dependence_on_undeclared_columns(
         )
 
 
+def test_contract_suite_rejects_empty_explicit_keyed_baseline(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["outputs"]["alignment"] = "explicit_keyed_output"
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def empty_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        base = sma(provider_request)
+        output = base.data.iloc[:0].copy()
+        diagnostics = type(base.diagnostics)(
+            input_rows=len(provider_request.input_panel),
+            output_rows=0,
+            warmup_rows=2,
+            dropped_rows=len(provider_request.input_panel),
+        )
+        return type(base)(data=output, diagnostics=diagnostics, provenance=base.provenance)
+
+    with pytest.raises(ContractViolationError, match="baseline.*at least one output row") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), empty_provider, request)
+
+    assert provider_calls == 1
+    assert exc_info.value.to_dict()["details"] == {"alignment": "explicit_keyed_output"}
+
+
+def test_contract_suite_allows_empty_explicit_keyed_optional_probe(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["inputs"]["optional_columns"] = ["volume"]
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+    payload["outputs"]["alignment"] = "explicit_keyed_output"
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    observed_rows: list[int] = []
+
+    def subset_provider(provider_request: OperatorRequest):
+        base = sma(provider_request)
+        output = base.data.iloc[: 1 if "volume" in provider_request.input_panel else 0].copy()
+        observed_rows.append(len(output))
+        diagnostics = type(base.diagnostics)(
+            input_rows=len(provider_request.input_panel),
+            output_rows=len(output),
+            warmup_rows=2,
+            dropped_rows=len(provider_request.input_panel) - len(output),
+        )
+        return type(base)(data=output, diagnostics=diagnostics, provenance=base.provenance)
+
+    report = verify_operator_contract(load_operator_manifest(payload), subset_provider, request)
+
+    assert report.passed is True
+    assert "optional_inputs" in report.checks
+    assert 0 in observed_rows
+
+
 def test_contract_suite_enforces_require_complete_input_policy(
     daily_context,
     daily_symbol_frames,
@@ -1559,6 +1636,35 @@ def test_contract_suite_refuses_artifact_wide_parameter_effects_before_provider_
     assert exc_info.value.to_dict()["details"] == {"parameters": ["period"]}
 
 
+@pytest.mark.parametrize("nan_policy", ["propagate", "declared_missing"])
+def test_contract_suite_refuses_uncertified_nan_policies_before_provider_call(
+    nan_policy,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["outputs"]["nan_policy"] = nan_policy
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="cannot certify nan_policy") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {"nan_policy": nan_policy}
+
+
 def test_contract_suite_enforces_cross_section_min_assets_at_every_date(
     daily_context,
     daily_symbol_frames,
@@ -1884,6 +1990,41 @@ def test_contract_suite_uses_exact_determinism_by_default(
             subtly_unstable_provider,
             request,
         )
+
+
+@pytest.mark.parametrize(
+    ("first_bits", "second_bits"),
+    [
+        (0x0000000000000000, 0x8000000000000000),
+        (0x7FF8000000000001, 0x7FF8000000000002),
+    ],
+)
+def test_contract_suite_bitwise_determinism_compares_float_payload_bits(
+    first_bits,
+    second_bits,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+    payloads = iter((first_bits, second_bits))
+
+    def bit_changing_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        result.data["sma_2"].to_numpy(copy=False).view(np.uint64)[0] = next(payloads)
+        return result
+
+    with pytest.raises(ContractViolationError, match="deterministic"):
+        verify_operator_contract(load_operator_manifest(payload), bit_changing_provider, request)
 
 
 def test_contract_suite_applies_declared_determinism_tolerances(

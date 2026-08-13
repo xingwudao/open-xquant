@@ -113,6 +113,13 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"parameters": warmup_parameters},
         )
+    nan_policy = manifest.raw["outputs"]["nan_policy"]
+    if nan_policy in {"propagate", "declared_missing"}:
+        raise ContractViolationError(
+            f"contract checker cannot certify nan_policy={nan_policy}",
+            operator_id=manifest.operator_id,
+            details={"nan_policy": nan_policy},
+        )
     parameters = manifest.validate_parameters(request.parameters)
     normalized = _copy_request(request, parameters=parameters)
     _validate_availability(manifest, normalized)
@@ -215,6 +222,12 @@ def verify_operator_contract(
     checks.append("input_immutability")
 
     _validate_result(manifest, normalized, result, expected_implementation_digest)
+    if manifest.raw["outputs"]["alignment"] == "explicit_keyed_output" and result.data.empty:
+        raise ContractViolationError(
+            "baseline explicit_keyed_output must contain at least one output row",
+            operator_id=manifest.operator_id,
+            details={"alignment": "explicit_keyed_output"},
+        )
     checks.extend(("output_contract", "provenance"))
 
     for column in present_optional_columns:
@@ -721,15 +734,30 @@ def _require_deterministic_data(
     absolute_tolerance = determinism.get("absolute_tolerance", 0.0)
     relative_tolerance = determinism.get("relative_tolerance", 0.0)
     try:
-        pd.testing.assert_frame_equal(
-            left,
-            right,
-            check_exact=bitwise,
-            atol=absolute_tolerance,
-            rtol=relative_tolerance,
-        )
+        if bitwise:
+            _assert_frame_bitwise_equal(left, right)
+        else:
+            pd.testing.assert_frame_equal(
+                left,
+                right,
+                check_exact=False,
+                atol=absolute_tolerance,
+                rtol=relative_tolerance,
+            )
     except AssertionError as exc:
         raise ContractViolationError(message, operator_id=manifest.operator_id) from exc
+
+
+def _assert_frame_bitwise_equal(left: pd.DataFrame, right: pd.DataFrame) -> None:
+    pd.testing.assert_frame_equal(left, right, check_exact=True)
+    for position in range(len(left.columns)):
+        left_values = left.iloc[:, position].to_numpy(copy=False)
+        right_values = right.iloc[:, position].to_numpy(copy=False)
+        if left_values.dtype.hasobject:
+            continue
+        left_bytes = np.ascontiguousarray(left_values).view(np.uint8)
+        right_bytes = np.ascontiguousarray(right_values).view(np.uint8)
+        np.testing.assert_array_equal(left_bytes, right_bytes)
 
 
 def _require_exact_data(

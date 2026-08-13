@@ -117,6 +117,21 @@ def test_operator_request_rejects_non_string_nested_parameter_keys(daily_context
         )
 
 
+@pytest.mark.parametrize(
+    "parameters",
+    [[("period", 2)], ("period", 2), "period=2"],
+    ids=["list", "tuple", "string"],
+)
+def test_operator_request_requires_parameters_mapping(daily_context, parameters: Any) -> None:
+    with pytest.raises(TypeError, match="parameters must be a mapping"):
+        OperatorRequest(
+            operator_id="fake.indicators.sma",
+            parameters=parameters,
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=daily_context,
+        )
+
+
 def test_frozen_request_parameters_remain_compatible_with_manifest_validation_and_copy(
     daily_context,
     valid_manifest_payload,
@@ -247,6 +262,23 @@ def test_fitted_state_accepts_none_or_exact_integer_random_seed(random_seed: int
     assert state.random_seed == random_seed
 
 
+@pytest.mark.parametrize("field", ["operator_id", "operator_version", "training_start", "training_end"])
+@pytest.mark.parametrize(
+    "invalid",
+    [1, ["mutable"], {"truthy": "mapping"}],
+    ids=["integer", "list", "mapping"],
+)
+def test_fitted_state_identity_fields_require_strings(field: str, invalid: Any) -> None:
+    with pytest.raises(TypeError, match=rf"{field} must be a string"):
+        _fitted_state(**{field: invalid})
+
+
+@pytest.mark.parametrize("field", ["operator_id", "operator_version", "training_start", "training_end"])
+def test_fitted_state_identity_fields_reject_empty_strings(field: str) -> None:
+    with pytest.raises(ValueError, match=rf"{field} must be a non-empty string"):
+        _fitted_state(**{field: ""})
+
+
 @pytest.mark.parametrize(
     "random_seed",
     [True, 7.0, "7", [], {}],
@@ -353,6 +385,58 @@ def test_operator_result_requires_matching_provenance(daily_context) -> None:
             data=pd.DataFrame({"date": [], "code": []}),
             diagnostics=diagnostics,
             provenance=provenance,
+        )
+
+
+class _DiagnosticsLike:
+    output_rows = 1
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid", "message"),
+    [
+        ("diagnostics", _DiagnosticsLike(), "diagnostics must be an OperatorDiagnostics"),
+        ("provenance", object(), "provenance must be an OperatorProvenance"),
+        ("metadata", [("source", "test")], "metadata must be a mapping"),
+    ],
+    ids=["diagnostics", "provenance", "metadata"],
+)
+def test_operator_result_requires_concrete_contract_types(field: str, invalid: Any, message: str) -> None:
+    values: dict[str, Any] = {
+        "data": pd.DataFrame({"value": [1.0]}),
+        "diagnostics": OperatorDiagnostics(input_rows=1, output_rows=1),
+        "provenance": OperatorProvenance(
+            operator_id="fake.indicators.sma",
+            operator_version="1.0.0",
+            implementation_digest="sha256:" + "a" * 64,
+        ),
+        "metadata": {},
+    }
+    values[field] = invalid
+
+    with pytest.raises(TypeError, match=message):
+        OperatorResult(**values)
+
+
+def test_operator_result_factory_rejects_non_mapping_metadata(daily_context) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={},
+        input_panel=pd.DataFrame({"value": [1.0]}),
+        context=daily_context,
+    )
+
+    with pytest.raises(TypeError, match="metadata must be a mapping"):
+        OperatorResult.for_request(
+            request,
+            data=pd.DataFrame({"value": [1.0]}),
+            diagnostics=OperatorDiagnostics(input_rows=1, output_rows=1),
+            provenance=OperatorProvenance(
+                operator_id=request.operator_id,
+                operator_version="1.0.0",
+                implementation_digest="sha256:" + "a" * 64,
+            ),
+            metadata=[],  # type: ignore[arg-type]
         )
 
 

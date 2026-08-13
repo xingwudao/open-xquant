@@ -769,6 +769,24 @@ def test_manifest_converts_default_output_format_failures_to_manifest_errors(val
         load_operator_manifest(payload)
 
 
+def test_manifest_converts_default_output_attribute_failures_to_manifest_errors(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": "object",
+        "default": {},
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{options.name}"
+
+    with pytest.raises(InvalidManifestError, match="format"):
+        load_operator_manifest(payload)
+
+
 @pytest.mark.parametrize(
     ("path", "value"),
     [(("outputs", "fields", 0, "minimum"), float("nan")), (("determinism", "absolute_tolerance"), float("inf"))],

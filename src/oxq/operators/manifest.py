@@ -445,7 +445,7 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             defaults = {name: parameters[name]["default"] for name in references}
             try:
                 resolved_name = field["name_template"].format(**defaults)
-            except (KeyError, IndexError, ValueError, TypeError) as exc:
+            except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
                 raise InvalidManifestError(
                     f"output field template cannot format declared defaults: {field['name_template']}",
                     operator_id=operator_id,

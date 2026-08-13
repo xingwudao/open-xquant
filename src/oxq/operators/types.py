@@ -153,6 +153,8 @@ class OperatorRequest:
     def __post_init__(self) -> None:
         if not self.operator_id:
             raise ValueError("operator_id must be a non-empty string")
+        if not isinstance(self.parameters, Mapping):
+            raise TypeError("parameters must be a mapping")
         if not isinstance(self.input_panel, pd.DataFrame):
             raise TypeError("input_panel must be a pandas DataFrame")
         object.__setattr__(
@@ -217,7 +219,10 @@ class FittedOperatorState:
 
     def __post_init__(self) -> None:
         for name in ("operator_id", "operator_version", "training_start", "training_end"):
-            if not getattr(self, name):
+            value = getattr(self, name)
+            if not isinstance(value, str):
+                raise TypeError(f"{name} must be a string")
+            if not value:
                 raise ValueError(f"{name} must be a non-empty string")
         for name in ("training_data_digest", "state_digest"):
             if not _DIGEST_RE.fullmatch(getattr(self, name)):
@@ -266,6 +271,12 @@ class OperatorResult:
     def __post_init__(self) -> None:
         if not isinstance(self.data, pd.DataFrame):
             raise TypeError("operator result data must be a pandas DataFrame")
+        if not isinstance(self.diagnostics, OperatorDiagnostics):
+            raise TypeError("diagnostics must be an OperatorDiagnostics")
+        if not isinstance(self.provenance, OperatorProvenance):
+            raise TypeError("provenance must be an OperatorProvenance")
+        if not isinstance(self.metadata, Mapping):
+            raise TypeError("metadata must be a mapping")
         if len(self.data) != self.diagnostics.output_rows:
             raise ValueError("diagnostics.output_rows must match result data rows")
         object.__setattr__(self, "metadata", _freeze(self.metadata))
@@ -282,7 +293,12 @@ class OperatorResult:
     ) -> OperatorResult:
         if provenance.operator_id != request.operator_id:
             raise ValueError("provenance operator_id must match request operator_id")
-        return cls(data=data, diagnostics=diagnostics, provenance=provenance, metadata=metadata or {})
+        return cls(
+            data=data,
+            diagnostics=diagnostics,
+            provenance=provenance,
+            metadata={} if metadata is None else metadata,
+        )
 
 
 class QuantOperatorExecutor(Protocol):
