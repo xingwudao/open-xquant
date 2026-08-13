@@ -8,6 +8,7 @@ from types import MappingProxyType
 import pytest
 import yaml  # type: ignore[import-untyped]
 
+import oxq.operators.catalog as catalog_module
 import oxq.operators.manifest as manifest_module
 from oxq.operators.catalog import load_operator_catalog
 from oxq.operators.errors import InvalidManifestError, InvalidParameterError
@@ -1212,6 +1213,66 @@ def test_catalog_accepts_shared_non_recursive_aliases(valid_manifest_payload, tm
     catalog = load_operator_catalog(source)
 
     assert catalog.operator_ids == ("fake.indicators.sma",)
+
+
+def test_catalog_memoizes_completed_yaml_alias_nodes_during_duplicate_key_scan(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    aliases = ["shared_0: &shared_0 {leaf: value}"]
+    for index in range(1, 17):
+        aliases.append(f"shared_{index}: &shared_{index} [*shared_{index - 1}, *shared_{index - 1}]")
+    raw = "\n".join(
+        [
+            "schema_version: 1",
+            "contract_version: 1",
+            "package:",
+            "  distribution: fake-quant-operators",
+            "  version: 1.0.0",
+            f"  source_commit: {'a' * 40}",
+            f"  source_tree_digest: sha256:{'b' * 64}",
+            "  build_identifier: ci-42",
+            "operators: []",
+            *aliases,
+        ]
+    )
+    source = tmp_path / "catalog.yaml"
+    source.write_text(raw, encoding="utf-8")
+    original = catalog_module._reject_duplicate_catalog_yaml_keys
+    visits = 0
+
+    def count_visits(node, **kwargs):
+        nonlocal visits
+        visits += 1
+        if visits > 256:
+            raise AssertionError("duplicate-key scan revisited completed YAML aliases")
+        return original(node, **kwargs)
+
+    monkeypatch.setattr(catalog_module, "_reject_duplicate_catalog_yaml_keys", count_visits)
+
+    with pytest.raises(InvalidManifestError, match="unknown fields"):
+        load_operator_catalog(source)
+
+    assert visits <= 256
+
+
+def test_catalog_memoizes_completed_aliases_during_recursive_container_scan() -> None:
+    visits = 0
+
+    class CountingMapping(dict[str, object]):
+        def items(self):
+            nonlocal visits
+            visits += 1
+            if visits > 64:
+                raise AssertionError("recursive-container scan revisited completed aliases")
+            return super().items()
+
+    shared: object = CountingMapping({"leaf": "value"})
+    for _ in range(16):
+        shared = CountingMapping({"left": shared, "right": shared})
+
+    assert catalog_module._find_recursive_container(shared) is None
+    assert visits <= 64
 
 
 @pytest.mark.parametrize("field", ["schema_version", "contract_version"])

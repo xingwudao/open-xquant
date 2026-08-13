@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 import numpy as np
 import pandas as pd
 
+from oxq.operators._identity import is_canonical_operator_id
 from oxq.operators._version import is_semantic_version
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
@@ -24,6 +25,15 @@ _ISO_DATETIME_RE = re.compile(
     r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
 )
 _IMMUTABLE_LEAF_TYPES = (type(None), bool, int, float, complex, str, bytes)
+
+
+def _validate_operator_id(value: Any) -> None:
+    if not isinstance(value, str):
+        raise TypeError("operator_id must be a string")
+    if not value:
+        raise ValueError("operator_id must be a non-empty string")
+    if not is_canonical_operator_id(value):
+        raise ValueError("operator_id must be a canonical namespaced operator ID")
 
 
 def _parse_training_boundary(value: str) -> tuple[str, date | datetime]:
@@ -203,10 +213,7 @@ class OperatorRequest:
     context: OperatorContext
 
     def __post_init__(self) -> None:
-        if not isinstance(self.operator_id, str):
-            raise TypeError("operator_id must be a string")
-        if not self.operator_id:
-            raise ValueError("operator_id must be a non-empty string")
+        _validate_operator_id(self.operator_id)
         if not isinstance(self.parameters, Mapping):
             raise TypeError("parameters must be a mapping")
         if not isinstance(self.input_panel, pd.DataFrame):
@@ -258,12 +265,11 @@ class OperatorProvenance:
     implementation_digest: str
 
     def __post_init__(self) -> None:
-        for name in ("operator_id", "operator_version"):
-            value = getattr(self, name)
-            if not isinstance(value, str):
-                raise TypeError(f"{name} must be a string")
-            if not value:
-                raise ValueError(f"{name} must be a non-empty string")
+        _validate_operator_id(self.operator_id)
+        if not isinstance(self.operator_version, str):
+            raise TypeError("operator_version must be a string")
+        if not self.operator_version:
+            raise ValueError("operator_version must be a non-empty string")
         if not is_semantic_version(self.operator_version):
             raise ValueError("operator_version must be semantic versioning")
         if not _DIGEST_RE.fullmatch(self.implementation_digest):
@@ -286,7 +292,8 @@ class FittedOperatorState:
     state_digest: str
 
     def __post_init__(self) -> None:
-        for name in ("operator_id", "operator_version", "training_start", "training_end"):
+        _validate_operator_id(self.operator_id)
+        for name in ("operator_version", "training_start", "training_end"):
             value = getattr(self, name)
             if not isinstance(value, str):
                 raise TypeError(f"{name} must be a string")

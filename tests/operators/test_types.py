@@ -285,6 +285,75 @@ def test_operator_request_requires_string_operator_id(daily_context, operator_id
         )
 
 
+def _operator_id_public_type(boundary: str, operator_id: str, daily_context):
+    if boundary == "request":
+        return OperatorRequest(
+            operator_id=operator_id,
+            parameters={},
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=daily_context,
+        )
+    if boundary == "provenance":
+        return OperatorProvenance(
+            operator_id=operator_id,
+            operator_version="1.0.0",
+            implementation_digest="sha256:" + "a" * 64,
+        )
+    return _fitted_state(operator_id=operator_id)
+
+
+@pytest.mark.parametrize("boundary", ["request", "provenance", "fitted-state"])
+@pytest.mark.parametrize(
+    "operator_id",
+    [
+        "fake",
+        ".fake.operator",
+        "fake.operator.",
+        "fake..operator",
+        "Fake.operator",
+        "fake.Operator",
+        "fake.-operator",
+        "fake.operator-",
+        "fake.operator/name",
+        "fake.oper\u0661tor",
+    ],
+    ids=[
+        "single-segment",
+        "leading-dot",
+        "trailing-dot",
+        "empty-segment",
+        "uppercase-namespace",
+        "uppercase-name",
+        "leading-hyphen",
+        "trailing-hyphen",
+        "slash",
+        "unicode-digit",
+    ],
+)
+def test_public_operator_id_boundaries_reject_noncanonical_namespaced_ids(
+    boundary: str,
+    operator_id: str,
+    daily_context,
+) -> None:
+    with pytest.raises(ValueError, match="operator_id must be a canonical namespaced operator ID"):
+        _operator_id_public_type(boundary, operator_id, daily_context)
+
+
+@pytest.mark.parametrize("boundary", ["request", "provenance", "fitted-state"])
+@pytest.mark.parametrize(
+    "operator_id",
+    ["a.b", "fake_quant.operator-2", "a1.b_2.c-3"],
+)
+def test_public_operator_id_boundaries_accept_canonical_namespaced_ids(
+    boundary: str,
+    operator_id: str,
+    daily_context,
+) -> None:
+    value = _operator_id_public_type(boundary, operator_id, daily_context)
+
+    assert value.operator_id == operator_id
+
+
 @pytest.mark.parametrize("field", ["operator_id", "operator_version"])
 @pytest.mark.parametrize("invalid", [1, True, ["fake.operator"], None])
 def test_operator_provenance_identity_fields_require_strings(field: str, invalid: Any) -> None:

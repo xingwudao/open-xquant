@@ -90,6 +90,71 @@ def test_load_workspace_config_rejects_duplicate_mapping_keys(
         load_workspace_config(config_path)
 
 
+def test_duplicate_key_scan_memoizes_completed_yaml_alias_nodes() -> None:
+    class CountingSafeLoader(workspace_config.yaml.SafeLoader):
+        construct_calls = 0
+
+        def construct_object(self, node: object, deep: bool = False) -> object:
+            self.construct_calls += 1
+            return super().construct_object(node, deep=deep)
+
+    lines = ["base: &base", "  leaf: 1"]
+    previous = "base"
+    for index in range(1, 15):
+        current = f"level{index}"
+        lines.extend(
+            [
+                f"{current}: &{current}",
+                f"  - *{previous}",
+                f"  - *{previous}",
+            ]
+        )
+        previous = current
+    lines.append(f"root: *{previous}")
+
+    loader = CountingSafeLoader("\n".join(lines))
+    try:
+        node = loader.get_single_node()
+        assert node is not None
+
+        workspace_config._reject_duplicate_workspace_yaml_keys(
+            node,
+            loader=loader,
+            path=Path("workspace.yaml"),
+        )
+
+        assert loader.construct_calls <= 64
+    finally:
+        loader.dispose()
+
+
+def test_load_workspace_config_preserves_recursive_yaml_aliases(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("root: &root\n  - *root\n", encoding="utf-8")
+
+    config = load_workspace_config(config_path)
+
+    assert config["root"][0] is config["root"]
+
+
+def test_load_workspace_config_detects_duplicate_keys_inside_yaml_aliases(tmp_path: Path) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text(
+        "shared: &shared\n  value: first\n  value: second\nleft: *shared\nright: *shared\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        WorkspaceConfigError,
+        match=r"workspace\.shared\.value: duplicate mapping key",
+    ):
+        load_workspace_config(config_path)
+
+
 def test_load_workspace_config_missing_behavior_is_explicit(tmp_path: Path) -> None:
     path = tmp_path / ".open-xquant" / "workspace.yaml"
     assert load_workspace_config(path, missing_ok=True) == {}

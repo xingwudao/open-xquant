@@ -9,7 +9,7 @@ import re
 import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
-from itertools import combinations
+from itertools import combinations, permutations
 from math import comb
 from types import MappingProxyType
 from typing import Any
@@ -32,7 +32,9 @@ from oxq.operators.types import (
     OperatorAvailability,
     OperatorCausality,
     OperatorContext,
+    OperatorDiagnostics,
     OperatorLifecycle,
+    OperatorProvenance,
     OperatorRequest,
     OperatorResult,
     OperatorScope,
@@ -887,6 +889,23 @@ def _verify_minimum_boundary_failures(
             minimum_value=min_assets,
         )
 
+    if min_history > 1 and min_assets > 1:
+        retained_codes = declared_panel["code"].drop_duplicates().iloc[: min_assets - 1]
+        combined_panel = (
+            declared_panel.loc[declared_panel["code"].isin(retained_codes)]
+            .groupby("code", sort=False, observed=True, group_keys=False)
+            .head(min_history - 1)
+            .copy(deep=True)
+        )
+        _verify_simultaneous_minimum_boundary_failure(
+            manifest,
+            operator,
+            request,
+            combined_panel,
+            min_history=min_history,
+            min_assets=min_assets,
+        )
+
 
 def _verify_minimum_boundary_failure(
     manifest: OperatorManifest,
@@ -928,6 +947,78 @@ def _verify_minimum_boundary_failure(
                 f"nonempty input below declared {minimum_name} error must identify the declared minimum",
                 operator_id=manifest.operator_id,
                 details={**failure_details, "actual": exc.details.get(minimum_name)},
+            ) from exc
+        return
+    except Exception as exc:
+        _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+        raise ContractViolationError(
+            failure_message,
+            operator_id=manifest.operator_id,
+            details={**failure_details, "actual_error": type(exc).__name__},
+        ) from exc
+    _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+    raise ContractViolationError(
+        failure_message,
+        operator_id=manifest.operator_id,
+        details=failure_details,
+    )
+
+
+def _verify_simultaneous_minimum_boundary_failure(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    panel: pd.DataFrame,
+    *,
+    min_history: int,
+    min_assets: int,
+) -> None:
+    probe_request = _copy_request(request, panel=panel)
+    snapshot = _deepcopy_frame(probe_request.input_panel)
+    expected_errors: tuple[tuple[type[OperatorError], str, int], ...] = (
+        (InsufficientHistoryError, "min_history", min_history),
+        (InsufficientCrossSectionError, "min_assets", min_assets),
+    )
+    failure_message = "nonempty input below both declared minima must raise a structured insufficient-input error"
+    failure_details = {
+        "min_history": min_history,
+        "min_assets": min_assets,
+        "available_rows": len(panel),
+        "available_assets": int(panel["code"].nunique()),
+        "expected_errors": [error_type.code for error_type, _, _ in expected_errors],
+    }
+    try:
+        operator(probe_request)
+    except OperatorError as exc:
+        _assert_input_unchanged(manifest, probe_request.input_panel, snapshot)
+        matching_specification = next(
+            (specification for specification in expected_errors if isinstance(exc, specification[0])),
+            None,
+        )
+        if matching_specification is None:
+            raise ContractViolationError(
+                failure_message,
+                operator_id=manifest.operator_id,
+                details={**failure_details, "actual_error": exc.code},
+            ) from exc
+        if exc.operator_id != manifest.operator_id:
+            raise ContractViolationError(
+                "nonempty input below both declared minima error must identify the manifest operator",
+                operator_id=manifest.operator_id,
+                details=failure_details,
+            ) from exc
+        if not str(exc).strip():
+            raise ContractViolationError(
+                "nonempty input below both declared minima error must contain a human-readable message",
+                operator_id=manifest.operator_id,
+                details=failure_details,
+            ) from exc
+        _, minimum_name, minimum_value = matching_specification
+        if exc.details.get(minimum_name) != minimum_value:
+            raise ContractViolationError(
+                f"nonempty input below both declared minima error must identify the declared {minimum_name}",
+                operator_id=manifest.operator_id,
+                details={**failure_details, "expected": minimum_value, "actual": exc.details.get(minimum_name)},
             ) from exc
         return
     except Exception as exc:
@@ -1044,6 +1135,9 @@ def _verify_shape(
         operator,
         request,
         baseline_data,
+        baseline_metadata,
+        result.diagnostics,
+        result.provenance,
         expected_implementation_digest,
     )
 
@@ -1328,8 +1422,10 @@ def _validate_certification_probe_budget(
     behavioral_probe_upper_bound = shape_variant_count * per_shape_behavioral_upper_bound
     shape_invocation_upper_bound = shape_variant_count * 2
     required_probe_upper_bound = required_column_count * shape_count * (2 if has_undeclared_columns else 1)
+    min_history = manifest.raw["inputs"]["min_history"]
+    min_assets = manifest.raw["inputs"]["min_assets"]
     boundary_probe_upper_bound = shape_variant_count * (
-        1 + int(manifest.raw["inputs"]["min_history"] > 1) + int(manifest.raw["inputs"]["min_assets"] > 1)
+        1 + int(min_history > 1) + int(min_assets > 1) + int(min_history > 1 and min_assets > 1)
     )
     upper_bound = behavioral_probe_upper_bound + shape_invocation_upper_bound + required_probe_upper_bound + boundary_probe_upper_bound
     if upper_bound > _MAX_CERTIFIED_PROBES:
@@ -1359,7 +1455,9 @@ def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorR
     }:
         probe_count += max(0, int(request.input_panel["date"].nunique()) - 1)
     if not manifest.raw["inputs"]["requires_sorted"]:
-        probe_count += 1 if len(request.input_panel) == 2 else 3
+        probe_count += _unordered_permutation_probe_count(len(request.input_panel))
+        if probe_count > _MAX_CERTIFIED_PROBES:
+            return probe_count
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
         symbol_count = int(request.input_panel["code"].nunique())
         min_assets = manifest.raw["inputs"]["min_assets"]
@@ -1372,11 +1470,23 @@ def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorR
     return probe_count
 
 
+def _unordered_permutation_probe_count(row_count: int) -> int:
+    permutation_count = 1
+    for factor in range(2, row_count + 1):
+        if permutation_count > (_MAX_CERTIFIED_PROBES + 1) // factor:
+            return _MAX_CERTIFIED_PROBES + 1
+        permutation_count *= factor
+    return max(0, permutation_count - 1)
+
+
 def _verify_behavioral_probes(
     manifest: OperatorManifest,
     operator: OperatorCallable,
     request: OperatorRequest,
     baseline: pd.DataFrame,
+    baseline_metadata: Any,
+    baseline_diagnostics: OperatorDiagnostics,
+    baseline_provenance: OperatorProvenance,
     expected_implementation_digest: str,
 ) -> None:
     if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
@@ -1393,20 +1503,11 @@ def _verify_behavioral_probes(
         )
 
     if not manifest.raw["inputs"]["requires_sorted"]:
-        permuted_panels = [request.input_panel.iloc[::-1].reset_index(drop=True)]
-        if len(request.input_panel) >= 3:
-            permuted_panels.append(
-                pd.concat(
-                    (request.input_panel.iloc[1:], request.input_panel.iloc[:1]),
-                    ignore_index=True,
-                )
-            )
-            adjacent_swap = request.input_panel.copy(deep=True)
-            left = max(1, (len(adjacent_swap) - 2) // 2)
-            order = list(range(len(adjacent_swap)))
-            order[left], order[left + 1] = order[left + 1], order[left]
-            permuted_panels.append(adjacent_swap.iloc[order].reset_index(drop=True))
-        for permuted_panel in permuted_panels:
+        identity = tuple(range(len(request.input_panel)))
+        for order in permutations(identity):
+            if order == identity:
+                continue
+            permuted_panel = request.input_panel.iloc[list(order)].reset_index(drop=True)
             permuted_request = _copy_request(request, panel=permuted_panel)
             permuted_result = _invoke_operator(manifest, operator, permuted_request)
             _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
@@ -1416,6 +1517,21 @@ def _verify_behavioral_probes(
                 manifest,
                 "operator output must not depend on incidental input order",
             )
+            if baseline_diagnostics != permuted_result.diagnostics:
+                raise ContractViolationError(
+                    "operator diagnostics must not depend on incidental input order",
+                    operator_id=manifest.operator_id,
+                )
+            if baseline_provenance != permuted_result.provenance:
+                raise ContractViolationError(
+                    "operator provenance must not depend on incidental input order",
+                    operator_id=manifest.operator_id,
+                )
+            if not _metadata_equal(baseline_metadata, _snapshot_metadata(permuted_result.metadata), manifest):
+                raise ContractViolationError(
+                    "operator metadata must not depend on incidental input order",
+                    operator_id=manifest.operator_id,
+                )
 
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
         codes = tuple(request.input_panel["code"].drop_duplicates())

@@ -44,6 +44,7 @@ def _thaw(value: Any) -> Any:
 def _find_recursive_container(value: Any, path: str = "catalog") -> str | None:
     stack: list[tuple[Any, str, bool]] = [(value, path, False)]
     active: set[int] = set()
+    completed: set[int] = set()
     while stack:
         current, current_path, exiting = stack.pop()
         if not isinstance(current, (Mapping, list, tuple)):
@@ -51,6 +52,9 @@ def _find_recursive_container(value: Any, path: str = "catalog") -> str | None:
         identity = id(current)
         if exiting:
             active.remove(identity)
+            completed.add(identity)
+            continue
+        if identity in completed:
             continue
         if identity in active:
             return current_path
@@ -242,9 +246,13 @@ def _reject_duplicate_catalog_yaml_keys(
     path: Path,
     location: str = "catalog",
     active: set[int] | None = None,
+    completed: set[int] | None = None,
 ) -> None:
     active = set() if active is None else active
+    completed = set() if completed is None else completed
     identity = id(node)
+    if identity in completed:
+        return
     if identity in active:
         return
     active.add(identity)
@@ -267,6 +275,7 @@ def _reject_duplicate_catalog_yaml_keys(
                     path=path,
                     location=child_location,
                     active=active,
+                    completed=completed,
                 )
         elif isinstance(node, yaml.SequenceNode):
             for index, item in enumerate(node.value):
@@ -276,6 +285,8 @@ def _reject_duplicate_catalog_yaml_keys(
                     path=path,
                     location=f"{location}[{index}]",
                     active=active,
+                    completed=completed,
                 )
     finally:
         active.remove(identity)
+        completed.add(identity)

@@ -76,10 +76,12 @@ def _reject_duplicate_workspace_yaml_keys(
     path: Path,
     location: str = "workspace",
     active: set[int] | None = None,
+    completed: set[int] | None = None,
 ) -> None:
     active = set() if active is None else active
+    completed = set() if completed is None else completed
     identity = id(node)
-    if identity in active:
+    if identity in active or identity in completed:
         return
     active.add(identity)
     try:
@@ -103,6 +105,7 @@ def _reject_duplicate_workspace_yaml_keys(
                     path=path,
                     location=child_location,
                     active=active,
+                    completed=completed,
                 )
         elif isinstance(node, yaml.SequenceNode):
             for index, item in enumerate(node.value):
@@ -112,7 +115,9 @@ def _reject_duplicate_workspace_yaml_keys(
                     path=path,
                     location=f"{location}[{index}]",
                     active=active,
+                    completed=completed,
                 )
+        completed.add(identity)
     finally:
         active.remove(identity)
 
@@ -382,21 +387,16 @@ def discover_workspace_config(path: str | Path) -> DiscoveredWorkspaceConfig | N
         except FileNotFoundError:
             config_directory_status = None
         except OSError as exc:
-            raise WorkspaceConfigError(
-                f"workspace configuration directory could not be inspected: {config_path.parent}: {exc}"
-            ) from exc
+            raise WorkspaceConfigError(f"workspace configuration directory could not be inspected: {config_path.parent}: {exc}") from exc
         if config_directory_status is not None:
             attributes = getattr(config_directory_status, "st_file_attributes", 0)
             reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400)
             if stat.S_ISLNK(config_directory_status.st_mode) or bool(attributes & reparse_flag):
                 raise WorkspaceConfigError(
-                    "workspace configuration directory must not be a symlink or reparse point: "
-                    f"{config_path.parent}"
+                    f"workspace configuration directory must not be a symlink or reparse point: {config_path.parent}"
                 )
             if not stat.S_ISDIR(config_directory_status.st_mode):
-                raise WorkspaceConfigError(
-                    f"workspace configuration directory must be a directory: {config_path.parent}"
-                )
+                raise WorkspaceConfigError(f"workspace configuration directory must be a directory: {config_path.parent}")
         if not config_path.exists() and not config_path.is_symlink():
             continue
         config = load_workspace_config(config_path)

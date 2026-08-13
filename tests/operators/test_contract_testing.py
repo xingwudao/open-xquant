@@ -1518,7 +1518,7 @@ def test_contract_suite_uses_reversal_for_two_row_unordered_probe(
     assert observed_keys[-1] == [baseline_keys[1], baseline_keys[0]]
 
 
-def test_contract_suite_uses_three_distinct_unordered_probes_for_three_rows(
+def test_contract_suite_exhausts_nonidentity_unordered_probes_for_three_rows(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -1544,12 +1544,16 @@ def test_contract_suite_uses_three_distinct_unordered_probes_for_three_rows(
 
     baseline = list(panel[["date", "code"]].itertuples(index=False, name=None))
     assert report.passed is True
-    assert observed_keys[-3] == list(reversed(baseline))
-    assert observed_keys[-2] == baseline[1:] + baseline[:1]
-    assert observed_keys[-1] == [baseline[0], baseline[2], baseline[1]]
+    assert observed_keys[-5:] == [
+        [baseline[0], baseline[2], baseline[1]],
+        [baseline[1], baseline[0], baseline[2]],
+        [baseline[1], baseline[2], baseline[0]],
+        [baseline[2], baseline[0], baseline[1]],
+        [baseline[2], baseline[1], baseline[0]],
+    ]
 
 
-def test_contract_suite_budgets_all_three_unordered_probes_for_three_rows(
+def test_contract_suite_budgets_all_nonidentity_unordered_probes_for_three_rows(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -1588,8 +1592,134 @@ def test_contract_suite_budgets_all_three_unordered_probes_for_three_rows(
 
     assert provider_calls == 0
     details = exc_info.value.to_dict()["details"]
-    assert details["per_shape_behavioral_upper_bound"] == 3
+    assert details["per_shape_behavioral_upper_bound"] == 5
     assert details["upper_bound"] > details["maximum"]
+
+
+def test_contract_suite_exhausts_four_row_unordered_permutations(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload, period=1)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_history"] = 1
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).iloc[:4].reset_index(drop=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 1},
+        input_panel=panel,
+        context=daily_context,
+    )
+    hidden_order = [0, 3, 1, 2]
+    hidden_keys = panel.iloc[hidden_order][["date", "code"]].reset_index(drop=True)
+
+    def hidden_order_dependent_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        keys = provider_request.input_panel[["date", "code"]].reset_index(drop=True)
+        if keys.equals(hidden_keys):
+            result.data.loc[result.data.index[-1], "sma_1"] += 1.0
+        return result
+
+    with pytest.raises(ContractViolationError, match="incidental input order"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            hidden_order_dependent_provider,
+            request,
+        )
+
+
+def test_contract_suite_rejects_unordered_factorial_budget_before_provider(
+    daily_context,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload, period=1)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_history"] = 1
+    row_count = 5_000
+    panel = pd.DataFrame(
+        {
+            "date": pd.date_range("2020-01-01", periods=row_count),
+            "code": pd.Series(["000001.SZ"] * row_count, dtype="string"),
+            "close": np.arange(row_count, dtype="float64"),
+        }
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 1},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="certification probe budget") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    details = exc_info.value.to_dict()["details"]
+    assert details["per_shape_behavioral_upper_bound"] > details["maximum"]
+
+
+@pytest.mark.parametrize("component", ["data", "metadata", "diagnostics", "provenance"])
+def test_contract_suite_compares_all_result_channels_across_unordered_permutations(
+    component,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload, period=1)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_history"] = 1
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).iloc[:2].reset_index(drop=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 1},
+        input_panel=panel,
+        context=daily_context,
+    )
+    reversed_keys = panel.iloc[::-1][["date", "code"]].reset_index(drop=True)
+
+    def order_dependent_channel_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        keys = provider_request.input_panel[["date", "code"]].reset_index(drop=True)
+        if not keys.equals(reversed_keys):
+            return result
+        if component == "data":
+            result.data.loc[result.data.index[-1], "sma_1"] += 1.0
+            return result
+        if component == "metadata":
+            return replace(result, metadata={"first_code": str(keys.loc[0, "code"])})
+        if component == "diagnostics":
+            return replace(result, diagnostics=replace(result.diagnostics, warnings=("order-dependent",)))
+
+        class UnequalProvenance(type(result.provenance)):
+            def __eq__(self, other):
+                return self is other
+
+        return replace(
+            result,
+            provenance=UnequalProvenance(
+                operator_id=result.provenance.operator_id,
+                operator_version=result.provenance.operator_version,
+                implementation_digest=result.provenance.implementation_digest,
+            ),
+        )
+
+    expected = "incidental input order" if component == "data" else component
+    with pytest.raises(ContractViolationError, match=expected):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            order_dependent_channel_provider,
+            request,
+        )
 
 
 def test_contract_suite_rejects_circular_neighbor_dependence_with_adjacent_swap(
@@ -2805,6 +2935,7 @@ def test_contract_suite_skips_invalid_past_only_prefixes_for_staggered_panel(
     payload = copy.deepcopy(valid_manifest_payload)
     payload["execution_scope"] = "panel"
     payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     original_last_date = panel["date"].max()
     last_session = panel.loc[panel["date"] == original_last_date]
@@ -3246,6 +3377,7 @@ def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     extra_symbol = panel.loc[panel["code"] == panel["code"].min()].copy()
     extra_symbol.loc[:, "code"] = "300001.SZ"
@@ -3283,6 +3415,7 @@ def test_contract_suite_rejects_time_series_mixing_in_specific_min_asset_subset(
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     first_symbol = panel.loc[panel["code"] == panel["code"].min()].copy()
     third_symbol = first_symbol.copy()
@@ -3326,6 +3459,7 @@ def test_contract_suite_rejects_time_series_mixing_in_every_six_symbol_subset(
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     template = panel.loc[panel["code"] == panel["code"].min()].copy()
     extra_symbols = []
@@ -3469,6 +3603,7 @@ def test_contract_suite_leave_one_out_probes_omit_every_symbol(
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["min_assets"] = 29
     payload["inputs"]["optional_columns"] = []
+    payload["inputs"]["requires_sorted"] = True
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
     template = panel.loc[panel["code"] == panel["code"].min()].copy()
     extra_symbols = []
@@ -3874,6 +4009,7 @@ def test_contract_suite_required_failure_probes_use_all_declared_optional_shapes
     valid_manifest_payload,
 ) -> None:
     payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["inputs"]["requires_sorted"] = True
     payload["inputs"]["optional_columns"] = ["volume", "quality"]
     payload["inputs"]["dtypes"].update({"volume": ["int64"], "quality": ["float64"]})
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
@@ -4311,7 +4447,7 @@ def test_contract_suite_probes_nonempty_inputs_below_each_declared_minimum(
 
     assert report.passed is True
     assert "minimum_boundaries" in report.checks
-    assert observed_boundaries == [(2, 2), (1, 3), (2, 2), (1, 3)]
+    assert observed_boundaries == [(2, 2), (1, 3), (1, 2), (2, 2), (1, 3), (1, 2)]
 
 
 @pytest.mark.parametrize("minimum", ["min_history", "min_assets"])
@@ -4452,6 +4588,13 @@ def test_contract_suite_invalid_size_probes_cover_undeclared_variants_for_every_
             )
         asset_count = int(probe_panel["code"].nunique())
         minimum_history = int(probe_panel.groupby("code", sort=False, observed=True).size().min())
+        if minimum_history == 2 and asset_count == 1:
+            observed.add(("combined", optional_shape, has_helper))
+            raise InsufficientHistoryError(
+                "input is below both declared minima",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
         if minimum_history == 2:
             observed.add(("min_history", optional_shape, has_helper))
             raise InsufficientHistoryError(
@@ -4479,7 +4622,7 @@ def test_contract_suite_invalid_size_probes_cover_undeclared_variants_for_every_
     assert report.passed is True
     assert observed == {
         (boundary, optional_shape, has_helper)
-        for boundary in ("empty", "min_history", "min_assets")
+        for boundary in ("empty", "min_history", "min_assets", "combined")
         for optional_shape in ((), ("volume",), ("quality",), ("volume", "quality"))
         for has_helper in (False, True)
     }
@@ -4526,7 +4669,148 @@ def test_contract_suite_budgets_undeclared_invalid_size_probe_variants(
 
     assert provider_calls == 0
     details = exc_info.value.to_dict()["details"]
-    assert details["boundary_probe_upper_bound"] == details["shape_variant_count"] * 3
+    assert details["boundary_probe_upper_bound"] == details["shape_variant_count"] * 4
+
+
+@pytest.mark.parametrize("combined_error_type", [InsufficientHistoryError, InsufficientCrossSectionError])
+def test_contract_suite_accepts_either_structured_error_for_simultaneous_minimum_violation(
+    combined_error_type,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["min_history"] = 3
+    manifest = load_operator_manifest(payload)
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    combined_calls = 0
+
+    def minimum_enforcing_provider(provider_request: OperatorRequest):
+        nonlocal combined_calls
+        probe_panel = provider_request.input_panel
+        if "close" not in probe_panel:
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        if probe_panel.empty:
+            raise InsufficientHistoryError(
+                "empty input does not satisfy the history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        asset_count = int(probe_panel["code"].nunique())
+        minimum_history = int(probe_panel.groupby("code", sort=False, observed=True).size().min())
+        if asset_count == 1 and minimum_history == 2:
+            combined_calls += 1
+            minimum_name = "min_history" if combined_error_type is InsufficientHistoryError else "min_assets"
+            minimum_value = 3 if minimum_name == "min_history" else 2
+            raise combined_error_type(
+                "input violates both declared minima",
+                operator_id=provider_request.operator_id,
+                details={minimum_name: minimum_value},
+            )
+        if minimum_history == 2:
+            raise InsufficientHistoryError(
+                "input is below the history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        if asset_count == 1:
+            raise InsufficientCrossSectionError(
+                "input is below the asset minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_assets": 2},
+            )
+        return sma(provider_request)
+
+    report = _verify_operator_contract(
+        manifest,
+        minimum_enforcing_provider,
+        request,
+        expected_distribution_version="1.0.0",
+        expected_implementation_digest=IMPLEMENTATION_DIGEST,
+    )
+
+    assert report.passed is True
+    assert combined_calls == 1
+
+
+@pytest.mark.parametrize("behavior", ["raw_error", "silent"])
+def test_contract_suite_rejects_noncompliant_simultaneous_minimum_violation(
+    behavior,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["min_history"] = 3
+    manifest = load_operator_manifest(payload)
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def noncompliant_provider(provider_request: OperatorRequest):
+        probe_panel = provider_request.input_panel
+        if "close" not in probe_panel:
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        if probe_panel.empty:
+            raise InsufficientHistoryError(
+                "empty input does not satisfy the history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        asset_count = int(probe_panel["code"].nunique())
+        minimum_history = int(probe_panel.groupby("code", sort=False, observed=True).size().min())
+        if asset_count == 1 and minimum_history == 2:
+            if behavior == "raw_error":
+                raise IndexError("unstructured simultaneous minimum failure")
+            return sma(provider_request)
+        if minimum_history == 2:
+            raise InsufficientHistoryError(
+                "input is below the history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 3},
+            )
+        if asset_count == 1:
+            raise InsufficientCrossSectionError(
+                "input is below the asset minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_assets": 2},
+            )
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="both declared minima"):
+        _verify_operator_contract(
+            manifest,
+            noncompliant_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
 
 
 @pytest.mark.parametrize("component", ["metadata", "diagnostics"])

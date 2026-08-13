@@ -19,6 +19,7 @@ from oxq.operators.types import OperatorContext, TimestampSemantics
 Alignment = Literal["preserve_input_order", "canonical_order", "explicit_keyed_output"]
 _SUPPORTED_ALIGNMENTS = frozenset({"preserve_input_order", "canonical_order", "explicit_keyed_output"})
 _KEY_COLUMNS = ["date", "code"]
+_MAX_JSON_TREE_DEPTH = 64
 
 
 class QuantPanelAdapter:
@@ -176,7 +177,7 @@ class QuantPanelAdapter:
 def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
     """Validate the JSON Schema and composite-key semantics of a serialized QuantPanel."""
 
-    _validate_json_tree(payload, "payload", set())
+    _validate_json_tree(payload, "payload", set(), depth=0)
     materialized_payload = _materialize_json_tree(payload)
     schema = load_contract_schema("quant-panel-v1.schema.json")
     errors = sorted(
@@ -220,7 +221,12 @@ def _materialize_json_tree(value: Any) -> Any:
     return value
 
 
-def _validate_json_tree(value: Any, path: str, active_containers: set[int]) -> None:
+def _validate_json_tree(value: Any, path: str, active_containers: set[int], *, depth: int) -> None:
+    if depth > _MAX_JSON_TREE_DEPTH:
+        raise InvalidPanelError(
+            f"serialized QuantPanel {path} nesting depth exceeds maximum {_MAX_JSON_TREE_DEPTH}",
+            details={"path": path, "maximum_depth": _MAX_JSON_TREE_DEPTH},
+        )
     if value is None or isinstance(value, (bool, int, str)):
         return
     if isinstance(value, float):
@@ -252,10 +258,10 @@ def _validate_json_tree(value: Any, path: str, active_containers: set[int]) -> N
                         f"serialized QuantPanel {key_path} object key must be a string",
                         details={"path": key_path, "type": type(key).__name__},
                     )
-                _validate_json_tree(item, f"{path}.{key}", active_containers)
+                _validate_json_tree(item, f"{path}.{key}", active_containers, depth=depth + 1)
         else:
             for index, item in enumerate(value):
-                _validate_json_tree(item, f"{path}[{index}]", active_containers)
+                _validate_json_tree(item, f"{path}[{index}]", active_containers, depth=depth + 1)
     finally:
         active_containers.remove(container_id)
 

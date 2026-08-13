@@ -27,6 +27,16 @@ def _serialized_daily_panel(**row_values: object) -> dict[str, object]:
     }
 
 
+def _deep_json_object(depth: int) -> dict[str, object]:
+    root: dict[str, object] = {}
+    current = root
+    for _ in range(depth):
+        child: dict[str, object] = {}
+        current["nested"] = child
+        current = child
+    return root
+
+
 def test_daily_frames_round_trip_without_mutating_input(daily_context, daily_symbol_frames) -> None:
     snapshots = {code: frame.copy(deep=True) for code, frame in daily_symbol_frames.items()}
 
@@ -424,6 +434,19 @@ def test_serialized_panel_rejects_cyclic_trees(container_type: type[list] | type
     payload = _serialized_daily_panel(metadata=cyclic)
 
     with pytest.raises(InvalidPanelError, match=r"rows\[0\]\.metadata.*cyclic") as exc_info:
+        validate_serialized_quant_panel(payload)
+
+    assert exc_info.value.code == "invalid_panel"
+
+
+@pytest.mark.parametrize("location", ["unknown", "metadata"])
+def test_serialized_panel_rejects_excessively_deep_json_trees(location: str) -> None:
+    nested = _deep_json_object(1_000)
+    payload = _serialized_daily_panel(**({"metadata": nested} if location == "metadata" else {}))
+    if location == "unknown":
+        payload["unknown"] = nested
+
+    with pytest.raises(InvalidPanelError, match="nesting depth") as exc_info:
         validate_serialized_quant_panel(payload)
 
     assert exc_info.value.code == "invalid_panel"
