@@ -663,6 +663,7 @@ def _check_deps() -> dict[str, Any]:
     optional_modules = {
         "yfinance": "uv sync --extra yfinance",
         "akshare": "uv sync --extra akshare",
+        "tushare": "uv sync --extra tushare",
         "scipy": "uv sync --extra scipy",
         "matplotlib": "uv sync --extra chart",
         "mplfinance": "uv sync --extra chart",

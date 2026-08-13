@@ -166,7 +166,7 @@ def fake_sdk_bundle(monkeypatch):
             "id": "bundle-test",
             "root": str(root),
             "profile": "full-research",
-            "extras": ["chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent"],
+            "extras": ["chart", "scipy", "yfinance", "akshare", "tushare", "live", "mcp", "agent"],
             "excluded_extras": ["dev", "docs", "talib"],
             "wheel": {"path": str(wheel), "sha256": "wheel-sha", "version": "0.1.0", "source_commit": "commit-sha"},
             "dependencies": {
@@ -1633,7 +1633,7 @@ def test_doctor_json_reports_malformed_workspace_config(monkeypatch, tmp_path) -
 
 
 def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
-    missing = {"pyarrow", "pandas", "numpy", "yaml", "scipy", "matplotlib", "yfinance"}
+    missing = {"pyarrow", "pandas", "numpy", "yaml", "scipy", "matplotlib", "yfinance", "tushare"}
 
     def fake_find_spec(module: str):
         return None if module in missing else object()
@@ -1650,7 +1650,9 @@ def test_doctor_deps_separates_core_and_optional_missing(monkeypatch) -> None:
     assert "scipy" in result["missing_optional"]
     assert "matplotlib" in result["missing_optional"]
     assert "yfinance" in result["missing_optional"]
+    assert "tushare" in result["missing_optional"]
     assert "uv sync --all-extras" in result["fixes"]
+    assert "uv sync --extra tushare" in result["fixes"]
 
 
 def test_doctor_deps_warns_when_only_optional_missing(monkeypatch) -> None:

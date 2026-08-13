@@ -42,7 +42,7 @@ def _write_valid_bundle(root) -> dict:
         "id": root.name,
         "root": str(root),
         "profile": "full-research",
-        "extras": ["agent", "akshare", "chart", "live", "mcp", "scipy", "yfinance"],
+        "extras": ["agent", "akshare", "chart", "live", "mcp", "scipy", "tushare", "yfinance"],
         "excluded_extras": ["dev", "docs", "talib"],
         "wheel": {
             "path": str(wheel),
@@ -137,6 +137,23 @@ def test_build_sdk_bundle_selects_all_research_extras_except_excluded(monkeypatc
     assert "talib" not in req
     assert payload["extras"] == ["chart", "researchx"]
     assert payload["excluded_extras"] == ["dev", "docs", "talib"]
+
+
+def test_build_sdk_bundle_uses_full_research_fallback_when_optional_dependencies_are_missing(monkeypatch, tmp_path) -> None:
+    source = tmp_path / "source"
+    config_root = tmp_path / "config/open-xquant"
+    source.mkdir()
+    (source / "pyproject.toml").write_text(
+        "[project]\nname = 'open-xquant'\nversion = '0.1.0'\n",
+        encoding="utf-8",
+    )
+    commands: list[list[str]] = []
+    monkeypatch.setattr("oxq.cli.sdk_bundle._run", _fake_build_run(commands))
+
+    payload = build_sdk_bundle(source, config_root)
+
+    req = (Path(payload["root"]) / "requirements.in").read_text(encoding="utf-8")
+    assert req.startswith("open-xquant[agent,akshare,chart,live,mcp,scipy,tushare,yfinance] @ ")
 
 
 def test_build_sdk_bundle_uses_shared_uv_cache_across_bundle_roots(monkeypatch, tmp_path) -> None:
