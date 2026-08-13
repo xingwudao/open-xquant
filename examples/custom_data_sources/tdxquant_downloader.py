@@ -9,6 +9,7 @@ from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from email.message import Message
+from http.client import HTTPException
 from pathlib import Path
 from typing import Any, cast
 from urllib.error import HTTPError, URLError
@@ -99,11 +100,18 @@ class TdxQuantDownloader:
         _validate_endpoint(endpoint)
         if dividend_type not in {"front", "none"}:
             raise ValueError("dividend_type must be 'front' or 'none'")
-        if not math.isfinite(timeout) or timeout <= 0:
-            raise ValueError("timeout must be finite and greater than zero")
+        timeout_message = "timeout must be finite and greater than zero"
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+            raise ValueError(timeout_message)
+        try:
+            normalized_timeout = float(timeout)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(timeout_message) from exc
+        if not math.isfinite(normalized_timeout) or normalized_timeout <= 0:
+            raise ValueError(timeout_message)
         self.endpoint = endpoint
         self.dividend_type = dividend_type
-        self.timeout = timeout
+        self.timeout = normalized_timeout
 
     def download(
         self,
@@ -168,6 +176,10 @@ class TdxQuantDownloader:
                 raw = response.read()
         except HTTPError as exc:
             raise DownloadError(f"TdxQuant returned HTTP {exc.code}.") from exc
+        except HTTPException as exc:
+            raise DownloadError(
+                "TdxQuant returned an incomplete HTTP response."
+            ) from exc
         except (socket.timeout, TimeoutError) as exc:  # noqa: UP041
             raise DownloadError(
                 f"TdxQuant request timed out for {self.endpoint} after "
@@ -302,6 +314,8 @@ def _frame_from_payload(
             pd.to_datetime(date_values, format="%Y%m%d", errors="raise"),
             name="date",
         ).tz_localize("Asia/Shanghai")
+        if index.hasnans:
+            raise ValueError("date array contains NaT")
         volume = _volume_values(series["Volume"], symbol)
         frame = pd.DataFrame(
             {

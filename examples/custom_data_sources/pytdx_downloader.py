@@ -170,6 +170,10 @@ def _parse_bar_page(payload: object, symbol: str) -> pd.DataFrame:
             raise DownloadError(
                 f"TDX returned an invalid bar date for '{symbol}'."
             ) from exc
+        if pd.isna(timestamp):
+            raise DownloadError(
+                f"TDX returned an invalid bar date for '{symbol}'."
+            )
         values = {field: _price(item[field], symbol) for field in _OHLC}
         if not (
             values["low"] <= values["open"] <= values["high"]
@@ -287,7 +291,7 @@ def _parse_actions(
             date_parts.append(value)
         try:
             action_day = date(*date_parts)
-        except ValueError as exc:
+        except (OverflowError, ValueError) as exc:
             raise DownloadError(
                 f"TDX returned an invalid corporate-action date for '{symbol}'."
             ) from exc

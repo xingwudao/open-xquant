@@ -4,6 +4,7 @@ import importlib
 import json
 import socket
 from decimal import Decimal
+from http.client import IncompleteRead
 from pathlib import Path
 from typing import Any
 from unittest.mock import MagicMock, call, patch
@@ -225,11 +226,12 @@ def test_rejects_unsupported_dividend_type(dividend_type: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "timeout", [0.0, -1.0, float("nan"), float("inf"), float("-inf")]
+    "timeout",
+    [True, "10", object(), 10**1000, 0.0, -1.0, float("nan"), float("inf")],
 )
-def test_rejects_non_finite_or_non_positive_timeout(timeout: float) -> None:
+def test_rejects_non_finite_or_non_positive_timeout(timeout: object) -> None:
     with pytest.raises(ValueError, match="finite.*greater than zero"):
-        TdxQuantDownloader(timeout=timeout)
+        TdxQuantDownloader(timeout=timeout)  # type: ignore[arg-type]
 
 
 @pytest.mark.parametrize(
@@ -286,6 +288,24 @@ def test_transport_errors_are_wrapped(
             TdxQuantDownloader().download(
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
             )
+    assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
+
+
+def test_truncated_http_response_is_wrapped_without_writes(tmp_path: Path) -> None:
+    response = FakeResponse(market_payload())
+    response.read = MagicMock(  # type: ignore[method-assign]
+        side_effect=IncompleteRead(b"partial", 100)
+    )
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=response,
+    ):
+        with pytest.raises(DownloadError, match="incomplete HTTP response"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+
     assert not tmp_path.exists() or list(tmp_path.iterdir()) == []
 
 
@@ -403,6 +423,7 @@ def test_response_errors_are_rejected_without_writes(
         ("High", ["1860.00"], "uneven field lengths"),
         ("Open", ["bad", "1800.00"], "invalid dates or OHLCV"),
         ("Date", ["20241301", "20240102"], "invalid dates or OHLCV"),
+        ("Date", ["NaT", "20240102"], "invalid dates or OHLCV"),
         ("Date", ["20240102", "20240102"], "duplicate dates"),
         ("Volume", ["1.5", "2.0"], "unsafe volume"),
         ("Close", ["NaN", "1840.00"], "non-finite OHLCV"),

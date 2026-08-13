@@ -305,6 +305,14 @@ def test_rejects_invalid_bar_date() -> None:
         )
 
 
+def test_rejects_nat_bar_date() -> None:
+    payload = bar("2024-01-01", 10.0)
+    payload["datetime"] = "NaT"
+
+    with pytest.raises(DownloadError, match="invalid bar date"):
+        module._parse_bar_page([payload], "510300.SH")
+
+
 def test_rejects_inconsistent_ohlc() -> None:
     invalid = bar("2024-01-01", 10.0)
     invalid["high"] = 9.5
@@ -572,6 +580,7 @@ def test_rejects_invalid_action_response(payload: object) -> None:
     "record",
     [
         {"year": True, "month": 1, "day": 2, "category": 1},
+        {"year": 10**1000, "month": 1, "day": 2, "category": 1},
         {"year": 2024, "month": 13, "day": 2, "category": 1},
         {"year": 2024, "month": 1, "day": 2, "category": True},
     ],
