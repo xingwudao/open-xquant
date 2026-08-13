@@ -42,6 +42,23 @@ def verify_operator_contract(
     )
 
 
+def _artifact_wide_payload(valid_manifest_payload, *, period: int = 2):
+    payload = copy.deepcopy(valid_manifest_payload)
+    period_declaration = payload["parameters"]["period"]
+    period_declaration["affects_warmup"] = False
+    period_declaration["affects_output_fields"] = False
+    if payload["outputs"]["fields"][0]["name_template"] == "sma_{period}":
+        payload["outputs"]["fields"][0]["name_template"] = f"sma_{period}"
+    warmup = payload["outputs"]["warmup"]
+    if warmup["kind"] == "parameter" and warmup["parameter"] == "period":
+        payload["outputs"]["warmup"] = {"kind": "fixed", "rows": period - 1}
+    return payload
+
+
+def _load_contract_manifest(payload, *, period: int = 2):
+    return load_operator_manifest(_artifact_wide_payload(payload, period=period))
+
+
 def test_fake_provider_passes_reusable_contract_suite(
     daily_context,
     daily_symbol_frames,
@@ -55,7 +72,7 @@ def test_fake_provider_passes_reusable_contract_suite(
         context=daily_context,
     )
 
-    manifest = load_operator_manifest(valid_manifest_payload)
+    manifest = _load_contract_manifest(valid_manifest_payload)
     report = verify_operator_contract(
         manifest,
         sma,
@@ -96,7 +113,7 @@ def test_contract_suite_rejects_unexpected_implementation_digest(
 
     with pytest.raises(ContractViolationError, match="implementation_digest mismatch"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             sma,
             request,
             expected_implementation_digest="sha256:" + "d" * 64,
@@ -125,7 +142,7 @@ def test_contract_suite_rejects_invalid_distribution_semantic_versions(
 
     with pytest.raises(ContractViolationError, match="semantic versioning") as exc_info:
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             tracked_provider,
             request,
             expected_distribution_version=version,
@@ -153,7 +170,7 @@ def test_contract_suite_detects_input_mutation(
         return sma(mutating_request)
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), mutating_provider, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), mutating_provider, request)
 
 
 def test_contract_suite_detects_undeclared_output(
@@ -175,7 +192,7 @@ def test_contract_suite_detects_undeclared_output(
 
     with pytest.raises(ContractViolationError, match="declared fields"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             extra_output_provider,
             request,
         )
@@ -189,7 +206,7 @@ def test_contract_suite_detects_nondeterminism(
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
         context=daily_context,
     )
     counter = 0
@@ -202,7 +219,7 @@ def test_contract_suite_detects_nondeterminism(
         return result
 
     with pytest.raises(ContractViolationError, match="deterministic"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), unstable_provider, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), unstable_provider, request)
 
 
 def test_contract_suite_detects_nondeterministic_diagnostics(
@@ -234,7 +251,7 @@ def test_contract_suite_detects_nondeterministic_diagnostics(
         )
 
     with pytest.raises(ContractViolationError, match="diagnostics"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), unstable_provider, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), unstable_provider, request)
 
 
 def test_contract_suite_requires_exact_manifest_identity(
@@ -249,7 +266,7 @@ def test_contract_suite_requires_exact_manifest_identity(
         context=daily_context,
     )
     with pytest.raises(ContractViolationError, match="does not match manifest"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), sma, request)
 
 
 def test_contract_suite_enforces_declared_input_dtype_and_history(
@@ -266,7 +283,7 @@ def test_contract_suite_enforces_declared_input_dtype_and_history(
         input_panel=invalid_dtype,
         context=daily_context,
     )
-    manifest = load_operator_manifest(valid_manifest_payload)
+    manifest = _load_contract_manifest(valid_manifest_payload)
     with pytest.raises(ContractViolationError, match="dtype"):
         verify_operator_contract(manifest, sma, request)
 
@@ -298,7 +315,7 @@ def test_contract_suite_rejects_nonfinite_supplied_numeric_parameters(
     )
 
     with pytest.raises(InvalidParameterError, match="finite"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
 
 def test_contract_suite_enforces_dtype_of_present_optional_columns(
@@ -319,7 +336,7 @@ def test_contract_suite_enforces_dtype_of_present_optional_columns(
     )
 
     with pytest.raises(ContractViolationError, match="volume dtype"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
 
 def test_contract_suite_probes_each_present_optional_column_independently(
@@ -347,7 +364,7 @@ def test_contract_suite_probes_each_present_optional_column_independently(
         return sma(provider_request)
 
     report = verify_operator_contract(
-        load_operator_manifest(payload),
+        _load_contract_manifest(payload),
         optional_aware_provider,
         request,
     )
@@ -378,13 +395,96 @@ def test_contract_suite_rejects_unconditional_reads_of_optional_columns(
 
     with pytest.raises(ContractViolationError, match="optional input column") as exc_info:
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             unconditional_optional_read,
             request,
         )
 
     assert exc_info.value.to_dict()["details"] == {"column": "volume"}
     assert isinstance(exc_info.value.__cause__, KeyError)
+
+
+def test_contract_suite_probes_with_only_declared_input_columns(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    observed_columns: list[tuple[str, ...]] = []
+
+    def tracking_provider(provider_request: OperatorRequest):
+        observed_columns.append(tuple(provider_request.input_panel.columns))
+        return sma(provider_request)
+
+    report = verify_operator_contract(
+        _load_contract_manifest(payload),
+        tracking_provider,
+        request,
+    )
+
+    assert report.passed is True
+    assert observed_columns.count(("date", "code", "close")) == 1
+
+
+def test_contract_suite_rejects_unconditional_reads_of_undeclared_columns(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def undeclared_input_provider(provider_request: OperatorRequest):
+        provider_request.input_panel["volume"]
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="undeclared input columns") as exc_info:
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            undeclared_input_provider,
+            request,
+        )
+
+    assert exc_info.value.to_dict()["details"] == {"columns": ["volume"]}
+    assert isinstance(exc_info.value.__cause__, KeyError)
+
+
+def test_contract_suite_rejects_output_dependence_on_undeclared_columns(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def undeclared_dependent_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        if "volume" in provider_request.input_panel:
+            result.data["sma_2"] += 1.0
+        return result
+
+    with pytest.raises(ContractViolationError, match="depend on undeclared input columns"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            undeclared_dependent_provider,
+            request,
+        )
 
 
 def test_contract_suite_enforces_require_complete_input_policy(
@@ -404,7 +504,7 @@ def test_contract_suite_enforces_require_complete_input_policy(
     )
 
     with pytest.raises(ContractViolationError, match="require_complete"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
 
 def test_contract_suite_rejects_incomplete_declared_cross_sections(
@@ -423,7 +523,7 @@ def test_contract_suite_rejects_incomplete_declared_cross_sections(
     )
 
     with pytest.raises(InsufficientCrossSectionError, match="complete cross section"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
 
 def test_contract_suite_does_not_shuffle_for_sorted_only_operators(
@@ -447,7 +547,7 @@ def test_contract_suite_does_not_shuffle_for_sorted_only_operators(
             raise AssertionError("provider received unsorted input")
         return sma(provider_request)
 
-    report = verify_operator_contract(load_operator_manifest(payload), sorted_only_provider, request)
+    report = verify_operator_contract(_load_contract_manifest(payload), sorted_only_provider, request)
 
     assert "unordered_input" not in report.checks
 
@@ -473,7 +573,7 @@ def test_contract_suite_rejects_unordered_probe_with_fewer_than_two_rows(
         raise AssertionError("provider must not be called for an invalid unordered probe fixture")
 
     with pytest.raises(ContractViolationError, match="unordered input probe") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), unexpected_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload, period=1), unexpected_provider, request)
 
     assert exc_info.value.to_dict()["details"] == {
         "required_rows": 2,
@@ -504,7 +604,7 @@ def test_contract_suite_uses_rotation_for_two_row_unordered_probe(
         observed_keys.append(list(provider_request.input_panel[["date", "code"]].itertuples(index=False, name=None)))
         return sma(provider_request)
 
-    report = verify_operator_contract(load_operator_manifest(payload), tracking_provider, request)
+    report = verify_operator_contract(_load_contract_manifest(payload, period=1), tracking_provider, request)
 
     baseline_keys = list(panel[["date", "code"]].itertuples(index=False, name=None))
     assert report.passed is True
@@ -541,7 +641,7 @@ def test_contract_suite_compares_unordered_probe_exactly(
 
     with pytest.raises(ContractViolationError, match="incidental input order"):
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             order_sensitive_provider,
             request,
         )
@@ -560,7 +660,7 @@ def test_contract_suite_rejects_use_before_declared_availability(
     )
 
     with pytest.raises(CausalityViolationError, match="not available"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), sma, request)
 
 
 def test_contract_suite_enriches_input_panel_errors_with_manifest_operator_id(
@@ -578,7 +678,7 @@ def test_contract_suite_enriches_input_panel_errors_with_manifest_operator_id(
     )
 
     with pytest.raises(DuplicateKeyError) as exc_info:
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), sma, request)
 
     assert exc_info.value.to_dict() == {
         "code": "duplicate_key",
@@ -610,7 +710,7 @@ def test_contract_suite_enriches_output_panel_errors_with_manifest_operator_id(
 
     with pytest.raises(InvalidPanelError) as exc_info:
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             invalid_output_provider,
             request,
         )
@@ -645,7 +745,7 @@ def test_contract_suite_rejects_non_string_output_column_labels_structurally(
 
     with pytest.raises(ContractViolationError, match="column labels must be strings") as exc_info:
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             non_string_column_provider,
             request,
         )
@@ -679,7 +779,7 @@ def test_contract_suite_enforces_declared_output_bounds(
         return result
 
     with pytest.raises(ContractViolationError, match="minimum"):
-        verify_operator_contract(load_operator_manifest(payload), out_of_bounds_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), out_of_bounds_provider, request)
 
 
 def test_contract_suite_enforces_output_nan_policy_none(
@@ -697,7 +797,7 @@ def test_contract_suite_enforces_output_nan_policy_none(
     )
 
     with pytest.raises(ContractViolationError, match="nan_policy=none"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
 
 def test_contract_suite_confines_warmup_nans_to_declared_rows(
@@ -718,7 +818,7 @@ def test_contract_suite_confines_warmup_nans_to_declared_rows(
         return result
 
     with pytest.raises(ContractViolationError, match="outside declared warmup"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), late_nan_provider, request)
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), late_nan_provider, request)
 
 
 def test_manifest_boundary_rejects_negative_resolved_warmup_without_nans(
@@ -766,13 +866,13 @@ def test_contract_suite_validates_all_diagnostic_row_counts(
 
     with pytest.raises(ContractViolationError, match=message):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             invalid_diagnostics_provider,
             request,
         )
 
 
-def test_contract_suite_rejects_duplicate_resolved_output_names(
+def test_contract_suite_refuses_parameterized_duplicate_output_fields(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -796,11 +896,13 @@ def test_contract_suite_rejects_duplicate_resolved_output_names(
         context=daily_context,
     )
 
-    with pytest.raises(ContractViolationError, match="duplicate resolved output fields"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+    with pytest.raises(ContractViolationError, match="parameters that affect output fields") as exc_info:
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
+
+    assert exc_info.value.to_dict()["details"] == {"parameters": ["alias"]}
 
 
-def test_contract_suite_rejects_dynamic_reserved_output_names(
+def test_contract_suite_refuses_parameterized_reserved_output_fields(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -823,11 +925,13 @@ def test_contract_suite_rejects_dynamic_reserved_output_names(
         context=daily_context,
     )
 
-    with pytest.raises(ContractViolationError, match="reserved QuantPanel key"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+    with pytest.raises(ContractViolationError, match="parameters that affect output fields") as exc_info:
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
+
+    assert exc_info.value.to_dict()["details"] == {"parameters": ["field"]}
 
 
-def test_contract_suite_rejects_required_parameter_resolving_to_empty_output_name(
+def test_contract_suite_refuses_parameterized_empty_output_fields(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -855,13 +959,13 @@ def test_contract_suite_rejects_required_parameter_resolving_to_empty_output_nam
         output = result.data.rename(columns={"sma_2": provider_request.parameters["field"]})
         return type(result)(data=output, diagnostics=result.diagnostics, provenance=result.provenance)
 
-    with pytest.raises(ContractViolationError, match="non-empty") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), empty_output_name_provider, request)
+    with pytest.raises(ContractViolationError, match="parameters that affect output fields") as exc_info:
+        verify_operator_contract(_load_contract_manifest(payload), empty_output_name_provider, request)
 
-    assert exc_info.value.to_dict()["details"] == {"fields": [""]}
+    assert exc_info.value.to_dict()["details"] == {"parameters": ["field"]}
 
 
-def test_contract_suite_structures_attribute_errors_from_output_name_templates(
+def test_contract_suite_refuses_attribute_output_template_domains_before_formatting(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -884,17 +988,10 @@ def test_contract_suite_structures_attribute_errors_from_output_name_templates(
         context=daily_context,
     )
 
-    with pytest.raises(ContractViolationError, match="field template could not be resolved") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+    with pytest.raises(ContractViolationError, match="parameters that affect output fields") as exc_info:
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
-    assert exc_info.value.to_dict() == {
-        "code": "contract_violation",
-        "operator_id": "fake.indicators.sma",
-        "message": "operator output field template could not be resolved",
-        "details": {},
-        "retryable": False,
-    }
-    assert isinstance(exc_info.value.__cause__, AttributeError)
+    assert exc_info.value.to_dict()["details"] == {"parameters": ["options"]}
 
 
 def test_contract_suite_checks_immutability_on_unordered_probe(
@@ -919,7 +1016,7 @@ def test_contract_suite_checks_immutability_on_unordered_probe(
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             unordered_mutating_provider,
             request,
         )
@@ -933,7 +1030,7 @@ def test_contract_suite_snapshots_first_result_before_repeat_probe(
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
         context=daily_context,
     )
     shared = None
@@ -950,7 +1047,7 @@ def test_contract_suite_snapshots_first_result_before_repeat_probe(
 
     with pytest.raises(ContractViolationError, match="deterministic"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             shared_result_provider,
             request,
         )
@@ -982,7 +1079,7 @@ def test_contract_suite_includes_metadata_in_determinism_check(
 
     with pytest.raises(ContractViolationError, match="metadata"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             varying_metadata_provider,
             request,
         )
@@ -1010,7 +1107,7 @@ def test_contract_suite_compares_array_metadata_without_ambiguous_truth_values(
         )
 
     report = verify_operator_contract(
-        load_operator_manifest(valid_manifest_payload),
+        _load_contract_manifest(valid_manifest_payload),
         array_metadata_provider,
         request,
     )
@@ -1050,7 +1147,7 @@ def test_contract_suite_treats_matching_missing_values_in_array_metadata_as_equa
         )
 
     report = verify_operator_contract(
-        load_operator_manifest(valid_manifest_payload),
+        _load_contract_manifest(valid_manifest_payload),
         array_metadata_provider,
         request,
     )
@@ -1087,7 +1184,7 @@ def test_contract_suite_snapshots_nested_read_only_metadata(
         )
 
     report = verify_operator_contract(
-        load_operator_manifest(valid_manifest_payload),
+        _load_contract_manifest(valid_manifest_payload),
         nested_read_only_metadata_provider,
         request,
     )
@@ -1119,7 +1216,7 @@ def test_contract_suite_treats_repeated_missing_metadata_as_equal(
         )
 
     report = verify_operator_contract(
-        load_operator_manifest(valid_manifest_payload),
+        _load_contract_manifest(valid_manifest_payload),
         missing_metadata_provider,
         request,
     )
@@ -1149,7 +1246,7 @@ def test_contract_suite_deeply_checks_object_cell_immutability(
         return sma(provider_request)
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
-        verify_operator_contract(load_operator_manifest(payload), object_mutating_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), object_mutating_provider, request)
 
 
 def test_contract_suite_verifies_past_only_causality_with_truncated_histories(
@@ -1173,7 +1270,7 @@ def test_contract_suite_verifies_past_only_causality_with_truncated_histories(
 
     with pytest.raises(ContractViolationError, match="past_only"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             future_using_provider,
             request,
         )
@@ -1206,7 +1303,7 @@ def test_contract_suite_uses_exact_comparison_for_past_only_causality(
 
     with pytest.raises(ContractViolationError, match="past_only"):
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             subtly_future_using_provider,
             request,
         )
@@ -1234,7 +1331,7 @@ def test_contract_suite_verifies_past_only_causality_for_panel_scope(
         return result
 
     with pytest.raises(ContractViolationError, match="past_only"):
-        verify_operator_contract(load_operator_manifest(payload), future_using_panel_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), future_using_panel_provider, request)
 
 
 def test_contract_suite_verifies_past_only_causality_for_research_only_scope(
@@ -1260,7 +1357,7 @@ def test_contract_suite_verifies_past_only_causality_for_research_only_scope(
 
     with pytest.raises(ContractViolationError, match="past_only"):
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             future_using_research_provider,
             request,
         )
@@ -1281,7 +1378,7 @@ def test_contract_suite_rejects_past_only_fixture_without_a_valid_proper_prefix(
     )
 
     with pytest.raises(ContractViolationError, match="causality probe") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
     assert exc_info.value.to_dict()["details"] == {
         "min_history": 3,
@@ -1330,7 +1427,7 @@ def test_contract_suite_skips_invalid_past_only_prefixes_for_staggered_panel(
         return sma(provider_request)
 
     report = verify_operator_contract(
-        load_operator_manifest(payload),
+        _load_contract_manifest(payload),
         minimum_enforcing_provider,
         request,
     )
@@ -1372,7 +1469,7 @@ def test_contract_suite_refuses_parameterized_causality_before_provider_call(
         return sma(provider_request)
 
     with pytest.raises(ContractViolationError, match="parameters that affect causality") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), tracked_provider, request)
 
     assert provider_calls == 0
     assert exc_info.value.to_dict() == {
@@ -1414,7 +1511,7 @@ def test_contract_suite_refuses_parameterized_availability_before_provider_call(
         return sma(provider_request)
 
     with pytest.raises(ContractViolationError, match="parameters that affect availability") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), tracked_provider, request)
 
     assert provider_calls == 0
     assert exc_info.value.to_dict() == {
@@ -1424,6 +1521,42 @@ def test_contract_suite_refuses_parameterized_availability_before_provider_call(
         "details": {"parameters": ["release_lag"]},
         "retryable": False,
     }
+
+
+@pytest.mark.parametrize(
+    ("flag", "message"),
+    [
+        ("affects_output_fields", "parameters that affect output fields"),
+        ("affects_warmup", "parameters that affect warmup"),
+    ],
+)
+def test_contract_suite_refuses_artifact_wide_parameter_effects_before_provider_call(
+    flag,
+    message,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["parameters"]["period"][flag] = True
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match=message) as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {"parameters": ["period"]}
 
 
 def test_contract_suite_enforces_cross_section_min_assets_at_every_date(
@@ -1465,7 +1598,7 @@ def test_contract_suite_enforces_cross_section_min_assets_at_every_date(
         )
 
     with pytest.raises(InsufficientCrossSectionError, match="minimum 2 at every date") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), identity_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), identity_provider, request)
 
     assert exc_info.value.details["min_assets"] == 2
     assert 1 in exc_info.value.details["assets_by_date"].values()
@@ -1512,7 +1645,7 @@ def test_contract_suite_verifies_cross_section_scope_per_date(
         )
 
     with pytest.raises(ContractViolationError, match="per-date"):
-        verify_operator_contract(load_operator_manifest(payload), time_mixing_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), time_mixing_provider, request)
 
 
 def test_contract_suite_compares_cross_section_scope_probe_exactly(
@@ -1556,7 +1689,7 @@ def test_contract_suite_compares_cross_section_scope_probe_exactly(
 
     with pytest.raises(ContractViolationError, match="per-date"):
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             date_mixing_provider,
             request,
         )
@@ -1588,7 +1721,7 @@ def test_contract_suite_rejects_cross_section_scope_probe_with_one_date(
 
     with pytest.raises(ContractViolationError, match="cross_section scope probe") as exc_info:
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             tracked_provider,
             request,
         )
@@ -1616,7 +1749,7 @@ def test_contract_suite_rejects_time_series_scope_probe_with_one_asset(
 
     with pytest.raises(ContractViolationError, match="time_series scope probe") as exc_info:
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             sma,
             request,
         )
@@ -1655,7 +1788,7 @@ def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
         return sma(provider_request)
 
     report = verify_operator_contract(
-        load_operator_manifest(payload),
+        _load_contract_manifest(payload),
         min_assets_enforcing_provider,
         request,
     )
@@ -1689,7 +1822,7 @@ def test_contract_suite_compares_time_series_scope_probe_exactly(
 
     with pytest.raises(ContractViolationError, match="other symbols"):
         verify_operator_contract(
-            load_operator_manifest(payload),
+            _load_contract_manifest(payload),
             symbol_mixing_provider,
             request,
         )
@@ -1716,7 +1849,7 @@ def test_contract_suite_rejects_time_series_scope_probe_without_support_assets(
         return sma(provider_request)
 
     with pytest.raises(ContractViolationError, match="time_series scope probe") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+        verify_operator_contract(_load_contract_manifest(payload), tracked_provider, request)
 
     assert provider_calls == 0
     assert exc_info.value.to_dict()["details"] == {
@@ -1733,7 +1866,7 @@ def test_contract_suite_uses_exact_determinism_by_default(
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
         context=daily_context,
     )
     calls = 0
@@ -1747,7 +1880,7 @@ def test_contract_suite_uses_exact_determinism_by_default(
 
     with pytest.raises(ContractViolationError, match="deterministic"):
         verify_operator_contract(
-            load_operator_manifest(valid_manifest_payload),
+            _load_contract_manifest(valid_manifest_payload),
             subtly_unstable_provider,
             request,
         )
@@ -1770,7 +1903,7 @@ def test_contract_suite_applies_declared_determinism_tolerances(
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
         context=daily_context,
     )
     calls = 0
@@ -1784,7 +1917,7 @@ def test_contract_suite_applies_declared_determinism_tolerances(
             result.data.loc[result.data.index[-1], "sma_2"] += calls * 1e-7
         return result
 
-    report = verify_operator_contract(load_operator_manifest(payload), tolerant_provider, request)
+    report = verify_operator_contract(_load_contract_manifest(payload), tolerant_provider, request)
 
     assert report.passed is True
 

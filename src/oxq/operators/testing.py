@@ -97,6 +97,22 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"parameters": availability_parameters},
         )
+    output_field_parameters = sorted(
+        name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_output_fields"]
+    )
+    if output_field_parameters:
+        raise ContractViolationError(
+            "contract checker cannot certify parameters that affect output fields",
+            operator_id=manifest.operator_id,
+            details={"parameters": output_field_parameters},
+        )
+    warmup_parameters = sorted(name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_warmup"])
+    if warmup_parameters:
+        raise ContractViolationError(
+            "contract checker cannot certify parameters that affect warmup",
+            operator_id=manifest.operator_id,
+            details={"parameters": warmup_parameters},
+        )
     parameters = manifest.validate_parameters(request.parameters)
     normalized = _copy_request(request, parameters=parameters)
     _validate_availability(manifest, normalized)
@@ -152,6 +168,7 @@ def verify_operator_contract(
     declared_columns = required_columns | set(input_spec["optional_columns"])
     present_declared_columns = sorted(declared_columns & set(normalized.input_panel.columns))
     present_optional_columns = [column for column in input_spec["optional_columns"] if column in normalized.input_panel.columns]
+    undeclared_columns = [column for column in normalized.input_panel.columns if column not in declared_columns | {"date", "code"}]
     if input_spec["missing_value_policy"]["kind"] == "require_complete":
         incomplete_columns = [column for column in present_declared_columns if normalized.input_panel[column].isna().any()]
         if incomplete_columns:
@@ -216,6 +233,24 @@ def verify_operator_contract(
         checks.append("optional_inputs")
 
     first_data = _deepcopy_frame(result.data)
+    if undeclared_columns:
+        declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
+        declared_request = _copy_request(normalized, panel=declared_panel)
+        try:
+            declared_result = _invoke_operator(manifest, operator, declared_request)
+        except Exception as exc:
+            raise ContractViolationError(
+                "operator failed without undeclared input columns",
+                operator_id=manifest.operator_id,
+                details={"columns": undeclared_columns},
+            ) from exc
+        _validate_result(manifest, declared_request, declared_result, expected_implementation_digest)
+        _require_exact_data(
+            _canonical(first_data),
+            _canonical(declared_result.data),
+            manifest,
+            "operator output must not depend on undeclared input columns",
+        )
     first_metadata = _snapshot_metadata(result.metadata)
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated, expected_implementation_digest)

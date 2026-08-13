@@ -562,6 +562,78 @@ def test_catalog_accepts_nested_read_only_mapping_input_without_mutability_leaka
     assert json.loads(catalog.to_json())["operators"][0]["semantic_name"] == "SMA"
 
 
+@pytest.mark.parametrize("source_kind", ["mapping", "yaml"])
+@pytest.mark.parametrize("cycle_location", ["package", "operator"])
+def test_catalog_rejects_recursive_container_graphs_before_traversal(
+    valid_manifest_payload,
+    tmp_path,
+    source_kind,
+    cycle_location,
+) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+    if cycle_location == "package":
+        payload["package"]["build_identifier"] = payload["package"]
+        expected_path = "catalog.package.build_identifier"
+    else:
+        recursive: list[object] = []
+        recursive.append(recursive)
+        payload["operators"][0]["parameters"]["period"]["default"] = recursive
+        expected_path = "catalog.operators[0].parameters.period.default[0]"
+
+    source = payload
+    if source_kind == "yaml":
+        source = tmp_path / "catalog.yaml"
+        source.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(InvalidManifestError, match="recursive|cyclic") as exc_info:
+        load_operator_catalog(source)
+
+    assert expected_path in str(exc_info.value)
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
+@pytest.mark.parametrize("source_kind", ["mapping", "yaml"])
+def test_catalog_accepts_shared_non_recursive_aliases(valid_manifest_payload, tmp_path, source_kind) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    shared_dtypes = ["float64", "float32", "int64"]
+    payload["inputs"]["optional_columns"] = ["open"]
+    payload["inputs"]["dtypes"] = {"close": shared_dtypes, "open": shared_dtypes}
+    manifest = load_operator_manifest(payload)
+    catalog_payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**payload, "manifest_digest": manifest.digest}],
+    }
+
+    source = catalog_payload
+    if source_kind == "yaml":
+        source = tmp_path / "catalog.yaml"
+        source.write_text(yaml.safe_dump(catalog_payload, sort_keys=False), encoding="utf-8")
+
+    catalog = load_operator_catalog(source)
+
+    assert catalog.operator_ids == ("fake.indicators.sma",)
+
+
 @pytest.mark.parametrize("field", ["schema_version", "contract_version"])
 @pytest.mark.parametrize("invalid_version", [True, 1.0])
 def test_catalog_requires_integer_version_fields(valid_manifest_payload, field, invalid_version) -> None:

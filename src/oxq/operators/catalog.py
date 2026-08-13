@@ -32,6 +32,36 @@ def _thaw(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def _find_recursive_container(value: Any, path: str = "catalog") -> str | None:
+    stack: list[tuple[Any, str, bool]] = [(value, path, False)]
+    active: set[int] = set()
+    while stack:
+        current, current_path, exiting = stack.pop()
+        if not isinstance(current, (Mapping, list, tuple)):
+            continue
+        identity = id(current)
+        if exiting:
+            active.remove(identity)
+            continue
+        if identity in active:
+            return current_path
+        active.add(identity)
+        stack.append((current, current_path, True))
+        if isinstance(current, Mapping):
+            children = [(item, f"{current_path}.{key}") for key, item in current.items()]
+        else:
+            children = [(item, f"{current_path}[{index}]") for index, item in enumerate(current)]
+        for child, child_path in reversed(children):
+            stack.append((child, child_path, False))
+    return None
+
+
+def _reject_recursive_containers(value: Any) -> None:
+    recursive_path = _find_recursive_container(value)
+    if recursive_path is not None:
+        raise InvalidManifestError(f"catalog contains a recursive or cyclic container: {recursive_path}")
+
+
 def _find_non_string_mapping_key(value: Any, path: str = "catalog") -> str | None:
     if isinstance(value, Mapping):
         for key, item in value.items():
@@ -142,6 +172,7 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
 
 def _read_catalog(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(source, Mapping):
+        _reject_recursive_containers(source)
         payload = _thaw(source)
         assert isinstance(payload, dict)
         return payload
@@ -151,6 +182,7 @@ def _read_catalog(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
         payload = json.loads(raw) if path.suffix.lower() == ".json" else yaml.safe_load(raw)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError) as exc:
         raise InvalidManifestError(f"operator catalog is invalid: {path}: {exc}") from exc
+    _reject_recursive_containers(payload)
     if not isinstance(payload, dict):
         raise InvalidManifestError(f"operator catalog must contain an object: {path}")
     return payload
