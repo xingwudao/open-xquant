@@ -4,10 +4,10 @@ import socket
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import examples.custom_data_sources.pytdx_downloader as module
+import examples.modules.pytdx_downloader as module
 import pandas as pd
 import pytest
-from examples.custom_data_sources.pytdx_downloader import PyTdxDownloader
+from examples.modules.pytdx_downloader import PyTdxDownloader
 
 from oxq.core.errors import DownloadError
 from oxq.data.manifest import read_manifest, verify_manifest
