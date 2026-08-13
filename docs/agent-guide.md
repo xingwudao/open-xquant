@@ -265,7 +265,45 @@ Agent 实现都以每个 `SKILL.md` 的 frontmatter `name` 和 `description`
 
 默认 `full-research` profile 会安装 `pyproject.toml` 中除 `dev`、
 `docs`、`talib` 以外的 optional extras。当前版本包含 `agent`、
-`akshare`、`chart`、`live`、`mcp`、`scipy`、`yfinance`。
+`akshare`、`chart`、`live`、`mcp`、`scipy`、`tushare`、`yfinance`。
+
+### A 股数据源
+
+Agent 可使用 AkShare 或 Tushare 下载 A 股数据。使用 Tushare 前先安装
+可选依赖并配置凭据：
+
+```bash
+uv sync --extra tushare
+export TUSHARE_TOKEN="your-token"
+```
+
+```python
+from oxq.data import TushareDownloader
+
+downloader = TushareDownloader()  # 首次使用时读取 TUSHARE_TOKEN
+path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
+
+# 显式构造参数 token 的优先级高于环境变量。
+explicit = TushareDownloader(token="your-token")
+```
+
+Tushare 首版仅支持 A 股日线，代码必须完全匹配
+`^[0-9]{6}\.(SH|SZ|BJ)$`：六位数字加大写交易所后缀。`end` 包含端点。
+前复权（qfq）公式为
+`raw_price * row_adj_factor / reference_adj_factor`；参考因子取包含端点的
+`end` 当日或之前的最新有效复权因子，它可以独立于最后一条日线交易记录。
+`volume` 单位为股。权限、积分和限流由 Tushare 平台决定。
+Tushare `daily` 单次最多返回 6000 行。下载器会把长区间自动切成每块最多
+3650 个包含端点的日历日，并让 `daily` 与 `adj_factor` 使用完全相同、无
+重叠且无缺口的边界；短区间仍只请求一次。任一分块响应达到 6000 行时会在
+写入前失败，避免接受可能被截断的数据；成功 manifest 仍记录用户请求的
+完整范围。Agent 绝不能
+打印或存储 token；open-xquant 不会将 token 持久化到本地状态、日志、异常
+或产物。凭据传输由上游 Tushare SDK 控制，其当前官方客户端使用 HTTP，
+Agent 应将其视为需要用户自行评估的上游安全边界。
+
+下载后应把标准 Parquet 作为审计运行的输入，并继续使用
+`data.provider: local`，不能把 provider 设置为 `tushare`。
 
 安装完成后，`~/.config/open-xquant/agent.yaml` 会记录：
 

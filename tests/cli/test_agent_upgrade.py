@@ -78,7 +78,7 @@ def fake_sdk_bundle(monkeypatch):
             "id": "bundle-test",
             "root": str(root),
             "profile": "full-research",
-            "extras": ["chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent"],
+            "extras": ["chart", "scipy", "yfinance", "akshare", "tushare", "live", "mcp", "agent"],
             "excluded_extras": ["dev", "docs", "talib"],
             "wheel": {"path": str(wheel), "sha256": "wheel-sha", "version": "0.1.0", "source_commit": "commit-sha"},
             "dependencies": {
@@ -1117,7 +1117,7 @@ def test_agent_upgrade_tracks_previous_sdk_bundle(monkeypatch, tmp_path) -> None
             "id": bundle_id,
             "root": str(root),
             "profile": "full-research",
-            "extras": ["chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent"],
+            "extras": ["chart", "scipy", "yfinance", "akshare", "tushare", "live", "mcp", "agent"],
             "excluded_extras": ["dev", "docs", "talib"],
             "wheel": {"path": str(wheel), "sha256": "wheel-sha", "version": "0.1.0", "source_commit": "commit-sha"},
             "dependencies": {

@@ -23,7 +23,7 @@ import click
 from oxq.cli.agent_manifest import expand_path, read_json_file, sha256_file, write_json_file, write_text_file
 
 SDK_PROFILE = "full-research"
-SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "live", "mcp", "agent")
+SDK_EXTRA_FALLBACK = ("chart", "scipy", "yfinance", "akshare", "tushare", "live", "mcp", "agent")
 EXCLUDED_EXTRAS = ("dev", "docs", "talib")
 WHEEL_ZIP_DATE = (1980, 1, 1, 0, 0, 0)
 RESERVED_WORKSPACE_PATHS = (

@@ -44,6 +44,9 @@ yfinance = [
 akshare = [
     "akshare>=1.10",
 ]
+tushare = [
+    "tushare>=1.4.29",
+]
 chart = [
     "mplfinance>=0.12",
     "matplotlib>=3.7",

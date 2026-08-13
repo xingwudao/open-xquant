@@ -4,6 +4,7 @@ def test_data_public_api() -> None:
         Downloader,
         LocalMarketDataProvider,
         MarketDataProvider,
+        TushareDownloader,
         YFinanceDownloader,
         resolve_data_dir,
     )
@@ -12,6 +13,7 @@ def test_data_public_api() -> None:
     assert Downloader is not None
     assert YFinanceDownloader is not None
     assert AkShareDownloader is not None
+    assert TushareDownloader is not None
     assert resolve_data_dir is not None
 
 

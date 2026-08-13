@@ -119,6 +119,44 @@ Agent loads open-xquant skill
 
 `examples/` 目录提供了由浅入深的学习路径。
 
+### Tushare Pro A 股日线
+
+安装可选依赖并通过环境变量配置 token：
+
+```bash
+uv sync --extra tushare
+export TUSHARE_TOKEN="your-token"
+```
+
+```python
+from oxq.data import TushareDownloader
+
+downloader = TushareDownloader()  # 首次使用时读取 TUSHARE_TOKEN
+path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
+
+# 显式构造参数 token 的优先级高于环境变量。
+explicit = TushareDownloader(token="your-token")
+```
+
+首版仅支持 A 股日线，证券代码必须完全匹配
+`^[0-9]{6}\.(SH|SZ|BJ)$`：六位数字加大写交易所后缀，例如
+`600519.SH`。`end` 日期包含在下载范围内。输出价格默认为前复权（qfq），
+计算公式为
+`raw_price * row_adj_factor / reference_adj_factor`；参考因子取包含端点的
+`end` 当日或之前的最新有效复权因子，它可以独立于最后一条日线交易记录。
+`volume` 的单位为股。Tushare 账户权限、积分和限流由 Tushare 平台决定。
+Tushare `daily` 单次最多返回 6000 行。下载器会把长区间自动切成每块最多
+3650 个包含端点的日历日，`daily` 与 `adj_factor` 使用完全相同、无重叠且
+无缺口的边界；短区间仍只请求一次。任一分块响应达到 6000 行时会在写入前
+失败，避免静默接受可能被截断的数据；成功 manifest 仍记录用户请求的完整
+`start` 和 `end`。
+下载得到的标准 Parquet 仍通过 `data.provider: local` 用于研究和回测，不能
+把 provider 设置为 `tushare`。
+
+open-xquant 不会持久化 token，也不会把它写入日志、异常或输出产物。
+凭据的网络传输由上游 Tushare SDK 控制；其当前官方客户端使用 HTTP。
+用户应自行评估这一上游传输边界，并遵守 Tushare 的服务条款和安全要求。
+
 ### 推荐学习顺序
 
 **第一步：模块示例（`examples/modules/`）**
@@ -362,6 +400,50 @@ for the directory layout, role handoffs, and workflow graph.
 - **AI application developers**: Build LLM-powered automated quant research agents
 
 ## Learn by Examples
+
+### Tushare Pro A-share Daily Data
+
+Install the optional dependency and configure the token through the
+environment:
+
+```bash
+uv sync --extra tushare
+export TUSHARE_TOKEN="your-token"
+```
+
+```python
+from oxq.data import TushareDownloader
+
+downloader = TushareDownloader()  # reads TUSHARE_TOKEN on first use
+path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
+
+# Explicit constructor token takes precedence over the environment.
+explicit = TushareDownloader(token="your-token")
+```
+
+The first release supports A-share daily data only. Symbols must match
+`^[0-9]{6}\.(SH|SZ|BJ)$` exactly: six digits followed by an uppercase exchange
+suffix, for example `600519.SH`. The `end` date is inclusive. Output prices use
+forward adjustment (qfq), calculated as
+`raw_price * row_adj_factor / reference_adj_factor`; the reference factor is
+the latest valid adjustment factor on or before the inclusive `end` and may be
+independent of the last daily trading row. `volume` is in shares. Tushare
+account permissions, points, and rate limits are determined by the Tushare
+platform. Tushare `daily` returns at most 6,000 rows per call. The downloader
+automatically splits long ranges into inclusive chunks of at most 3,650
+calendar days; `daily` and `adj_factor` use identical, gap-free,
+non-overlapping boundaries, while short ranges still use one call. A chunk
+that reaches 6,000 rows is rejected before output is written, because it may
+have been truncated. A successful manifest still records the user's complete
+original `start` and `end` range. Research and backtests continue to consume
+the downloaded standard Parquet through `data.provider: local`; do not set
+the provider to `tushare`.
+
+open-xquant does not persist the token or write it to logs, exceptions, or
+output artifacts. Credential transport is controlled by the upstream Tushare
+SDK, whose current official client uses HTTP. Users should assess this upstream
+transport boundary and follow Tushare's terms of service and security
+requirements.
 
 ### Step 1: Module Examples (`examples/modules/`)
 
