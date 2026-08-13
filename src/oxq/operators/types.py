@@ -54,6 +54,14 @@ def _freeze(
         frozen = copy.deepcopy(value)
         frozen.setflags(write=False)
         return frozen
+    if immutable_leaves_only and isinstance(value, np.generic):
+        return _freeze(
+            value.item(),
+            permanent_arrays=permanent_arrays,
+            string_keys_only=string_keys_only,
+            immutable_leaves_only=True,
+            path=path,
+        )
     if isinstance(value, Mapping):
         frozen_items = {}
         for key, item in value.items():
@@ -332,6 +340,8 @@ class OperatorResult:
             raise ValueError("provenance operator_id must match request operator_id")
         if diagnostics.input_rows != len(request.input_panel):
             raise ValueError("diagnostics.input_rows must match request input_panel rows")
+        if diagnostics.output_rows + diagnostics.dropped_rows != diagnostics.input_rows:
+            raise ValueError("diagnostics.output_rows + diagnostics.dropped_rows must match diagnostics.input_rows")
         return cls(
             data=data,
             diagnostics=diagnostics,

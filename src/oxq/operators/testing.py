@@ -1024,6 +1024,11 @@ def _verify_behavioral_probes(
                     ignore_index=True,
                 )
             )
+            adjacent_swap = request.input_panel.copy(deep=True)
+            left = max(1, (len(adjacent_swap) - 2) // 2)
+            order = list(range(len(adjacent_swap)))
+            order[left], order[left + 1] = order[left + 1], order[left]
+            permuted_panels.append(adjacent_swap.iloc[order].reset_index(drop=True))
         for permuted_panel in permuted_panels:
             permuted_request = _copy_request(request, panel=permuted_panel)
             permuted_result = _invoke_operator(manifest, operator, permuted_request)
@@ -1036,18 +1041,21 @@ def _verify_behavioral_probes(
             )
 
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
-        for excluded_code in request.input_panel["code"].drop_duplicates():
-            isolated_panel = request.input_panel.loc[request.input_panel["code"] != excluded_code].reset_index(drop=True)
-            isolated_request = _copy_request(request, panel=isolated_panel)
-            isolated_result = _invoke_operator(manifest, operator, isolated_request)
-            _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
-            expected = baseline.loc[baseline["code"] != excluded_code]
-            _require_deterministic_data(
-                _canonical(expected),
-                _canonical(isolated_result.data),
-                manifest,
-                "time_series output must not depend on other symbols",
-            )
+        codes = tuple(request.input_panel["code"].drop_duplicates())
+        min_assets = manifest.raw["inputs"]["min_assets"]
+        for asset_count in range(len(codes) - 1, min_assets - 1, -1):
+            for included_codes in combinations(codes, asset_count):
+                isolated_panel = request.input_panel.loc[request.input_panel["code"].isin(included_codes)].reset_index(drop=True)
+                isolated_request = _copy_request(request, panel=isolated_panel)
+                isolated_result = _invoke_operator(manifest, operator, isolated_request)
+                _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
+                expected = baseline.loc[baseline["code"].isin(included_codes)]
+                _require_deterministic_data(
+                    _canonical(expected),
+                    _canonical(isolated_result.data),
+                    manifest,
+                    "time_series output must not depend on other symbols",
+                )
 
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
         _verify_cross_section_scope(

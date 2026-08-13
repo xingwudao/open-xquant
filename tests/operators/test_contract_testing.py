@@ -1364,7 +1364,7 @@ def test_contract_suite_uses_reversal_for_two_row_unordered_probe(
     assert observed_keys[-1] == [baseline_keys[1], baseline_keys[0]]
 
 
-def test_contract_suite_uses_two_distinct_unordered_probes_for_three_rows(
+def test_contract_suite_uses_three_distinct_unordered_probes_for_three_rows(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -1390,8 +1390,51 @@ def test_contract_suite_uses_two_distinct_unordered_probes_for_three_rows(
 
     baseline = list(panel[["date", "code"]].itertuples(index=False, name=None))
     assert report.passed is True
-    assert observed_keys[-2] == list(reversed(baseline))
-    assert observed_keys[-1] == baseline[1:] + baseline[:1]
+    assert observed_keys[-3] == list(reversed(baseline))
+    assert observed_keys[-2] == baseline[1:] + baseline[:1]
+    assert observed_keys[-1] == [baseline[0], baseline[2], baseline[1]]
+
+
+def test_contract_suite_rejects_circular_neighbor_dependence_with_adjacent_swap(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload, period=1)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["min_history"] = 1
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 1},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def circular_neighbor_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        raw = provider_request.input_panel.reset_index(drop=True)
+        neighbors = raw[["date", "code"]].copy()
+        neighbors["sma_1"] = raw["close"].shift(1, fill_value=raw["close"].iloc[-1]) + raw["close"].shift(
+            -1, fill_value=raw["close"].iloc[0]
+        )
+        return replace(
+            result,
+            data=result.data.drop(columns=["sma_1"]).merge(
+                neighbors,
+                on=["date", "code"],
+                how="left",
+                validate="one_to_one",
+            ),
+        )
+
+    with pytest.raises(ContractViolationError, match="incidental input order"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            circular_neighbor_provider,
+            request,
+        )
 
 
 def test_contract_suite_applies_declared_tolerance_to_unordered_probe(
@@ -2849,6 +2892,49 @@ def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
 
     assert report.passed is True
     assert min(probed_asset_counts) == 2
+
+
+def test_contract_suite_rejects_time_series_mixing_in_specific_min_asset_subset(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    first_symbol = panel.loc[panel["code"] == panel["code"].min()].copy()
+    third_symbol = first_symbol.copy()
+    third_symbol.loc[:, "code"] = "300001.SZ"
+    third_symbol.loc[:, "close"] += 5.0
+    fourth_symbol = first_symbol.copy()
+    fourth_symbol.loc[:, "code"] = "300002.SZ"
+    fourth_symbol.loc[:, "close"] += 10.0
+    panel = pd.concat([panel, third_symbol, fourth_symbol], ignore_index=True).sort_values(
+        ["date", "code"],
+        kind="stable",
+        ignore_index=True,
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    mixed_pair = frozenset(("000001.SZ", "300002.SZ"))
+
+    def pair_specific_mixing_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        symbols = frozenset(provider_request.input_panel["code"].unique())
+        if symbols == mixed_pair:
+            result.data.loc[:, "sma_2"] += 1.0
+        return result
+
+    with pytest.raises(ContractViolationError, match="other symbols"):
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            pair_specific_mixing_provider,
+            request,
+        )
 
 
 def test_contract_suite_applies_declared_tolerance_to_time_series_scope_probe(

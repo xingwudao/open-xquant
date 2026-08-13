@@ -515,6 +515,28 @@ def test_fitted_state_permanently_freezes_numpy_arrays_in_all_state_mappings() -
 
 
 @pytest.mark.parametrize("field", ["training_data_summary", "parameters", "learned_state"])
+def test_fitted_state_normalizes_nested_numpy_scalars_in_all_state_mappings(field: str) -> None:
+    state = _fitted_state(
+        **{
+            field: {
+                "nested": {
+                    "float": np.float32(1.25),
+                    "integer": np.int64(7),
+                    "boolean": np.bool_(True),
+                }
+            }
+        }
+    )
+
+    nested = getattr(state, field)["nested"]
+
+    assert nested == {"float": 1.25, "integer": 7, "boolean": True}
+    assert type(nested["float"]) is float
+    assert type(nested["integer"]) is int
+    assert type(nested["boolean"]) is bool
+
+
+@pytest.mark.parametrize("field", ["training_data_summary", "parameters", "learned_state"])
 def test_fitted_state_rejects_object_dtype_arrays_in_all_state_mappings(field: str) -> None:
     with pytest.raises(TypeError, match="object-dtype arrays"):
         _fitted_state(**{field: {"labels": np.array([["mutable"]], dtype=object)}})
@@ -608,6 +630,36 @@ def test_operator_result_factory_requires_diagnostics_for_request_input_rows(dai
             request,
             data=pd.DataFrame({"value": [1.0]}),
             diagnostics=OperatorDiagnostics(input_rows=1, output_rows=1),
+            provenance=OperatorProvenance(
+                operator_id=request.operator_id,
+                operator_version="1.0.0",
+                implementation_digest="sha256:" + "a" * 64,
+            ),
+        )
+
+
+@pytest.mark.parametrize("dropped_rows", [0, 2], ids=["under-count", "over-count"])
+def test_operator_result_factory_requires_diagnostic_row_conservation(daily_context, dropped_rows: int) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={},
+        input_panel=pd.DataFrame(
+            {
+                "date": ["2025-01-01", "2025-01-02", "2025-01-03"],
+                "code": ["000001", "000001", "000001"],
+            }
+        ),
+        context=daily_context,
+    )
+
+    with pytest.raises(
+        ValueError,
+        match=r"diagnostics\.output_rows \+ diagnostics\.dropped_rows must match diagnostics\.input_rows",
+    ):
+        OperatorResult.for_request(
+            request,
+            data=pd.DataFrame({"value": [1.0, 2.0]}),
+            diagnostics=OperatorDiagnostics(input_rows=3, output_rows=2, dropped_rows=dropped_rows),
             provenance=OperatorProvenance(
                 operator_id=request.operator_id,
                 operator_version="1.0.0",
