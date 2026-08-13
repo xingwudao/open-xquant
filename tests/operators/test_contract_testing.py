@@ -3179,7 +3179,7 @@ def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
         provider_calls += 1
         return sma(provider_request)
 
-    with pytest.raises(ContractViolationError, match="behavioral probe budget") as exc_info:
+    with pytest.raises(ContractViolationError, match="certification probe budget") as exc_info:
         verify_operator_contract(
             _load_contract_manifest(payload),
             bounded_probe_provider,
@@ -3189,7 +3189,52 @@ def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
     assert provider_calls == 0
     details = exc_info.value.to_dict()["details"]
     assert details["shape_count"] == 256
-    assert details["upper_bound"] == details["shape_count"] * details["per_shape_upper_bound"]
+    assert details["behavioral_probe_upper_bound"] == (
+        details["shape_count"] * details["per_shape_behavioral_upper_bound"]
+    )
+    assert details["upper_bound"] > details["maximum"]
+
+
+def test_contract_suite_bounds_required_column_probes_across_optional_shapes(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    required_columns = ["close", *(f"required_{index}" for index in range(16))]
+    optional_columns = [f"optional_{index}" for index in range(8)]
+    payload["inputs"]["required_columns"] = required_columns
+    payload["inputs"]["optional_columns"] = optional_columns
+    payload["inputs"]["dtypes"] = {
+        **{column: ["float64"] for column in required_columns},
+        **{column: ["float64"] for column in optional_columns},
+    }
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    for column in [*required_columns[1:], *optional_columns]:
+        panel[column] = 1.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="certification probe budget") as exc_info:
+        verify_operator_contract(_load_contract_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    details = exc_info.value.to_dict()["details"]
+    assert details["shape_count"] == 256
+    assert details["required_probe_upper_bound"] == len(required_columns) * details["shape_count"]
     assert details["upper_bound"] > details["maximum"]
 
 

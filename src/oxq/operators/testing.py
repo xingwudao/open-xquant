@@ -38,7 +38,7 @@ from oxq.operators.types import (
 
 OperatorCallable = Callable[[OperatorRequest], OperatorResult]
 _MAX_CERTIFIED_OPTIONAL_COLUMNS = 8
-_MAX_CERTIFIED_BEHAVIORAL_PROBES = 4096
+_MAX_CERTIFIED_PROBES = 4096
 _TRADING_AVAILABILITY_ORDER = {
     OperatorAvailability.PRE_OPEN: 0,
     OperatorAvailability.OPEN: 1,
@@ -272,7 +272,13 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"required_assets": required_assets, "available_assets": available_assets},
             )
-    _validate_behavioral_probe_budget(manifest, normalized, len(optional_columns), bool(undeclared_columns))
+    _validate_certification_probe_budget(
+        manifest,
+        normalized,
+        required_column_count=len(required_columns),
+        optional_column_count=len(optional_columns),
+        has_declared_only_shape=bool(undeclared_columns),
+    )
     checks = ["request"]
 
     result = _invoke_operator(manifest, operator, normalized)
@@ -1198,24 +1204,40 @@ def _behavioral_check_names(manifest: OperatorManifest) -> tuple[str, ...]:
     return tuple(checks)
 
 
-def _validate_behavioral_probe_budget(
+def _validate_certification_probe_budget(
     manifest: OperatorManifest,
     request: OperatorRequest,
+    required_column_count: int,
     optional_column_count: int,
     has_declared_only_shape: bool,
 ) -> None:
-    per_shape_upper_bound = _behavioral_probe_upper_bound(manifest, request)
+    per_shape_behavioral_upper_bound = _behavioral_probe_upper_bound(manifest, request)
     shape_count = 2**optional_column_count + int(has_declared_only_shape)
-    upper_bound = shape_count * per_shape_upper_bound
-    if upper_bound > _MAX_CERTIFIED_BEHAVIORAL_PROBES:
+    behavioral_probe_upper_bound = shape_count * per_shape_behavioral_upper_bound
+    shape_invocation_upper_bound = shape_count * 2
+    required_probe_upper_bound = required_column_count * 2**optional_column_count
+    fixed_probe_upper_bound = 1 + int(manifest.raw["inputs"]["min_history"] > 1) + int(
+        manifest.raw["inputs"]["min_assets"] > 1
+    )
+    upper_bound = (
+        behavioral_probe_upper_bound
+        + shape_invocation_upper_bound
+        + required_probe_upper_bound
+        + fixed_probe_upper_bound
+    )
+    if upper_bound > _MAX_CERTIFIED_PROBES:
         raise ContractViolationError(
-            "contract checker behavioral probe budget exceeded",
+            "contract checker certification probe budget exceeded",
             operator_id=manifest.operator_id,
             details={
                 "upper_bound": upper_bound,
-                "maximum": _MAX_CERTIFIED_BEHAVIORAL_PROBES,
+                "maximum": _MAX_CERTIFIED_PROBES,
                 "shape_count": shape_count,
-                "per_shape_upper_bound": per_shape_upper_bound,
+                "per_shape_behavioral_upper_bound": per_shape_behavioral_upper_bound,
+                "behavioral_probe_upper_bound": behavioral_probe_upper_bound,
+                "shape_invocation_upper_bound": shape_invocation_upper_bound,
+                "required_probe_upper_bound": required_probe_upper_bound,
+                "fixed_probe_upper_bound": fixed_probe_upper_bound,
             },
         )
 
