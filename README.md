@@ -133,9 +133,11 @@ Agent loads open-xquant skill
 | `04_audit_and_robustness.py` | 可复现审计、偏差审计、稳健性测试 |
 | `05_report_and_experiment.py` | 报告 artifact、QA 与实验登记 |
 | `06_signals_and_rules.py` | Signal、Rule、ROCTiming 与 BUY/SELL/HOLD 语义 |
+| `11_tdx_data_and_universe.py` | 可选 PyTdx/TdxQuant 下载、读取与 Universe 构建 |
 
 ```bash
 uv run python examples/modules/01_spec_and_validate.py
+uv run python examples/modules/11_tdx_data_and_universe.py --help
 ```
 
 **第二步：Spec 校验（`examples/strategies/spec_validation_demo.py`）**
@@ -373,9 +375,11 @@ Runnable Python scripts demonstrating each core module with SDK and equivalent C
 | `04_audit_and_robustness.py` | Reproducibility audit, bias audit, robustness tests |
 | `05_report_and_experiment.py` | Report artifacts, QA, and experiment registry |
 | `06_signals_and_rules.py` | Signals, rules, ROCTiming, and BUY/SELL/HOLD semantics |
+| `11_tdx_data_and_universe.py` | Selectable PyTdx/TdxQuant download, readback, and Universe construction |
 
 ```bash
 uv run python examples/modules/01_spec_and_validate.py
+uv run python examples/modules/11_tdx_data_and_universe.py --help
 ```
 
 ### Step 2: Spec Validation (`examples/strategies/spec_validation_demo.py`)
