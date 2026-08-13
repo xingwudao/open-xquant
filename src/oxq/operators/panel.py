@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from copy import deepcopy
 from datetime import UTC, date, datetime
@@ -170,6 +171,7 @@ class QuantPanelAdapter:
 def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
     """Validate the JSON Schema and composite-key semantics of a serialized QuantPanel."""
 
+    _validate_json_tree(payload, "payload", set())
     schema = load_contract_schema("quant-panel-v1.schema.json")
     errors = sorted(
         Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload),
@@ -194,6 +196,46 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
             "serialized QuantPanel contains duplicate (date, code) keys",
             details={"keys": [list(key) for key in duplicates]},
         )
+
+
+def _validate_json_tree(value: Any, path: str, active_containers: set[int]) -> None:
+    if value is None or isinstance(value, (bool, int, str)):
+        return
+    if isinstance(value, float):
+        if not math.isfinite(value):
+            raise InvalidPanelError(
+                f"serialized QuantPanel {path} numeric value must be finite",
+                details={"path": path, "type": type(value).__name__},
+            )
+        return
+    if not isinstance(value, (Mapping, list)):
+        raise InvalidPanelError(
+            f"serialized QuantPanel {path} must contain only JSON-compatible values; got {type(value).__name__}",
+            details={"path": path, "type": type(value).__name__},
+        )
+
+    container_id = id(value)
+    if container_id in active_containers:
+        raise InvalidPanelError(
+            f"serialized QuantPanel {path} contains a cyclic JSON tree",
+            details={"path": path},
+        )
+    active_containers.add(container_id)
+    try:
+        if isinstance(value, Mapping):
+            for key, item in value.items():
+                if not isinstance(key, str):
+                    key_path = f"{path}[{key!r}]"
+                    raise InvalidPanelError(
+                        f"serialized QuantPanel {key_path} object key must be a string",
+                        details={"path": key_path, "type": type(key).__name__},
+                    )
+                _validate_json_tree(item, f"{path}.{key}", active_containers)
+        else:
+            for index, item in enumerate(value):
+                _validate_json_tree(item, f"{path}[{index}]", active_containers)
+    finally:
+        active_containers.remove(container_id)
 
 
 def _validate_serialized_date(value: str, timestamp_semantics: str) -> str | datetime:

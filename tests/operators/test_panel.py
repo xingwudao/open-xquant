@@ -8,6 +8,23 @@ from oxq.operators.panel import QuantPanelAdapter, validate_serialized_quant_pan
 from oxq.operators.types import OperatorContext
 
 
+def _serialized_daily_panel(**row_values: object) -> dict[str, object]:
+    return {
+        "schema_version": 1,
+        "context": {
+            "timezone": "Asia/Shanghai",
+            "calendar": "XSHG",
+            "frequency": "1d",
+            "timestamp_semantics": "session_date",
+            "currency": "CNY",
+            "price_adjustment": "forward_adjusted",
+            "data_version": "fixture-v1",
+            "source": "fake",
+        },
+        "rows": [{"date": "2026-01-05", "code": "000001.SZ", **row_values}],
+    }
+
+
 def test_daily_frames_round_trip_without_mutating_input(daily_context, daily_symbol_frames) -> None:
     snapshots = {code: frame.copy(deep=True) for code, frame in daily_symbol_frames.items()}
 
@@ -247,3 +264,65 @@ def test_serialized_intraday_panel_normalizes_lowercase_utc_designators_for_dupl
 
     with pytest.raises(DuplicateKeyError, match="duplicate"):
         validate_serialized_quant_panel(payload)
+
+
+def test_serialized_panel_accepts_nested_json_values() -> None:
+    shared_statistics = {"count": 2, "weight": 1.25}
+    payload = _serialized_daily_panel(
+        metadata={
+            "active": True,
+            "tags": ["bank", None],
+            "statistics": shared_statistics,
+            "statistics_copy": shared_statistics,
+        }
+    )
+
+    validate_serialized_quant_panel(payload)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [b"binary", ("tuple",), {"set"}, object()],
+    ids=["bytes", "tuple", "set", "object"],
+)
+def test_serialized_panel_rejects_nested_non_json_values(value: object) -> None:
+    payload = _serialized_daily_panel(metadata={"nested": [value]})
+
+    with pytest.raises(InvalidPanelError, match=r"rows\[0\]\.metadata\.nested\[0\].*JSON") as exc_info:
+        validate_serialized_quant_panel(payload)
+
+    assert exc_info.value.code == "invalid_panel"
+
+
+def test_serialized_panel_rejects_nested_non_string_object_keys() -> None:
+    payload = _serialized_daily_panel(metadata={1: "numeric", "1": "string"})
+
+    with pytest.raises(InvalidPanelError, match=r"rows\[0\]\.metadata\[1\].*string") as exc_info:
+        validate_serialized_quant_panel(payload)
+
+    assert exc_info.value.code == "invalid_panel"
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_serialized_panel_rejects_nonfinite_numbers(value: float) -> None:
+    payload = _serialized_daily_panel(value=value)
+
+    with pytest.raises(InvalidPanelError, match=r"rows\[0\]\.value.*finite") as exc_info:
+        validate_serialized_quant_panel(payload)
+
+    assert exc_info.value.code == "invalid_panel"
+
+
+@pytest.mark.parametrize("container_type", [list, dict], ids=["list", "object"])
+def test_serialized_panel_rejects_cyclic_trees(container_type: type[list] | type[dict]) -> None:
+    cyclic: list[object] | dict[str, object] = container_type()
+    if isinstance(cyclic, list):
+        cyclic.append(cyclic)
+    else:
+        cyclic["self"] = cyclic
+    payload = _serialized_daily_panel(metadata=cyclic)
+
+    with pytest.raises(InvalidPanelError, match=r"rows\[0\]\.metadata.*cyclic") as exc_info:
+        validate_serialized_quant_panel(payload)
+
+    assert exc_info.value.code == "invalid_panel"

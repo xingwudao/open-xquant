@@ -169,6 +169,47 @@ def test_manifest_rejects_negative_warmup_resolved_from_parameter_default(valid_
         load_operator_manifest(payload)
 
 
+@pytest.mark.parametrize(
+    ("domain_kind", "offset"),
+    [
+        ("required-minimum", -2),
+        ("nondefault-minimum", -1),
+        ("enum-member", -2),
+        ("unbounded-domain", -1),
+    ],
+)
+def test_manifest_rejects_parameter_warmup_domains_that_can_resolve_negative(
+    valid_manifest_payload,
+    domain_kind,
+    offset,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    declaration = payload["parameters"]["period"]
+    if domain_kind == "required-minimum":
+        declaration["required"] = True
+        declaration.pop("default")
+    elif domain_kind == "nondefault-minimum":
+        declaration["minimum"] = 0
+    elif domain_kind == "enum-member":
+        declaration["enum"] = [1, 2]
+    else:
+        declaration.pop("minimum")
+    payload["outputs"]["warmup"]["offset"] = offset
+
+    with pytest.raises(InvalidManifestError, match="warmup.*non-negative"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_accepts_parameter_warmup_with_non_negative_integer_domain(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["period"]["minimum"] = 0.5
+    payload["outputs"]["warmup"]["offset"] = -1
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.validate_parameters({"period": 1}) == {"period": 1}
+
+
 @pytest.mark.parametrize("rows", [1.0, True], ids=["integral-float", "boolean"])
 def test_manifest_rejects_non_int_fixed_warmup_rows(valid_manifest_payload, rows) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
@@ -306,6 +347,72 @@ def test_manifest_rejects_overlapping_input_columns(valid_manifest_payload) -> N
 
     with pytest.raises(InvalidManifestError, match="required_columns"):
         load_operator_manifest(payload)
+
+
+def test_manifest_rejects_dtype_declarations_for_undeclared_columns(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+
+    with pytest.raises(InvalidManifestError, match="dtypes.*unexpected.*volume"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_recursive_in_memory_container_graph(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    recursive: list[object] = []
+    recursive.append(recursive)
+    payload["parameters"]["options"] = {
+        "type": "array",
+        "default": recursive,
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+
+    with pytest.raises(InvalidManifestError, match="recursive|cyclic") as exc_info:
+        load_operator_manifest(payload)
+
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
+def test_manifest_rejects_recursive_yaml_alias(valid_manifest_payload, tmp_path) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    recursive: list[object] = []
+    recursive.append(recursive)
+    payload["parameters"]["options"] = {
+        "type": "array",
+        "default": recursive,
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    source = tmp_path / "operator.yaml"
+    source.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(InvalidManifestError, match="recursive|cyclic") as exc_info:
+        load_operator_manifest(source)
+
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
+def test_manifest_accepts_non_recursive_yaml_alias(valid_manifest_payload, tmp_path) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    shared_dtypes = ["float64"]
+    payload["inputs"]["optional_columns"] = ["volume"]
+    payload["inputs"]["dtypes"] = {"close": shared_dtypes, "volume": shared_dtypes}
+    source = tmp_path / "operator.yaml"
+    source.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    manifest = load_operator_manifest(source)
+
+    assert manifest.raw["inputs"]["dtypes"]["close"] == ("float64",)
+    assert manifest.raw["inputs"]["dtypes"]["volume"] == ("float64",)
 
 
 def test_manifest_rejects_invalid_output_template(valid_manifest_payload) -> None:

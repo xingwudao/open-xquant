@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from oxq.operators._version import is_semantic_version
 from oxq.operators.errors import (
     CausalityViolationError,
     ContractViolationError,
@@ -74,10 +75,11 @@ def verify_operator_contract(
             "request operator_id does not match manifest",
             operator_id=manifest.operator_id,
         )
-    if not isinstance(expected_distribution_version, str) or not expected_distribution_version:
+    if not isinstance(expected_distribution_version, str) or not is_semantic_version(expected_distribution_version):
         raise ContractViolationError(
-            "expected_distribution_version must be a non-empty string",
+            "expected_distribution_version must be semantic versioning",
             operator_id=manifest.operator_id,
+            details={"distribution_version": expected_distribution_version},
         )
     causality_parameters = sorted(name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_causality"])
     if causality_parameters:
@@ -149,6 +151,7 @@ def verify_operator_contract(
         )
     declared_columns = required_columns | set(input_spec["optional_columns"])
     present_declared_columns = sorted(declared_columns & set(normalized.input_panel.columns))
+    present_optional_columns = [column for column in input_spec["optional_columns"] if column in normalized.input_panel.columns]
     if input_spec["missing_value_policy"]["kind"] == "require_complete":
         incomplete_columns = [column for column in present_declared_columns if normalized.input_panel[column].isna().any()]
         if incomplete_columns:
@@ -197,6 +200,21 @@ def verify_operator_contract(
     _validate_result(manifest, normalized, result, expected_implementation_digest)
     checks.extend(("output_contract", "provenance"))
 
+    for column in present_optional_columns:
+        panel_without_optional = normalized.input_panel.drop(columns=[column])
+        optional_request = _copy_request(normalized, panel=panel_without_optional)
+        try:
+            optional_result = _invoke_operator(manifest, operator, optional_request)
+        except Exception as exc:
+            raise ContractViolationError(
+                f"operator failed without optional input column {column}",
+                operator_id=manifest.operator_id,
+                details={"column": column},
+            ) from exc
+        _validate_result(manifest, optional_request, optional_result, expected_implementation_digest)
+    if present_optional_columns:
+        checks.append("optional_inputs")
+
     first_data = _deepcopy_frame(result.data)
     first_metadata = _snapshot_metadata(result.metadata)
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
@@ -234,21 +252,16 @@ def verify_operator_contract(
         checks.append("causality")
 
     if not input_spec["requires_sorted"]:
-        shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
-        baseline_keys = normalized.input_panel[["date", "code"]].reset_index(drop=True)
-        shuffled_keys = shuffled_panel[["date", "code"]].reset_index(drop=True)
-        if shuffled_keys.equals(baseline_keys):
-            raise ContractViolationError(
-                "unordered input probe did not change key order",
-                operator_id=manifest.operator_id,
-                details={"available_rows": len(normalized.input_panel)},
-            )
-        shuffled_request = _copy_request(normalized, panel=shuffled_panel)
-        shuffled_result = _invoke_operator(manifest, operator, shuffled_request)
-        _validate_result(manifest, shuffled_request, shuffled_result, expected_implementation_digest)
+        permuted_panel = pd.concat(
+            (normalized.input_panel.iloc[1:], normalized.input_panel.iloc[:1]),
+            ignore_index=True,
+        )
+        permuted_request = _copy_request(normalized, panel=permuted_panel)
+        permuted_result = _invoke_operator(manifest, operator, permuted_request)
+        _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
         _require_exact_data(
             _canonical(first_data),
-            _canonical(shuffled_result.data),
+            _canonical(permuted_result.data),
             manifest,
             "operator output must not depend on incidental input order",
         )

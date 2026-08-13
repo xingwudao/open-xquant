@@ -42,6 +42,36 @@ def _thaw(value: Any) -> Any:
     return copy.deepcopy(value)
 
 
+def _find_recursive_container(value: Any, path: str = "manifest") -> str | None:
+    stack: list[tuple[Any, str, bool]] = [(value, path, False)]
+    active: set[int] = set()
+    while stack:
+        current, current_path, exiting = stack.pop()
+        if not isinstance(current, (Mapping, list, tuple)):
+            continue
+        identity = id(current)
+        if exiting:
+            active.remove(identity)
+            continue
+        if identity in active:
+            return current_path
+        active.add(identity)
+        stack.append((current, current_path, True))
+        if isinstance(current, Mapping):
+            children = [(item, f"{current_path}.{key}") for key, item in current.items()]
+        else:
+            children = [(item, f"{current_path}[{index}]") for index, item in enumerate(current)]
+        for child, child_path in reversed(children):
+            stack.append((child, child_path, False))
+    return None
+
+
+def _reject_recursive_containers(value: Any) -> None:
+    recursive_path = _find_recursive_container(value)
+    if recursive_path is not None:
+        raise InvalidManifestError(f"manifest contains a recursive or cyclic container: {recursive_path}")
+
+
 def manifest_digest(payload: Mapping[str, Any]) -> str:
     digest_payload = {key: value for key, value in payload.items() if key != "manifest_digest"}
     return "sha256:" + hashlib.sha256(_canonical_json(digest_payload).encode()).hexdigest()
@@ -155,6 +185,7 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
 
 def _read_payload(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(source, Mapping):
+        _reject_recursive_containers(source)
         payload = _thaw(source)
         assert isinstance(payload, dict)
         return payload
@@ -164,6 +195,7 @@ def _read_payload(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
         payload = json.loads(raw) if path.suffix.lower() == ".json" else yaml.safe_load(raw)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError) as exc:
         raise InvalidManifestError(f"operator manifest is invalid: {path}: {exc}") from exc
+    _reject_recursive_containers(payload)
     if not isinstance(payload, dict):
         raise InvalidManifestError(f"operator manifest must contain an object: {path}")
     return payload
@@ -262,10 +294,18 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             f"inputs required_columns and optional_columns overlap: {', '.join(overlap)}",
             operator_id=operator_id,
         )
-    missing_dtypes = sorted((required | optional) - set(inputs["dtypes"]))
-    if missing_dtypes:
+    expected_dtypes = required | optional
+    declared_dtypes = set(inputs["dtypes"])
+    missing_dtypes = sorted(expected_dtypes - declared_dtypes)
+    unexpected_dtypes = sorted(declared_dtypes - expected_dtypes)
+    if missing_dtypes or unexpected_dtypes:
+        discrepancies = []
+        if missing_dtypes:
+            discrepancies.append(f"missing declarations: {', '.join(missing_dtypes)}")
+        if unexpected_dtypes:
+            discrepancies.append(f"unexpected declarations: {', '.join(unexpected_dtypes)}")
         raise InvalidManifestError(
-            f"inputs dtypes missing declarations: {', '.join(missing_dtypes)}",
+            "inputs dtypes keys must exactly match required_columns and optional_columns; " + "; ".join(discrepancies),
             operator_id=operator_id,
         )
     parameters = payload["parameters"]
@@ -347,9 +387,26 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"outputs warmup parameter must set affects_warmup=true: {warmup_name}",
                 operator_id=operator_id,
             )
-        if "default" in warmup_parameter and warmup_parameter["default"] + warmup.get("offset", 0) < 0:
+        if "default" in warmup_parameter and warmup_parameter["default"] + offset < 0:
             raise InvalidManifestError(
                 f"outputs warmup parameter default plus offset must be non-negative: {warmup_name}",
+                operator_id=operator_id,
+            )
+        if "enum" in warmup_parameter:
+            unsafe_values = [value for value in warmup_parameter["enum"] if value + offset < 0]
+            if unsafe_values:
+                raise InvalidManifestError(
+                    f"outputs warmup parameter enum plus offset must always be non-negative: {warmup_name}",
+                    operator_id=operator_id,
+                )
+        elif "minimum" not in warmup_parameter:
+            raise InvalidManifestError(
+                f"outputs warmup parameter domain must declare a minimum to remain non-negative: {warmup_name}",
+                operator_id=operator_id,
+            )
+        elif math.ceil(warmup_parameter["minimum"]) + offset < 0:
+            raise InvalidManifestError(
+                f"outputs warmup parameter minimum plus offset must be non-negative: {warmup_name}",
                 operator_id=operator_id,
             )
     resolved_output_names: set[str] = set()

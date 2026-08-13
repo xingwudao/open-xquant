@@ -14,6 +14,7 @@ from oxq.operators.errors import (
     DuplicateKeyError,
     InsufficientCrossSectionError,
     InsufficientHistoryError,
+    InvalidManifestError,
     InvalidPanelError,
     InvalidParameterError,
 )
@@ -100,6 +101,38 @@ def test_contract_suite_rejects_unexpected_implementation_digest(
             request,
             expected_implementation_digest="sha256:" + "d" * 64,
         )
+
+
+@pytest.mark.parametrize("version", ["1.0", "1.0.0-01", "1\u0660.0.0"])
+def test_contract_suite_rejects_invalid_distribution_semantic_versions(
+    version,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="semantic versioning") as exc_info:
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            tracked_provider,
+            request,
+            expected_distribution_version=version,
+        )
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {"distribution_version": version}
 
 
 def test_contract_suite_detects_input_mutation(
@@ -289,6 +322,71 @@ def test_contract_suite_enforces_dtype_of_present_optional_columns(
         verify_operator_contract(load_operator_manifest(payload), sma, request)
 
 
+def test_contract_suite_probes_each_present_optional_column_independently(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["optional_columns"] = ["volume", "quality"]
+    payload["inputs"]["dtypes"].update({"volume": ["int64"], "quality": ["float64"]})
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel["quality"] = 1.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    absent_optional_columns: list[tuple[str, ...]] = []
+
+    def optional_aware_provider(provider_request: OperatorRequest):
+        absent = tuple(column for column in ("volume", "quality") if column not in provider_request.input_panel)
+        if absent:
+            absent_optional_columns.append(absent)
+        return sma(provider_request)
+
+    report = verify_operator_contract(
+        load_operator_manifest(payload),
+        optional_aware_provider,
+        request,
+    )
+
+    assert report.passed is True
+    assert "optional_inputs" in report.checks
+    assert absent_optional_columns == [("volume",), ("quality",)]
+
+
+def test_contract_suite_rejects_unconditional_reads_of_optional_columns(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["optional_columns"] = ["volume"]
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def unconditional_optional_read(provider_request: OperatorRequest):
+        provider_request.input_panel["volume"]
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="optional input column") as exc_info:
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            unconditional_optional_read,
+            request,
+        )
+
+    assert exc_info.value.to_dict()["details"] == {"column": "volume"}
+    assert isinstance(exc_info.value.__cause__, KeyError)
+
+
 def test_contract_suite_enforces_require_complete_input_policy(
     daily_context,
     daily_symbol_frames,
@@ -383,11 +481,10 @@ def test_contract_suite_rejects_unordered_probe_with_fewer_than_two_rows(
     }
 
 
-def test_contract_suite_rejects_unordered_probe_that_does_not_change_key_order(
+def test_contract_suite_uses_rotation_for_two_row_unordered_probe(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
-    monkeypatch,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["execution_scope"] = "panel"
@@ -401,17 +498,17 @@ def test_contract_suite_rejects_unordered_probe_that_does_not_change_key_order(
         context=daily_context,
     )
 
-    def unchanged_sample(frame, *, frac, random_state):
-        assert frac == 1
-        assert random_state == 731
-        return frame.copy()
+    observed_keys: list[list[tuple[pd.Timestamp, str]]] = []
 
-    monkeypatch.setattr(pd.DataFrame, "sample", unchanged_sample)
+    def tracking_provider(provider_request: OperatorRequest):
+        observed_keys.append(list(provider_request.input_panel[["date", "code"]].itertuples(index=False, name=None)))
+        return sma(provider_request)
 
-    with pytest.raises(ContractViolationError, match="did not change key order") as exc_info:
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+    report = verify_operator_contract(load_operator_manifest(payload), tracking_provider, request)
 
-    assert exc_info.value.to_dict()["details"] == {"available_rows": 2}
+    baseline_keys = list(panel[["date", "code"]].itertuples(index=False, name=None))
+    assert report.passed is True
+    assert observed_keys[-1] == [baseline_keys[1], baseline_keys[0]]
 
 
 def test_contract_suite_compares_unordered_probe_exactly(
@@ -624,23 +721,15 @@ def test_contract_suite_confines_warmup_nans_to_declared_rows(
         verify_operator_contract(load_operator_manifest(valid_manifest_payload), late_nan_provider, request)
 
 
-def test_contract_suite_rejects_negative_resolved_warmup_without_nans(
-    daily_context,
-    daily_symbol_frames,
+def test_manifest_boundary_rejects_negative_resolved_warmup_without_nans(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["outputs"]["warmup"]["offset"] = -2
     payload["outputs"]["nan_policy"] = "none"
-    request = OperatorRequest(
-        operator_id="fake.indicators.sma",
-        parameters={"period": 1},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
-        context=daily_context,
-    )
 
-    with pytest.raises(ContractViolationError, match="non-negative integer"):
-        verify_operator_contract(load_operator_manifest(payload), sma, request)
+    with pytest.raises(InvalidManifestError, match="minimum plus offset must be non-negative"):
+        load_operator_manifest(payload)
 
 
 @pytest.mark.parametrize(

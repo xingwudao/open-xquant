@@ -225,6 +225,8 @@ class FittedOperatorState:
         if not self.feature_order or any(not isinstance(feature, str) or not feature for feature in self.feature_order):
             raise ValueError("feature_order must contain non-empty feature names")
         object.__setattr__(self, "feature_order", tuple(self.feature_order))
+        if self.random_seed is not None and type(self.random_seed) is not int:
+            raise TypeError("random_seed must be an integer or None")
         for name in ("training_data_summary", "parameters", "learned_state"):
             object.__setattr__(
                 self,

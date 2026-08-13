@@ -240,6 +240,23 @@ def test_fitted_state_requires_non_empty_string_feature_names(feature_order: tup
         _fitted_state(feature_order=feature_order)
 
 
+@pytest.mark.parametrize("random_seed", [None, 0, -7])
+def test_fitted_state_accepts_none_or_exact_integer_random_seed(random_seed: int | None) -> None:
+    state = _fitted_state(random_seed=random_seed)
+
+    assert state.random_seed == random_seed
+
+
+@pytest.mark.parametrize(
+    "random_seed",
+    [True, 7.0, "7", [], {}],
+    ids=["bool", "float", "string", "list", "mapping"],
+)
+def test_fitted_state_rejects_non_integer_random_seed(random_seed: Any) -> None:
+    with pytest.raises(TypeError, match="random_seed must be an integer or None"):
+        _fitted_state(random_seed=random_seed)
+
+
 def test_fitted_state_permanently_freezes_numpy_arrays_in_all_state_mappings() -> None:
     summary_array = np.array([252, 253])
     parameter_array = np.array([0.25, 0.75])
