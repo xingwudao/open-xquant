@@ -38,6 +38,7 @@ from oxq.operators.types import (
 
 OperatorCallable = Callable[[OperatorRequest], OperatorResult]
 _MAX_CERTIFIED_OPTIONAL_COLUMNS = 8
+_MAX_CERTIFIED_BEHAVIORAL_PROBES = 4096
 _TRADING_AVAILABILITY_ORDER = {
     OperatorAvailability.PRE_OPEN: 0,
     OperatorAvailability.OPEN: 1,
@@ -144,9 +145,17 @@ def verify_operator_contract(
     parameters = manifest.validate_parameters(request.parameters)
     parameters_digest = _resolved_parameters_digest(parameters, manifest.operator_id)
     input_spec = manifest.raw["inputs"]
+    try:
+        QuantPanelAdapter.validate_panel(
+            request.input_panel,
+            request.context,
+            require_canonical_order=input_spec["requires_sorted"],
+        )
+    except OperatorError as exc:
+        raise _enrich_operator_error(exc, manifest.operator_id) from exc
     declared_columns = set(input_spec["required_columns"]) | set(input_spec["optional_columns"])
     present_declared_columns = sorted(declared_columns & set(request.input_panel.columns))
-    _validate_object_input_values(manifest, request.input_panel, present_declared_columns)
+    _validate_object_input_values(manifest, request.input_panel)
     normalized = _copy_request(request, parameters=parameters)
     context_digest = _operator_context_digest(normalized.context, manifest.operator_id)
     determinism = manifest.raw.get("determinism", {})
@@ -161,14 +170,6 @@ def verify_operator_contract(
                 details={"fields": object_fields},
             )
     _validate_availability(manifest, normalized)
-    try:
-        QuantPanelAdapter.validate_panel(
-            normalized.input_panel,
-            normalized.context,
-            require_canonical_order=input_spec["requires_sorted"],
-        )
-    except OperatorError as exc:
-        raise _enrich_operator_error(exc, manifest.operator_id) from exc
     required_columns = set(manifest.raw["inputs"]["required_columns"])
     missing_columns = sorted(required_columns - set(normalized.input_panel.columns))
     if missing_columns:
@@ -271,6 +272,7 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"required_assets": required_assets, "available_assets": available_assets},
             )
+    _validate_behavioral_probe_budget(manifest, normalized, len(optional_columns), bool(undeclared_columns))
     checks = ["request"]
 
     result = _invoke_operator(manifest, operator, normalized)
@@ -1137,12 +1139,11 @@ def _deepcopy_frame(panel: pd.DataFrame) -> pd.DataFrame:
 def _validate_object_input_values(
     manifest: OperatorManifest,
     panel: pd.DataFrame,
-    declared_columns: list[str],
 ) -> None:
     unsupported_columns = sorted(
         column
-        for column in declared_columns
-        if pd.api.types.is_object_dtype(panel[column].dtype) and any(not _is_certifiable_object_value(value) for value in panel[column])
+        for column in panel.select_dtypes(include="object").columns
+        if any(not _is_certifiable_object_value(value) for value in panel[column])
     )
     if unsupported_columns:
         raise ContractViolationError(
@@ -1195,6 +1196,50 @@ def _behavioral_check_names(manifest: OperatorManifest) -> tuple[str, ...]:
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
         checks.append("scope_consistency")
     return tuple(checks)
+
+
+def _validate_behavioral_probe_budget(
+    manifest: OperatorManifest,
+    request: OperatorRequest,
+    optional_column_count: int,
+    has_declared_only_shape: bool,
+) -> None:
+    per_shape_upper_bound = _behavioral_probe_upper_bound(manifest, request)
+    shape_count = 2**optional_column_count + int(has_declared_only_shape)
+    upper_bound = shape_count * per_shape_upper_bound
+    if upper_bound > _MAX_CERTIFIED_BEHAVIORAL_PROBES:
+        raise ContractViolationError(
+            "contract checker behavioral probe budget exceeded",
+            operator_id=manifest.operator_id,
+            details={
+                "upper_bound": upper_bound,
+                "maximum": _MAX_CERTIFIED_BEHAVIORAL_PROBES,
+                "shape_count": shape_count,
+                "per_shape_upper_bound": per_shape_upper_bound,
+            },
+        )
+
+
+def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorRequest) -> int:
+    probe_count = 0
+    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
+        OperatorScope.TIME_SERIES,
+        OperatorScope.PANEL,
+        OperatorScope.RESEARCH_ONLY,
+    }:
+        probe_count += max(0, int(request.input_panel["date"].nunique()) - 1)
+    if not manifest.raw["inputs"]["requires_sorted"]:
+        probe_count += 1 if len(request.input_panel) == 2 else min(3, max(0, len(request.input_panel) - 1))
+    if manifest.execution_scope is OperatorScope.TIME_SERIES:
+        codes = tuple(request.input_panel["code"].drop_duplicates())
+        min_assets = manifest.raw["inputs"]["min_assets"]
+        probe_count += sum(
+            len(_overlapping_symbol_subsets(codes, asset_count))
+            for asset_count in range(len(codes) - 1, min_assets - 1, -1)
+        )
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        probe_count += int(request.input_panel["date"].nunique())
+    return probe_count
 
 
 def _verify_behavioral_probes(

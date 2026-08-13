@@ -2353,6 +2353,55 @@ def test_contract_suite_rejects_cyclic_object_input_before_invocation(
     assert provider_calls == 0
 
 
+def test_contract_suite_preserves_duplicate_object_column_panel_error(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["required_columns"].append("attributes")
+    payload["inputs"]["dtypes"]["attributes"] = ["object"]
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    panel["attributes"] = [{"value": 1} for _ in range(len(panel))]
+    panel = pd.concat([panel, panel[["attributes"]]], axis=1)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    with pytest.raises(InvalidPanelError, match="columns must be unique"):
+        verify_operator_contract(_load_contract_manifest(payload), sma, request)
+
+
+def test_contract_suite_rejects_uncertifiable_undeclared_object_input_before_invocation(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel["helper"] = pd.Series([object() for _ in range(len(panel))], dtype=object)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="cannot certify object input.*representation-wise") as exc_info:
+        verify_operator_contract(_load_contract_manifest(valid_manifest_payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {"columns": ["helper"]}
+
+
 def test_contract_suite_compares_input_immutability_representation_wise(
     daily_context,
     daily_symbol_frames,
@@ -3090,6 +3139,58 @@ def test_contract_suite_bounds_time_series_subset_probes_for_thirty_symbols(
     assert subset_probe_calls <= 300
     assert set(probed_codes_by_size) == set(range(2, 30))
     assert all(probed_codes == all_codes for probed_codes in probed_codes_by_size.values())
+
+
+def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    optional_columns = [f"optional_{index}" for index in range(8)]
+    payload["inputs"]["optional_columns"] = optional_columns
+    payload["inputs"]["dtypes"] = {"close": ["float64"], **{column: ["float64"] for column in optional_columns}}
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    template = panel.loc[panel["code"] == panel["code"].min()].copy()
+    extra_symbols = []
+    for offset in range(1, 29):
+        symbol = template.copy()
+        symbol.loc[:, "code"] = f"300{offset:03d}.SZ"
+        symbol.loc[:, "close"] += float(offset)
+        extra_symbols.append(symbol)
+    panel = pd.concat([panel, *extra_symbols], ignore_index=True).sort_values(
+        ["date", "code"],
+        kind="stable",
+        ignore_index=True,
+    )
+    for column in optional_columns:
+        panel[column] = 1.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def bounded_probe_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="behavioral probe budget") as exc_info:
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            bounded_probe_provider,
+            request,
+        )
+
+    assert provider_calls == 0
+    details = exc_info.value.to_dict()["details"]
+    assert details["shape_count"] == 256
+    assert details["upper_bound"] == details["shape_count"] * details["per_shape_upper_bound"]
+    assert details["upper_bound"] > details["maximum"]
 
 
 def test_contract_suite_applies_declared_tolerance_to_time_series_scope_probe(

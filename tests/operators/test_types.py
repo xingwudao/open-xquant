@@ -227,6 +227,62 @@ def test_operator_request_rejects_non_string_nested_parameter_keys(daily_context
         )
 
 
+@pytest.mark.parametrize("container_kind", ["list", "mapping"])
+def test_operator_request_rejects_cyclic_parameters(daily_context, container_kind: str) -> None:
+    if container_kind == "list":
+        cyclic: Any = []
+        cyclic.append(cyclic)
+    else:
+        cyclic = {}
+        cyclic["self"] = cyclic
+
+    with pytest.raises(TypeError, match="parameters.*cyclic"):
+        OperatorRequest(
+            operator_id="fake.indicators.sma",
+            parameters={"value": cyclic},
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=daily_context,
+        )
+
+
+def test_operator_request_allows_shared_acyclic_parameter_containers(daily_context) -> None:
+    shared = [1, 2]
+
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"left": shared, "right": shared},
+        input_panel=pd.DataFrame({"date": [], "code": []}),
+        context=daily_context,
+    )
+
+    assert request.parameters == {"left": (1, 2), "right": (1, 2)}
+
+
+@pytest.mark.parametrize("operator_id", [1, True, ["fake.operator"], None])
+def test_operator_request_requires_string_operator_id(daily_context, operator_id: Any) -> None:
+    with pytest.raises(TypeError, match="operator_id must be a string"):
+        OperatorRequest(
+            operator_id=operator_id,
+            parameters={},
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=daily_context,
+        )
+
+
+@pytest.mark.parametrize("field", ["operator_id", "operator_version"])
+@pytest.mark.parametrize("invalid", [1, True, ["fake.operator"], None])
+def test_operator_provenance_identity_fields_require_strings(field: str, invalid: Any) -> None:
+    values: dict[str, Any] = {
+        "operator_id": "fake.indicators.sma",
+        "operator_version": "1.0.0",
+        "implementation_digest": "sha256:" + "a" * 64,
+    }
+    values[field] = invalid
+
+    with pytest.raises(TypeError, match=rf"{field} must be a string"):
+        OperatorProvenance(**values)
+
+
 @pytest.mark.parametrize(
     "parameters",
     [[("period", 2)], ("period", 2), "period=2"],
