@@ -488,8 +488,16 @@ def load_symbols(
         from oxq.data import AkShareDownloader
 
         dl = AkShareDownloader()
+    elif source == "tushare":
+        from oxq.data import TushareDownloader
+
+        dl = TushareDownloader()
     else:
-        return {"error": f"Unknown source '{source}'. Use 'yfinance' or 'akshare'."}
+        return {
+            "error": (
+                f"Unknown source '{source}'. Use 'yfinance', 'akshare', or 'tushare'."
+            )
+        }
 
     rows: dict[str, int] = {}
     errors: dict[str, str] = {}

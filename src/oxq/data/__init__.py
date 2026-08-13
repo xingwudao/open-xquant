@@ -11,6 +11,7 @@ from oxq.data.factors import (
 from oxq.data.loaders import (
     AkShareDownloader,
     Downloader,
+    TushareDownloader,
     YFinanceDownloader,
     resolve_data_dir,
 )
@@ -33,6 +34,7 @@ __all__ = [
     "ManifestVerification",
     "MarketDataAdapter",
     "MarketDataProvider",
+    "TushareDownloader",
     "WorldBankDownloader",
     "WorldBankFetcher",
     "YFinanceDownloader",
