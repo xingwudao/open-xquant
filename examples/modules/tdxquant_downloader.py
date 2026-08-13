@@ -1,3 +1,38 @@
+"""Local TdxQuant HTTP Downloader example.
+
+This example implements ``oxq.data.providers.Downloader`` through the official
+TdxQuant loopback HTTP API. A supported TDX desktop client must be installed
+and running, the required post-market data must be prepared, and the endpoint
+must remain on port 17709 of ``127.0.0.1``, ``localhost``, or ``::1``.
+
+Run::
+
+    uv run python examples/modules/tdxquant_downloader.py \
+      600519.SH 2024-01-01 2024-12-31 \
+      --dividend-type front --dest-dir data/market
+
+The default is front-adjusted data; use ``--dividend-type none`` for raw data.
+This is a learning and local-research example, not a production synchronizer.
+Users remain responsible for client, account, data-license, and redistribution
+terms. The repository supplies no client, account, quote data, or rights.
+
+Supported symbols use six digits plus `.SH`, `.SZ`, or `.BJ`; only daily bars
+are requested. Each download writes `<symbol>.parquet` and
+`<symbol>.manifest.json`. The index is named `date` and localized to
+`Asia/Shanghai`; columns are `open`, `high`, `low`, `close`, and `volume`.
+
+The endpoint validator rejects non-loopback hosts, HTTPS, credentials, redirects,
+and ports other than 17709. A refused connection means the supported client,
+local endpoint, permissions, or post-market data must be checked. Empty data,
+partial responses, malformed JSON, invalid OHLCV, and timeouts fail explicitly.
+
+The implementation directly replaces its target Parquet and manifest and has
+no cross-file transaction, incremental synchronization, or recovery. Production
+use requires temporary files, atomic replacement, retries, and a verified data
+license. Never commit or redistribute downloaded quote data without the
+required rights.
+"""
+
 from __future__ import annotations
 
 import argparse

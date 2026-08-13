@@ -1,3 +1,45 @@
+"""Direct TDX quote-server Downloader example.
+
+This is an example implementation of ``oxq.data.providers.Downloader``. It
+connects directly to an explicitly supplied TDX-compatible quote server and
+does not require the TDX desktop client to be installed or running.
+
+Run::
+
+    uv run --with pytdx==1.72 python \
+      examples/modules/pytdx_downloader.py \
+      510300.SH 2020-05-01 2026-01-01 \
+      --host YOUR_TDX_HOST --dest-dir data/market
+
+``pytdx==1.72`` is optional, archived software and is not an open-xquant
+dependency. The default ratio adjustment applies the same multiplication
+shape as yfinance ``auto_adjust=True`` to open, high, low, and close while
+leaving volume unchanged. It is not guaranteed to match the desktop client's
+affine adjustment for cash dividends.
+
+The example is for learning and local research, not production synchronization.
+Users must verify server access terms, market-data rights, protocol
+compatibility, and redistribution restrictions. The repository supplies no
+server list, credentials, quote data, or access authorization.
+
+Supported data is limited to daily bars for six-digit `.SH` and `.SZ` symbols.
+Each download writes `<symbol>.parquet` and `<symbol>.manifest.json`. The
+Parquet index is unique, increasing, named `date`, and localized to
+`Asia/Shanghai`; columns are `open`, `high`, `low`, `close`, and `volume`.
+
+When adjustment is enabled, the latest server trading day is the reference.
+Unsupported or invalid corporate actions fail explicitly instead of silently
+falling back to raw prices. Output is not guaranteed to match the desktop TDX
+client price-for-price when cash dividends require an affine adjustment.
+
+The implementation has no server discovery, failover, rate-limit coordination,
+incremental synchronization, recovery, or cross-file atomic publication.
+`download_many` stops at the first failure and keeps files already written.
+`pytdx` was archived in 2020; review its archived-project notice and source
+before use. Never commit or redistribute downloaded quote data without the
+required rights.
+"""
+
 from __future__ import annotations
 
 import argparse
