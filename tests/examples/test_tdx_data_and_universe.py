@@ -7,6 +7,8 @@ from types import ModuleType
 
 import pandas as pd
 import pytest
+from examples.modules.pytdx_downloader import PyTdxDownloader
+from examples.modules.tdxquant_downloader import TdxQuantDownloader
 
 from oxq.core.errors import DownloadError, SymbolNotFoundError
 from oxq.data.providers import Downloader
@@ -106,6 +108,133 @@ def test_tdx_data_context_downloader_doubles_satisfy_downloader_protocol() -> No
     assert isinstance(FileWritingDownloader(), Downloader)
     assert isinstance(NeverCalledDownloader(), Downloader)
     assert isinstance(MappingOnlyDownloader({}), Downloader)
+
+
+def test_create_downloader_selects_pytdx_with_explicit_options() -> None:
+    module = load_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "pytdx",
+            "2024-01-01",
+            "2024-01-31",
+            "--symbols",
+            "510300.SH",
+            "159915.SZ",
+            "--host",
+            "quote.example",
+            "--port",
+            "7710",
+            "--timeout",
+            "7",
+            "--no-auto-adjust",
+        ]
+    )
+
+    downloader = module.create_downloader(args)
+
+    assert isinstance(downloader, PyTdxDownloader)
+    assert downloader.host == "quote.example"
+    assert downloader.port == 7710
+    assert downloader.timeout == 7.0
+    assert downloader.auto_adjust is False
+
+
+def test_create_downloader_selects_tdxquant_with_explicit_options() -> None:
+    module = load_example_module()
+    args = module.build_parser().parse_args(
+        [
+            "tdxquant",
+            "2024-01-01",
+            "2024-01-31",
+            "--symbols",
+            "510300.SH",
+            "159915.SZ",
+            "--endpoint",
+            "http://localhost:17709/",
+            "--timeout",
+            "8",
+            "--dividend-type",
+            "none",
+        ]
+    )
+
+    downloader = module.create_downloader(args)
+
+    assert isinstance(downloader, TdxQuantDownloader)
+    assert downloader.endpoint == "http://localhost:17709/"
+    assert downloader.timeout == 8.0
+    assert downloader.dividend_type == "none"
+
+
+def test_create_downloader_parser_rejects_pytdx_host_for_tdxquant() -> None:
+    module = load_example_module()
+
+    with pytest.raises(SystemExit):
+        module.build_parser().parse_args(
+            [
+                "tdxquant",
+                "2024-01-01",
+                "2024-01-31",
+                "--symbols",
+                "510300.SH",
+                "--host",
+                "quote.example",
+            ]
+        )
+
+
+def test_create_downloader_parser_rejects_tdxquant_endpoint_for_pytdx() -> None:
+    module = load_example_module()
+
+    with pytest.raises(SystemExit):
+        module.build_parser().parse_args(
+            [
+                "pytdx",
+                "2024-01-01",
+                "2024-01-31",
+                "--symbols",
+                "510300.SH",
+                "--host",
+                "quote.example",
+                "--endpoint",
+                "http://localhost:17709/",
+            ]
+        )
+
+
+def test_main_builds_universe_and_prints_downloaded_data_summary(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    module = load_example_module()
+    monkeypatch.setattr(
+        module,
+        "create_downloader",
+        lambda args: FileWritingDownloader(),
+    )
+
+    exit_code = module.main(
+        [
+            "pytdx",
+            "2024-01-01",
+            "2024-01-31",
+            "--symbols",
+            "510300.SH",
+            "159915.SZ",
+            "--host",
+            "quote.example",
+            "--dest-dir",
+            str(tmp_path),
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Provider: pytdx" in captured.out
+    assert "Universe: 510300.SH, 159915.SZ" in captured.out
+    assert "510300.SH: 2 rows, 2024-01-02 to 2024-01-03" in captured.out
+    assert "159915.SZ: 2 rows, 2024-01-02 to 2024-01-03" in captured.out
 
 
 def test_build_tdx_data_context_reopens_data_and_builds_universe(

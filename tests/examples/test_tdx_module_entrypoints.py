@@ -23,7 +23,11 @@ def test_tdx_downloader_is_importable_from_modules(module_name: str) -> None:
 
 @pytest.mark.parametrize(
     "script_name",
-    ("pytdx_downloader.py", "tdxquant_downloader.py"),
+    (
+        "pytdx_downloader.py",
+        "tdxquant_downloader.py",
+        "11_tdx_data_and_universe.py",
+    ),
 )
 def test_tdx_downloader_help_runs_from_modules(script_name: str) -> None:
     result = subprocess.run(
