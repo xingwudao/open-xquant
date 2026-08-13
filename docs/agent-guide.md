@@ -265,7 +265,37 @@ Agent 实现都以每个 `SKILL.md` 的 frontmatter `name` 和 `description`
 
 默认 `full-research` profile 会安装 `pyproject.toml` 中除 `dev`、
 `docs`、`talib` 以外的 optional extras。当前版本包含 `agent`、
-`akshare`、`chart`、`live`、`mcp`、`scipy`、`yfinance`。
+`akshare`、`chart`、`live`、`mcp`、`scipy`、`tushare`、`yfinance`。
+
+### A 股数据源
+
+Agent 可使用 AkShare 或 Tushare 下载 A 股数据。使用 Tushare 前先安装
+可选依赖并配置凭据：
+
+```bash
+uv sync --extra tushare
+export TUSHARE_TOKEN="your-token"
+```
+
+```python
+from oxq.data import TushareDownloader
+
+downloader = TushareDownloader()  # 首次使用时读取 TUSHARE_TOKEN
+path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
+
+# 显式构造参数 token 的优先级高于环境变量。
+explicit = TushareDownloader(token="your-token")
+```
+
+Tushare 首版仅支持 A 股日线，代码必须使用 `.SH`、`.SZ` 或 `.BJ`
+后缀。`end` 包含端点，输出价格为前复权（qfq），`volume` 单位为股。
+权限、积分和限流由 Tushare 平台决定。Agent 绝不能打印或存储 token；
+open-xquant 不会将 token 持久化到本地状态、日志、异常或产物。凭据传输由
+上游 Tushare SDK 控制，其当前官方客户端使用 HTTP，Agent 应将其视为需要
+用户自行评估的上游安全边界。
+
+下载后应把标准 Parquet 作为审计运行的输入，并继续使用
+`data.provider: local`，不能把 provider 设置为 `tushare`。
 
 安装完成后，`~/.config/open-xquant/agent.yaml` 会记录：
 

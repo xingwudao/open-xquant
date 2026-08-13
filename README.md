@@ -119,6 +119,35 @@ Agent loads open-xquant skill
 
 `examples/` 目录提供了由浅入深的学习路径。
 
+### Tushare Pro A 股日线
+
+安装可选依赖并通过环境变量配置 token：
+
+```bash
+uv sync --extra tushare
+export TUSHARE_TOKEN="your-token"
+```
+
+```python
+from oxq.data import TushareDownloader
+
+downloader = TushareDownloader()  # 首次使用时读取 TUSHARE_TOKEN
+path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
+
+# 显式构造参数 token 的优先级高于环境变量。
+explicit = TushareDownloader(token="your-token")
+```
+
+首版仅支持 A 股日线，证券代码必须使用 `.SH`、`.SZ` 或 `.BJ` 后缀，
+例如 `600519.SH`。`end` 日期包含在下载范围内；输出价格默认为前复权
+（qfq），`volume` 的单位为股。Tushare 账户权限、积分和限流由 Tushare
+平台决定。下载得到的标准 Parquet 仍通过 `data.provider: local` 用于研究
+和回测，不能把 provider 设置为 `tushare`。
+
+open-xquant 不会持久化 token，也不会把它写入日志、异常或输出产物。
+凭据的网络传输由上游 Tushare SDK 控制；其当前官方客户端使用 HTTP。
+用户应自行评估这一上游传输边界，并遵守 Tushare 的服务条款和安全要求。
+
 ### 推荐学习顺序
 
 **第一步：模块示例（`examples/modules/`）**
@@ -362,6 +391,40 @@ for the directory layout, role handoffs, and workflow graph.
 - **AI application developers**: Build LLM-powered automated quant research agents
 
 ## Learn by Examples
+
+### Tushare Pro A-share Daily Data
+
+Install the optional dependency and configure the token through the
+environment:
+
+```bash
+uv sync --extra tushare
+export TUSHARE_TOKEN="your-token"
+```
+
+```python
+from oxq.data import TushareDownloader
+
+downloader = TushareDownloader()  # reads TUSHARE_TOKEN on first use
+path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
+
+# Explicit constructor token takes precedence over the environment.
+explicit = TushareDownloader(token="your-token")
+```
+
+The first release supports A-share daily data only. Symbols must use a
+`.SH`, `.SZ`, or `.BJ` suffix, for example `600519.SH`. The `end` date is
+inclusive; output prices use forward adjustment (qfq), and `volume` is in
+shares. Tushare account permissions, points, and rate limits are determined
+by the Tushare platform. Research and backtests continue to consume the
+downloaded standard Parquet through `data.provider: local`; do not set the
+provider to `tushare`.
+
+open-xquant does not persist the token or write it to logs, exceptions, or
+output artifacts. Credential transport is controlled by the upstream Tushare
+SDK, whose current official client uses HTTP. Users should assess this upstream
+transport boundary and follow Tushare's terms of service and security
+requirements.
 
 ### Step 1: Module Examples (`examples/modules/`)
 
