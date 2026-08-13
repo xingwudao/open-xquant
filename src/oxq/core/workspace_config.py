@@ -7,7 +7,7 @@ import os
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import yaml  # type: ignore[import-untyped]
 
@@ -58,6 +58,9 @@ def load_workspace_config(
 
 
 def _read_regular_file_nofollow(path: Path) -> str:
+    if _platform_name() == "nt":
+        return _read_regular_file_windows_nofollow(path)
+
     nofollow = getattr(os, "O_NOFOLLOW", None)
     directory = getattr(os, "O_DIRECTORY", None)
     if not isinstance(nofollow, int) or nofollow == 0 or not isinstance(directory, int) or directory == 0:
@@ -87,6 +90,168 @@ def _read_regular_file_nofollow(path: Path) -> str:
         return _read_regular_file_at(absolute.name, path, directory_descriptor, nofollow)
     finally:
         os.close(directory_descriptor)
+
+
+class _WindowsWorkspaceFileApi(Protocol):
+    def open(self, path: Path, *, directory: bool) -> int: ...
+
+    def attributes(self, handle: int) -> int: ...
+
+    def is_disk_file(self, handle: int) -> bool: ...
+
+    def read_bytes(self, handle: int) -> bytes: ...
+
+    def close(self, handle: int) -> None: ...
+
+
+class _NativeWindowsWorkspaceFileApi:
+    _FILE_ATTRIBUTE_DIRECTORY = 0x00000010
+    _FILE_FLAG_BACKUP_SEMANTICS = 0x02000000
+    _FILE_FLAG_OPEN_REPARSE_POINT = 0x00200000
+    _FILE_READ_ATTRIBUTES = 0x00000080
+    _FILE_SHARE_READ = 0x00000001
+    _FILE_SHARE_WRITE = 0x00000002
+    _FILE_TYPE_DISK = 0x0001
+    _GENERIC_READ = 0x80000000
+    _OPEN_EXISTING = 3
+
+    def __init__(self) -> None:
+        import ctypes
+        from ctypes import wintypes
+
+        class FileAttributeTagInfo(ctypes.Structure):
+            _fields_ = [
+                ("file_attributes", wintypes.DWORD),
+                ("reparse_tag", wintypes.DWORD),
+            ]
+
+        self._ctypes = ctypes
+        self._file_attribute_tag_info = FileAttributeTagInfo
+        kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+        self._create_file = kernel32.CreateFileW
+        self._create_file.argtypes = (
+            wintypes.LPCWSTR,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            wintypes.DWORD,
+            wintypes.HANDLE,
+        )
+        self._create_file.restype = wintypes.HANDLE
+        self._get_file_information = kernel32.GetFileInformationByHandleEx
+        self._get_file_information.argtypes = (
+            wintypes.HANDLE,
+            ctypes.c_int,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+        )
+        self._get_file_information.restype = wintypes.BOOL
+        self._get_file_type = kernel32.GetFileType
+        self._get_file_type.argtypes = (wintypes.HANDLE,)
+        self._get_file_type.restype = wintypes.DWORD
+        self._read_file = kernel32.ReadFile
+        self._read_file.argtypes = (
+            wintypes.HANDLE,
+            wintypes.LPVOID,
+            wintypes.DWORD,
+            ctypes.POINTER(wintypes.DWORD),
+            wintypes.LPVOID,
+        )
+        self._read_file.restype = wintypes.BOOL
+        self._close_handle = kernel32.CloseHandle
+        self._close_handle.argtypes = (wintypes.HANDLE,)
+        self._close_handle.restype = wintypes.BOOL
+
+    def open(self, path: Path, *, directory: bool) -> int:
+        desired_access = self._FILE_READ_ATTRIBUTES if directory else self._GENERIC_READ | self._FILE_READ_ATTRIBUTES
+        flags = self._FILE_FLAG_OPEN_REPARSE_POINT
+        if directory:
+            flags |= self._FILE_FLAG_BACKUP_SEMANTICS
+        # Pin each absolute-path component against rename until the leaf handle is open.
+        handle = self._create_file(
+            str(path),
+            desired_access,
+            self._FILE_SHARE_READ | self._FILE_SHARE_WRITE,
+            None,
+            self._OPEN_EXISTING,
+            flags,
+            None,
+        )
+        invalid_handle = self._ctypes.c_void_p(-1).value
+        if handle == invalid_handle:
+            error = int(getattr(self._ctypes, "get_last_error")())
+            if error in {2, 3}:
+                raise FileNotFoundError(error, os.strerror(error), str(path))
+            raise OSError(error, os.strerror(error), str(path))
+        return int(handle)
+
+    def attributes(self, handle: int) -> int:
+        info = self._file_attribute_tag_info()
+        if not self._get_file_information(handle, 9, self._ctypes.byref(info), self._ctypes.sizeof(info)):
+            error = int(getattr(self._ctypes, "get_last_error")())
+            raise OSError(error, os.strerror(error))
+        return int(info.file_attributes)
+
+    def is_disk_file(self, handle: int) -> bool:
+        return int(self._get_file_type(handle)) == self._FILE_TYPE_DISK
+
+    def read_bytes(self, handle: int) -> bytes:
+        chunks: list[bytes] = []
+        while True:
+            buffer = self._ctypes.create_string_buffer(1024 * 1024)
+            count = self._ctypes.c_uint32()
+            if not self._read_file(handle, buffer, len(buffer), self._ctypes.byref(count), None):
+                error = int(getattr(self._ctypes, "get_last_error")())
+                raise OSError(error, os.strerror(error))
+            if count.value == 0:
+                return b"".join(chunks)
+            chunks.append(buffer.raw[: count.value])
+
+    def close(self, handle: int) -> None:
+        self._close_handle(handle)
+
+
+def _platform_name() -> str:
+    return os.name
+
+
+def _windows_workspace_file_api() -> _WindowsWorkspaceFileApi:
+    return _NativeWindowsWorkspaceFileApi()
+
+
+def _read_regular_file_windows_nofollow(path: Path) -> str:
+    absolute = path.absolute()
+    api = _windows_workspace_file_api()
+    handles: list[int] = []
+    reparse_attribute = 0x00000400
+    directory_attribute = 0x00000010
+    current = Path(absolute.anchor)
+    directories = [current]
+    for component in absolute.parts[1:-1]:
+        current /= component
+        directories.append(current)
+    try:
+        for directory_path in directories:
+            handle = api.open(directory_path, directory=True)
+            handles.append(handle)
+            attributes = api.attributes(handle)
+            if attributes & reparse_attribute:
+                raise WorkspaceConfigError(f"workspace configuration path component must not be a reparse point: {directory_path}")
+            if not attributes & directory_attribute:
+                raise WorkspaceConfigError(f"workspace configuration path component must be a directory: {directory_path}")
+
+        file_handle = api.open(absolute, directory=False)
+        handles.append(file_handle)
+        attributes = api.attributes(file_handle)
+        if attributes & reparse_attribute:
+            raise WorkspaceConfigError(f"workspace configuration must not be a symlink or reparse point: {path}")
+        if attributes & directory_attribute or not api.is_disk_file(file_handle):
+            raise WorkspaceConfigError(f"workspace configuration must be a regular file: {path}")
+        return api.read_bytes(file_handle).decode("utf-8")
+    finally:
+        while handles:
+            api.close(handles.pop())
 
 
 def _open_directory_nofollow(

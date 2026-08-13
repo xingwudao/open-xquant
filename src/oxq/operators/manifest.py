@@ -508,6 +508,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"output field template references unknown parameters: {', '.join(unknown)}",
                 operator_id=operator_id,
             )
+        composite = sorted(name for name in references if parameters[name]["type"] in {"array", "object"})
+        if composite:
+            raise InvalidManifestError(
+                "output field template parameters must be scalar: " + ", ".join(composite),
+                operator_id=operator_id,
+            )
         unresolved = sorted(name for name in references if not parameters[name]["required"] and "default" not in parameters[name])
         if unresolved:
             raise InvalidManifestError(

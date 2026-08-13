@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from itertools import combinations
@@ -20,6 +21,7 @@ from oxq.operators.errors import (
     ContractViolationError,
     InsufficientCrossSectionError,
     InsufficientHistoryError,
+    MissingColumnError,
     OperatorError,
 )
 from oxq.operators.manifest import OperatorManifest
@@ -238,6 +240,7 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"allowed": list(allowed_dtypes)},
             )
+    _validate_object_input_values(manifest, normalized.input_panel, present_declared_columns)
     input_dtypes = MappingProxyType({column: str(normalized.input_panel[column].dtype) for column in present_declared_columns})
     input_dtypes_digest = _canonical_mapping_digest(
         input_dtypes,
@@ -281,6 +284,9 @@ def verify_operator_contract(
         )
     checks.extend(("output_contract", "provenance"))
 
+    _verify_required_column_failures(manifest, operator, normalized, required_columns)
+    checks.append("required_inputs")
+
     declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
     for present_count in range(len(optional_columns)):
         for present_subset in combinations(optional_columns, present_count):
@@ -323,7 +329,7 @@ def verify_operator_contract(
                     f"operator provenance without optional input {omission_label} must be deterministic",
                     operator_id=manifest.operator_id,
                 )
-            if not _metadata_equal(optional_metadata, optional_repeated.metadata):
+            if not _metadata_equal(optional_metadata, optional_repeated.metadata, manifest):
                 raise ContractViolationError(
                     f"operator metadata without optional input {omission_label} must be deterministic",
                     operator_id=manifest.operator_id,
@@ -369,7 +375,7 @@ def verify_operator_contract(
             "operator provenance must be deterministic",
             operator_id=manifest.operator_id,
         )
-    if not _metadata_equal(first_metadata, repeated.metadata):
+    if not _metadata_equal(first_metadata, repeated.metadata, manifest):
         raise ContractViolationError(
             "operator metadata must be deterministic",
             operator_id=manifest.operator_id,
@@ -657,6 +663,37 @@ def _operator_context_digest(context: OperatorContext, operator_id: str) -> str:
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _verify_required_column_failures(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    required_columns: set[str],
+) -> None:
+    for column in sorted(required_columns):
+        probe_request = _copy_request(request, panel=request.input_panel.drop(columns=[column]))
+        try:
+            operator(probe_request)
+        except MissingColumnError as exc:
+            if exc.details.get("column") == column:
+                continue
+            raise ContractViolationError(
+                f"missing required input column {column} must identify that column in MissingColumnError details",
+                operator_id=manifest.operator_id,
+                details={"column": column},
+            ) from exc
+        except Exception as exc:
+            raise ContractViolationError(
+                f"missing required input column {column} must raise MissingColumnError",
+                operator_id=manifest.operator_id,
+                details={"column": column},
+            ) from exc
+        raise ContractViolationError(
+            f"missing required input column {column} must raise MissingColumnError",
+            operator_id=manifest.operator_id,
+            details={"column": column},
+        )
+
+
 def _optional_probe_failure(omitted_columns: tuple[str, ...]) -> tuple[str, Mapping[str, Any]]:
     if len(omitted_columns) == 1:
         column = omitted_columns[0]
@@ -700,29 +737,127 @@ def _invoke_operator(
     return result
 
 
-def _metadata_equal(left: Any, right: Any) -> bool:
+def _metadata_equal(left: Any, right: Any, manifest: OperatorManifest) -> bool:
+    determinism = manifest.raw.get("determinism", {})
+    bitwise = determinism.get("bitwise", True)
+    absolute_tolerance = determinism.get("absolute_tolerance", 0.0)
+    relative_tolerance = determinism.get("relative_tolerance", 0.0)
+    return _structured_value_equal(
+        left,
+        right,
+        bitwise=bitwise,
+        absolute_tolerance=absolute_tolerance,
+        relative_tolerance=relative_tolerance,
+    )
+
+
+def _structured_value_equal(
+    left: Any,
+    right: Any,
+    *,
+    bitwise: bool,
+    absolute_tolerance: float,
+    relative_tolerance: float,
+) -> bool:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         if set(left) != set(right):
             return False
-        return all(_metadata_equal(left[key], right[key]) for key in left)
+        return all(
+            _structured_value_equal(
+                left[key],
+                right[key],
+                bitwise=bitwise,
+                absolute_tolerance=absolute_tolerance,
+                relative_tolerance=relative_tolerance,
+            )
+            for key in left
+        )
     if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
-        return len(left) == len(right) and all(_metadata_equal(a, b) for a, b in zip(left, right, strict=True))
+        return len(left) == len(right) and all(
+            _structured_value_equal(
+                a,
+                b,
+                bitwise=bitwise,
+                absolute_tolerance=absolute_tolerance,
+                relative_tolerance=relative_tolerance,
+            )
+            for a, b in zip(left, right, strict=True)
+        )
     if isinstance(left, np.ndarray) and isinstance(right, np.ndarray):
-        return left.shape == right.shape and _metadata_equal(left.tolist(), right.tolist())
+        if left.shape != right.shape or left.dtype != right.dtype:
+            return False
+        if bitwise:
+            try:
+                _assert_array_representation_equal(left, right)
+            except AssertionError:
+                return False
+            return True
+        try:
+            np.testing.assert_allclose(
+                left,
+                right,
+                atol=absolute_tolerance,
+                rtol=relative_tolerance,
+                equal_nan=True,
+            )
+        except (AssertionError, TypeError):
+            return _structured_value_equal(
+                left.tolist(),
+                right.tolist(),
+                bitwise=False,
+                absolute_tolerance=absolute_tolerance,
+                relative_tolerance=relative_tolerance,
+            )
+        return True
     if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
         try:
-            pd.testing.assert_frame_equal(left, right)
+            if bitwise:
+                _assert_frame_bitwise_equal(left, right)
+            else:
+                pd.testing.assert_frame_equal(
+                    left,
+                    right,
+                    check_exact=False,
+                    atol=absolute_tolerance,
+                    rtol=relative_tolerance,
+                )
         except AssertionError:
             return False
         return True
     if isinstance(left, pd.Series) and isinstance(right, pd.Series):
         try:
-            pd.testing.assert_series_equal(left, right)
+            if bitwise:
+                _assert_series_bitwise_equal(left, right)
+            else:
+                pd.testing.assert_series_equal(
+                    left,
+                    right,
+                    check_exact=False,
+                    atol=absolute_tolerance,
+                    rtol=relative_tolerance,
+                )
         except AssertionError:
             return False
         return True
     if _both_scalar_missing(left, right):
+        if bitwise and _is_representation_scalar(left) and _is_representation_scalar(right):
+            return _scalar_representation(left) == _scalar_representation(right)
         return True
+    if bitwise and _is_representation_scalar(left) and _is_representation_scalar(right):
+        return _scalar_representation(left) == _scalar_representation(right)
+    if not bitwise and _is_numeric_scalar(left) and _is_numeric_scalar(right):
+        try:
+            return bool(
+                np.isclose(
+                    left,
+                    right,
+                    atol=absolute_tolerance,
+                    rtol=relative_tolerance,
+                    equal_nan=True,
+                )
+            )
+        except TypeError:
+            return False
     try:
         equal = left == right
     except (TypeError, ValueError):
@@ -761,6 +896,36 @@ def _deepcopy_frame(panel: pd.DataFrame) -> pd.DataFrame:
     for column in panel.select_dtypes(include="object").columns:
         snapshot[column] = panel[column].map(copy.deepcopy)
     return snapshot
+
+
+def _validate_object_input_values(
+    manifest: OperatorManifest,
+    panel: pd.DataFrame,
+    declared_columns: list[str],
+) -> None:
+    unsupported_columns = sorted(
+        column
+        for column in declared_columns
+        if pd.api.types.is_object_dtype(panel[column].dtype) and any(not _is_certifiable_object_value(value) for value in panel[column])
+    )
+    if unsupported_columns:
+        raise ContractViolationError(
+            "contract checker cannot certify object input values representation-wise",
+            operator_id=manifest.operator_id,
+            details={"columns": unsupported_columns},
+        )
+
+
+def _is_certifiable_object_value(value: Any) -> bool:
+    if isinstance(value, Mapping):
+        return all(_is_certifiable_object_value(key) and _is_certifiable_object_value(item) for key, item in value.items())
+    if isinstance(value, (list, tuple)):
+        return all(_is_certifiable_object_value(item) for item in value)
+    if isinstance(value, np.ndarray):
+        if value.dtype.hasobject:
+            return all(_is_certifiable_object_value(item) for item in value.flat)
+        return True
+    return value is None or value is pd.NA or isinstance(value, (bool, int, float, str, bytes, np.generic))
 
 
 def _behavioral_check_names(manifest: OperatorManifest) -> tuple[str, ...]:
@@ -959,14 +1124,80 @@ def _require_deterministic_data(
 
 def _assert_frame_bitwise_equal(left: pd.DataFrame, right: pd.DataFrame) -> None:
     pd.testing.assert_frame_equal(left, right, check_exact=True)
+    _assert_array_representation_equal(left.index.to_numpy(), right.index.to_numpy())
+    _assert_array_representation_equal(left.columns.to_numpy(), right.columns.to_numpy())
     for position in range(len(left.columns)):
         left_values = left.iloc[:, position].to_numpy(copy=False)
         right_values = right.iloc[:, position].to_numpy(copy=False)
-        if left_values.dtype.hasobject:
-            continue
-        left_bytes = np.ascontiguousarray(left_values).view(np.uint8)
-        right_bytes = np.ascontiguousarray(right_values).view(np.uint8)
-        np.testing.assert_array_equal(left_bytes, right_bytes)
+        _assert_array_representation_equal(left_values, right_values)
+
+
+def _assert_series_bitwise_equal(left: pd.Series, right: pd.Series) -> None:
+    pd.testing.assert_series_equal(left, right, check_exact=True)
+    _assert_array_representation_equal(left.index.to_numpy(), right.index.to_numpy())
+    _assert_array_representation_equal(left.to_numpy(copy=False), right.to_numpy(copy=False))
+
+
+def _assert_array_representation_equal(left: np.ndarray, right: np.ndarray) -> None:
+    if left.shape != right.shape or left.dtype != right.dtype:
+        raise AssertionError("array representation differs")
+    if left.dtype.hasobject:
+        for left_item, right_item in zip(left.flat, right.flat, strict=True):
+            _assert_object_value_representation_equal(left_item, right_item)
+        return
+    left_bytes = np.ascontiguousarray(left).view(np.uint8)
+    right_bytes = np.ascontiguousarray(right).view(np.uint8)
+    np.testing.assert_array_equal(left_bytes, right_bytes)
+
+
+def _assert_object_value_representation_equal(left: Any, right: Any) -> None:
+    if left is pd.NA or right is pd.NA:
+        if left is not right:
+            raise AssertionError("missing value representation differs")
+        return
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        left_items = list(left.items())
+        right_items = list(right.items())
+        if len(left_items) != len(right_items):
+            raise AssertionError("mapping representation differs")
+        for (left_key, left_value), (right_key, right_value) in zip(left_items, right_items, strict=True):
+            _assert_object_value_representation_equal(left_key, right_key)
+            _assert_object_value_representation_equal(left_value, right_value)
+        return
+    if isinstance(left, (list, tuple)) and isinstance(right, (list, tuple)):
+        if type(left) is not type(right) or len(left) != len(right):
+            raise AssertionError("sequence representation differs")
+        for left_item, right_item in zip(left, right, strict=True):
+            _assert_object_value_representation_equal(left_item, right_item)
+        return
+    if isinstance(left, np.ndarray) and isinstance(right, np.ndarray):
+        _assert_array_representation_equal(left, right)
+        return
+    if not _is_certifiable_object_value(left) or not _is_certifiable_object_value(right):
+        raise AssertionError("object value cannot be compared representation-wise")
+    if _is_representation_scalar(left) or _is_representation_scalar(right):
+        if not (_is_representation_scalar(left) and _is_representation_scalar(right)):
+            raise AssertionError("scalar representation differs")
+        if _scalar_representation(left) != _scalar_representation(right):
+            raise AssertionError("scalar representation differs")
+        return
+    if type(left) is not type(right) or left != right:
+        raise AssertionError("object value representation differs")
+
+
+def _is_representation_scalar(value: Any) -> bool:
+    return isinstance(value, (float, np.generic)) and not isinstance(value, (bool, np.bool_))
+
+
+def _scalar_representation(value: Any) -> tuple[str, bytes]:
+    if isinstance(value, np.generic):
+        array = np.asarray(value)
+        return array.dtype.str, array.tobytes()
+    return "python-float64", struct.pack(">d", value)
+
+
+def _is_numeric_scalar(value: Any) -> bool:
+    return isinstance(value, (int, float, np.number)) and not isinstance(value, (bool, np.bool_))
 
 
 def _require_exact_data(

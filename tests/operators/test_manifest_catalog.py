@@ -488,6 +488,58 @@ def test_manifest_requires_template_parameters_to_affect_output_fields(valid_man
         load_operator_manifest(payload)
 
 
+@pytest.mark.parametrize(
+    ("parameter_type", "default"),
+    [
+        ("object", {"fast": 1, "slow": 2}),
+        ("object", {"slow": 2, "fast": 1}),
+        ("array", ["fast", "slow"]),
+    ],
+    ids=["object", "object-reversed", "array"],
+)
+def test_manifest_rejects_composite_default_parameters_in_output_templates(
+    valid_manifest_payload,
+    parameter_type,
+    default,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": parameter_type,
+        "default": default,
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{suffix}"
+
+    with pytest.raises(InvalidManifestError, match="template parameters must be scalar: suffix"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("parameter_type", ["object", "array"])
+def test_manifest_rejects_required_composite_parameters_in_output_templates(
+    valid_manifest_payload,
+    parameter_type,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": parameter_type,
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{suffix}"
+
+    with pytest.raises(InvalidManifestError, match="template parameters must be scalar: suffix"):
+        load_operator_manifest(payload)
+
+
 def test_manifest_validates_nested_output_format_references(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["outputs"]["fields"][0]["name_template"] = "sma_{period:0{width}d}"
@@ -846,7 +898,7 @@ def test_manifest_converts_default_output_format_failures_to_manifest_errors(val
         load_operator_manifest(payload)
 
 
-def test_manifest_converts_default_output_attribute_failures_to_manifest_errors(valid_manifest_payload) -> None:
+def test_manifest_rejects_composite_parameter_attribute_access_in_output_template(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["parameters"]["options"] = {
         "type": "object",
@@ -860,7 +912,7 @@ def test_manifest_converts_default_output_attribute_failures_to_manifest_errors(
     }
     payload["outputs"]["fields"][0]["name_template"] = "sma_{options.name}"
 
-    with pytest.raises(InvalidManifestError, match="format"):
+    with pytest.raises(InvalidManifestError, match="template parameters must be scalar: options"):
         load_operator_manifest(payload)
 
 

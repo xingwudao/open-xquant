@@ -5,11 +5,52 @@ from pathlib import Path
 
 import pytest
 
+from oxq.core import workspace_config
 from oxq.core.workspace_config import (
     WorkspaceConfigError,
     discover_workspace_config,
     load_workspace_config,
 )
+
+
+class _FakeWindowsWorkspaceFileApi:
+    directory_attribute = 0x00000010
+    reparse_attribute = 0x00000400
+
+    def __init__(self, *, reparse_paths: set[Path] | None = None) -> None:
+        self.reparse_paths = reparse_paths or set()
+        self.paths: dict[int, Path] = {}
+        self.opened: list[tuple[Path, bool]] = []
+        self.attributes_checked: list[int] = []
+        self.disk_file_checked: list[int] = []
+        self.read: list[int] = []
+        self.closed: list[int] = []
+
+    def open(self, path: Path, *, directory: bool) -> int:
+        handle = len(self.paths) + 1
+        self.paths[handle] = path
+        self.opened.append((path, directory))
+        return handle
+
+    def attributes(self, handle: int) -> int:
+        self.attributes_checked.append(handle)
+        path = self.paths[handle]
+        attributes = self.directory_attribute if path.name != "workspace.yaml" else 0
+        if path in self.reparse_paths:
+            attributes |= self.reparse_attribute
+        return attributes
+
+    def read_bytes(self, handle: int) -> bytes:
+        self.read.append(handle)
+        assert self.paths[handle].name == "workspace.yaml"
+        return b"name: windows\n"
+
+    def is_disk_file(self, handle: int) -> bool:
+        self.disk_file_checked.append(handle)
+        return self.paths[handle].name == "workspace.yaml"
+
+    def close(self, handle: int) -> None:
+        self.closed.append(handle)
 
 
 def test_load_workspace_config_accepts_canonical_mapping(tmp_path: Path) -> None:
@@ -281,11 +322,60 @@ def test_load_workspace_config_fstats_and_closes_every_opened_descriptor(tmp_pat
             real_fstat(descriptor)
 
 
+def test_load_workspace_config_uses_secure_windows_handles_without_posix_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: ignored-by-fake-api\n", encoding="utf-8")
+    api = _FakeWindowsWorkspaceFileApi()
+    monkeypatch.setattr(workspace_config, "_platform_name", lambda: "nt", raising=False)
+    monkeypatch.setattr(workspace_config, "_windows_workspace_file_api", lambda: api, raising=False)
+    monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+
+    assert load_workspace_config(config_path) == {"name": "windows"}
+    absolute = config_path.absolute()
+    current = Path(absolute.anchor)
+    expected_opened = [(current, True)]
+    for component in absolute.parts[1:-1]:
+        current /= component
+        expected_opened.append((current, True))
+    expected_opened.append((absolute, False))
+    assert api.opened == expected_opened
+    assert api.attributes_checked == list(api.paths)
+    assert api.disk_file_checked == [len(api.paths)]
+    assert api.read == [len(api.paths)]
+    assert api.closed == list(reversed(list(api.paths)))
+
+
+@pytest.mark.parametrize("reparse_component", [".open-xquant", "workspace.yaml"])
+def test_load_workspace_config_windows_fallback_rejects_reparse_points(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, reparse_component: str
+) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: trusted\n", encoding="utf-8")
+    reparse_path = config_dir if reparse_component == ".open-xquant" else config_path
+    api = _FakeWindowsWorkspaceFileApi(reparse_paths={reparse_path.absolute()})
+    monkeypatch.setattr(workspace_config, "_platform_name", lambda: "nt", raising=False)
+    monkeypatch.setattr(workspace_config, "_windows_workspace_file_api", lambda: api, raising=False)
+
+    with pytest.raises(WorkspaceConfigError, match="reparse"):
+        load_workspace_config(config_path)
+
+    assert api.attributes_checked == list(api.paths)
+    assert api.disk_file_checked == []
+    assert api.read == []
+    assert api.closed == list(reversed(list(api.paths)))
+
+
 def test_load_workspace_config_fails_closed_without_nofollow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir = tmp_path / ".open-xquant"
     config_dir.mkdir()
     config_path = config_dir / "workspace.yaml"
     config_path.write_text("name: trusted\n", encoding="utf-8")
+    monkeypatch.setattr(workspace_config, "_platform_name", lambda: "posix")
     monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
 
     with pytest.raises(WorkspaceConfigError, match="nofollow"):
@@ -297,6 +387,7 @@ def test_load_workspace_config_fails_closed_without_directory_nofollow(tmp_path:
     config_dir.mkdir()
     config_path = config_dir / "workspace.yaml"
     config_path.write_text("name: trusted\n", encoding="utf-8")
+    monkeypatch.setattr(workspace_config, "_platform_name", lambda: "posix")
     monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
 
     with pytest.raises(WorkspaceConfigError, match="nofollow"):

@@ -4,6 +4,7 @@ import copy
 import json
 import re
 from dataclasses import FrozenInstanceError, replace
+from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -193,6 +194,17 @@ def test_operator_request_requires_parameters_mapping(daily_context, parameters:
             parameters=parameters,
             input_panel=pd.DataFrame({"date": [], "code": []}),
             context=daily_context,
+        )
+
+
+@pytest.mark.parametrize("context", [{"timezone": "Asia/Shanghai"}, SimpleNamespace(timezone="Asia/Shanghai")])
+def test_operator_request_requires_concrete_operator_context(context: Any) -> None:
+    with pytest.raises(TypeError, match="context must be an OperatorContext"):
+        OperatorRequest(
+            operator_id="fake.indicators.sma",
+            parameters={"period": 2},
+            input_panel=pd.DataFrame({"date": [], "code": []}),
+            context=context,
         )
 
 

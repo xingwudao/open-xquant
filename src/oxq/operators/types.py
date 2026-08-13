@@ -181,6 +181,8 @@ class OperatorRequest:
             raise TypeError("parameters must be a mapping")
         if not isinstance(self.input_panel, pd.DataFrame):
             raise TypeError("input_panel must be a pandas DataFrame")
+        if not isinstance(self.context, OperatorContext):
+            raise TypeError("context must be an OperatorContext")
         object.__setattr__(
             self,
             "parameters",

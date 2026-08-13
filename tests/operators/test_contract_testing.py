@@ -19,12 +19,24 @@ from oxq.operators.errors import (
     InvalidManifestError,
     InvalidPanelError,
     InvalidParameterError,
+    MissingColumnError,
 )
 from oxq.operators.manifest import load_operator_manifest
 from oxq.operators.panel import QuantPanelAdapter
 from oxq.operators.testing import verify_operator_contract as _verify_operator_contract
 from oxq.operators.types import OperatorRequest
-from tests.operators.fake_provider import IMPLEMENTATION_DIGEST, sma
+from tests.operators.fake_provider import IMPLEMENTATION_DIGEST
+from tests.operators.fake_provider import sma as _sma
+
+
+def sma(request: OperatorRequest):
+    if "close" not in request.input_panel:
+        raise MissingColumnError(
+            "missing required input column close",
+            operator_id=request.operator_id,
+            details={"column": "close"},
+        )
+    return _sma(request)
 
 
 def verify_operator_contract(
@@ -35,9 +47,19 @@ def verify_operator_contract(
     expected_distribution_version="1.0.0",
     expected_implementation_digest=IMPLEMENTATION_DIGEST,
 ):
+    def required_column_aware_operator(provider_request: OperatorRequest):
+        for column in manifest.raw["inputs"]["required_columns"]:
+            if column not in provider_request.input_panel:
+                raise MissingColumnError(
+                    f"missing required input column {column}",
+                    operator_id=provider_request.operator_id,
+                    details={"column": column},
+                )
+        return operator(provider_request)
+
     return _verify_operator_contract(
         manifest,
-        operator,
+        required_column_aware_operator,
         request,
         expected_distribution_version=expected_distribution_version,
         expected_implementation_digest=expected_implementation_digest,
@@ -126,11 +148,98 @@ def test_fake_provider_passes_reusable_contract_suite(
         "input_immutability",
         "output_contract",
         "provenance",
+        "required_inputs",
         "determinism",
         "causality",
         "unordered_input",
         "batch_consistency",
     )
+
+
+def test_contract_suite_probes_each_required_data_column(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["inputs"]["required_columns"] = ["close", "volume"]
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    probed_columns: list[str] = []
+
+    def structured_missing_column_provider(provider_request: OperatorRequest):
+        for column in payload["inputs"]["required_columns"]:
+            if column not in provider_request.input_panel:
+                probed_columns.append(column)
+                raise MissingColumnError(
+                    f"missing required input column {column}",
+                    operator_id=provider_request.operator_id,
+                    details={"column": column},
+                )
+        return sma(provider_request)
+
+    report = _verify_operator_contract(
+        load_operator_manifest(payload),
+        structured_missing_column_provider,
+        request,
+        expected_distribution_version="1.0.0",
+        expected_implementation_digest=IMPLEMENTATION_DIGEST,
+    )
+
+    assert report.passed is True
+    assert "required_inputs" in report.checks
+    assert probed_columns == ["close", "volume"]
+
+
+@pytest.mark.parametrize("behavior", ["silent", "key_error", "wrong_column"])
+def test_contract_suite_rejects_unstructured_missing_required_column_behavior(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    behavior: str,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+
+    def noncompliant_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            if behavior == "key_error":
+                raise KeyError("close")
+            if behavior == "wrong_column":
+                raise MissingColumnError(
+                    "missing required input column",
+                    operator_id=provider_request.operator_id,
+                    details={"column": "volume"},
+                )
+            return _sma(
+                OperatorRequest(
+                    operator_id=provider_request.operator_id,
+                    parameters=provider_request.parameters,
+                    input_panel=provider_request.input_panel.assign(close=0.0),
+                    context=provider_request.context,
+                )
+            )
+        return _sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="required input column close.*MissingColumnError") as exc_info:
+        _verify_operator_contract(
+            _load_contract_manifest(valid_manifest_payload),
+            noncompliant_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )
+
+    assert exc_info.value.to_dict()["details"] == {"column": "close"}
 
 
 def test_contract_suite_rejects_unexpected_implementation_digest(
@@ -1505,35 +1614,6 @@ def test_contract_suite_refuses_parameterized_empty_output_fields(
     assert exc_info.value.to_dict()["details"] == {"parameters": ["field"]}
 
 
-def test_contract_suite_refuses_attribute_output_template_domains_before_formatting(
-    daily_context,
-    daily_symbol_frames,
-    valid_manifest_payload,
-) -> None:
-    payload = copy.deepcopy(valid_manifest_payload)
-    payload["parameters"]["options"] = {
-        "type": "object",
-        "required": True,
-        "unit": None,
-        "affects_warmup": False,
-        "affects_output_fields": True,
-        "affects_causality": False,
-        "affects_availability": False,
-    }
-    payload["outputs"]["fields"][0]["name_template"] = "sma_{options.missing}"
-    request = OperatorRequest(
-        operator_id="fake.indicators.sma",
-        parameters={"period": 2, "options": {}},
-        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
-        context=daily_context,
-    )
-
-    with pytest.raises(ContractViolationError, match="parameters that affect output fields") as exc_info:
-        verify_operator_contract(_load_contract_manifest(payload), sma, request)
-
-    assert exc_info.value.to_dict()["details"] == {"parameters": ["options"]}
-
-
 def test_contract_suite_checks_immutability_on_unordered_probe(
     daily_context,
     daily_symbol_frames,
@@ -1649,6 +1729,96 @@ def test_contract_suite_compares_array_metadata_without_ambiguous_truth_values(
     report = verify_operator_contract(
         _load_contract_manifest(valid_manifest_payload),
         array_metadata_provider,
+        request,
+    )
+
+    assert report.passed is True
+
+
+@pytest.mark.parametrize(
+    "metadata_factory",
+    [
+        pytest.param(lambda value: pd.DataFrame({"score": [value]}), id="dataframe"),
+        pytest.param(lambda value: pd.Series([value], name="score"), id="series"),
+    ],
+)
+def test_contract_suite_compares_structured_metadata_representation_wise_for_bitwise_determinism(
+    metadata_factory,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+    values = iter((0.0, -0.0))
+
+    def representation_changing_metadata_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        return type(result)(
+            data=result.data,
+            diagnostics=result.diagnostics,
+            provenance=result.provenance,
+            metadata={"statistics": [({"nested": metadata_factory(next(values))},)]},
+        )
+
+    with pytest.raises(ContractViolationError, match="metadata.*deterministic"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            representation_changing_metadata_provider,
+            request,
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata_factory",
+    [
+        pytest.param(lambda value: pd.DataFrame({"score": [value]}), id="dataframe"),
+        pytest.param(lambda value: pd.Series([value], name="score"), id="series"),
+    ],
+)
+def test_contract_suite_applies_declared_tolerance_to_structured_metadata(
+    metadata_factory,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["determinism"] = {
+        "bitwise": False,
+        "absolute_tolerance": 1e-3,
+        "relative_tolerance": 0.0,
+    }
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+    values = iter((0.0, 5e-4))
+
+    def tolerant_metadata_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        return type(result)(
+            data=result.data,
+            diagnostics=result.diagnostics,
+            provenance=result.provenance,
+            metadata={"statistics": [({"nested": metadata_factory(next(values))},)]},
+        )
+
+    report = verify_operator_contract(
+        load_operator_manifest(payload),
+        tolerant_metadata_provider,
         request,
     )
 
@@ -1787,6 +1957,93 @@ def test_contract_suite_deeply_checks_object_cell_immutability(
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
         verify_operator_contract(_load_contract_manifest(payload), object_mutating_provider, request)
+
+
+@pytest.mark.parametrize(
+    "representation",
+    ["python_signed_zero", "python_nan_payload", "numpy_scalar", "numpy_array"],
+)
+def test_contract_suite_detects_representation_only_mutation_in_nested_object_input(
+    representation,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["required_columns"].append("attributes")
+    payload["inputs"]["dtypes"]["attributes"] = ["object"]
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    first_nan = np.array([0x7FF8000000000001], dtype=np.uint64).view(np.float64)[0].item()
+    second_nan = np.array([0x7FF8000000000002], dtype=np.uint64).view(np.float64)[0].item()
+
+    def make_attributes():
+        if representation == "python_nan_payload":
+            value = first_nan
+        elif representation == "numpy_scalar":
+            value = np.float64(0.0)
+        elif representation == "numpy_array":
+            value = np.array([0.0], dtype=np.float64)
+        else:
+            value = 0.0
+        return {"weights": [(value,)]}
+
+    panel["attributes"] = [make_attributes() for _ in range(len(panel))]
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def representation_mutating_provider(provider_request: OperatorRequest):
+        if "attributes" not in provider_request.input_panel:
+            raise MissingColumnError(
+                "missing required input column attributes",
+                operator_id=provider_request.operator_id,
+                details={"column": "attributes"},
+            )
+        weights = provider_request.input_panel.loc[0, "attributes"]["weights"]
+        if representation == "python_nan_payload":
+            weights[0] = (second_nan,)
+        elif representation == "numpy_scalar":
+            weights[0] = (np.float64(-0.0),)
+        elif representation == "numpy_array":
+            weights[0][0][0] = -0.0
+        else:
+            weights[0] = (-0.0,)
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="mutated input_panel"):
+        verify_operator_contract(_load_contract_manifest(payload), representation_mutating_provider, request)
+
+
+def test_contract_suite_rejects_uncertifiable_object_input_before_invocation(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["required_columns"].append("attributes")
+    payload["inputs"]["dtypes"]["attributes"] = ["object"]
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    panel["attributes"] = [object() for _ in range(len(panel))]
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="cannot certify object input.*representation-wise"):
+        verify_operator_contract(_load_contract_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
 
 
 def test_contract_suite_compares_input_immutability_representation_wise(
