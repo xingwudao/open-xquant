@@ -9,6 +9,7 @@ import pandas as pd
 import pytest
 
 from oxq.core.errors import DownloadError, SymbolNotFoundError
+from oxq.data.providers import Downloader
 
 
 def load_example_module() -> ModuleType:
@@ -18,6 +19,15 @@ def load_example_module() -> ModuleType:
 
 
 class FileWritingDownloader:
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        raise AssertionError("download must not be called")
+
     def download_many(
         self,
         symbols: list[str],
@@ -50,6 +60,15 @@ class FileWritingDownloader:
 
 
 class NeverCalledDownloader:
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        raise AssertionError("download must not be called")
+
     def download_many(
         self,
         symbols: list[str],
@@ -64,6 +83,15 @@ class MappingOnlyDownloader:
     def __init__(self, paths: dict[str, Path]) -> None:
         self.paths = paths
 
+    def download(
+        self,
+        symbol: str,
+        start: str,
+        end: str,
+        dest_dir: Path | None = None,
+    ) -> Path:
+        raise AssertionError("download must not be called")
+
     def download_many(
         self,
         symbols: list[str],
@@ -72,6 +100,12 @@ class MappingOnlyDownloader:
         dest_dir: Path | None = None,
     ) -> dict[str, Path]:
         return self.paths
+
+
+def test_tdx_data_context_downloader_doubles_satisfy_downloader_protocol() -> None:
+    assert isinstance(FileWritingDownloader(), Downloader)
+    assert isinstance(NeverCalledDownloader(), Downloader)
+    assert isinstance(MappingOnlyDownloader({}), Downloader)
 
 
 def test_build_tdx_data_context_reopens_data_and_builds_universe(
