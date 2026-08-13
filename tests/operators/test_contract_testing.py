@@ -3339,6 +3339,57 @@ def test_contract_suite_bounds_time_series_subset_probes_for_thirty_symbols(
     assert all(probed_codes == all_codes for probed_codes in probed_codes_by_size.values())
 
 
+def test_contract_suite_rejects_large_time_series_universe_without_materializing_subsets(
+    monkeypatch,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["optional_columns"] = []
+    template = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    template = template.loc[template["code"] == template["code"].min()].reset_index(drop=True)
+    symbol_count = 5_000
+    panel = template.loc[template.index.repeat(symbol_count)].reset_index(drop=True)
+    panel["code"] = pd.array(
+        [f"{index:06d}.SZ" for _ in range(len(template)) for index in range(symbol_count)],
+        dtype="string",
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    def reject_materialized_subsets(codes, subset_size):
+        raise AssertionError("probe budget must not materialize symbol subsets")
+
+    monkeypatch.setattr(
+        "oxq.operators.testing._overlapping_symbol_subsets",
+        reject_materialized_subsets,
+    )
+
+    with pytest.raises(ContractViolationError, match="certification probe budget") as exc_info:
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            tracked_provider,
+            request,
+        )
+
+    assert provider_calls == 0
+    details = exc_info.value.to_dict()["details"]
+    assert details["per_shape_behavioral_upper_bound"] > details["maximum"]
+    assert details["upper_bound"] > details["maximum"]
+
+
 def test_contract_suite_leave_one_out_probes_omit_every_symbol(
     daily_context,
     daily_symbol_frames,

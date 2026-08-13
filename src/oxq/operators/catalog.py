@@ -20,6 +20,7 @@ from oxq.operators.manifest import OperatorManifest, load_operator_manifest
 
 _CATALOG_KEYS = {"schema_version", "contract_version", "package", "operators", "catalog_digest"}
 _PACKAGE_KEYS = {"distribution", "version", "source_commit", "source_tree_digest", "build_identifier"}
+_DISTRIBUTION_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
 _COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
@@ -138,6 +139,8 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
     )
     if not valid_package:
         raise InvalidManifestError(f"catalog package must contain exactly {sorted(_PACKAGE_KEYS)}")
+    if not _DISTRIBUTION_RE.fullmatch(package["distribution"]):
+        raise InvalidManifestError("catalog package.distribution must be a canonical Python distribution name")
     if not is_semantic_version(package["version"]):
         raise InvalidManifestError("catalog package.version must be semantic versioning")
     if not _COMMIT_RE.fullmatch(package["source_commit"]):
@@ -181,7 +184,10 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
 def _read_catalog(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(source, Mapping):
         _reject_recursive_containers(source)
-        payload = _thaw(source)
+        try:
+            payload = _thaw(source)
+        except RecursionError as exc:
+            raise InvalidManifestError("catalog mapping is nested too deeply") from exc
         assert isinstance(payload, dict)
         return payload
     path = Path(source)

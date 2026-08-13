@@ -120,6 +120,8 @@ class OperatorManifest:
     digest: str
 
     def validate_parameters(self, supplied: Mapping[str, Any]) -> dict[str, Any]:
+        if not isinstance(supplied, Mapping):
+            raise TypeError("supplied parameters must be a mapping")
         declarations = self.raw["parameters"]
         assert isinstance(declarations, Mapping)
         non_string_names = sorted(repr(name) for name in supplied if not isinstance(name, str))
@@ -614,8 +616,16 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"outputs warmup parameter minimum plus offset must be non-negative: {warmup_name}",
                 operator_id=operator_id,
             )
+    output_templates: set[str] = set()
     resolved_output_names: set[str] = set()
     for field in outputs["fields"]:
+        template = field["name_template"]
+        if template in output_templates:
+            raise InvalidManifestError(
+                f"duplicate output field template: {template}",
+                operator_id=operator_id,
+            )
+        output_templates.add(template)
         has_bounds = "minimum" in field or "maximum" in field
         if has_bounds and not _is_ordered_numeric_dtype(field["dtype"]):
             raise InvalidManifestError(

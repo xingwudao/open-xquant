@@ -26,7 +26,9 @@ from oxq.cli.research import (
     _resolve_version_phase_path,
     _workflow_manifest_is_valid,
     _workflow_manifest_path_mismatches,
+    _workspace_config_directory_artifact_kind,
     _workspace_config_directory_is_link,
+    _workspace_config_directory_is_unsafe,
     initialize_workspace,
 )
 from oxq.cli.research import (
@@ -47,7 +49,7 @@ def doctor(as_json: bool, fix: bool) -> None:
         fix
         and not (Path.cwd() / ".open-xquant" / "workspace.yaml").exists()
         and not (Path.cwd() / ".open-xquant" / "workspace.yaml").is_symlink()
-        and not _workspace_config_directory_is_link(Path.cwd())
+        and not _workspace_config_directory_is_unsafe(Path.cwd())
     ):
         if as_json:
             with redirect_stdout(StringIO()):
@@ -99,11 +101,7 @@ def _check_agent_locked() -> dict[str, Any]:
         return {"status": "missing", "fixes": ["oxq agent install"]}
     manifest = read_json_file(manifest_path())
     targets = manifest.get("targets", {}) if isinstance(manifest.get("targets"), dict) else {}
-    installed_targets = {
-        target_id: state
-        for target_id, state in targets.items()
-        if isinstance(state, dict) and state.get("installed")
-    }
+    installed_targets = {target_id: state for target_id, state in targets.items() if isinstance(state, dict) and state.get("installed")}
     missing_paths: list[str] = []
     installed_count = 0
     expected_count = 0
@@ -127,12 +125,20 @@ def _check_agent_locked() -> dict[str, Any]:
 
 def _check_workspace() -> dict[str, Any]:
     workspace = Path.cwd() / ".open-xquant" / "workspace.yaml"
-    if _workspace_config_directory_is_link(Path.cwd()):
+    artifact_kind = _workspace_config_directory_artifact_kind(Path.cwd())
+    if artifact_kind == "link":
         return {
             "status": "fail",
             "path": str(workspace),
             "error": "workspace configuration directory must not be a symlink or reparse point",
             "fixes": ["Replace the .open-xquant symlink with a real directory, then run oxq research init"],
+        }
+    if artifact_kind == "non-directory":
+        return {
+            "status": "fail",
+            "path": str(workspace),
+            "error": "workspace configuration path must be a directory",
+            "fixes": ["Replace the .open-xquant artifact with a real directory, then run oxq research init"],
         }
     if not workspace.exists() and not workspace.is_symlink():
         return {"status": "missing", "fixes": ["oxq research init"]}
@@ -152,11 +158,7 @@ def _check_workspace() -> dict[str, Any]:
             "fixes": fixes,
         }
     configured_paths, path_warnings = _workspace_required_paths_and_warnings(config)
-    missing = [
-        str(path)
-        for path in configured_paths
-        if not path.exists()
-    ]
+    missing = [str(path) for path in configured_paths if not path.exists()]
     governance_warnings = list(dict.fromkeys([*path_warnings, *_workspace_governance_warnings(config)]))
     return {
         "status": "ok" if not missing and not governance_warnings else "warn",
@@ -219,11 +221,7 @@ def _workspace_required_paths_and_warnings(config: dict[str, Any]) -> tuple[list
         if not isinstance(value, str) or not value:
             continue
         try:
-            configured_path = (
-                _configured_path(Path.cwd(), config, key)
-                if key in paths
-                else Path.cwd() / value
-            )
+            configured_path = _configured_path(Path.cwd(), config, key) if key in paths else Path.cwd() / value
         except click.ClickException:
             warnings.append(f"{key}_unsafe")
             continue
@@ -255,8 +253,7 @@ def _uses_version_local_backtest_output(config: dict[str, Any]) -> bool:
     if not isinstance(workflow, dict):
         return _is_version_governed_workspace(config)
     return (
-        workflow.get("layout") == "version_governed"
-        and workflow.get("default_output_dir") == "versions/{active_version}/09_backtests"
+        workflow.get("layout") == "version_governed" and workflow.get("default_output_dir") == "versions/{active_version}/09_backtests"
     ) or _is_version_governed_workspace(config)
 
 
@@ -288,52 +285,22 @@ def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
         lineage_path = None
         warnings.append("lineage_manifest_unsafe")
     try:
-        workflow_path = _configured_path(Path.cwd(), config, "workflow_manifest") or (
-            Path.cwd() / "workflow_manifest.json"
-        )
+        workflow_path = _configured_path(Path.cwd(), config, "workflow_manifest") or (Path.cwd() / "workflow_manifest.json")
     except click.ClickException:
         workflow_path = None
         warnings.append("workflow_manifest_unsafe")
 
-    current, current_status = (
-        _read_json_object_state(current_path)
-        if current_path is not None
-        else ({}, "missing")
-    )
-    lineage, lineage_status = (
-        _read_json_object_state(lineage_path)
-        if lineage_path is not None
-        else ({}, "missing")
-    )
-    workflow_manifest, workflow_manifest_status = (
-        _read_json_object_state(workflow_path)
-        if workflow_path is not None
-        else ({}, "missing")
-    )
+    current, current_status = _read_json_object_state(current_path) if current_path is not None else ({}, "missing")
+    lineage, lineage_status = _read_json_object_state(lineage_path) if lineage_path is not None else ({}, "missing")
+    workflow_manifest, workflow_manifest_status = _read_json_object_state(workflow_path) if workflow_path is not None else ({}, "missing")
     if current_status != "ok" or not _current_manifest_is_valid(current):
-        warnings.append(
-            f"current_manifest_{current_status if current_status != 'ok' else 'invalid'}"
-        )
+        warnings.append(f"current_manifest_{current_status if current_status != 'ok' else 'invalid'}")
     if lineage_status != "ok" or not _lineage_manifest_root_is_valid(lineage):
-        warnings.append(
-            f"lineage_manifest_{lineage_status if lineage_status != 'ok' else 'invalid'}"
-        )
-    if workflow_manifest_status != "ok" or not _workflow_manifest_is_valid(
-        workflow_manifest
-    ):
-        warnings.append(
-            "workflow_manifest_"
-            + (
-                workflow_manifest_status
-                if workflow_manifest_status != "ok"
-                else "invalid"
-            )
-        )
+        warnings.append(f"lineage_manifest_{lineage_status if lineage_status != 'ok' else 'invalid'}")
+    if workflow_manifest_status != "ok" or not _workflow_manifest_is_valid(workflow_manifest):
+        warnings.append("workflow_manifest_" + (workflow_manifest_status if workflow_manifest_status != "ok" else "invalid"))
     else:
-        warnings.extend(
-            f"workflow_manifest_path_mismatch:{key}"
-            for key in _workflow_manifest_path_mismatches(config, workflow_manifest)
-        )
+        warnings.extend(f"workflow_manifest_path_mismatch:{key}" for key in _workflow_manifest_path_mismatches(config, workflow_manifest))
 
     strategy_family_id = current.get("strategy_family_id")
     if isinstance(strategy_family_id, str) and strategy_family_id:
@@ -370,18 +337,12 @@ def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
                 and strategy_family_id
                 and item.get("strategy_family_id") != strategy_family_id
             ):
-                warnings.append(
-                    f"strategy_family_id_mismatch:lineage:{_lineage_entry_label(item)}"
-                )
+                warnings.append(f"strategy_family_id_mismatch:lineage:{_lineage_entry_label(item)}")
         warnings.extend(
-            f"lineage_duplicate_version_id:{version_id}"
-            for version_id in dict.fromkeys(version_ids)
-            if version_ids.count(version_id) > 1
+            f"lineage_duplicate_version_id:{version_id}" for version_id in dict.fromkeys(version_ids) if version_ids.count(version_id) > 1
         )
     active_lineage = (
-        [item for item in versions if isinstance(item, dict) and item.get("status") == "active"]
-        if isinstance(versions, list)
-        else []
+        [item for item in versions if isinstance(item, dict) and item.get("status") == "active"] if isinstance(versions, list) else []
     )
     if not active_lineage:
         warnings.append("lineage_active_version_missing")
@@ -392,11 +353,7 @@ def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
         if len(active_lineage) == 1 and active_lineage[0].get("version_id") != active_version:
             warnings.append("lineage_active_version_mismatch:current")
         try:
-            version_dir = (
-                _resolve_active_version_dir(Path.cwd(), versions_dir, active_version)
-                if versions_dir is not None
-                else None
-            )
+            version_dir = _resolve_active_version_dir(Path.cwd(), versions_dir, active_version) if versions_dir is not None else None
         except click.ClickException:
             version_dir = None
             warnings.append("active_version_dir_unsafe")
@@ -404,44 +361,32 @@ def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
             return warnings
         if not version_dir.exists():
             warnings.append("active_version_dir_missing")
-        if versions and isinstance(versions, list) and not any(
-            isinstance(item, dict) and item.get("version_id") == active_version for item in versions
+        if (
+            versions
+            and isinstance(versions, list)
+            and not any(isinstance(item, dict) and item.get("version_id") == active_version for item in versions)
         ):
             warnings.append("active_version_not_in_lineage")
         if version_dir.exists():
             phase_state, phase_state_status = _read_json_object_state(version_dir / "phase_state.json")
-            version_manifest, version_manifest_status = _read_json_object_state(
-                version_dir / "version_manifest.json"
-            )
+            version_manifest, version_manifest_status = _read_json_object_state(version_dir / "version_manifest.json")
             if phase_state_status == "ok" and not _active_phase_state_is_valid(phase_state, active_version):
                 phase_state = {}
                 phase_state_status = "invalid"
             if phase_state_status != "ok":
                 warnings.append(f"active_phase_state_{phase_state_status}")
-            version_manifest_schema_valid = (
-                version_manifest_status == "ok"
-                and _active_version_manifest_is_valid(version_manifest, active_version)
+            version_manifest_schema_valid = version_manifest_status == "ok" and _active_version_manifest_is_valid(
+                version_manifest, active_version
             )
             if not version_manifest_schema_valid:
-                warnings.append(
-                    "active_version_manifest_"
-                    + (
-                        version_manifest_status
-                        if version_manifest_status != "ok"
-                        else "invalid"
-                    )
-                )
+                warnings.append("active_version_manifest_" + (version_manifest_status if version_manifest_status != "ok" else "invalid"))
             if (
                 isinstance(strategy_family_id, str)
                 and strategy_family_id
                 and version_manifest.get("strategy_family_id") != strategy_family_id
             ):
                 warnings.append("strategy_family_id_mismatch:version_manifest")
-            matching_active_lineage = [
-                item
-                for item in active_lineage
-                if item.get("version_id") == active_version
-            ]
+            matching_active_lineage = [item for item in active_lineage if item.get("version_id") == active_version]
             if (
                 len(matching_active_lineage) == 1
                 and version_manifest_schema_valid
@@ -452,21 +397,13 @@ def _workspace_governance_warnings(config: dict[str, Any]) -> list[str]:
             version_manifest_phase = version_manifest.get("active_phase")
             if isinstance(phase_state_phase, str) and phase_state_phase and phase_state_phase != active_phase:
                 warnings.append("active_phase_mismatch:phase_state")
-            if (
-                isinstance(version_manifest_phase, str)
-                and version_manifest_phase
-                and version_manifest_phase != active_phase
-            ):
+            if isinstance(version_manifest_phase, str) and version_manifest_phase and version_manifest_phase != active_phase:
                 warnings.append("active_phase_mismatch:version_manifest")
             resolved_phase_paths: dict[str, Path] = {}
             if version_manifest_status == "ok":
                 phase_paths = version_manifest.get("phase_paths")
                 for phase in VERSION_PHASE_DIRS:
-                    raw_phase_path = (
-                        phase_paths.get(phase)
-                        if isinstance(phase_paths, dict) and phase in phase_paths
-                        else None
-                    )
+                    raw_phase_path = phase_paths.get(phase) if isinstance(phase_paths, dict) and phase in phase_paths else None
                     try:
                         resolved_phase_paths[phase] = _resolve_version_phase_path(
                             Path.cwd(),
@@ -593,12 +530,7 @@ def _current_manifest_is_valid(payload: dict[str, Any]) -> bool:
 
 def _lineage_manifest_root_is_valid(payload: dict[str, Any]) -> bool:
     versions = payload.get("versions")
-    return (
-        _schema_version_is_current(payload)
-        and _strategy_family_id_is_valid(payload)
-        and isinstance(versions, list)
-        and bool(versions)
-    )
+    return _schema_version_is_current(payload) and _strategy_family_id_is_valid(payload) and isinstance(versions, list) and bool(versions)
 
 
 def _active_version_manifest_is_valid(
@@ -692,16 +624,8 @@ def _check_deps() -> dict[str, Any]:
         "websockets": "uv sync --extra live",
         "tabulate": "uv sync --extra dev",
     }
-    missing_core = [
-        module
-        for module in core_modules
-        if importlib.util.find_spec(module) is None
-    ]
-    missing_optional = sorted(
-        module
-        for module in optional_modules
-        if importlib.util.find_spec(module) is None
-    )
+    missing_core = [module for module in core_modules if importlib.util.find_spec(module) is None]
+    missing_optional = sorted(module for module in optional_modules if importlib.util.find_spec(module) is None)
     fixes = sorted({optional_modules[module] for module in missing_optional})
     if missing_core:
         fixes.insert(0, "uv sync --all-extras")

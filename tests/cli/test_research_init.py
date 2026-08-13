@@ -73,6 +73,38 @@ def _workspace_snapshot(root: Path) -> dict[str, bytes | None]:
     return {path.relative_to(root).as_posix(): path.read_bytes() if path.is_file() else None for path in sorted(root.rglob("*"))}
 
 
+@pytest.mark.parametrize("artifact_kind", ["file", "fifo"])
+def test_research_init_rejects_non_directory_workspace_config_artifact_without_mutation(
+    tmp_path,
+    artifact_kind: str,
+) -> None:
+    if artifact_kind == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("requires POSIX FIFO support")
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        workspace = tmp_path / cwd
+        artifact = workspace / ".open-xquant"
+        if artifact_kind == "file":
+            artifact.write_bytes(b"external sentinel\n")
+        else:
+            os.mkfifo(artifact)
+        before = artifact.lstat()
+
+        result = runner.invoke(main, ["research", "init"])
+
+        assert result.exit_code == 1
+        assert "workspace configuration directory must be a directory" in result.output
+        assert "FileExistsError" not in result.output
+        after = artifact.lstat()
+        assert (after.st_dev, after.st_ino, after.st_mode) == (
+            before.st_dev,
+            before.st_ino,
+            before.st_mode,
+        )
+        if artifact_kind == "file":
+            assert artifact.read_bytes() == b"external sentinel\n"
+
+
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
 def test_research_init_rejects_broken_workspace_marker_without_overwrite(tmp_path) -> None:
     runner = CliRunner()
@@ -3350,9 +3382,7 @@ def test_governance_recovery_syncs_each_rollback_and_cleanup_mutation(
     entry = {
         "destination": "versions/v001/version_manifest.json",
         "had_original": True,
-        "parent_identity": research_module._governance_identity_payload(
-            destination.parent.stat()
-        ),
+        "parent_identity": research_module._governance_identity_payload(destination.parent.stat()),
     }
     if state == "prepared":
         destination.replace(backup)
@@ -3365,18 +3395,10 @@ def test_governance_recovery_syncs_each_rollback_and_cleanup_mutation(
         entry.update(
             {
                 "progress": "installed",
-                "replacement_identity": research_module._governance_identity_payload(
-                    destination.stat()
-                ),
-                "replacement_sha256": research_module.hashlib.sha256(
-                    replacement
-                ).hexdigest(),
-                "original_identity": research_module._governance_identity_payload(
-                    backup.stat()
-                ),
-                "original_sha256": research_module.hashlib.sha256(
-                    original
-                ).hexdigest(),
+                "replacement_identity": research_module._governance_identity_payload(destination.stat()),
+                "replacement_sha256": research_module.hashlib.sha256(replacement).hexdigest(),
+                "original_identity": research_module._governance_identity_payload(backup.stat()),
+                "original_sha256": research_module.hashlib.sha256(original).hexdigest(),
             }
         )
     journal_path = workspace / ".open-xquant/governance-transaction.json"

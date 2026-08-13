@@ -14,10 +14,7 @@ from oxq.cli.research import VERSION_PHASE_DIRS
 
 
 def _workspace_snapshot(root: Path) -> dict[str, bytes | None]:
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes() if path.is_file() else None
-        for path in sorted(root.rglob("*"))
-    }
+    return {path.relative_to(root).as_posix(): path.read_bytes() if path.is_file() else None for path in sorted(root.rglob("*"))}
 
 
 def _write_source(root: Path) -> None:
@@ -28,6 +25,48 @@ def _write_source(root: Path) -> None:
         "---\nname: build-strategy-spec\ndescription: Build quant strategies\n---\n\n# Strategy Builder\n",
         encoding="utf-8",
     )
+
+
+@pytest.mark.parametrize("artifact_kind", ["file", "fifo"])
+def test_doctor_fix_diagnoses_non_directory_workspace_config_artifact_without_initializing(
+    monkeypatch,
+    tmp_path,
+    artifact_kind: str,
+) -> None:
+    if artifact_kind == "fifo" and not hasattr(os, "mkfifo"):
+        pytest.skip("requires POSIX FIFO support")
+    artifact = tmp_path / ".open-xquant"
+    if artifact_kind == "file":
+        artifact.write_bytes(b"external sentinel\n")
+    else:
+        os.mkfifo(artifact)
+    before = artifact.lstat()
+    monkeypatch.chdir(tmp_path)
+    initialize_calls: list[Path] = []
+
+    def unexpected_initialize(path: Path) -> None:
+        initialize_calls.append(path)
+        raise AssertionError("doctor --fix must not initialize over a non-directory artifact")
+
+    monkeypatch.setattr("oxq.cli.doctor.initialize_workspace", unexpected_initialize)
+
+    result = CliRunner().invoke(main, ["doctor", "--fix", "--json"])
+
+    assert result.exit_code == 0, result.exception
+    assert initialize_calls == []
+    assert "FileExistsError" not in result.output
+    workspace = json.loads(result.output)["checks"]["workspace"]
+    assert workspace["status"] == "fail"
+    assert workspace["error"] == "workspace configuration path must be a directory"
+    assert workspace["fixes"] == ["Replace the .open-xquant artifact with a real directory, then run oxq research init"]
+    after = artifact.lstat()
+    assert (after.st_dev, after.st_ino, after.st_mode) == (
+        before.st_dev,
+        before.st_ino,
+        before.st_mode,
+    )
+    if artifact_kind == "file":
+        assert artifact.read_bytes() == b"external sentinel\n"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
@@ -45,9 +84,7 @@ def test_doctor_fails_closed_for_workspace_file_symlink(monkeypatch, tmp_path, d
 
     assert result["status"] == "fail"
     assert "symlink" in result["error"]
-    assert result["fixes"] == [
-        "Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"
-    ]
+    assert result["fixes"] == ["Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"]
     assert "oxq research init --force" not in result["fixes"]
 
 
@@ -72,9 +109,7 @@ def test_doctor_fix_diagnoses_dangling_workspace_marker_without_initializing(mon
     workspace = json.loads(result.output)["checks"]["workspace"]
     assert workspace["status"] == "fail"
     assert "symlink" in workspace["error"]
-    assert workspace["fixes"] == [
-        "Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"
-    ]
+    assert workspace["fixes"] == ["Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
@@ -149,7 +184,7 @@ def _write_governed_workspace(work: Path, *, active_phase: str = "01_brainstorm"
                         "created_reason": "initial_strategy_version",
                         "status": "active",
                     }
-                ]
+                ],
             }
         ),
         encoding="utf-8",
@@ -182,10 +217,7 @@ def _write_valid_active_version_state(version_dir: Path, *, active_phase: str = 
                 "status": "active",
                 "active_phase": active_phase,
                 "source_conversation": "",
-                "phase_paths": {
-                    phase: f"versions/v001/{phase}"
-                    for phase in VERSION_PHASE_DIRS
-                },
+                "phase_paths": {phase: f"versions/v001/{phase}" for phase in VERSION_PHASE_DIRS},
             }
         ),
         encoding="utf-8",
@@ -251,11 +283,11 @@ def fake_sdk_bundle(monkeypatch):
             "excluded_extras": ["dev", "docs", "talib"],
             "wheel": {"path": str(wheel), "sha256": "wheel-sha", "version": "0.1.0", "source_commit": "commit-sha"},
             "dependencies": {
-                    "lock_file": str(lock),
-                    "lock_sha256": "lock-sha",
-                    "packages_file": str(packages),
-                    "packages_count": 1,
-                },
+                "lock_file": str(lock),
+                "lock_sha256": "lock-sha",
+                "packages_file": str(packages),
+                "packages_count": 1,
+            },
             "runner": {
                 "venv": str(root / "runner" / ".venv"),
                 "python": str(python),
@@ -816,9 +848,7 @@ def test_doctor_warns_when_active_lineage_identity_disagrees_with_manifest_in_cu
         "created_reason": "signal_semantics_change",
         "status": "active",
     }
-    lineage_identity[identity_field] = (
-        "v000" if identity_field == "parent_version_id" else "different"
-    )
+    lineage_identity[identity_field] = "v000" if identity_field == "parent_version_id" else "different"
     (work / "lineage.json").write_text(
         json.dumps(
             {
@@ -840,10 +870,7 @@ def test_doctor_warns_when_active_lineage_identity_disagrees_with_manifest_in_cu
                 "status": "active",
                 "active_phase": "06_spec_audit",
                 "source_conversation": "",
-                "phase_paths": {
-                    phase: f"research_versions/v002/{phase}"
-                    for phase in VERSION_PHASE_DIRS
-                },
+                "phase_paths": {phase: f"research_versions/v002/{phase}" for phase in VERSION_PHASE_DIRS},
             }
         ),
         encoding="utf-8",
@@ -1026,10 +1053,7 @@ def test_doctor_warns_for_malformed_non_active_lineage_entry(
 
     assert result["missing"] == []
     assert result["status"] == "warn"
-    assert any(
-        warning.startswith("lineage_entry_invalid:")
-        for warning in result["governance_warnings"]
-    )
+    assert any(warning.startswith("lineage_entry_invalid:") for warning in result["governance_warnings"])
     assert _workspace_snapshot(work) == before
 
 
@@ -1044,9 +1068,7 @@ def test_doctor_accepts_nullable_governance_fields_and_unique_completed_phases(
     lineage = json.loads((work / "lineage.json").read_text(encoding="utf-8"))
     lineage["versions"][0]["parent_version_id"] = None
     (work / "lineage.json").write_text(json.dumps(lineage), encoding="utf-8")
-    version_manifest = json.loads(
-        (version_dir / "version_manifest.json").read_text(encoding="utf-8")
-    )
+    version_manifest = json.loads((version_dir / "version_manifest.json").read_text(encoding="utf-8"))
     version_manifest["parent_version_id"] = None
     (version_dir / "version_manifest.json").write_text(
         json.dumps(version_manifest),
@@ -1471,9 +1493,7 @@ def test_doctor_rejects_symlink_escapes_while_scanning_report_reviews(
     assert "version_manifest_phase_stale:report_review_passed" not in warnings
 
 
-def test_doctor_warns_when_version_governed_workspace_has_root_phase_artifacts(
-    monkeypatch, tmp_path
-) -> None:
+def test_doctor_warns_when_version_governed_workspace_has_root_phase_artifacts(monkeypatch, tmp_path) -> None:
     work = tmp_path / "work"
     (work / ".open-xquant").mkdir(parents=True)
     (work / ".open-xquant" / "workspace.yaml").write_text(
@@ -1547,9 +1567,7 @@ def test_doctor_warns_when_version_governed_workspace_has_root_phase_artifacts(
     assert "root_phase_artifact:result.json" in result["governance_warnings"]
 
 
-def test_doctor_warns_when_report_review_passes_but_active_phase_is_stale(
-    monkeypatch, tmp_path
-) -> None:
+def test_doctor_warns_when_report_review_passes_but_active_phase_is_stale(monkeypatch, tmp_path) -> None:
     work = tmp_path / "work"
     (work / ".open-xquant").mkdir(parents=True)
     (work / ".open-xquant" / "workspace.yaml").write_text(
@@ -1603,10 +1621,7 @@ def test_doctor_warns_when_report_review_passes_but_active_phase_is_stale(
                 "status": "active",
                 "active_phase": "01_brainstorm",
                 "source_conversation": "",
-                "phase_paths": {
-                    phase: f"versions/v001/{phase}"
-                    for phase in VERSION_PHASE_DIRS
-                },
+                "phase_paths": {phase: f"versions/v001/{phase}" for phase in VERSION_PHASE_DIRS},
             }
         ),
         encoding="utf-8",

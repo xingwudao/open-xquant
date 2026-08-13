@@ -1340,14 +1340,24 @@ def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorR
     if not manifest.raw["inputs"]["requires_sorted"]:
         probe_count += 1 if len(request.input_panel) == 2 else 3
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
-        codes = tuple(request.input_panel["code"].drop_duplicates())
+        symbol_count = int(request.input_panel["code"].nunique())
         min_assets = manifest.raw["inputs"]["min_assets"]
-        probe_count += sum(
-            len(_overlapping_symbol_subsets(codes, asset_count)) for asset_count in range(len(codes) - 1, min_assets - 1, -1)
-        )
+        for asset_count in range(symbol_count - 1, min_assets - 1, -1):
+            probe_count += _overlapping_symbol_subset_upper_bound(symbol_count, asset_count)
+            if probe_count > _MAX_CERTIFIED_PROBES:
+                return probe_count
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
         probe_count += int(request.input_panel["date"].nunique())
     return probe_count
+
+
+def _overlapping_symbol_subset_upper_bound(symbol_count: int, subset_size: int) -> int:
+    if subset_size == symbol_count - 1:
+        return symbol_count
+
+    stride = max(1, subset_size - 1)
+    probes_per_ordering = (symbol_count + stride - 1) // stride
+    return 2 * probes_per_ordering
 
 
 def _verify_behavioral_probes(

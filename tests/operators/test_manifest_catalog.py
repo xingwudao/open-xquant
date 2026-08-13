@@ -46,6 +46,14 @@ def test_manifest_rejects_non_string_supplied_parameter_keys(valid_manifest_payl
     assert exc_info.value.to_dict()["details"] == {"parameters": ["1"]}
 
 
+@pytest.mark.parametrize("supplied", [None, [], [("period", 5)], "period"])
+def test_manifest_rejects_non_mapping_supplied_parameters(valid_manifest_payload, supplied) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+
+    with pytest.raises(TypeError, match="supplied parameters must be a mapping"):
+        manifest.validate_parameters(supplied)
+
+
 def test_manifest_resolves_output_name_from_arbitrary_required_string_at_parameter_boundary(
     valid_manifest_payload,
 ) -> None:
@@ -871,6 +879,32 @@ def test_manifest_rejects_duplicate_default_resolved_output_names(valid_manifest
         load_operator_manifest(payload)
 
 
+def test_manifest_rejects_identical_output_templates_with_required_parameters(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"] = [
+        {"name_template": "{field}", "dtype": "float64"},
+        {"name_template": "{field}", "dtype": "float64"},
+    ]
+    payload["outputs"]["multiple"] = True
+
+    with pytest.raises(InvalidManifestError, match="duplicate output field template: \\{field\\}") as exc_info:
+        load_operator_manifest(payload)
+
+    assert exc_info.value.code == "invalid_manifest"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+
+
 def test_catalog_requires_and_verifies_manifest_digests(valid_manifest_payload) -> None:
     standalone = load_operator_manifest(valid_manifest_payload)
     catalog_payload = {
@@ -891,6 +925,39 @@ def test_catalog_requires_and_verifies_manifest_digests(valid_manifest_payload) 
     assert catalog.operator_ids == ("fake.indicators.sma",)
     assert catalog.digest.startswith("sha256:")
     assert json.loads(catalog.to_json())["catalog_digest"] == catalog.digest
+
+
+@pytest.mark.parametrize(
+    "distribution",
+    [
+        "Fake-Quant-Operators",
+        "fake_quant_operators",
+        "fake.quant.operators",
+        "fake--quant-operators",
+        "fake-quant-operators-",
+    ],
+    ids=["uppercase", "underscore", "dot", "repeated-separator", "trailing-separator"],
+)
+def test_catalog_rejects_noncanonical_package_distribution_when_operators_are_empty(
+    distribution: str,
+) -> None:
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": distribution,
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [],
+    }
+
+    with pytest.raises(InvalidManifestError, match="package.distribution") as exc_info:
+        load_operator_catalog(payload)
+
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
 
 
 def test_catalog_accepts_nested_read_only_mapping_input_without_mutability_leakage(
@@ -993,6 +1060,30 @@ def test_catalog_rejects_recursive_container_graphs_before_traversal(
         load_operator_catalog(source)
 
     assert expected_path in str(exc_info.value)
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
+def test_catalog_rejects_deep_nonrecursive_mapping_without_leaking_recursion_error() -> None:
+    nested: object = "leaf"
+    for _ in range(1_100):
+        nested = {"nested": nested}
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [],
+        "unexpected": nested,
+    }
+
+    with pytest.raises(InvalidManifestError, match="nested too deeply") as exc_info:
+        load_operator_catalog(payload)
+
     assert exc_info.value.to_dict()["code"] == "invalid_manifest"
 
 

@@ -274,17 +274,32 @@ def _workspace_init_transition_lock_path(cwd: Path) -> Path:
     return verified_user_runtime_root() / "research" / f"transition-{identity}.lock"
 
 
-def _workspace_config_directory_is_link(cwd: Path) -> bool:
+def _workspace_config_directory_artifact_kind(cwd: Path) -> str | None:
     try:
         status = (cwd / ".open-xquant").lstat()
     except FileNotFoundError:
-        return False
-    return stat.S_ISLNK(status.st_mode) or _is_windows_reparse_point(status)
+        return None
+    if stat.S_ISLNK(status.st_mode) or _is_windows_reparse_point(status):
+        return "link"
+    if not stat.S_ISDIR(status.st_mode):
+        return "non-directory"
+    return None
+
+
+def _workspace_config_directory_is_link(cwd: Path) -> bool:
+    return _workspace_config_directory_artifact_kind(cwd) == "link"
+
+
+def _workspace_config_directory_is_unsafe(cwd: Path) -> bool:
+    return _workspace_config_directory_artifact_kind(cwd) is not None
 
 
 def _require_safe_workspace_config_directory(cwd: Path) -> None:
-    if _workspace_config_directory_is_link(cwd):
+    artifact_kind = _workspace_config_directory_artifact_kind(cwd)
+    if artifact_kind == "link":
         raise click.ClickException("workspace configuration directory must not be a symlink or reparse point")
+    if artifact_kind == "non-directory":
+        raise click.ClickException("workspace configuration directory must be a directory")
 
 
 def _write_workspace_config(cwd: Path, path: Path, payload: dict[str, object]) -> None:
@@ -830,14 +845,8 @@ def _recover_governance_transaction(cwd: Path) -> None:
         journal_parent = parent_handles[journal_path.parent]
         journal_parent.assert_identity_payload(journal["journal_parent_identity"])
         journal_evidence = journal_parent.file_evidence(journal_path.name)
-        if (
-            journal_evidence is None
-            or _governance_identity_tuple(journal_evidence[0]) != journal_identity
-        ):
-            raise click.ClickException(
-                "governance transaction journal changed during recovery; "
-                "journal preserved"
-            )
+        if journal_evidence is None or _governance_identity_tuple(journal_evidence[0]) != journal_identity:
+            raise click.ClickException("governance transaction journal changed during recovery; journal preserved")
         for entry in resolved_entries:
             parent_handles[entry.destination.parent].assert_identity_payload(entry.parent_identity)
             _preflight_governance_recovery_entry(
@@ -983,12 +992,9 @@ def _preflight_governance_recovery_entry(
     entry: _GovernanceRecoveryEntry,
     state: str,
 ) -> None:
-    if state == "committed" and (
-        not entry.has_evidence or entry.progress != "installed"
-    ):
+    if state == "committed" and (not entry.has_evidence or entry.progress != "installed"):
         raise click.ClickException(
-            "governance transaction committed entry progress must be installed; "
-            "journal preserved for manual recovery"
+            "governance transaction committed entry progress must be installed; journal preserved for manual recovery"
         )
     if not entry.has_evidence:
         if state == "prepared" and not entry.had_original and parent.exists(entry.destination.name):
@@ -1336,20 +1342,10 @@ class _GovernanceMutationParent:
             quarantine = f".{name}.quarantine-{uuid4().hex}"
             self.replace_file(name, quarantine)
             evidence = self.file_evidence(quarantine)
-            identity_matches = (
-                evidence is not None
-                and (
-                    expected_identity is None
-                    or _governance_identity_tuple(evidence[0]) == expected_identity
-                )
+            identity_matches = evidence is not None and (
+                expected_identity is None or _governance_identity_tuple(evidence[0]) == expected_identity
             )
-            content_matches = (
-                evidence is not None
-                and (
-                    expected_sha256 is None
-                    or evidence[1] == expected_sha256
-                )
-            )
+            content_matches = evidence is not None and (expected_sha256 is None or evidence[1] == expected_sha256)
             if not identity_matches or not content_matches:
                 raise click.ClickException(
                     "governance transaction artifact changed during recovery; "
