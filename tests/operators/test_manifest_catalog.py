@@ -8,6 +8,7 @@ from types import MappingProxyType
 import pytest
 import yaml  # type: ignore[import-untyped]
 
+import oxq.operators.manifest as manifest_module
 from oxq.operators.catalog import load_operator_catalog
 from oxq.operators.errors import InvalidManifestError, InvalidParameterError
 from oxq.operators.manifest import load_operator_manifest
@@ -704,6 +705,52 @@ def test_manifest_accepts_non_recursive_yaml_alias(valid_manifest_payload, tmp_p
     assert manifest.raw["inputs"]["dtypes"]["volume"] == ("float64",)
 
 
+def test_manifest_rejects_deep_nonrecursive_mapping_without_leaking_recursion_error(
+    valid_manifest_payload,
+) -> None:
+    nested: object = "leaf"
+    for _ in range(1_100):
+        nested = {"nested": nested}
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["unexpected"] = nested
+
+    with pytest.raises(InvalidManifestError, match="nested too deeply") as exc_info:
+        load_operator_manifest(payload)
+
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
+def test_manifest_memoizes_completed_yaml_alias_nodes_during_duplicate_key_scan(
+    valid_manifest_payload,
+    tmp_path,
+    monkeypatch,
+) -> None:
+    shared: object = {"leaf": "value"}
+    for _ in range(16):
+        shared = {"left": shared, "right": shared}
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["unexpected"] = shared
+    source = tmp_path / "operator.yaml"
+    source.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    original = manifest_module._reject_duplicate_yaml_keys
+    visits = 0
+
+    def count_visits(node, **kwargs):
+        nonlocal visits
+        visits += 1
+        if visits > 512:
+            raise AssertionError("duplicate-key scan revisited shared YAML aliases")
+        return original(node, **kwargs)
+
+    monkeypatch.setattr(manifest_module, "_reject_duplicate_yaml_keys", count_visits)
+
+    with pytest.raises(InvalidManifestError, match="unexpected"):
+        load_operator_manifest(source)
+
+    assert visits <= 512
+
+
 def test_manifest_rejects_invalid_output_template(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["outputs"]["fields"][0]["name_template"] = "sma_{period"
@@ -903,6 +950,56 @@ def test_manifest_rejects_identical_output_templates_with_required_parameters(
 
     assert exc_info.value.code == "invalid_manifest"
     assert exc_info.value.operator_id == "fake.indicators.sma"
+
+
+def test_manifest_rejects_distinct_templates_that_always_collide_for_required_integer(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"] = [
+        {"name_template": "{value}", "dtype": "float64"},
+        {"name_template": "{value:d}", "dtype": "float64"},
+    ]
+    payload["outputs"]["multiple"] = True
+
+    with pytest.raises(InvalidManifestError, match="always resolve to duplicate output field names") as exc_info:
+        load_operator_manifest(payload)
+
+    assert exc_info.value.code == "invalid_manifest"
+    assert exc_info.value.operator_id == "fake.indicators.sma"
+
+
+def test_manifest_rejects_distinct_templates_that_collide_across_finite_parameter_domain(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "enum": [1, 2],
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"] = [
+        {"name_template": "{value:d}", "dtype": "float64"},
+        {"name_template": "{value:01d}", "dtype": "float64"},
+    ]
+    payload["outputs"]["multiple"] = True
+
+    with pytest.raises(InvalidManifestError, match="no parameter assignment produces unique output field names"):
+        load_operator_manifest(payload)
 
 
 def test_catalog_requires_and_verifies_manifest_digests(valid_manifest_payload) -> None:

@@ -2141,6 +2141,39 @@ def test_contract_suite_rejects_bitwise_metadata_scalar_type_changes(
         )
 
 
+@pytest.mark.parametrize("container_type", [set, frozenset], ids=["set", "frozenset"])
+def test_contract_suite_rejects_bitwise_metadata_set_element_type_changes(
+    container_type,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    payload["inputs"]["optional_columns"] = []
+    payload["inputs"]["dtypes"] = {"close": ["float64"]}
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+    metadata_values = iter((1, True))
+
+    def representation_changing_metadata_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        return replace(result, metadata={"values": container_type((next(metadata_values),))})
+
+    with pytest.raises(ContractViolationError, match="metadata.*deterministic"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            representation_changing_metadata_provider,
+            request,
+        )
+
+
 def test_contract_suite_compares_array_metadata_without_ambiguous_truth_values(
     daily_context,
     daily_symbol_frames,
@@ -3286,7 +3319,51 @@ def test_contract_suite_rejects_time_series_mixing_in_specific_min_asset_subset(
         )
 
 
-def test_contract_suite_bounds_time_series_subset_probes_for_thirty_symbols(
+def test_contract_suite_rejects_time_series_mixing_in_every_six_symbol_subset(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    template = panel.loc[panel["code"] == panel["code"].min()].copy()
+    extra_symbols = []
+    for offset in range(4):
+        symbol = template.copy()
+        symbol.loc[:, "code"] = f"300{offset:03d}.SZ"
+        symbol.loc[:, "close"] += float(offset + 1)
+        extra_symbols.append(symbol)
+    panel = pd.concat([panel, *extra_symbols], ignore_index=True).sort_values(
+        ["date", "code"],
+        kind="stable",
+        ignore_index=True,
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    ordered_codes = tuple(panel["code"].drop_duplicates())
+    previously_omitted_pair = frozenset((ordered_codes[0], ordered_codes[3]))
+
+    def omitted_pair_mixing_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        symbols = frozenset(provider_request.input_panel["code"].unique())
+        if symbols == previously_omitted_pair:
+            result.data.loc[:, "sma_2"] += 1.0
+        return result
+
+    with pytest.raises(ContractViolationError, match="other symbols"):
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            omitted_pair_mixing_provider,
+            request,
+        )
+
+
+def test_contract_suite_rejects_thirty_symbol_time_series_subset_budget_before_provider(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -3313,30 +3390,24 @@ def test_contract_suite_bounds_time_series_subset_probes_for_thirty_symbols(
         input_panel=panel,
         context=daily_context,
     )
-    all_codes = set(panel["code"].unique())
-    probed_codes_by_size: dict[int, set[str]] = {}
-    subset_probe_calls = 0
+    provider_calls = 0
 
-    def bounded_probe_provider(provider_request: OperatorRequest):
-        nonlocal subset_probe_calls
-        included_codes = set(provider_request.input_panel["code"].unique())
-        if len(included_codes) < len(all_codes):
-            subset_probe_calls += 1
-            if subset_probe_calls > 300:
-                raise AssertionError("time-series subset probe count exceeded its bound")
-            probed_codes_by_size.setdefault(len(included_codes), set()).update(included_codes)
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
         return sma(provider_request)
 
-    report = verify_operator_contract(
-        _load_contract_manifest(payload),
-        bounded_probe_provider,
-        request,
-    )
+    with pytest.raises(ContractViolationError, match="certification probe budget") as exc_info:
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            tracked_provider,
+            request,
+        )
 
-    assert report.passed is True
-    assert subset_probe_calls <= 300
-    assert set(probed_codes_by_size) == set(range(2, 30))
-    assert all(probed_codes == all_codes for probed_codes in probed_codes_by_size.values())
+    assert provider_calls == 0
+    details = exc_info.value.to_dict()["details"]
+    assert details["per_shape_behavioral_upper_bound"] > details["maximum"]
+    assert details["upper_bound"] > details["maximum"]
 
 
 def test_contract_suite_rejects_large_time_series_universe_without_materializing_subsets(
@@ -3373,7 +3444,7 @@ def test_contract_suite_rejects_large_time_series_universe_without_materializing
         raise AssertionError("probe budget must not materialize symbol subsets")
 
     monkeypatch.setattr(
-        "oxq.operators.testing._overlapping_symbol_subsets",
+        "oxq.operators.testing.combinations",
         reject_materialized_subsets,
     )
 

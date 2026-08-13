@@ -10,6 +10,7 @@ import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from itertools import combinations
+from math import comb
 from types import MappingProxyType
 from typing import Any
 
@@ -1113,6 +1114,26 @@ def _structured_value_equal(
             )
             for a, b in zip(left, right, strict=True)
         )
+    if isinstance(left, (set, frozenset)) and isinstance(right, (set, frozenset)):
+        if not bitwise:
+            return left == right
+        if len(left) != len(right):
+            return False
+        unmatched = list(right)
+        for left_item in left:
+            for index, right_item in enumerate(unmatched):
+                if _structured_value_equal(
+                    left_item,
+                    right_item,
+                    bitwise=True,
+                    absolute_tolerance=absolute_tolerance,
+                    relative_tolerance=relative_tolerance,
+                ):
+                    unmatched.pop(index)
+                    break
+            else:
+                return False
+        return True
     if isinstance(left, np.ndarray) and isinstance(right, np.ndarray):
         if left.shape != right.shape or left.dtype != right.dtype:
             return False
@@ -1343,21 +1364,12 @@ def _behavioral_probe_upper_bound(manifest: OperatorManifest, request: OperatorR
         symbol_count = int(request.input_panel["code"].nunique())
         min_assets = manifest.raw["inputs"]["min_assets"]
         for asset_count in range(symbol_count - 1, min_assets - 1, -1):
-            probe_count += _overlapping_symbol_subset_upper_bound(symbol_count, asset_count)
+            probe_count += comb(symbol_count, asset_count)
             if probe_count > _MAX_CERTIFIED_PROBES:
                 return probe_count
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
         probe_count += int(request.input_panel["date"].nunique())
     return probe_count
-
-
-def _overlapping_symbol_subset_upper_bound(symbol_count: int, subset_size: int) -> int:
-    if subset_size == symbol_count - 1:
-        return symbol_count
-
-    stride = max(1, subset_size - 1)
-    probes_per_ordering = (symbol_count + stride - 1) // stride
-    return 2 * probes_per_ordering
 
 
 def _verify_behavioral_probes(
@@ -1409,7 +1421,7 @@ def _verify_behavioral_probes(
         codes = tuple(request.input_panel["code"].drop_duplicates())
         min_assets = manifest.raw["inputs"]["min_assets"]
         for asset_count in range(len(codes) - 1, min_assets - 1, -1):
-            for included_codes in _overlapping_symbol_subsets(codes, asset_count):
+            for included_codes in combinations(codes, asset_count):
                 isolated_panel = request.input_panel.loc[request.input_panel["code"].isin(included_codes)].reset_index(drop=True)
                 isolated_request = _copy_request(request, panel=isolated_panel)
                 isolated_result = _invoke_operator(manifest, operator, isolated_request)
@@ -1430,27 +1442,6 @@ def _verify_behavioral_probes(
             baseline,
             expected_implementation_digest,
         )
-
-
-def _overlapping_symbol_subsets(codes: tuple[Any, ...], subset_size: int) -> tuple[tuple[Any, ...], ...]:
-    if subset_size == len(codes) - 1:
-        return tuple(codes[:index] + codes[index + 1 :] for index in range(len(codes)))
-
-    # Each cyclic ordering needs ceil(N / stride) probes. The second ordering
-    # covers deterministic non-adjacent pairs without reverting to combinations.
-    stride = max(1, subset_size - 1)
-    interleaved_codes = codes[::2] + codes[1::2]
-    orderings = (codes,) if interleaved_codes == codes else (codes, interleaved_codes)
-    subsets: list[tuple[Any, ...]] = []
-    seen: set[frozenset[Any]] = set()
-    for ordering in orderings:
-        for start in range(0, len(codes), stride):
-            subset = tuple(ordering[(start + offset) % len(codes)] for offset in range(subset_size))
-            key = frozenset(subset)
-            if key not in seen:
-                seen.add(key)
-                subsets.append(subset)
-    return tuple(subsets)
 
 
 def _verify_past_only_causality(

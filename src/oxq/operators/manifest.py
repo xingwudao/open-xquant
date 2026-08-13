@@ -10,6 +10,7 @@ import re
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass
+from itertools import product
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -52,25 +53,50 @@ def _canonical_json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
-def _freeze(value: Any) -> Any:
+def _freeze(value: Any, memo: dict[int, Any] | None = None) -> Any:
+    memo = {} if memo is None else memo
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
     if isinstance(value, Mapping):
-        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+        result: dict[Any, Any] = {}
+        memo[identity] = result
+        result.update({key: _freeze(item, memo) for key, item in value.items()})
+        frozen = MappingProxyType(result)
+        memo[identity] = frozen
+        return frozen
     if isinstance(value, (list, tuple)):
-        return tuple(_freeze(item) for item in value)
+        result_list: list[Any] = []
+        memo[identity] = result_list
+        result_list.extend(_freeze(item, memo) for item in value)
+        frozen_tuple = tuple(result_list)
+        memo[identity] = frozen_tuple
+        return frozen_tuple
     return copy.deepcopy(value)
 
 
-def _thaw(value: Any) -> Any:
+def _thaw(value: Any, memo: dict[int, Any] | None = None) -> Any:
+    memo = {} if memo is None else memo
+    identity = id(value)
+    if identity in memo:
+        return memo[identity]
     if isinstance(value, Mapping):
-        return {key: _thaw(item) for key, item in value.items()}
+        result: dict[Any, Any] = {}
+        memo[identity] = result
+        result.update({key: _thaw(item, memo) for key, item in value.items()})
+        return result
     if isinstance(value, (list, tuple)):
-        return [_thaw(item) for item in value]
+        result_list: list[Any] = []
+        memo[identity] = result_list
+        result_list.extend(_thaw(item, memo) for item in value)
+        return result_list
     return copy.deepcopy(value)
 
 
 def _find_recursive_container(value: Any, path: str = "manifest") -> str | None:
     stack: list[tuple[Any, str, bool]] = [(value, path, False)]
     active: set[int] = set()
+    completed: set[int] = set()
     while stack:
         current, current_path, exiting = stack.pop()
         if not isinstance(current, (Mapping, list, tuple)):
@@ -78,6 +104,9 @@ def _find_recursive_container(value: Any, path: str = "manifest") -> str | None:
         identity = id(current)
         if exiting:
             active.remove(identity)
+            completed.add(identity)
+            continue
+        if identity in completed:
             continue
         if identity in active:
             return current_path
@@ -234,7 +263,10 @@ def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorMa
 def _read_payload(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     if isinstance(source, Mapping):
         _reject_recursive_containers(source)
-        payload = _thaw(source)
+        try:
+            payload = _thaw(source)
+        except RecursionError as exc:
+            raise InvalidManifestError("manifest mapping is nested too deeply") from exc
         assert isinstance(payload, dict)
         return payload
     path = Path(source)
@@ -289,9 +321,13 @@ def _reject_duplicate_yaml_keys(
     path: Path,
     location: str = "manifest",
     active: set[int] | None = None,
+    completed: set[int] | None = None,
 ) -> None:
     active = set() if active is None else active
+    completed = set() if completed is None else completed
     identity = id(node)
+    if identity in completed:
+        return
     if identity in active:
         return
     active.add(identity)
@@ -314,6 +350,7 @@ def _reject_duplicate_yaml_keys(
                     path=path,
                     location=child_location,
                     active=active,
+                    completed=completed,
                 )
         elif isinstance(node, yaml.SequenceNode):
             for index, item in enumerate(node.value):
@@ -323,9 +360,11 @@ def _reject_duplicate_yaml_keys(
                     path=path,
                     location=f"{location}[{index}]",
                     active=active,
+                    completed=completed,
                 )
     finally:
         active.remove(identity)
+        completed.add(identity)
 
 
 def _optional_operator_id(payload: Mapping[str, Any]) -> str | None:
@@ -617,6 +656,7 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 operator_id=operator_id,
             )
     output_templates: set[str] = set()
+    output_template_signatures: dict[tuple[tuple[str, str | None, str, str | None], ...], str] = {}
     resolved_output_names: set[str] = set()
     for field in outputs["fields"]:
         template = field["name_template"]
@@ -674,6 +714,14 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 "output field template parameters must set affects_output_fields=true: " + ", ".join(inconsistent),
                 operator_id=operator_id,
             )
+        signature = _output_template_collision_signature(template, parameters)
+        colliding_template = output_template_signatures.get(signature)
+        if colliding_template is not None:
+            raise InvalidManifestError(
+                f"output field templates always resolve to duplicate output field names: {colliding_template}, {template}",
+                operator_id=operator_id,
+            )
+        output_template_signatures[signature] = template
         try:
             _validate_template_resource_bounds(field["name_template"], parameters)
         except _OutputFormatResourceLimitError as exc:
@@ -722,6 +770,44 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                     operator_id=operator_id,
                 )
             resolved_output_names.add(resolved_name)
+    _validate_finite_output_template_satisfiability(outputs, parameters, operator_id)
+
+
+def _validate_finite_output_template_satisfiability(
+    outputs: Mapping[str, Any],
+    parameters: Mapping[str, Mapping[str, Any]],
+    operator_id: str,
+) -> None:
+    templates = tuple(field["name_template"] for field in outputs["fields"])
+    references = sorted(set().union(*(_template_references(template) for template in templates)))
+    if not references or any("enum" not in parameters[name] for name in references):
+        return
+    domains = [tuple(parameters[name]["enum"]) for name in references]
+    combination_count = math.prod(len(domain) for domain in domains)
+    if combination_count > _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS:
+        return
+    for combination in product(*domains):
+        values = dict(zip(references, combination, strict=True))
+        resolved = tuple(_format_bounded(template, values) for template in templates)
+        if len(set(resolved)) == len(resolved):
+            return
+    raise InvalidManifestError(
+        "no parameter assignment produces unique output field names",
+        operator_id=operator_id,
+    )
+
+
+def _output_template_collision_signature(
+    template: str,
+    parameters: Mapping[str, Mapping[str, Any]],
+) -> tuple[tuple[str, str | None, str, str | None], ...]:
+    signature: list[tuple[str, str | None, str, str | None]] = []
+    for literal_text, field_name, format_spec, conversion in string.Formatter().parse(template):
+        normalized_spec = format_spec or ""
+        if field_name is not None and conversion is None and parameters[field_name]["type"] == "integer" and format_spec in {"", "d"}:
+            normalized_spec = "d"
+        signature.append((literal_text, field_name, normalized_spec, conversion))
+    return tuple(signature)
 
 
 def _template_references(template: str, *, depth: int = 0) -> set[str]:
