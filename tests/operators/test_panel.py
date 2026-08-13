@@ -274,6 +274,24 @@ def test_validate_output_enforces_declared_alignment(daily_context, daily_symbol
         )
 
 
+@pytest.mark.parametrize("alignment", ["preserve-input-order", "unknown"])
+def test_validate_output_rejects_unsupported_alignment(
+    daily_context: OperatorContext,
+    daily_symbol_frames: dict[str, pd.DataFrame],
+    alignment: str,
+) -> None:
+    input_panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    output_panel = input_panel[["date", "code"]].copy()
+
+    with pytest.raises(InvalidPanelError, match="unsupported output alignment"):
+        QuantPanelAdapter.validate_output(
+            input_panel,
+            output_panel,
+            daily_context,
+            alignment=alignment,  # type: ignore[arg-type]
+        )
+
+
 def test_explicit_keyed_output_allows_unique_subset(daily_context, daily_symbol_frames) -> None:
     input_panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     output = input_panel.loc[input_panel["code"] == "000001.SZ", ["date", "code"]].copy()

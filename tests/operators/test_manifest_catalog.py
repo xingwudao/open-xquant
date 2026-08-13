@@ -1059,6 +1059,108 @@ def test_manifest_accepts_output_format_compatible_with_required_parameter_type(
     assert manifest.raw["outputs"]["fields"][0]["name_template"] == "sma_{suffix:>4s}"
 
 
+@pytest.mark.parametrize(
+    "domain",
+    [
+        {"minimum": 1_114_112},
+        {"minimum": -1, "maximum": 65},
+        {"enum": [65, 1_114_112]},
+    ],
+    ids=["minimum-too-large", "minimum-negative", "enum-member-outside-unicode"],
+)
+def test_manifest_rejects_value_sensitive_output_format_outside_required_parameter_domain(
+    valid_manifest_payload,
+    domain,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        **domain,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{value:c}"
+
+    with pytest.raises(InvalidManifestError, match="format.*declared parameter domain"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_requires_bounded_or_enumerated_domain_for_value_sensitive_output_format(
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{value:c}"
+
+    with pytest.raises(InvalidManifestError, match="format.*declared parameter domain"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    "domain",
+    [
+        {"minimum": 0, "maximum": 1_114_111},
+        {"minimum": -0.5, "maximum": 1_114_111.9},
+        {"enum": [0, 65, 1_114_111]},
+    ],
+    ids=["bounded", "fractional-bounds", "enum"],
+)
+def test_manifest_accepts_provably_safe_domain_for_value_sensitive_output_format(
+    valid_manifest_payload,
+    domain,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        **domain,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "prefix_{value:c}"
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.raw["outputs"]["fields"][0]["name_template"] == "prefix_{value:c}"
+
+
+@pytest.mark.parametrize("format_spec", ["d", "08x", ",d", ">12d"])
+def test_manifest_accepts_common_integer_output_formats_without_bounded_domain(
+    valid_manifest_payload,
+    format_spec,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = f"value_{{value:{format_spec}}}"
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.raw["outputs"]["fields"][0]["name_template"] == f"value_{{value:{format_spec}}}"
+
+
 def test_manifest_rejects_composite_parameter_attribute_access_in_output_template(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["parameters"]["options"] = {

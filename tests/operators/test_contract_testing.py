@@ -25,7 +25,7 @@ from oxq.operators.errors import (
 from oxq.operators.manifest import load_operator_manifest
 from oxq.operators.panel import QuantPanelAdapter
 from oxq.operators.testing import verify_operator_contract as _verify_operator_contract
-from oxq.operators.types import OperatorRequest
+from oxq.operators.types import OperatorRequest, OperatorScope
 from tests.operators.fake_provider import IMPLEMENTATION_DIGEST
 from tests.operators.fake_provider import sma as _sma
 
@@ -56,6 +56,7 @@ def verify_operator_contract(
                     operator_id=provider_request.operator_id,
                     details={"column": column},
                 )
+        _reject_empty_input(manifest, provider_request)
         return operator(provider_request)
 
     return _verify_operator_contract(
@@ -64,6 +65,23 @@ def verify_operator_contract(
         request,
         expected_distribution_version=expected_distribution_version,
         expected_implementation_digest=expected_implementation_digest,
+    )
+
+
+def _reject_empty_input(manifest, request: OperatorRequest) -> None:
+    if not request.input_panel.empty:
+        return
+    input_spec = manifest.raw["inputs"]
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION or input_spec["min_history"] == 0:
+        raise InsufficientCrossSectionError(
+            "empty input does not satisfy the declared asset minimum",
+            operator_id=request.operator_id,
+            details={"min_assets": input_spec["min_assets"], "available_assets": 0},
+        )
+    raise InsufficientHistoryError(
+        "empty input does not satisfy the declared history minimum",
+        operator_id=request.operator_id,
+        details={"min_history": input_spec["min_history"], "available_history": 0},
     )
 
 
@@ -154,6 +172,7 @@ def test_fake_provider_passes_reusable_contract_suite(
         "output_contract",
         "provenance",
         "required_inputs",
+        "empty_input",
         "determinism",
         "causality",
         "unordered_input",
@@ -176,6 +195,7 @@ def test_contract_suite_probes_each_required_data_column(
         context=daily_context,
     )
     probed_columns: list[str] = []
+    manifest = load_operator_manifest(payload)
 
     def structured_missing_column_provider(provider_request: OperatorRequest):
         for column in payload["inputs"]["required_columns"]:
@@ -186,10 +206,11 @@ def test_contract_suite_probes_each_required_data_column(
                     operator_id=provider_request.operator_id,
                     details={"column": column},
                 )
+        _reject_empty_input(manifest, provider_request)
         return sma(provider_request)
 
     report = _verify_operator_contract(
-        load_operator_manifest(payload),
+        manifest,
         structured_missing_column_provider,
         request,
         expected_distribution_version="1.0.0",
@@ -3294,6 +3315,7 @@ def test_contract_suite_required_failure_probes_use_all_declared_optional_shapes
         context=daily_context,
     )
     observed_shapes: set[tuple[str, ...]] = set()
+    manifest = load_operator_manifest(payload)
 
     def shape_recording_provider(provider_request: OperatorRequest):
         if "close" not in provider_request.input_panel:
@@ -3304,10 +3326,11 @@ def test_contract_suite_required_failure_probes_use_all_declared_optional_shapes
                 operator_id=provider_request.operator_id,
                 details={"column": "close"},
             )
+        _reject_empty_input(manifest, provider_request)
         return sma(provider_request)
 
     report = _verify_operator_contract(
-        load_operator_manifest(payload),
+        manifest,
         shape_recording_provider,
         request,
         expected_distribution_version="1.0.0",
@@ -3461,3 +3484,105 @@ def test_fake_provider_matches_expected_values(
     result = sma(request)
     expected = pd.Series([None, None, 10.5, 19.0, 11.5, 19.5], name="sma_2", dtype="float64")
     pd.testing.assert_series_equal(result.data["sma_2"], expected)
+
+
+def test_contract_suite_probes_a_structurally_valid_empty_quant_panel(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    manifest = _load_contract_manifest(valid_manifest_payload)
+    empty_shapes: list[tuple[tuple[str, str], ...]] = []
+
+    def empty_aware_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        if provider_request.input_panel.empty:
+            QuantPanelAdapter.validate_panel(provider_request.input_panel, provider_request.context)
+            empty_shapes.append(tuple((column, str(provider_request.input_panel[column].dtype)) for column in provider_request.input_panel))
+            raise InsufficientHistoryError(
+                "empty input does not satisfy the declared history minimum",
+                operator_id=provider_request.operator_id,
+                details={"min_history": 2, "available_history": 0},
+            )
+        return sma(provider_request)
+
+    report = _verify_operator_contract(
+        manifest,
+        empty_aware_provider,
+        request,
+        expected_distribution_version="1.0.0",
+        expected_implementation_digest=IMPLEMENTATION_DIGEST,
+    )
+
+    assert report.passed is True
+    assert "empty_input" in report.checks
+    assert empty_shapes == [
+        (
+            ("date", "datetime64[ns]"),
+            ("code", "string"),
+            ("close", "float64"),
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "behavior",
+    ["index_error", "silent", "wrong_error", "missing_operator_id", "wrong_minimum"],
+)
+def test_contract_suite_rejects_noncompliant_empty_input_behavior(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    behavior: str,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def noncompliant_provider(provider_request: OperatorRequest):
+        if "close" not in provider_request.input_panel:
+            raise MissingColumnError(
+                "missing required input column close",
+                operator_id=provider_request.operator_id,
+                details={"column": "close"},
+            )
+        if provider_request.input_panel.empty:
+            if behavior == "index_error":
+                raise IndexError("single positional indexer is out-of-bounds")
+            if behavior == "wrong_error":
+                raise InsufficientCrossSectionError(
+                    "wrong insufficient-input category for time_series scope",
+                    operator_id=provider_request.operator_id,
+                )
+            if behavior == "missing_operator_id":
+                raise InsufficientHistoryError("missing operator identity")
+            if behavior == "wrong_minimum":
+                raise InsufficientHistoryError(
+                    "history minimum does not match the manifest",
+                    operator_id=provider_request.operator_id,
+                    details={"min_history": 999},
+                )
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="empty input"):
+        _verify_operator_contract(
+            _load_contract_manifest(valid_manifest_payload),
+            noncompliant_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=IMPLEMENTATION_DIGEST,
+        )

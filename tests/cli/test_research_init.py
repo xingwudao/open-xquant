@@ -90,6 +90,51 @@ def test_research_init_rejects_broken_workspace_marker_without_overwrite(tmp_pat
         assert marker.is_symlink()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_research_init_force_rejects_symlinked_config_directory_without_external_mutation(tmp_path) -> None:
+    runner = CliRunner()
+    with runner.isolated_filesystem(temp_dir=tmp_path) as cwd:
+        workspace = tmp_path / cwd
+        external = tmp_path / "external"
+        external.mkdir()
+        (external / "workspace.yaml").write_text("external sentinel\n", encoding="utf-8")
+        (workspace / ".open-xquant").symlink_to(external, target_is_directory=True)
+        before = _workspace_snapshot(external)
+
+        result = runner.invoke(main, ["research", "init", "--force"])
+
+        assert result.exit_code == 1
+        assert "workspace configuration directory must not be a symlink" in result.output
+        assert _workspace_snapshot(external) == before
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_research_init_force_rejects_config_directory_swap_without_external_mutation(monkeypatch, tmp_path) -> None:
+    import oxq.cli.research as research_module
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    research_module.initialize_workspace(workspace)
+    config_dir = workspace / ".open-xquant"
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "workspace.yaml").write_text("external sentinel\n", encoding="utf-8")
+    before = _workspace_snapshot(external)
+    original_validate = research_module._validate_existing_governance_manifests
+
+    def swap_config_dir(cwd: Path, config: dict[str, object]) -> None:
+        original_validate(cwd, config)
+        config_dir.rename(workspace / ".open-xquant-original")
+        config_dir.symlink_to(external, target_is_directory=True)
+
+    monkeypatch.setattr(research_module, "_validate_existing_governance_manifests", swap_config_dir)
+
+    with pytest.raises(Exception, match="configuration directory contains a symlink|changed after validation"):
+        research_module.initialize_workspace(workspace, force=True)
+
+    assert _workspace_snapshot(external) == before
+
+
 @pytest.mark.parametrize("instruction_file", ["AGENTS.md", "CLAUDE.md"])
 @pytest.mark.parametrize("marker", ["open-xquant-workspace", "open-xquant-subagents"])
 def test_research_init_rejects_malformed_managed_markers_without_mutation(

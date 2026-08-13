@@ -296,6 +296,9 @@ def verify_operator_contract(
     )
     checks.append("required_inputs")
 
+    _verify_empty_input_failure(manifest, operator, normalized, declared_panel)
+    checks.append("empty_input")
+
     for present_count in range(len(optional_columns)):
         for present_subset in combinations(optional_columns, present_count):
             omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
@@ -682,6 +685,82 @@ def _verify_required_column_failures(
                     operator_id=manifest.operator_id,
                     details={"column": column},
                 )
+
+
+def _verify_empty_input_failure(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    declared_panel: pd.DataFrame,
+) -> None:
+    input_spec = manifest.raw["inputs"]
+    expected_errors: tuple[tuple[type[OperatorError], str, int], ...]
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION or input_spec["min_history"] == 0:
+        expected_errors = ((InsufficientCrossSectionError, "min_assets", input_spec["min_assets"]),)
+    elif manifest.execution_scope is OperatorScope.TIME_SERIES:
+        expected_errors = ((InsufficientHistoryError, "min_history", input_spec["min_history"]),)
+    else:
+        expected_errors = (
+            (InsufficientHistoryError, "min_history", input_spec["min_history"]),
+            (InsufficientCrossSectionError, "min_assets", input_spec["min_assets"]),
+        )
+
+    empty_request = _copy_request(request, panel=declared_panel.iloc[0:0].copy(deep=True))
+    snapshot = _deepcopy_frame(empty_request.input_panel)
+    expected_codes = [error_type.code for error_type, _, _ in expected_errors]
+    failure_details = {
+        "execution_scope": manifest.execution_scope.value,
+        "min_assets": input_spec["min_assets"],
+        "min_history": input_spec["min_history"],
+        "expected_errors": expected_codes,
+    }
+    try:
+        operator(empty_request)
+    except OperatorError as exc:
+        _assert_input_unchanged(manifest, empty_request.input_panel, snapshot)
+        matching_specification = next(
+            (specification for specification in expected_errors if isinstance(exc, specification[0])),
+            None,
+        )
+        if matching_specification is None:
+            raise ContractViolationError(
+                "empty input must raise a scope-appropriate insufficient-input error",
+                operator_id=manifest.operator_id,
+                details={**failure_details, "actual_error": exc.code},
+            ) from exc
+        if exc.operator_id != manifest.operator_id:
+            raise ContractViolationError(
+                "empty input error must identify the manifest operator",
+                operator_id=manifest.operator_id,
+                details=failure_details,
+            ) from exc
+        if not str(exc).strip():
+            raise ContractViolationError(
+                "empty input error must contain a human-readable message",
+                operator_id=manifest.operator_id,
+                details=failure_details,
+            ) from exc
+        _, minimum_name, minimum_value = matching_specification
+        if exc.details.get(minimum_name) != minimum_value:
+            raise ContractViolationError(
+                f"empty input error must identify the declared {minimum_name}",
+                operator_id=manifest.operator_id,
+                details={**failure_details, "expected": minimum_value, "actual": exc.details.get(minimum_name)},
+            ) from exc
+        return
+    except Exception as exc:
+        _assert_input_unchanged(manifest, empty_request.input_panel, snapshot)
+        raise ContractViolationError(
+            "empty input must raise a structured insufficient-input error",
+            operator_id=manifest.operator_id,
+            details={**failure_details, "actual_error": type(exc).__name__},
+        ) from exc
+    _assert_input_unchanged(manifest, empty_request.input_panel, snapshot)
+    raise ContractViolationError(
+        "empty input must raise a structured insufficient-input error",
+        operator_id=manifest.operator_id,
+        details=failure_details,
+    )
 
 
 def _optional_probe_failure(omitted_columns: tuple[str, ...]) -> tuple[str, Mapping[str, Any]]:

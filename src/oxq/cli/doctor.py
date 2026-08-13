@@ -26,6 +26,7 @@ from oxq.cli.research import (
     _resolve_version_phase_path,
     _workflow_manifest_is_valid,
     _workflow_manifest_path_mismatches,
+    _workspace_config_directory_is_link,
     initialize_workspace,
 )
 from oxq.cli.research import (
@@ -126,11 +127,16 @@ def _check_workspace() -> dict[str, Any]:
     try:
         config = load_workspace_config(workspace, allow_empty=True)
     except Exception as exc:
+        fixes = (
+            ["Replace the .open-xquant symlink with a real directory, then run oxq research init"]
+            if _workspace_config_directory_is_link(Path.cwd())
+            else ["oxq research init --force"]
+        )
         return {
             "status": "fail",
             "path": str(workspace),
             "error": str(exc),
-            "fixes": ["oxq research init --force"],
+            "fixes": fixes,
         }
     configured_paths, path_warnings = _workspace_required_paths_and_warnings(config)
     missing = [

@@ -25,7 +25,6 @@ from oxq.cli.agent_manifest import (
     upsert_marker_block,
     validate_marker_block,
     write_text_file,
-    write_yaml_file,
 )
 from oxq.cli.sdk_bundle import install_workspace_sdk
 from oxq.core.workspace_config import load_workspace_config
@@ -184,6 +183,7 @@ def _initialize_workspace_locked(
     sdk_venv: str,
 ) -> None:
     agent_profile = _installed_agent_profile()
+    _require_safe_workspace_config_directory(cwd)
     _recover_governance_transaction(cwd)
     _preflight_workspace_instruction_markers(cwd)
     config_dir = cwd / ".open-xquant"
@@ -206,10 +206,10 @@ def _initialize_workspace_locked(
 
     if created_workspace_config:
         config_dir.mkdir(parents=True, exist_ok=True)
-        write_yaml_file(workspace_file, workspace_config)
+        _write_workspace_config(cwd, workspace_file, workspace_config)
         click.echo(f"Workspace config written to {workspace_file}")
     elif sdk_state is not None:
-        write_yaml_file(workspace_file, workspace_config)
+        _write_workspace_config(cwd, workspace_file, workspace_config)
         click.echo(f"SDK config written to {workspace_file}")
 
     workspace_config = workspace_config or {}
@@ -231,7 +231,7 @@ def _initialize_workspace_locked(
         _write_governance_files_atomically(cwd, migration_files)
         click.echo("Workspace root manifests migrated from .open-xquant/")
     elif normalized_config:
-        write_yaml_file(workspace_file, workspace_config)
+        _write_workspace_config(cwd, workspace_file, workspace_config)
         click.echo(f"Workspace config normalized in {workspace_file}")
     if not minimal:
         _create_configured_workspace_dirs(cwd, workspace_config)
@@ -272,6 +272,37 @@ def _workspace_init_transition_lock_path(cwd: Path) -> Path:
         digest.update(encoded)
     identity = digest.hexdigest()[:24]
     return verified_user_runtime_root() / "research" / f"transition-{identity}.lock"
+
+
+def _workspace_config_directory_is_link(cwd: Path) -> bool:
+    try:
+        status = (cwd / ".open-xquant").lstat()
+    except FileNotFoundError:
+        return False
+    return stat.S_ISLNK(status.st_mode) or _is_windows_reparse_point(status)
+
+
+def _require_safe_workspace_config_directory(cwd: Path) -> None:
+    if _workspace_config_directory_is_link(cwd):
+        raise click.ClickException("workspace configuration directory must not be a symlink or reparse point")
+
+
+def _write_workspace_config(cwd: Path, path: Path, payload: dict[str, object]) -> None:
+    temporary_name = f".{path.name}.tmp-{uuid4().hex}"
+    try:
+        parent = _GovernanceMutationParent(cwd, path.parent)
+    except OSError as exc:
+        raise click.ClickException(
+            "workspace configuration directory contains a symlink or reparse point, or changed after validation"
+        ) from exc
+    try:
+        parent.write_text_file(temporary_name, yaml.safe_dump(payload, sort_keys=False, width=1000))
+        parent.replace_file(temporary_name, path.name)
+    finally:
+        try:
+            parent.unlink_file(temporary_name)
+        finally:
+            parent.close()
 
 
 def _preflight_workspace_instruction_markers(cwd: Path) -> None:

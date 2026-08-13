@@ -17,6 +17,7 @@ from oxq.operators.errors import DuplicateKeyError, InvalidPanelError, MissingCo
 from oxq.operators.types import OperatorContext, TimestampSemantics
 
 Alignment = Literal["preserve_input_order", "canonical_order", "explicit_keyed_output"]
+_SUPPORTED_ALIGNMENTS = frozenset({"preserve_input_order", "canonical_order", "explicit_keyed_output"})
 _KEY_COLUMNS = ["date", "code"]
 
 
@@ -138,6 +139,8 @@ class QuantPanelAdapter:
         *,
         alignment: Alignment,
     ) -> None:
+        if not isinstance(alignment, str) or alignment not in _SUPPORTED_ALIGNMENTS:
+            raise InvalidPanelError(f"unsupported output alignment: {alignment!r}")
         QuantPanelAdapter.validate_panel(input_panel, context)
         QuantPanelAdapter.validate_panel(output_panel, context)
         input_keys = pd.MultiIndex.from_frame(input_panel[_KEY_COLUMNS])

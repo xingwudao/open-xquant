@@ -43,6 +43,20 @@ def test_doctor_fails_closed_for_broken_workspace_marker(monkeypatch, tmp_path) 
     assert "symlink" in result["error"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_doctor_does_not_suggest_force_init_for_symlinked_config_directory(monkeypatch, tmp_path) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "workspace.yaml").write_text("paths: [broken\n", encoding="utf-8")
+    (tmp_path / ".open-xquant").symlink_to(external, target_is_directory=True)
+    monkeypatch.chdir(tmp_path)
+
+    result = _check_workspace()
+
+    assert result["fixes"] == ["Replace the .open-xquant symlink with a real directory, then run oxq research init"]
+    assert "oxq research init --force" not in result["fixes"]
+
+
 def _write_governed_workspace(work: Path, *, active_phase: str = "01_brainstorm") -> Path:
     config_dir = work / ".open-xquant"
     version_dir = work / "versions/v001"

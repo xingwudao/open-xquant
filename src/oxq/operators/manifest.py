@@ -580,6 +580,13 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"output field template format is incompatible with declared parameter types: {field['name_template']}",
                 operator_id=operator_id,
             ) from exc
+        try:
+            _validate_template_parameter_domains(field["name_template"], parameters)
+        except ValueError as exc:
+            raise InvalidManifestError(
+                f"output field template format is incompatible with declared parameter domain: {field['name_template']}",
+                operator_id=operator_id,
+            ) from exc
         if not references or all("default" in parameters[name] for name in references):
             defaults = {name: parameters[name]["default"] for name in references}
             try:
@@ -632,6 +639,35 @@ def _validate_template_parameter_types(
     }
     samples = {name: representative_values[parameters[name]["type"]] for name in references}
     template.format(**samples)
+
+
+def _validate_template_parameter_domains(
+    template: str,
+    parameters: Mapping[str, Mapping[str, Any]],
+) -> None:
+    for _, field_name, format_spec, _ in string.Formatter().parse(template):
+        if field_name is None:
+            continue
+        if format_spec and format_spec.endswith("c") and parameters[field_name]["type"] == "integer":
+            _validate_code_point_parameter_domain(parameters[field_name])
+        if format_spec:
+            _validate_template_parameter_domains(format_spec, parameters)
+
+
+def _validate_code_point_parameter_domain(declaration: Mapping[str, Any]) -> None:
+    minimum_code_point = 0
+    maximum_code_point = 0x10FFFF
+    if "enum" in declaration:
+        values = declaration["enum"]
+        if all(minimum_code_point <= value <= maximum_code_point for value in values):
+            return
+        raise ValueError("integer enum contains a value outside the Unicode code point range")
+    if "minimum" not in declaration or "maximum" not in declaration:
+        raise ValueError("integer code point format requires a bounded parameter domain")
+    effective_minimum = math.ceil(declaration["minimum"])
+    effective_maximum = math.floor(declaration["maximum"])
+    if effective_minimum > effective_maximum or effective_minimum < minimum_code_point or effective_maximum > maximum_code_point:
+        raise ValueError("integer bounds are not contained in the Unicode code point range")
 
 
 def _is_ordered_numeric_dtype(dtype: str) -> bool:

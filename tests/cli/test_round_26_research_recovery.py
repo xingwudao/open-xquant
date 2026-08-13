@@ -23,10 +23,10 @@ from oxq.cli import research
 workspace = pathlib.Path(sys.argv[1])
 paused = pathlib.Path(sys.argv[2])
 release = pathlib.Path(sys.argv[3])
-original_write_yaml = research.write_yaml_file
+original_write_workspace_config = research._write_workspace_config
 did_pause = False
 
-def pause_after_workspace_creation(path, payload):
+def pause_after_workspace_creation(cwd, path, payload):
     global did_pause
     if not did_pause and pathlib.Path(path).name == "workspace.yaml":
         did_pause = True
@@ -38,9 +38,9 @@ def pause_after_workspace_creation(path, payload):
             if time.monotonic() >= deadline:
                 raise TimeoutError("release was not signaled")
             time.sleep(0.02)
-    return original_write_yaml(path, payload)
+    return original_write_workspace_config(cwd, path, payload)
 
-research.write_yaml_file = pause_after_workspace_creation
+research._write_workspace_config = pause_after_workspace_creation
 research.initialize_workspace(workspace, name="round-26-first")
 """
 
