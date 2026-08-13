@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import json
 import socket
+import sys
+import uuid
 from decimal import Decimal
 from http.client import IncompleteRead
 from pathlib import Path
@@ -82,12 +85,25 @@ def test_downloader_satisfies_protocol() -> None:
     assert isinstance(downloader, Downloader)
 
 
-def test_local_transport_disables_environment_proxies_and_redirects(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def _assert_local_transport_policy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("http_proxy", "http://proxy.invalid:8080")
     monkeypatch.delenv("no_proxy", raising=False)
-    module = importlib.reload(tdxquant_downloader)
+    source_path = (
+        Path(__file__).resolve().parents[2]
+        / "examples"
+        / "modules"
+        / "tdxquant_downloader.py"
+    )
+    module_name = f"_tdxquant_import_policy_{uuid.uuid4().hex}"
+    spec = importlib.util.spec_from_file_location(module_name, source_path)
+    assert spec is not None
+    assert spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        del sys.modules[module_name]
     opener = getattr(module.urlopen, "__self__", None)
 
     assert opener is not None
@@ -109,6 +125,39 @@ def test_local_transport_disables_environment_proxies_and_redirects(
             "http://127.0.0.1:17709/redirected",
         )
         is None
+    )
+
+
+def test_local_transport_disables_environment_proxies_and_redirects(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _assert_local_transport_policy(monkeypatch)
+
+
+def test_tdxquant_factory_survives_import_policy_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    universe_module = importlib.import_module(
+        "examples.modules.11_tdx_data_and_universe"
+    )
+    args = universe_module.build_parser().parse_args(
+        [
+            "tdxquant",
+            "2024-01-01",
+            "2024-01-31",
+            "--symbols",
+            "510300.SH",
+        ]
+    )
+
+    assert isinstance(
+        universe_module.create_downloader(args),
+        tdxquant_downloader.TdxQuantDownloader,
+    )
+    _assert_local_transport_policy(monkeypatch)
+    assert isinstance(
+        universe_module.create_downloader(args),
+        tdxquant_downloader.TdxQuantDownloader,
     )
 
 
