@@ -15,6 +15,7 @@ from oxq.operators.errors import (
     ContractViolationError,
     InsufficientCrossSectionError,
     InsufficientHistoryError,
+    OperatorError,
 )
 from oxq.operators.manifest import OperatorManifest
 from oxq.operators.panel import QuantPanelAdapter
@@ -74,15 +75,27 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"parameters": causality_parameters},
         )
+    availability_parameters = sorted(
+        name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_availability"]
+    )
+    if availability_parameters:
+        raise ContractViolationError(
+            "contract checker cannot certify parameters that affect availability",
+            operator_id=manifest.operator_id,
+            details={"parameters": availability_parameters},
+        )
     parameters = manifest.validate_parameters(request.parameters)
     normalized = _copy_request(request, parameters=parameters)
     _validate_availability(manifest, normalized)
     input_spec = manifest.raw["inputs"]
-    QuantPanelAdapter.validate_panel(
-        normalized.input_panel,
-        normalized.context,
-        require_canonical_order=input_spec["requires_sorted"],
-    )
+    try:
+        QuantPanelAdapter.validate_panel(
+            normalized.input_panel,
+            normalized.context,
+            require_canonical_order=input_spec["requires_sorted"],
+        )
+    except OperatorError as exc:
+        raise _enrich_operator_error(exc, manifest.operator_id) from exc
     required_columns = set(manifest.raw["inputs"]["required_columns"])
     missing_columns = sorted(required_columns - set(normalized.input_panel.columns))
     if missing_columns:
@@ -285,7 +298,10 @@ def _validate_result(
         raise ContractViolationError("diagnostics.output_rows mismatch", operator_id=manifest.operator_id)
     outputs = manifest.raw["outputs"]
     alignment = outputs["alignment"]
-    QuantPanelAdapter.validate_output(request.input_panel, result.data, request.context, alignment=alignment)
+    try:
+        QuantPanelAdapter.validate_output(request.input_panel, result.data, request.context, alignment=alignment)
+    except OperatorError as exc:
+        raise _enrich_operator_error(exc, manifest.operator_id) from exc
     try:
         resolved_fields = [field["name_template"].format(**request.parameters) for field in outputs["fields"]]
     except (KeyError, IndexError, ValueError, TypeError) as exc:
@@ -380,6 +396,15 @@ def _validate_availability(manifest: OperatorManifest, request: OperatorRequest)
             operator_id=manifest.operator_id,
             details={"availability": available.value, "evaluation_time": evaluation.value},
         )
+
+
+def _enrich_operator_error(error: OperatorError, operator_id: str) -> OperatorError:
+    return type(error)(
+        str(error),
+        operator_id=operator_id,
+        details=error.details,
+        retryable=error.retryable,
+    )
 
 
 def _validate_nan_policy(

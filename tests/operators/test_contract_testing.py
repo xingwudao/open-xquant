@@ -11,8 +11,10 @@ import pytest
 from oxq.operators.errors import (
     CausalityViolationError,
     ContractViolationError,
+    DuplicateKeyError,
     InsufficientCrossSectionError,
     InsufficientHistoryError,
+    InvalidPanelError,
     InvalidParameterError,
 )
 from oxq.operators.manifest import load_operator_manifest
@@ -413,6 +415,69 @@ def test_contract_suite_rejects_use_before_declared_availability(
 
     with pytest.raises(CausalityViolationError, match="not available"):
         verify_operator_contract(load_operator_manifest(valid_manifest_payload), sma, request)
+
+
+def test_contract_suite_enriches_input_panel_errors_with_manifest_operator_id(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    duplicate_panel = pd.concat([panel, panel.iloc[[0]]], ignore_index=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=duplicate_panel,
+        context=daily_context,
+    )
+
+    with pytest.raises(DuplicateKeyError) as exc_info:
+        verify_operator_contract(load_operator_manifest(valid_manifest_payload), sma, request)
+
+    assert exc_info.value.to_dict() == {
+        "code": "duplicate_key",
+        "operator_id": "fake.indicators.sma",
+        "message": "QuantPanel contains duplicate (date, code) keys",
+        "details": {"count": 2},
+        "retryable": False,
+    }
+    assert isinstance(exc_info.value.__cause__, DuplicateKeyError)
+    assert exc_info.value.__cause__.operator_id is None
+
+
+def test_contract_suite_enriches_output_panel_errors_with_manifest_operator_id(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def invalid_output_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        result.data.loc[result.data.index[0], "code"] = ""
+        return result
+
+    with pytest.raises(InvalidPanelError) as exc_info:
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            invalid_output_provider,
+            request,
+        )
+
+    assert exc_info.value.to_dict() == {
+        "code": "invalid_panel",
+        "operator_id": "fake.indicators.sma",
+        "message": "QuantPanel code must contain non-empty strings",
+        "details": {},
+        "retryable": False,
+    }
+    assert type(exc_info.value.__cause__) is InvalidPanelError
+    assert exc_info.value.__cause__.operator_id is None
 
 
 def test_contract_suite_enforces_declared_output_bounds(
@@ -1075,6 +1140,48 @@ def test_contract_suite_refuses_parameterized_causality_before_provider_call(
         "operator_id": "fake.indicators.sma",
         "message": "contract checker cannot certify parameters that affect causality",
         "details": {"parameters": ["window_alignment"]},
+        "retryable": False,
+    }
+
+
+def test_contract_suite_refuses_parameterized_availability_before_provider_call(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["release_lag"] = {
+        "type": "integer",
+        "default": 0,
+        "required": False,
+        "unit": "sessions",
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": True,
+    }
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2, "release_lag": 0},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="parameters that affect availability") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict() == {
+        "code": "contract_violation",
+        "operator_id": "fake.indicators.sma",
+        "message": "contract checker cannot certify parameters that affect availability",
+        "details": {"parameters": ["release_lag"]},
         "retryable": False,
     }
 

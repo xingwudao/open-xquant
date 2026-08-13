@@ -73,6 +73,8 @@ class QuantPanelAdapter:
         result: dict[str, pd.DataFrame] = {}
         for code, rows in panel.groupby("code", sort=True, observed=True):
             frame = rows.drop(columns="code").set_index("date")
+            for column in frame.select_dtypes(include="object").columns:
+                frame[column] = frame[column].map(deepcopy)
             frame.index = pd.DatetimeIndex(frame.index)
             if context.timestamp_semantics is TimestampSemantics.SESSION_DATE:
                 frame.index = frame.index.tz_localize(context.timezone)

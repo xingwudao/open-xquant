@@ -311,7 +311,20 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             operator_id=operator_id,
         )
     warmup = outputs["warmup"]
-    if warmup["kind"] == "parameter":
+    if warmup["kind"] == "fixed":
+        rows = warmup["rows"]
+        if not isinstance(rows, int) or isinstance(rows, bool):
+            raise InvalidManifestError(
+                "outputs warmup fixed rows must be an integer",
+                operator_id=operator_id,
+            )
+    else:
+        offset = warmup.get("offset", 0)
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            raise InvalidManifestError(
+                "outputs warmup parameter offset must be an integer",
+                operator_id=operator_id,
+            )
         warmup_name = warmup["parameter"]
         if warmup_name not in parameters:
             raise InvalidManifestError(

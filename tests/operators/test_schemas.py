@@ -24,6 +24,21 @@ def test_operator_schema_accepts_contract_manifest(valid_manifest_payload) -> No
     Draft202012Validator(schema).validate(valid_manifest_payload)
 
 
+@pytest.mark.parametrize(
+    "warmup",
+    [
+        {"kind": "fixed", "rows": 1.0},
+        {"kind": "parameter", "parameter": "period", "offset": 0.0},
+    ],
+    ids=["fixed-rows", "parameter-offset"],
+)
+def test_operator_schema_accepts_integral_float_warmup_values(valid_manifest_payload, warmup) -> None:
+    schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
+    payload = {**valid_manifest_payload, "outputs": {**valid_manifest_payload["outputs"], "warmup": warmup}}
+
+    Draft202012Validator(schema).validate(payload)
+
+
 @pytest.mark.parametrize("operator_id", ["vendor..sma", "vendor.-.sma", "vendor._.sma"])
 def test_operator_schema_rejects_invalid_operator_id_segments(valid_manifest_payload, operator_id) -> None:
     schema = json.loads((SCHEMA_DIR / "operator-manifest-v1.schema.json").read_text(encoding="utf-8"))
@@ -89,6 +104,26 @@ def test_serialized_quant_panel_validation_enforces_date_formats() -> None:
             "source": "fake",
         },
         "rows": [{"date": "not-a-date", "code": "000001.SZ"}],
+    }
+
+    with pytest.raises(InvalidPanelError, match="date"):
+        validate_serialized_quant_panel(payload)
+
+
+def test_serialized_intraday_panel_requires_rfc3339_date_time() -> None:
+    payload = {
+        "schema_version": 1,
+        "context": {
+            "timezone": "UTC",
+            "calendar": "XNYS",
+            "frequency": "1min",
+            "timestamp_semantics": "bar_close",
+            "currency": "USD",
+            "price_adjustment": "raw",
+            "data_version": "fixture-v1",
+            "source": "fake",
+        },
+        "rows": [{"date": "2026-01-01 00:00:00+00:00", "code": "AAPL"}],
     }
 
     with pytest.raises(InvalidPanelError, match="date"):

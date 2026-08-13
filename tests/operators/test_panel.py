@@ -62,6 +62,25 @@ def test_to_panel_recursively_copies_object_cells(daily_context) -> None:
     assert frames["600000.SH"].loc[:, "metadata"].iloc[0] == {"tags": ["bank"]}
 
 
+def test_to_symbol_frames_recursively_copies_object_cells(daily_context) -> None:
+    panel = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2026-01-05"), pd.Timestamp("2026-01-06")],
+            "code": pd.Series(["000001.SZ", "600000.SH"], dtype="string"),
+            "close": [10.0, 20.0],
+            "metadata": [[{"tags": ["finance"]}], {"tags": ["bank"]}],
+        }
+    )
+
+    frames = QuantPanelAdapter.to_symbol_frames(panel, daily_context)
+
+    frames["000001.SZ"].loc[:, "metadata"].iloc[0][0]["tags"].append("mutated")
+    frames["600000.SH"].loc[:, "metadata"].iloc[0]["tags"].append("mutated")
+
+    assert panel.loc[0, "metadata"] == [{"tags": ["finance"]}]
+    assert panel.loc[1, "metadata"] == {"tags": ["bank"]}
+
+
 def test_intraday_panel_is_timezone_aware_and_canonicalized_to_utc() -> None:
     context = OperatorContext(
         timezone="Asia/Shanghai",

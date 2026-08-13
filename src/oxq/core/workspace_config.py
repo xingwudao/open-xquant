@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import errno
+import os
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -46,10 +49,8 @@ def load_workspace_config(
         raise WorkspaceConfigError(f"workspace configuration directory is invalid: {config_path.parent}")
     if config_path.is_symlink():
         raise WorkspaceConfigError(f"workspace configuration must not be a symlink: {config_path}")
-    if not config_path.is_file():
-        raise WorkspaceConfigError(f"workspace configuration must be a regular file: {config_path}")
     try:
-        payload = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        payload = yaml.safe_load(_read_regular_file_nofollow(config_path))
     except yaml.YAMLError as exc:
         raise WorkspaceConfigError(f"workspace configuration contains invalid YAML: {config_path}: {exc}") from exc
     except (OSError, UnicodeDecodeError) as exc:
@@ -59,6 +60,30 @@ def load_workspace_config(
     if not isinstance(payload, dict):
         raise WorkspaceConfigError(f"workspace configuration must contain an object: {config_path}")
     return payload
+
+
+def _read_regular_file_nofollow(path: Path) -> str:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if nofollow is None:
+        raise WorkspaceConfigError("workspace configuration cannot be read: atomic nofollow protection is unavailable")
+
+    try:
+        descriptor = os.open(path, os.O_RDONLY | nofollow)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            raise WorkspaceConfigError(f"workspace configuration must not be a symlink: {path}") from exc
+        raise
+
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise WorkspaceConfigError(f"workspace configuration must be a regular file: {path}")
+        stream = os.fdopen(descriptor, "r", encoding="utf-8")
+        descriptor = -1
+        with stream:
+            return stream.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
 def _first_link_component(path: Path) -> Path | None:

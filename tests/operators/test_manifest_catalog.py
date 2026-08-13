@@ -168,6 +168,24 @@ def test_manifest_rejects_negative_warmup_resolved_from_parameter_default(valid_
         load_operator_manifest(payload)
 
 
+@pytest.mark.parametrize("rows", [1.0, True], ids=["integral-float", "boolean"])
+def test_manifest_rejects_non_int_fixed_warmup_rows(valid_manifest_payload, rows) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["warmup"] = {"kind": "fixed", "rows": rows}
+
+    with pytest.raises(InvalidManifestError, match="warmup"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("offset", [0.0, False], ids=["integral-float", "boolean"])
+def test_manifest_rejects_non_int_parameter_warmup_offset(valid_manifest_payload, offset) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["warmup"]["offset"] = offset
+
+    with pytest.raises(InvalidManifestError, match="warmup"):
+        load_operator_manifest(payload)
+
+
 def test_manifest_rejects_cross_section_scope_with_multi_row_history(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["execution_scope"] = "cross_section"

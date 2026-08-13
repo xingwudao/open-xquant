@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import FrozenInstanceError
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,6 +21,25 @@ from oxq.operators.types import (
     OperatorResult,
     OperatorScope,
 )
+
+
+def _fitted_state(**overrides: Any) -> FittedOperatorState:
+    values: dict[str, Any] = {
+        "operator_id": "fake.preprocessing.standardize",
+        "operator_version": "1.0.0",
+        "training_start": "2025-01-01",
+        "training_end": "2025-12-31",
+        "training_data_digest": "sha256:" + "a" * 64,
+        "training_data_summary": {"rows": 252},
+        "feature_order": ("value",),
+        "parameters": {"ddof": 1},
+        "learned_state": {"mean": (1.0, 2.0)},
+        "random_seed": 7,
+        "dependency_versions": {"numpy": "2.4.2"},
+        "state_digest": "sha256:" + "b" * 64,
+    }
+    values.update(overrides)
+    return FittedOperatorState(**values)
 
 
 def test_operator_enums_match_contract_values() -> None:
@@ -180,52 +200,45 @@ def test_fitted_state_snapshots_training_metadata() -> None:
         state.learned_state["mean"] = (0.0,)  # type: ignore[index]
 
 
-def test_fitted_state_copies_numpy_arrays_and_makes_them_read_only() -> None:
-    coefficients = np.array([1.0, 2.0])
-    state = FittedOperatorState(
-        operator_id="fake.preprocessing.standardize",
-        operator_version="1.0.0",
-        training_start="2025-01-01",
-        training_end="2025-12-31",
-        training_data_digest="sha256:" + "a" * 64,
-        training_data_summary={"rows": 252},
-        feature_order=("value",),
-        parameters={"ddof": 1},
-        learned_state={"coefficients": coefficients},
-        random_seed=7,
-        dependency_versions={"numpy": "2.4.2"},
-        state_digest="sha256:" + "b" * 64,
+def test_fitted_state_permanently_freezes_numpy_arrays_in_all_state_mappings() -> None:
+    summary_array = np.array([252, 253])
+    parameter_array = np.array([0.25, 0.75])
+    learned_array = np.array([1.0, 2.0])
+    state = _fitted_state(
+        training_data_summary={"rows_by_year": summary_array},
+        parameters={"quantiles": parameter_array},
+        learned_state={"coefficients": learned_array},
     )
 
-    frozen_coefficients = state.learned_state["coefficients"]
-    coefficients[0] = 99.0
+    frozen_arrays = (
+        state.training_data_summary["rows_by_year"],
+        state.parameters["quantiles"],
+        state.learned_state["coefficients"],
+    )
+    summary_array[0] = 999
+    parameter_array[0] = 0.0
+    learned_array[0] = 99.0
 
-    assert isinstance(frozen_coefficients, np.ndarray)
-    assert frozen_coefficients is not coefficients
-    assert frozen_coefficients.tolist() == [1.0, 2.0]
-    assert frozen_coefficients.flags.writeable is False
-    with pytest.raises(ValueError, match="read-only"):
-        frozen_coefficients[0] = 0.0
-    with pytest.raises(ValueError, match="WRITEABLE flag"):
-        frozen_coefficients.setflags(write=True)
+    assert [array.tolist() for array in frozen_arrays] == [[252, 253], [0.25, 0.75], [1.0, 2.0]]
+    for frozen_array in frozen_arrays:
+        assert isinstance(frozen_array, np.ndarray)
+        assert frozen_array.flags.writeable is False
+        with pytest.raises(ValueError, match="read-only"):
+            frozen_array[0] = 0.0
+        with pytest.raises(ValueError, match="WRITEABLE flag"):
+            frozen_array.setflags(write=True)
 
 
-def test_fitted_state_rejects_object_dtype_arrays() -> None:
+@pytest.mark.parametrize("field", ["training_data_summary", "parameters", "learned_state"])
+def test_fitted_state_rejects_object_dtype_arrays_in_all_state_mappings(field: str) -> None:
     with pytest.raises(TypeError, match="object-dtype arrays"):
-        FittedOperatorState(
-            operator_id="fake.models.pca",
-            operator_version="1.0.0",
-            training_start="2025-01-01",
-            training_end="2025-12-31",
-            training_data_digest="sha256:" + "a" * 64,
-            training_data_summary={"rows": 252},
-            feature_order=("value",),
-            parameters={},
-            learned_state={"labels": np.array([["mutable"]], dtype=object)},
-            random_seed=7,
-            dependency_versions={"numpy": "2.4.2"},
-            state_digest="sha256:" + "b" * 64,
-        )
+        _fitted_state(**{field: {"labels": np.array([["mutable"]], dtype=object)}})
+
+
+@pytest.mark.parametrize("field", ["training_data_summary", "parameters", "learned_state"])
+def test_fitted_state_rejects_non_string_nested_keys_in_all_state_mappings(field: str) -> None:
+    with pytest.raises(TypeError, match=rf"{field}\['nested'\].*mapping keys must be strings.*int.*1"):
+        _fitted_state(**{field: {"nested": {1: "numeric", "1": "string"}}})
 
 
 @pytest.mark.parametrize(
@@ -233,25 +246,34 @@ def test_fitted_state_rejects_object_dtype_arrays() -> None:
     [bytearray(b"model"), pd.DataFrame({"weight": [1.0]})],
     ids=["bytearray", "dataframe"],
 )
-def test_fitted_state_rejects_unknown_mutable_leaves(mutable_leaf) -> None:
+@pytest.mark.parametrize("field", ["training_data_summary", "parameters", "learned_state"])
+def test_fitted_state_rejects_unknown_mutable_leaves_in_all_state_mappings(field: str, mutable_leaf: Any) -> None:
     with pytest.raises(
         TypeError,
-        match=r"learned_state\['model'\].*unsupported leaf type (bytearray|DataFrame)",
+        match=rf"{field}\['model'\].*unsupported leaf type (bytearray|DataFrame)",
     ):
-        FittedOperatorState(
-            operator_id="fake.models.pca",
-            operator_version="1.0.0",
-            training_start="2025-01-01",
-            training_end="2025-12-31",
-            training_data_digest="sha256:" + "a" * 64,
-            training_data_summary={"rows": 252},
-            feature_order=("value",),
-            parameters={},
-            learned_state={"model": mutable_leaf},
-            random_seed=7,
-            dependency_versions={"numpy": "2.4.2"},
-            state_digest="sha256:" + "b" * 64,
-        )
+        _fitted_state(**{field: {"model": mutable_leaf}})
+
+
+def test_fitted_state_snapshots_dependency_versions_as_read_only_string_mapping() -> None:
+    dependency_versions = {"numpy": "2.4.2"}
+    state = _fitted_state(dependency_versions=dependency_versions)
+
+    dependency_versions["numpy"] = "3.0.0"
+
+    assert state.dependency_versions == {"numpy": "2.4.2"}
+    with pytest.raises(TypeError):
+        state.dependency_versions["numpy"] = "3.0.0"  # type: ignore[index]
+
+
+@pytest.mark.parametrize(
+    "dependency_versions",
+    [{1: "2.4.2"}, {"numpy": 2.4}],
+    ids=["non-string-key", "non-string-value"],
+)
+def test_fitted_state_requires_string_dependency_names_and_versions(dependency_versions: dict[Any, Any]) -> None:
+    with pytest.raises(TypeError, match="dependency_versions.*strings"):
+        _fitted_state(dependency_versions=dependency_versions)
 
 
 def test_operator_result_requires_matching_provenance(daily_context) -> None:

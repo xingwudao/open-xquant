@@ -218,20 +218,33 @@ class FittedOperatorState:
         if not self.feature_order or any(not feature for feature in self.feature_order):
             raise ValueError("feature_order must contain non-empty feature names")
         object.__setattr__(self, "feature_order", tuple(self.feature_order))
-        object.__setattr__(self, "training_data_summary", _freeze(self.training_data_summary))
-        object.__setattr__(self, "parameters", _freeze(self.parameters))
+        for name in ("training_data_summary", "parameters", "learned_state"):
+            object.__setattr__(
+                self,
+                name,
+                _freeze(
+                    getattr(self, name),
+                    permanent_arrays=True,
+                    string_keys_only=True,
+                    immutable_leaves_only=True,
+                    path=name,
+                ),
+            )
+        if not isinstance(self.dependency_versions, Mapping) or any(
+            not isinstance(name, str) or not isinstance(version, str) for name, version in self.dependency_versions.items()
+        ):
+            raise TypeError("dependency_versions must be a mapping of strings to strings")
         object.__setattr__(
             self,
-            "learned_state",
+            "dependency_versions",
             _freeze(
-                self.learned_state,
+                self.dependency_versions,
                 permanent_arrays=True,
                 string_keys_only=True,
                 immutable_leaves_only=True,
-                path="learned_state",
+                path="dependency_versions",
             ),
         )
-        object.__setattr__(self, "dependency_versions", _freeze(self.dependency_versions))
 
 
 @dataclass(frozen=True, slots=True)
