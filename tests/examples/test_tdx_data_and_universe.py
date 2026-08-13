@@ -323,6 +323,7 @@ def test_main_builds_universe_and_prints_downloaded_data_summary(
 
     assert exit_code == 0
     assert "Provider: pytdx" in captured.out
+    assert "Universe source: static:tdx-example" in captured.out
     assert "Universe: 510300.SH, 159915.SZ" in captured.out
     assert "510300.SH: 2 rows, 2024-01-02 to 2024-01-03" in captured.out
     assert "159915.SZ: 2 rows, 2024-01-02 to 2024-01-03" in captured.out

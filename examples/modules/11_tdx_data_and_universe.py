@@ -144,6 +144,7 @@ def _print_context(
 ) -> None:
     snapshot = context.universe.get_universe(as_of_date=end)
     print(f"Provider: {provider}")
+    print(f"Universe source: {snapshot.source}")
     print(f"Universe: {', '.join(snapshot.symbols)}")
     for symbol in snapshot.symbols:
         path = context.downloaded_paths[symbol]
