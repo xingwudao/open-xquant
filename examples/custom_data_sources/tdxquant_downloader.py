@@ -209,7 +209,7 @@ class TdxQuantDownloader:
 
         try:
             decoded: object = json.loads(raw.decode("utf-8"), parse_float=Decimal)
-        except (UnicodeDecodeError, ValueError) as exc:
+        except (RecursionError, UnicodeDecodeError, ValueError) as exc:
             raise DownloadError("TdxQuant did not return valid JSON.") from exc
         if not isinstance(decoded, dict):
             raise DownloadError("TdxQuant returned a non-object JSON response.")
@@ -260,6 +260,10 @@ def _bars_from_payload(
     if symbol_error != "0":
         raise DownloadError(
             f"TdxQuant error for {symbol}: {symbol_error}: {_error_text(bars)}."
+        )
+    if result.get("has_more") is not False:
+        raise DownloadError(
+            "TdxQuant response has_more is not false; refusing partial data."
         )
     return bars
 

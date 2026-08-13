@@ -389,6 +389,20 @@ def test_oversized_json_integer_is_rejected_without_writes(tmp_path: Path) -> No
     assert not (tmp_path / "600519.SH.parquet").exists()
 
 
+def test_deeply_nested_json_is_rejected_without_writes(tmp_path: Path) -> None:
+    response = RawResponse(b"[" * 10000 + b"0" + b"]" * 10000)
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=response,
+    ):
+        with pytest.raises(DownloadError, match="valid JSON"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+
+    assert not (tmp_path / "600519.SH.parquet").exists()
+
+
 def test_raw_non_integral_large_json_volume_is_rejected_without_writes(
     tmp_path: Path,
 ) -> None:
@@ -459,6 +473,27 @@ def test_response_errors_are_rejected_without_writes(
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
     )
     assert not (tmp_path / "600519.SH.parquet").exists()
+
+
+def test_partial_has_more_response_is_rejected_without_writes(
+    tmp_path: Path,
+) -> None:
+    payload = market_payload()
+    result = payload["result"]
+    assert isinstance(result, dict)
+    result["has_more"] = True
+
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=FakeResponse(payload),
+    ):
+        with pytest.raises(DownloadError, match="has_more"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+
+    assert not (tmp_path / "600519.SH.parquet").exists()
+    assert not (tmp_path / "600519.SH.manifest.json").exists()
 
 
 @pytest.mark.parametrize(
