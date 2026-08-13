@@ -158,13 +158,18 @@ transport choice and data provenance explicit.
 
 ## Tests
 
-The change follows a path-contract RED/GREEN cycle:
+The change follows an import-and-execution RED/GREEN cycle:
 
-1. Add a test requiring the two importable modules and numbered workflow under
-   `examples/modules/`, with no `examples/custom_data_sources/` directory.
-2. Run it and observe failure on the old layout.
+1. Add tests that import both downloaders from `examples.modules` and execute
+   each new script path with `--help`.
+2. Run them and observe failure because the new imports and executable paths do
+   not exist yet.
 3. Move the files and update all imports, patches, commands, and install hints.
-4. Run it again and observe success.
+4. Run them again and observe successful imports and exit code zero.
+
+Tests do not assert that the old source directory is absent. Removing it is a
+reviewed repository-layout requirement, while the automated contract covers
+the user-visible import and execution behavior that depends on the new layout.
 
 Workflow tests use a fake `Downloader` that writes two small, valid Parquet
 files. They verify:
