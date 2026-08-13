@@ -139,11 +139,12 @@ def _check_workspace() -> dict[str, Any]:
     try:
         config = load_workspace_config(workspace, allow_empty=True)
     except Exception as exc:
-        fixes = (
-            ["Replace the .open-xquant symlink with a real directory, then run oxq research init"]
-            if _workspace_config_directory_is_link(Path.cwd())
-            else ["oxq research init --force"]
-        )
+        if workspace.is_symlink():
+            fixes = ["Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"]
+        elif _workspace_config_directory_is_link(Path.cwd()):
+            fixes = ["Replace the .open-xquant symlink with a real directory, then run oxq research init"]
+        else:
+            fixes = ["oxq research init --force"]
         return {
             "status": "fail",
             "path": str(workspace),

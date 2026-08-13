@@ -3336,6 +3336,52 @@ def test_contract_suite_bounds_time_series_subset_probes_for_thirty_symbols(
     assert all(probed_codes == all_codes for probed_codes in probed_codes_by_size.values())
 
 
+def test_contract_suite_leave_one_out_probes_omit_every_symbol(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 29
+    payload["inputs"]["optional_columns"] = []
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    template = panel.loc[panel["code"] == panel["code"].min()].copy()
+    extra_symbols = []
+    for offset in range(1, 29):
+        symbol = template.copy()
+        symbol.loc[:, "code"] = f"300{offset:03d}.SZ"
+        symbol.loc[:, "close"] += float(offset)
+        extra_symbols.append(symbol)
+    panel = pd.concat([panel, *extra_symbols], ignore_index=True).sort_values(
+        ["date", "code"],
+        kind="stable",
+        ignore_index=True,
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    all_codes = set(panel["code"].unique())
+    omitted_codes: set[str] = set()
+
+    def tracking_provider(provider_request: OperatorRequest):
+        included_codes = set(provider_request.input_panel["code"].unique())
+        if len(included_codes) == len(all_codes) - 1:
+            omitted_codes.update(all_codes - included_codes)
+        return sma(provider_request)
+
+    report = verify_operator_contract(
+        _load_contract_manifest(payload),
+        tracking_provider,
+        request,
+    )
+
+    assert report.passed is True
+    assert omitted_codes == all_codes
+
+
 def test_contract_suite_bounds_time_series_subset_probes_across_optional_shapes(
     daily_context,
     daily_symbol_frames,

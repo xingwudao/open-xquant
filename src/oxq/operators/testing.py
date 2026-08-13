@@ -1381,6 +1381,9 @@ def _verify_behavioral_probes(
 
 
 def _overlapping_symbol_subsets(codes: tuple[Any, ...], subset_size: int) -> tuple[tuple[Any, ...], ...]:
+    if subset_size == len(codes) - 1:
+        return tuple(codes[:index] + codes[index + 1 :] for index in range(len(codes)))
+
     # Each cyclic ordering needs ceil(N / stride) probes. The second ordering
     # covers deterministic non-adjacent pairs without reverting to combinations.
     stride = max(1, subset_size - 1)

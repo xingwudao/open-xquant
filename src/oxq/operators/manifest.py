@@ -695,10 +695,17 @@ def _validate_template_parameter_domains(
     template: str,
     parameters: Mapping[str, Mapping[str, Any]],
 ) -> None:
+    representative_values = {
+        "integer": 0,
+        "number": 0.0,
+        "string": "",
+        "boolean": False,
+    }
     for _, field_name, format_spec, _ in string.Formatter().parse(template):
         if field_name is None:
             continue
         for resolved_format_spec in _resolve_finite_format_specs(format_spec or "", parameters):
+            format(representative_values[parameters[field_name]["type"]], resolved_format_spec)
             if resolved_format_spec.endswith("c") and parameters[field_name]["type"] == "integer":
                 _validate_code_point_parameter_domain(parameters[field_name])
         if format_spec:

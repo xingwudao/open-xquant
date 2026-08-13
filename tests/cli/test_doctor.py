@@ -31,16 +31,24 @@ def _write_source(root: Path) -> None:
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
-def test_doctor_fails_closed_for_broken_workspace_marker(monkeypatch, tmp_path) -> None:
+@pytest.mark.parametrize("dangling", [False, True], ids=["normal", "dangling"])
+def test_doctor_fails_closed_for_workspace_file_symlink(monkeypatch, tmp_path, dangling: bool) -> None:
     config_dir = tmp_path / ".open-xquant"
     config_dir.mkdir()
-    (config_dir / "workspace.yaml").symlink_to(tmp_path / "missing.yaml")
+    target = tmp_path / "workspace-target.yaml"
+    if not dangling:
+        target.write_text("schema_version: 1\n", encoding="utf-8")
+    (config_dir / "workspace.yaml").symlink_to(target)
     monkeypatch.chdir(tmp_path)
 
     result = _check_workspace()
 
     assert result["status"] == "fail"
     assert "symlink" in result["error"]
+    assert result["fixes"] == [
+        "Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"
+    ]
+    assert "oxq research init --force" not in result["fixes"]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
@@ -64,7 +72,9 @@ def test_doctor_fix_diagnoses_dangling_workspace_marker_without_initializing(mon
     workspace = json.loads(result.output)["checks"]["workspace"]
     assert workspace["status"] == "fail"
     assert "symlink" in workspace["error"]
-    assert workspace["fixes"] == ["oxq research init --force"]
+    assert workspace["fixes"] == [
+        "Remove the .open-xquant/workspace.yaml symlink, then run oxq research init"
+    ]
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
