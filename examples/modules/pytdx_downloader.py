@@ -11,6 +11,20 @@ Run::
       510300.SH 2020-05-01 2026-01-01 \
       --host YOUR_TDX_HOST --dest-dir data/market
 
+Python API::
+
+    from pathlib import Path
+
+    from examples.modules.pytdx_downloader import PyTdxDownloader
+
+    downloader = PyTdxDownloader(host="YOUR_TDX_HOST", auto_adjust=True)
+    path = downloader.download(
+        "510300.SH",
+        "2020-05-01",
+        "2026-01-01",
+        dest_dir=Path("data/market"),
+    )
+
 ``pytdx==1.72`` is optional, archived software and is not an open-xquant
 dependency. The default ratio adjustment applies the same multiplication
 shape as yfinance ``auto_adjust=True`` to open, high, low, and close while

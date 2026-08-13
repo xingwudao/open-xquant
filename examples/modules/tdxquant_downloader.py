@@ -11,6 +11,20 @@ Run::
       600519.SH 2024-01-01 2024-12-31 \
       --dividend-type front --dest-dir data/market
 
+Python API::
+
+    from pathlib import Path
+
+    from examples.modules.tdxquant_downloader import TdxQuantDownloader
+
+    downloader = TdxQuantDownloader(dividend_type="front")
+    paths = downloader.download_many(
+        ["600519.SH"],
+        "2024-01-01",
+        "2024-12-31",
+        dest_dir=Path("data/market"),
+    )
+
 The default is front-adjusted data; use ``--dividend-type none`` for raw data.
 This is a learning and local-research example, not a production synchronizer.
 Users remain responsible for client, account, data-license, and redistribution

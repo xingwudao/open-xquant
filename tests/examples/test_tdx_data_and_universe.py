@@ -5,6 +5,7 @@ import importlib
 import importlib.util
 from pathlib import Path
 from types import ModuleType
+from typing import cast
 
 import examples.modules.tdxquant_downloader as tdxquant_downloader
 import pandas as pd
@@ -351,6 +352,31 @@ def test_build_tdx_data_context_reopens_data_and_builds_universe(
     assert str(bars.index.tz) == "Asia/Shanghai"
 
 
+def test_build_tdx_data_context_canonicalizes_lowercase_symbols_before_download(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+    context = module.build_tdx_data_context(
+        FileWritingDownloader(),
+        ["510300.sh", "159915.sz"],
+        "2024-01-01",
+        "2024-01-31",
+        tmp_path,
+    )
+
+    snapshot = context.universe.get_universe("2024-01-31")
+    assert snapshot.symbols == ("510300.SH", "159915.SZ")
+    assert context.downloaded_paths == {
+        "510300.SH": (tmp_path / "510300.SH.parquet").resolve(),
+        "159915.SZ": (tmp_path / "159915.SZ.parquet").resolve(),
+    }
+    bars = context.market.get_bars(
+        "510300.SH", "2024-01-01", "2024-01-31"
+    )
+    assert list(bars["close"]) == [10.5, 11.5]
+    assert (tmp_path / "510300.SH.parquet").exists()
+
+
 def test_build_tdx_data_context_rejects_downloads_without_requested_bars(
     tmp_path: Path,
 ) -> None:
@@ -395,6 +421,51 @@ def test_build_tdx_data_context_rejects_duplicate_symbols_before_downloading(
         )
 
 
+def test_build_tdx_data_context_rejects_case_variant_duplicates_before_downloading(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+
+    with pytest.raises(ValueError, match="symbols must be unique"):
+        module.build_tdx_data_context(
+            NeverCalledDownloader(),
+            ["510300.SH", "510300.sh"],
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
+
+
+def test_build_tdx_data_context_rejects_non_string_symbol_before_downloading(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+
+    with pytest.raises(ValueError, match="symbols must contain only strings"):
+        module.build_tdx_data_context(
+            NeverCalledDownloader(),
+            cast(list[str], ["510300.SH", 159915]),
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
+
+
+def test_build_tdx_data_context_rejects_empty_symbol_before_downloading(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+
+    with pytest.raises(ValueError, match="symbols must not contain empty values"):
+        module.build_tdx_data_context(
+            NeverCalledDownloader(),
+            ["510300.SH", ""],
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
+
+
 def test_build_tdx_data_context_rejects_missing_download_output(
     tmp_path: Path,
 ) -> None:
@@ -425,6 +496,83 @@ def test_build_tdx_data_context_rejects_extra_download_output(
                 }
             ),
             ["510300.SH", "159915.SZ"],
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
+
+
+def test_build_tdx_data_context_rejects_outside_path_despite_stale_canonical_file(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+    symbol = "510300.SH"
+    FileWritingDownloader().download_many(
+        [symbol], "2024-01-01", "2024-01-31", tmp_path
+    )
+    expected_path = (tmp_path / f"{symbol}.parquet").resolve()
+    outside_path = tmp_path.parent / "outside" / f"{symbol}.parquet"
+
+    with pytest.raises(
+        DownloadError,
+        match=rf"{symbol}.*{expected_path}",
+    ):
+        module.build_tdx_data_context(
+            MappingOnlyDownloader({symbol: outside_path}),
+            [symbol],
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
+
+
+def test_build_tdx_data_context_rejects_swapped_paths_despite_canonical_files(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+    symbols = ["510300.SH", "159915.SZ"]
+    canonical_paths = FileWritingDownloader().download_many(
+        symbols, "2024-01-01", "2024-01-31", tmp_path
+    )
+    expected_path = canonical_paths[symbols[0]].resolve()
+
+    with pytest.raises(
+        DownloadError,
+        match=rf"{symbols[0]}.*{expected_path}",
+    ):
+        module.build_tdx_data_context(
+            MappingOnlyDownloader(
+                {
+                    symbols[0]: canonical_paths[symbols[1]],
+                    symbols[1]: canonical_paths[symbols[0]],
+                }
+            ),
+            symbols,
+            "2024-01-01",
+            "2024-01-31",
+            tmp_path,
+        )
+
+
+def test_build_tdx_data_context_rejects_non_path_mapping_value(
+    tmp_path: Path,
+) -> None:
+    module = load_example_module()
+    symbol = "510300.SH"
+    canonical_paths = FileWritingDownloader().download_many(
+        [symbol], "2024-01-01", "2024-01-31", tmp_path
+    )
+    expected_path = canonical_paths[symbol].resolve()
+
+    with pytest.raises(
+        DownloadError,
+        match=rf"{symbol}.*{expected_path}",
+    ):
+        module.build_tdx_data_context(
+            MappingOnlyDownloader(
+                {symbol: cast(Path, str(canonical_paths[symbol]))}
+            ),
+            [symbol],
             "2024-01-01",
             "2024-01-31",
             tmp_path,

@@ -85,19 +85,42 @@ def build_tdx_data_context(
 ) -> TdxDataContext:
     if not symbols:
         raise ValueError("symbols must not be empty")
-    if len(symbols) != len(set(symbols)):
+
+    canonical_symbols: list[str] = []
+    for symbol in symbols:
+        if not isinstance(symbol, str):
+            raise ValueError("symbols must contain only strings")
+        canonical_symbol = symbol.upper()
+        if not canonical_symbol:
+            raise ValueError("symbols must not contain empty values")
+        canonical_symbols.append(canonical_symbol)
+    if len(canonical_symbols) != len(set(canonical_symbols)):
         raise ValueError("symbols must be unique")
 
+    resolved_dest_dir = dest_dir.resolve()
     downloaded_paths = downloader.download_many(
-        symbols, start, end, dest_dir=dest_dir
+        canonical_symbols, start, end, dest_dir=resolved_dest_dir
     )
-    if set(downloaded_paths) != set(symbols):
+    if set(downloaded_paths) != set(canonical_symbols):
         raise DownloadError(
             "downloader must return exactly one path for each requested symbol"
         )
+    verified_paths: dict[str, Path] = {}
+    for symbol in canonical_symbols:
+        expected_path = resolved_dest_dir / f"{symbol}.parquet"
+        downloaded_path = downloaded_paths[symbol]
+        if (
+            not isinstance(downloaded_path, Path)
+            or downloaded_path.resolve() != expected_path
+        ):
+            raise DownloadError(
+                f"Downloaded path for '{symbol}' must match expected canonical "
+                f"path '{expected_path}'."
+            )
+        verified_paths[symbol] = expected_path
 
-    market = LocalMarketDataProvider(data_dir=dest_dir)
-    universe = StaticUniverse(tuple(symbols), name="tdx-example")
+    market = LocalMarketDataProvider(data_dir=resolved_dest_dir)
+    universe = StaticUniverse(tuple(canonical_symbols), name="tdx-example")
     snapshot = universe.get_universe(as_of_date=end)
     for symbol in snapshot.symbols:
         bars = market.get_bars(symbol, start, end)
@@ -109,7 +132,7 @@ def build_tdx_data_context(
     return TdxDataContext(
         market=market,
         universe=universe,
-        downloaded_paths=downloaded_paths,
+        downloaded_paths=verified_paths,
     )
 
 
