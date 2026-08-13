@@ -478,6 +478,16 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"parameter {name} minimum must not exceed maximum",
                 operator_id=operator_id,
             )
+        if (
+            declaration["type"] == "integer"
+            and "minimum" in declaration
+            and "maximum" in declaration
+            and math.ceil(declaration["minimum"]) > math.floor(declaration["maximum"])
+        ):
+            raise InvalidManifestError(
+                f"parameter {name} integer domain is empty",
+                operator_id=operator_id,
+            )
         if "enum" in declaration:
             enum_declaration = {key: value for key, value in declaration.items() if key != "enum"}
             for index, member in enumerate(declaration["enum"]):

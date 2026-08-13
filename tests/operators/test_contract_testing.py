@@ -1723,7 +1723,7 @@ def test_manifest_boundary_rejects_negative_resolved_warmup_without_nans(
         load_operator_manifest(payload)
 
 
-def test_contract_suite_validates_dropped_row_count(
+def test_contract_suite_reports_direct_diagnostic_row_conservation_failure(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -1748,12 +1748,15 @@ def test_contract_suite_validates_dropped_row_count(
             provenance=result.provenance,
         )
 
-    with pytest.raises(ContractViolationError, match="dropped_rows"):
+    with pytest.raises(ContractViolationError, match="operator invocation failed") as exc_info:
         verify_operator_contract(
             _load_contract_manifest(valid_manifest_payload),
             invalid_diagnostics_provider,
             request,
         )
+
+    assert isinstance(exc_info.value.__cause__, ValueError)
+    assert "output_rows + dropped_rows must match input_rows" in str(exc_info.value.__cause__)
 
 
 def test_contract_suite_refuses_parameterized_duplicate_output_fields(
@@ -2291,6 +2294,46 @@ def test_contract_suite_rejects_uncertifiable_object_input_before_invocation(
     payload["inputs"]["dtypes"]["attributes"] = ["object"]
     panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
     panel["attributes"] = [object() for _ in range(len(panel))]
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="cannot certify object input.*representation-wise"):
+        verify_operator_contract(_load_contract_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+
+
+@pytest.mark.parametrize("container_kind", ["list", "mapping", "object-array"])
+def test_contract_suite_rejects_cyclic_object_input_before_invocation(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    container_kind: str,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["required_columns"].append("attributes")
+    payload["inputs"]["dtypes"]["attributes"] = ["object"]
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    if container_kind == "list":
+        cyclic_value: object = []
+        cyclic_value.append(cyclic_value)  # type: ignore[attr-defined]
+    elif container_kind == "mapping":
+        cyclic_value = {}
+        cyclic_value["self"] = cyclic_value  # type: ignore[index]
+    else:
+        cyclic_value = np.empty(1, dtype=object)
+        cyclic_value[0] = cyclic_value
+    panel["attributes"] = pd.Series([cyclic_value] * len(panel), dtype=object)
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
         parameters={"period": 2},

@@ -307,6 +307,14 @@ def test_diagnostics_reject_impossible_row_counts() -> None:
         OperatorDiagnostics(input_rows=2, output_rows=1, warmup_rows=3)
 
 
+def test_diagnostics_require_row_conservation() -> None:
+    with pytest.raises(
+        ValueError,
+        match=r"output_rows \+ dropped_rows must match input_rows",
+    ):
+        OperatorDiagnostics(input_rows=2, output_rows=1, dropped_rows=0)
+
+
 @pytest.mark.parametrize("field", ["input_rows", "output_rows", "warmup_rows", "dropped_rows"])
 @pytest.mark.parametrize("invalid", [True, 1.0])
 def test_diagnostics_require_actual_integer_row_counts(field, invalid) -> None:
@@ -320,7 +328,7 @@ def test_diagnostics_require_actual_integer_row_counts(field, invalid) -> None:
 def test_diagnostics_snapshots_warning_sequences_as_tuples() -> None:
     warnings = ["insufficient history", "partial output"]
 
-    diagnostics = OperatorDiagnostics(input_rows=2, output_rows=1, warnings=warnings)  # type: ignore[arg-type]
+    diagnostics = OperatorDiagnostics(input_rows=2, output_rows=1, dropped_rows=1, warnings=warnings)  # type: ignore[arg-type]
     warnings.append("late mutation")
 
     assert diagnostics.warnings == ("insufficient history", "partial output")
@@ -683,7 +691,7 @@ def test_operator_result_factory_requires_diagnostic_row_conservation(daily_cont
 
     with pytest.raises(
         ValueError,
-        match=r"diagnostics\.output_rows \+ diagnostics\.dropped_rows must match diagnostics\.input_rows",
+        match=r"output_rows \+ dropped_rows must match input_rows",
     ):
         OperatorResult.for_request(
             request,

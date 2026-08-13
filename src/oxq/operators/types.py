@@ -218,6 +218,8 @@ class OperatorDiagnostics:
             raise ValueError("warmup_rows cannot exceed input_rows")
         if self.dropped_rows > self.input_rows:
             raise ValueError("dropped_rows cannot exceed input_rows")
+        if self.output_rows + self.dropped_rows != self.input_rows:
+            raise ValueError("output_rows + dropped_rows must match input_rows")
         if (
             isinstance(self.warnings, (str, bytes))
             or not isinstance(self.warnings, Sequence)

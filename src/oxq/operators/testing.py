@@ -143,6 +143,10 @@ def verify_operator_contract(
         )
     parameters = manifest.validate_parameters(request.parameters)
     parameters_digest = _resolved_parameters_digest(parameters, manifest.operator_id)
+    input_spec = manifest.raw["inputs"]
+    declared_columns = set(input_spec["required_columns"]) | set(input_spec["optional_columns"])
+    present_declared_columns = sorted(declared_columns & set(request.input_panel.columns))
+    _validate_object_input_values(manifest, request.input_panel, present_declared_columns)
     normalized = _copy_request(request, parameters=parameters)
     context_digest = _operator_context_digest(normalized.context, manifest.operator_id)
     determinism = manifest.raw.get("determinism", {})
@@ -157,7 +161,6 @@ def verify_operator_contract(
                 details={"fields": object_fields},
             )
     _validate_availability(manifest, normalized)
-    input_spec = manifest.raw["inputs"]
     try:
         QuantPanelAdapter.validate_panel(
             normalized.input_panel,
@@ -220,8 +223,6 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"rows_by_code": {str(code): int(rows) for code, rows in history.items()}},
         )
-    declared_columns = required_columns | set(optional_columns)
-    present_declared_columns = sorted(declared_columns & set(normalized.input_panel.columns))
     undeclared_columns = [column for column in normalized.input_panel.columns if column not in declared_columns | {"date", "code"}]
     if input_spec["missing_value_policy"]["kind"] == "require_complete":
         incomplete_columns = [column for column in present_declared_columns if normalized.input_panel[column].isna().any()]
@@ -240,7 +241,6 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"allowed": list(allowed_dtypes)},
             )
-    _validate_object_input_values(manifest, normalized.input_panel, present_declared_columns)
     reported_input_columns = sorted({"date", "code", *present_declared_columns})
     input_dtypes = MappingProxyType({column: str(normalized.input_panel[column].dtype) for column in reported_input_columns})
     input_dtypes_digest = _canonical_mapping_digest(
@@ -1152,16 +1152,32 @@ def _validate_object_input_values(
         )
 
 
-def _is_certifiable_object_value(value: Any) -> bool:
-    if isinstance(value, Mapping):
-        return all(_is_certifiable_object_value(key) and _is_certifiable_object_value(item) for key, item in value.items())
-    if isinstance(value, (list, tuple)):
-        return all(_is_certifiable_object_value(item) for item in value)
-    if isinstance(value, np.ndarray):
-        if value.dtype.hasobject:
-            return all(_is_certifiable_object_value(item) for item in value.flat)
-        return True
-    return value is None or value is pd.NA or isinstance(value, (bool, int, float, str, bytes, np.generic))
+def _is_certifiable_object_value(value: Any, active_container_ids: set[int] | None = None) -> bool:
+    active = set() if active_container_ids is None else active_container_ids
+    is_container = isinstance(value, (Mapping, list, tuple)) or isinstance(value, np.ndarray) and value.dtype.hasobject
+    if is_container:
+        container_id = id(value)
+        if container_id in active:
+            return False
+        active.add(container_id)
+    else:
+        container_id = None
+    try:
+        if isinstance(value, Mapping):
+            return all(
+                _is_certifiable_object_value(key, active) and _is_certifiable_object_value(item, active)
+                for key, item in value.items()
+            )
+        if isinstance(value, (list, tuple)):
+            return all(_is_certifiable_object_value(item, active) for item in value)
+        if isinstance(value, np.ndarray):
+            if value.dtype.hasobject:
+                return all(_is_certifiable_object_value(item, active) for item in value.flat)
+            return True
+        return value is None or value is pd.NA or isinstance(value, (bool, int, float, str, bytes, np.generic))
+    finally:
+        if container_id is not None:
+            active.remove(container_id)
 
 
 def _behavioral_check_names(manifest: OperatorManifest) -> tuple[str, ...]:

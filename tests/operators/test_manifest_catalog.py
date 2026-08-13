@@ -365,6 +365,18 @@ def test_manifest_rejects_invalid_default_and_warmup_reference(valid_manifest_pa
         load_operator_manifest(invalid_warmup)
 
 
+def test_manifest_rejects_integer_bounds_with_no_integer_value(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    declaration = payload["parameters"]["period"]
+    declaration["minimum"] = 0.1
+    declaration["maximum"] = 0.9
+    declaration.pop("default")
+    declaration["required"] = True
+
+    with pytest.raises(InvalidManifestError, match="integer.*domain.*empty"):
+        load_operator_manifest(payload)
+
+
 def test_manifest_rejects_negative_warmup_resolved_from_parameter_default(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["outputs"]["warmup"]["offset"] = -3
