@@ -84,6 +84,13 @@ def _parse_date_range(start: str, end: str) -> tuple[date, date]:
         raise ValueError("start and end must be canonical YYYY-MM-DD dates")
     if start_date > end_date:
         raise ValueError("start date must not be later than end date")
+    try:
+        pd.Timestamp(start_date, tz="Asia/Shanghai")
+        pd.Timestamp(end_date, tz="Asia/Shanghai")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "start and end dates must be representable in Asia/Shanghai"
+        ) from exc
     return start_date, end_date
 
 
@@ -202,7 +209,7 @@ class TdxQuantDownloader:
 
         try:
             decoded: object = json.loads(raw.decode("utf-8"), parse_float=Decimal)
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, ValueError) as exc:
             raise DownloadError("TdxQuant did not return valid JSON.") from exc
         if not isinstance(decoded, dict):
             raise DownloadError("TdxQuant returned a non-object JSON response.")

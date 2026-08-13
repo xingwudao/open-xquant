@@ -137,6 +137,16 @@ def test_rejects_invalid_date_range(start: str, end: str) -> None:
         module._parse_date_range(start, end)
 
 
+def test_rejects_unlocalizable_date_before_connecting() -> None:
+    with patch.object(module, "_connected_api") as connected:
+        with pytest.raises(ValueError, match="date"):
+            PyTdxDownloader(host="quote.example").download(
+                "510300.SH", "2024-01-01", "9999-12-31"
+            )
+
+    connected.assert_not_called()
+
+
 def test_missing_pytdx_has_actionable_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def missing(name: str) -> object:
         raise ModuleNotFoundError(name)
@@ -241,9 +251,9 @@ def test_fetches_800_bar_pages_backward_until_before_start() -> None:
     newest_days = pd.date_range("2022-01-01", periods=800, freq="D")
     newest = [
         bar(day.strftime("%Y-%m-%d"), 10.0 + number / 1000)
-        for number, day in enumerate(reversed(newest_days))
+        for number, day in enumerate(newest_days)
     ]
-    older = [bar("2020-05-01", 9.1), bar("2020-04-30", 9.0)]
+    older = [bar("2020-04-30", 9.0), bar("2020-05-01", 9.1)]
     api = FakeApi(pages={0: newest, 800: older})
 
     frame = module._fetch_raw_bars(
@@ -261,6 +271,38 @@ def test_fetches_800_bar_pages_backward_until_before_start() -> None:
     assert frame.index.is_monotonic_increasing
     assert frame.index.min().date().isoformat() == "2020-04-30"
     assert frame.index.max().date() == newest_days[-1].date()
+
+
+def test_rejects_out_of_order_bar_within_full_page() -> None:
+    days = pd.date_range("2022-01-01", periods=800, freq="D")
+    page = [bar(day.strftime("%Y-%m-%d"), 10.0) for day in days]
+    page[400]["datetime"] = "2019-01-01 15:00"
+    api = FakeApi(pages={0: page})
+
+    with pytest.raises(DownloadError, match="chronological order"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
+
+
+def test_rejects_bar_page_that_does_not_progress_backward() -> None:
+    first_days = pd.date_range("2022-01-01", periods=800, freq="D")
+    first = [bar(day.strftime("%Y-%m-%d"), 10.0) for day in first_days]
+    second = [bar("2021-12-31", 9.0), bar("2022-01-02", 9.0)]
+    api = FakeApi(pages={0: first, 800: second})
+
+    with pytest.raises(DownloadError, match="chronological order"):
+        module._fetch_raw_bars(
+            api,
+            1,
+            "510300",
+            module.date(2020, 5, 1),
+            "510300.SH",
+        )
 
 
 @pytest.mark.parametrize(
@@ -711,9 +753,9 @@ def test_download_writes_standard_adjusted_artifacts(tmp_path: Path) -> None:
     api = FakeApi(
         pages={
             0: [
-                bar("2024-01-04", 9.9),
-                bar("2024-01-03", 9.8),
                 bar("2024-01-02", 10.2),
+                bar("2024-01-03", 9.8),
+                bar("2024-01-04", 9.9),
             ]
         },
         actions=[xdxr("2024-01-03", fenhong=2.0)],
@@ -760,10 +802,10 @@ def test_event_after_requested_end_adjusts_earlier_output(tmp_path: Path) -> Non
     api = FakeApi(
         pages={
             0: [
-                bar("2024-01-04", 9.9),
-                bar("2024-01-03", 9.8),
-                bar("2024-01-02", 10.2),
                 bar("2024-01-01", 10.0),
+                bar("2024-01-02", 10.2),
+                bar("2024-01-03", 9.8),
+                bar("2024-01-04", 9.9),
             ]
         },
         actions=[xdxr("2024-01-03", fenhong=2.0)],
@@ -796,7 +838,7 @@ def test_no_auto_adjust_skips_actions_and_preserves_raw_prices(
     tmp_path: Path,
 ) -> None:
     api = FakeApi(
-        pages={0: [bar("2024-01-02", 10.2), bar("2024-01-01", 10.0)]},
+        pages={0: [bar("2024-01-01", 10.0), bar("2024-01-02", 10.2)]},
         actions=None,
     )
     with patch.object(module, "_connected_api") as connected:

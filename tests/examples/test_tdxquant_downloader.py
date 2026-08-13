@@ -259,6 +259,18 @@ def test_rejects_invalid_date_range(start: str, end: str, tmp_path: Path) -> Non
         TdxQuantDownloader().download("600519.SH", start, end, tmp_path)
 
 
+def test_rejects_unlocalizable_date_before_request(tmp_path: Path) -> None:
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen"
+    ) as mock_urlopen:
+        with pytest.raises(ValueError, match="date"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-01", "9999-12-31", tmp_path
+            )
+
+    mock_urlopen.assert_not_called()
+
+
 @pytest.mark.parametrize(
     ("side_effect", "message"),
     [
@@ -360,6 +372,20 @@ def test_invalid_json_is_rejected_without_writes(tmp_path: Path) -> None:
             TdxQuantDownloader().download(
                 "600519.SH", "2024-01-02", "2024-01-03", tmp_path
             )
+    assert not (tmp_path / "600519.SH.parquet").exists()
+
+
+def test_oversized_json_integer_is_rejected_without_writes(tmp_path: Path) -> None:
+    response = RawResponse(b'{"id":' + b"1" * 5000 + b"}")
+    with patch(
+        "examples.custom_data_sources.tdxquant_downloader.urlopen",
+        return_value=response,
+    ):
+        with pytest.raises(DownloadError, match="valid JSON"):
+            TdxQuantDownloader().download(
+                "600519.SH", "2024-01-02", "2024-01-03", tmp_path
+            )
+
     assert not (tmp_path / "600519.SH.parquet").exists()
 
 

@@ -81,6 +81,13 @@ def _parse_date_range(start: str, end: str) -> tuple[date, date]:
         raise ValueError("start and end must be canonical YYYY-MM-DD dates")
     if start_date > end_date:
         raise ValueError("start date must not be later than end date")
+    try:
+        pd.Timestamp(start_date, tz="Asia/Shanghai")
+        pd.Timestamp(end_date, tz="Asia/Shanghai")
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(
+            "start and end dates must be representable in Asia/Shanghai"
+        ) from exc
     return start_date, end_date
 
 
@@ -244,6 +251,7 @@ def _fetch_raw_bars(
 ) -> pd.DataFrame:
     pages: list[pd.DataFrame] = []
     previous_fingerprint: tuple[tuple[object, ...], ...] | None = None
+    previous_oldest: pd.Timestamp | None = None
     for page_number in range(_MAX_PAGES):
         offset = page_number * _PAGE_SIZE
         try:
@@ -266,7 +274,19 @@ def _fetch_raw_bars(
         )
         if fingerprint == previous_fingerprint:
             raise DownloadError(f"TDX repeated a bar page for '{symbol}'.")
+        if (
+            page.index.has_duplicates
+            or not page.index.is_monotonic_increasing
+            or (
+                previous_oldest is not None
+                and page.index.max() > previous_oldest
+            )
+        ):
+            raise DownloadError(
+                f"TDX returned bars outside chronological order for '{symbol}'."
+            )
         previous_fingerprint = fingerprint
+        previous_oldest = page.index.min()
         pages.append(page)
         if page.index.min().date() < start_date or len(page) < _PAGE_SIZE:
             break
