@@ -169,6 +169,18 @@ def test_operator_error_materializes_details_as_strict_json() -> None:
     assert json.loads(json.dumps(payload, allow_nan=False, sort_keys=True)) == payload
 
 
+@pytest.mark.parametrize("operator_id", [1, True, ["fake.operator"]], ids=["integer", "boolean", "list"])
+def test_operator_error_requires_string_or_none_operator_id(operator_id: Any) -> None:
+    with pytest.raises(TypeError, match="operator_id must be a string or None"):
+        OperatorError("invalid output", operator_id=operator_id)
+
+
+@pytest.mark.parametrize("retryable", [0, 1, "false", None], ids=["zero", "one", "string", "none"])
+def test_operator_error_requires_actual_boolean_retryable(retryable: Any) -> None:
+    with pytest.raises(TypeError, match="retryable must be a boolean"):
+        OperatorError("invalid output", retryable=retryable)
+
+
 def test_operator_request_snapshots_parameters_and_is_frozen(daily_context) -> None:
     parameters = {
         "period": 2,
@@ -289,6 +301,8 @@ def test_diagnostics_reject_impossible_row_counts() -> None:
         OperatorDiagnostics(input_rows=-1, output_rows=0)
     with pytest.raises(ValueError, match="cannot exceed"):
         OperatorDiagnostics(input_rows=2, output_rows=1, dropped_rows=3)
+    with pytest.raises(ValueError, match="warmup_rows cannot exceed input_rows"):
+        OperatorDiagnostics(input_rows=2, output_rows=1, warmup_rows=3)
 
 
 @pytest.mark.parametrize("field", ["input_rows", "output_rows", "warmup_rows", "dropped_rows"])

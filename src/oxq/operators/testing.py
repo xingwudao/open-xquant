@@ -1044,7 +1044,7 @@ def _verify_behavioral_probes(
         codes = tuple(request.input_panel["code"].drop_duplicates())
         min_assets = manifest.raw["inputs"]["min_assets"]
         for asset_count in range(len(codes) - 1, min_assets - 1, -1):
-            for included_codes in combinations(codes, asset_count):
+            for included_codes in _overlapping_symbol_subsets(codes, asset_count):
                 isolated_panel = request.input_panel.loc[request.input_panel["code"].isin(included_codes)].reset_index(drop=True)
                 isolated_request = _copy_request(request, panel=isolated_panel)
                 isolated_result = _invoke_operator(manifest, operator, isolated_request)
@@ -1065,6 +1065,24 @@ def _verify_behavioral_probes(
             baseline,
             expected_implementation_digest,
         )
+
+
+def _overlapping_symbol_subsets(codes: tuple[Any, ...], subset_size: int) -> tuple[tuple[Any, ...], ...]:
+    # Each cyclic ordering needs ceil(N / stride) probes. The second ordering
+    # covers deterministic non-adjacent pairs without reverting to combinations.
+    stride = max(1, subset_size - 1)
+    interleaved_codes = codes[::2] + codes[1::2]
+    orderings = (codes,) if interleaved_codes == codes else (codes, interleaved_codes)
+    subsets: list[tuple[Any, ...]] = []
+    seen: set[frozenset[Any]] = set()
+    for ordering in orderings:
+        for start in range(0, len(codes), stride):
+            subset = tuple(ordering[(start + offset) % len(codes)] for offset in range(subset_size))
+            key = frozenset(subset)
+            if key not in seen:
+                seen.add(key)
+                subsets.append(subset)
+    return tuple(subsets)
 
 
 def _verify_past_only_causality(
@@ -1224,7 +1242,7 @@ def _assert_object_value_representation_equal(left: Any, right: Any) -> None:
     if isinstance(left, Mapping) and isinstance(right, Mapping):
         left_items = list(left.items())
         right_items = list(right.items())
-        if len(left_items) != len(right_items):
+        if type(left) is not type(right) or len(left_items) != len(right_items):
             raise AssertionError("mapping representation differs")
         for (left_key, left_value), (right_key, right_value) in zip(left_items, right_items, strict=True):
             _assert_object_value_representation_equal(left_key, right_key)

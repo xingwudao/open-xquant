@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+from collections import OrderedDict
 from dataclasses import FrozenInstanceError, replace
 from types import MappingProxyType
 
@@ -1686,17 +1687,10 @@ def test_manifest_boundary_rejects_negative_resolved_warmup_without_nans(
         load_operator_manifest(payload)
 
 
-@pytest.mark.parametrize(
-    ("warmup_rows", "dropped_rows", "message"),
-    [(999, 0, "warmup_rows"), (2, 1, "dropped_rows")],
-)
-def test_contract_suite_validates_all_diagnostic_row_counts(
+def test_contract_suite_validates_dropped_row_count(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
-    warmup_rows,
-    dropped_rows,
-    message,
 ) -> None:
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
@@ -1712,13 +1706,13 @@ def test_contract_suite_validates_all_diagnostic_row_counts(
             diagnostics=type(result.diagnostics)(
                 input_rows=result.diagnostics.input_rows,
                 output_rows=result.diagnostics.output_rows,
-                warmup_rows=warmup_rows,
-                dropped_rows=dropped_rows,
+                warmup_rows=2,
+                dropped_rows=1,
             ),
             provenance=result.provenance,
         )
 
-    with pytest.raises(ContractViolationError, match=message):
+    with pytest.raises(ContractViolationError, match="dropped_rows"):
         verify_operator_contract(
             _load_contract_manifest(valid_manifest_payload),
             invalid_diagnostics_provider,
@@ -2162,6 +2156,35 @@ def test_contract_suite_deeply_checks_object_cell_immutability(
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
         verify_operator_contract(_load_contract_manifest(payload), object_mutating_provider, request)
+
+
+def test_contract_suite_detects_mapping_type_change_in_object_input(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["required_columns"].append("attributes")
+    payload["inputs"]["dtypes"]["attributes"] = ["object"]
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    panel["attributes"] = [{"source": "raw"} for _ in range(len(panel))]
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    def mapping_type_mutating_provider(provider_request: OperatorRequest):
+        provider_request.input_panel.at[0, "attributes"] = OrderedDict(source="raw")
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="mutated input_panel"):
+        verify_operator_contract(
+            _load_contract_manifest(payload),
+            mapping_type_mutating_provider,
+            request,
+        )
 
 
 @pytest.mark.parametrize(
@@ -2935,6 +2958,59 @@ def test_contract_suite_rejects_time_series_mixing_in_specific_min_asset_subset(
             pair_specific_mixing_provider,
             request,
         )
+
+
+def test_contract_suite_bounds_time_series_subset_probes_for_thirty_symbols(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    payload["inputs"]["optional_columns"] = []
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"])
+    template = panel.loc[panel["code"] == panel["code"].min()].copy()
+    extra_symbols = []
+    for offset in range(1, 29):
+        symbol = template.copy()
+        symbol.loc[:, "code"] = f"300{offset:03d}.SZ"
+        symbol.loc[:, "close"] += float(offset)
+        extra_symbols.append(symbol)
+    panel = pd.concat([panel, *extra_symbols], ignore_index=True).sort_values(
+        ["date", "code"],
+        kind="stable",
+        ignore_index=True,
+    )
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    all_codes = set(panel["code"].unique())
+    probed_codes_by_size: dict[int, set[str]] = {}
+    subset_probe_calls = 0
+
+    def bounded_probe_provider(provider_request: OperatorRequest):
+        nonlocal subset_probe_calls
+        included_codes = set(provider_request.input_panel["code"].unique())
+        if len(included_codes) < len(all_codes):
+            subset_probe_calls += 1
+            if subset_probe_calls > 300:
+                raise AssertionError("time-series subset probe count exceeded its bound")
+            probed_codes_by_size.setdefault(len(included_codes), set()).update(included_codes)
+        return sma(provider_request)
+
+    report = verify_operator_contract(
+        _load_contract_manifest(payload),
+        bounded_probe_provider,
+        request,
+    )
+
+    assert report.passed is True
+    assert subset_probe_calls <= 300
+    assert set(probed_codes_by_size) == set(range(2, 30))
+    assert all(probed_codes == all_codes for probed_codes in probed_codes_by_size.values())
 
 
 def test_contract_suite_applies_declared_tolerance_to_time_series_scope_probe(

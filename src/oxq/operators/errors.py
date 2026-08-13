@@ -97,6 +97,10 @@ class OperatorError(ValueError):
         retryable: bool = False,
     ) -> None:
         super().__init__(message)
+        if operator_id is not None and not isinstance(operator_id, str):
+            raise TypeError("operator_id must be a string or None")
+        if type(retryable) is not bool:
+            raise TypeError("retryable must be a boolean")
         if details is not None and not isinstance(details, Mapping):
             raise TypeError("details must be a mapping")
         self.operator_id = operator_id

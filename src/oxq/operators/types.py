@@ -212,6 +212,8 @@ class OperatorDiagnostics:
             raise TypeError("diagnostic row counts must be integers")
         if any(value < 0 for value in counts):
             raise ValueError("diagnostic row counts must be non-negative")
+        if self.warmup_rows > self.input_rows:
+            raise ValueError("warmup_rows cannot exceed input_rows")
         if self.dropped_rows > self.input_rows:
             raise ValueError("dropped_rows cannot exceed input_rows")
         if (
