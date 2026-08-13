@@ -138,11 +138,15 @@ path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
 explicit = TushareDownloader(token="your-token")
 ```
 
-首版仅支持 A 股日线，证券代码必须使用 `.SH`、`.SZ` 或 `.BJ` 后缀，
-例如 `600519.SH`。`end` 日期包含在下载范围内；输出价格默认为前复权
-（qfq），`volume` 的单位为股。Tushare 账户权限、积分和限流由 Tushare
-平台决定。下载得到的标准 Parquet 仍通过 `data.provider: local` 用于研究
-和回测，不能把 provider 设置为 `tushare`。
+首版仅支持 A 股日线，证券代码必须完全匹配
+`^[0-9]{6}\.(SH|SZ|BJ)$`：六位数字加大写交易所后缀，例如
+`600519.SH`。`end` 日期包含在下载范围内。输出价格默认为前复权（qfq），
+计算公式为
+`raw_price * row_adj_factor / reference_adj_factor`；参考因子取包含端点的
+`end` 当日或之前的最新有效复权因子，它可以独立于最后一条日线交易记录。
+`volume` 的单位为股。Tushare 账户权限、积分和限流由 Tushare 平台决定。
+下载得到的标准 Parquet 仍通过 `data.provider: local` 用于研究和回测，不能
+把 provider 设置为 `tushare`。
 
 open-xquant 不会持久化 token，也不会把它写入日志、异常或输出产物。
 凭据的网络传输由上游 Tushare SDK 控制；其当前官方客户端使用 HTTP。
@@ -412,13 +416,16 @@ path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
 explicit = TushareDownloader(token="your-token")
 ```
 
-The first release supports A-share daily data only. Symbols must use a
-`.SH`, `.SZ`, or `.BJ` suffix, for example `600519.SH`. The `end` date is
-inclusive; output prices use forward adjustment (qfq), and `volume` is in
-shares. Tushare account permissions, points, and rate limits are determined
-by the Tushare platform. Research and backtests continue to consume the
-downloaded standard Parquet through `data.provider: local`; do not set the
-provider to `tushare`.
+The first release supports A-share daily data only. Symbols must match
+`^[0-9]{6}\.(SH|SZ|BJ)$` exactly: six digits followed by an uppercase exchange
+suffix, for example `600519.SH`. The `end` date is inclusive. Output prices use
+forward adjustment (qfq), calculated as
+`raw_price * row_adj_factor / reference_adj_factor`; the reference factor is
+the latest valid adjustment factor on or before the inclusive `end` and may be
+independent of the last daily trading row. `volume` is in shares. Tushare
+account permissions, points, and rate limits are determined by the Tushare
+platform. Research and backtests continue to consume the downloaded standard
+Parquet through `data.provider: local`; do not set the provider to `tushare`.
 
 open-xquant does not persist the token or write it to logs, exceptions, or
 output artifacts. Credential transport is controlled by the upstream Tushare

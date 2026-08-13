@@ -287,12 +287,15 @@ path = downloader.download("600519.SH", "2024-01-01", "2024-12-31")
 explicit = TushareDownloader(token="your-token")
 ```
 
-Tushare 首版仅支持 A 股日线，代码必须使用 `.SH`、`.SZ` 或 `.BJ`
-后缀。`end` 包含端点，输出价格为前复权（qfq），`volume` 单位为股。
-权限、积分和限流由 Tushare 平台决定。Agent 绝不能打印或存储 token；
-open-xquant 不会将 token 持久化到本地状态、日志、异常或产物。凭据传输由
-上游 Tushare SDK 控制，其当前官方客户端使用 HTTP，Agent 应将其视为需要
-用户自行评估的上游安全边界。
+Tushare 首版仅支持 A 股日线，代码必须完全匹配
+`^[0-9]{6}\.(SH|SZ|BJ)$`：六位数字加大写交易所后缀。`end` 包含端点。
+前复权（qfq）公式为
+`raw_price * row_adj_factor / reference_adj_factor`；参考因子取包含端点的
+`end` 当日或之前的最新有效复权因子，它可以独立于最后一条日线交易记录。
+`volume` 单位为股。权限、积分和限流由 Tushare 平台决定。Agent 绝不能
+打印或存储 token；open-xquant 不会将 token 持久化到本地状态、日志、异常
+或产物。凭据传输由上游 Tushare SDK 控制，其当前官方客户端使用 HTTP，
+Agent 应将其视为需要用户自行评估的上游安全边界。
 
 下载后应把标准 Parquet 作为审计运行的输入，并继续使用
 `data.provider: local`，不能把 provider 设置为 `tushare`。
