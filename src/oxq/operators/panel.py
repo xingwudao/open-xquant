@@ -172,17 +172,18 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
     """Validate the JSON Schema and composite-key semantics of a serialized QuantPanel."""
 
     _validate_json_tree(payload, "payload", set())
+    materialized_payload = _materialize_json_tree(payload)
     schema = load_contract_schema("quant-panel-v1.schema.json")
     errors = sorted(
-        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload),
+        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(materialized_payload),
         key=lambda error: list(error.absolute_path),
     )
     if errors:
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)
         raise InvalidPanelError(f"serialized QuantPanel {path or 'payload'}: {error.message}")
-    rows = payload["rows"]
-    timestamp_semantics = payload["context"]["timestamp_semantics"]
+    rows = materialized_payload["rows"]
+    timestamp_semantics = materialized_payload["context"]["timestamp_semantics"]
     seen: set[tuple[str | datetime, str]] = set()
     duplicates: list[tuple[str, str]] = []
     for row in rows:
@@ -196,6 +197,14 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
             "serialized QuantPanel contains duplicate (date, code) keys",
             details={"keys": [list(key) for key in duplicates]},
         )
+
+
+def _materialize_json_tree(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _materialize_json_tree(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_materialize_json_tree(item) for item in value]
+    return value
 
 
 def _validate_json_tree(value: Any, path: str, active_containers: set[int]) -> None:

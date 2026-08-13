@@ -313,6 +313,61 @@ def test_fitted_state_identity_fields_reject_empty_strings(field: str) -> None:
 
 
 @pytest.mark.parametrize(
+    ("training_start", "training_end"),
+    [
+        ("2025-01-01", "2025-12-31"),
+        ("2025-01-01T10:00:00+08:00", "2025-01-01T03:00:00Z"),
+        ("2025-01-01T10:00:00.123456+08:00", "2025-01-01T10:00:00.123456+08:00"),
+    ],
+    ids=["dates", "timezone-normalized-datetimes", "equal-datetimes"],
+)
+def test_fitted_state_accepts_portable_iso_8601_training_boundaries(
+    training_start: str,
+    training_end: str,
+) -> None:
+    state = _fitted_state(training_start=training_start, training_end=training_end)
+
+    assert state.training_start == training_start
+    assert state.training_end == training_end
+
+
+@pytest.mark.parametrize(
+    ("training_start", "training_end"),
+    [
+        ("2025-02-29", "2025-12-31"),
+        ("2025-01-01 00:00:00Z", "2025-12-31T00:00:00Z"),
+        ("2025-01-01T00:00:00", "2025-12-31T00:00:00"),
+        ("2025-01-01T00:00:00+0800", "2025-12-31T00:00:00+0800"),
+        ("２０２５-01-01", "2025-12-31"),
+        ("2025-01-01", "2025-12-31T00:00:00Z"),
+    ],
+    ids=["invalid-date", "space-separator", "naive-datetime", "compact-offset", "non-ascii-digits", "mixed-kinds"],
+)
+def test_fitted_state_rejects_non_portable_training_boundaries(
+    training_start: str,
+    training_end: str,
+) -> None:
+    with pytest.raises(ValueError, match="training boundaries must be ISO 8601"):
+        _fitted_state(training_start=training_start, training_end=training_end)
+
+
+@pytest.mark.parametrize(
+    ("training_start", "training_end"),
+    [
+        ("2025-12-31", "2025-01-01"),
+        ("2025-01-01T10:00:00+08:00", "2025-01-01T01:00:00Z"),
+    ],
+    ids=["dates", "timezone-aware-datetimes"],
+)
+def test_fitted_state_rejects_reversed_training_boundaries(
+    training_start: str,
+    training_end: str,
+) -> None:
+    with pytest.raises(ValueError, match="training_start must not be after training_end"):
+        _fitted_state(training_start=training_start, training_end=training_end)
+
+
+@pytest.mark.parametrize(
     "random_seed",
     [True, 7.0, "7", [], {}],
     ids=["bool", "float", "string", "list", "mapping"],

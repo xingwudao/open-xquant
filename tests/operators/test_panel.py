@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from types import MappingProxyType
+
 import pandas as pd
 import pytest
 
@@ -274,6 +276,37 @@ def test_serialized_panel_accepts_nested_json_values() -> None:
             "tags": ["bank", None],
             "statistics": shared_statistics,
             "statistics_copy": shared_statistics,
+        }
+    )
+
+    validate_serialized_quant_panel(payload)
+
+
+def test_serialized_panel_accepts_nested_read_only_mappings() -> None:
+    payload = MappingProxyType(
+        {
+            "schema_version": 1,
+            "context": MappingProxyType(
+                {
+                    "timezone": "Asia/Shanghai",
+                    "calendar": "XSHG",
+                    "frequency": "1d",
+                    "timestamp_semantics": "session_date",
+                    "currency": "CNY",
+                    "price_adjustment": "forward_adjusted",
+                    "data_version": "fixture-v1",
+                    "source": "fake",
+                }
+            ),
+            "rows": [
+                MappingProxyType(
+                    {
+                        "date": "2026-01-05",
+                        "code": "000001.SZ",
+                        "metadata": MappingProxyType({"statistics": MappingProxyType({"count": 2})}),
+                    }
+                )
+            ],
         }
     )
 

@@ -179,10 +179,89 @@ def _read_catalog(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
     path = Path(source)
     try:
         raw = path.read_text(encoding="utf-8")
-        payload = json.loads(raw) if path.suffix.lower() == ".json" else yaml.safe_load(raw)
+        if path.suffix.lower() == ".json":
+            parsed = json.loads(raw, object_pairs_hook=_CatalogJsonObjectPairs)
+            payload = _materialize_catalog_json(parsed, path=path)
+        else:
+            payload = _load_catalog_yaml(raw, path=path)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError, yaml.YAMLError) as exc:
         raise InvalidManifestError(f"operator catalog is invalid: {path}: {exc}") from exc
     _reject_recursive_containers(payload)
     if not isinstance(payload, dict):
         raise InvalidManifestError(f"operator catalog must contain an object: {path}")
     return payload
+
+
+class _CatalogJsonObjectPairs(list[tuple[str, Any]]):
+    """Keep JSON objects distinct from arrays until every key is checked."""
+
+
+def _materialize_catalog_json(value: Any, *, path: Path, location: str = "catalog") -> Any:
+    if isinstance(value, _CatalogJsonObjectPairs):
+        result: dict[str, Any] = {}
+        for key, item in value:
+            if key in result:
+                raise InvalidManifestError(f"operator catalog is invalid: {path}: {location}: duplicate mapping key: {key}")
+            result[key] = _materialize_catalog_json(item, path=path, location=f"{location}.{key}")
+        return result
+    if isinstance(value, list):
+        return [_materialize_catalog_json(item, path=path, location=f"{location}[{index}]") for index, item in enumerate(value)]
+    return value
+
+
+def _load_catalog_yaml(raw: str, *, path: Path) -> Any:
+    loader = yaml.SafeLoader(raw)
+    try:
+        node = loader.get_single_node()
+        if node is None:
+            return None
+        _reject_duplicate_catalog_yaml_keys(node, loader=loader, path=path)
+        return loader.construct_document(node)
+    finally:
+        loader.dispose()
+
+
+def _reject_duplicate_catalog_yaml_keys(
+    node: Any,
+    *,
+    loader: Any,
+    path: Path,
+    location: str = "catalog",
+    active: set[int] | None = None,
+) -> None:
+    active = set() if active is None else active
+    identity = id(node)
+    if identity in active:
+        return
+    active.add(identity)
+    try:
+        if isinstance(node, yaml.MappingNode):
+            seen: set[Any] = set()
+            for key_node, value_node in node.value:
+                key = key_node.value if key_node.tag == "tag:yaml.org,2002:merge" else loader.construct_object(key_node, deep=True)
+                try:
+                    duplicate = key in seen
+                    seen.add(key)
+                except TypeError:
+                    duplicate = False
+                if duplicate:
+                    raise InvalidManifestError(f"operator catalog is invalid: {path}: {location}: duplicate mapping key: {key}")
+                child_location = f"{location}.{key}" if isinstance(key, str) else location
+                _reject_duplicate_catalog_yaml_keys(
+                    value_node,
+                    loader=loader,
+                    path=path,
+                    location=child_location,
+                    active=active,
+                )
+        elif isinstance(node, yaml.SequenceNode):
+            for index, item in enumerate(node.value):
+                _reject_duplicate_catalog_yaml_keys(
+                    item,
+                    loader=loader,
+                    path=path,
+                    location=f"{location}[{index}]",
+                    active=active,
+                )
+    finally:
+        active.remove(identity)

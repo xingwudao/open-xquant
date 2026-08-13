@@ -6,6 +6,7 @@ import copy
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Protocol
@@ -15,7 +16,25 @@ import numpy as np
 import pandas as pd
 
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
+_ISO_DATE_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}$")
+_ISO_DATETIME_RE = re.compile(
+    r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}"
+    r"(?:\.[0-9]{1,6})?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+)
 _IMMUTABLE_LEAF_TYPES = (type(None), bool, int, float, complex, str, bytes)
+
+
+def _parse_training_boundary(value: str) -> tuple[str, date | datetime]:
+    try:
+        if _ISO_DATE_RE.fullmatch(value):
+            return "date", date.fromisoformat(value)
+        if _ISO_DATETIME_RE.fullmatch(value):
+            return "datetime", datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    raise ValueError(
+        "training boundaries must be ISO 8601 dates (YYYY-MM-DD) or timezone-aware datetimes (YYYY-MM-DDTHH:MM:SS[.ffffff](Z|+HH:MM))"
+    )
 
 
 def _freeze(
@@ -229,6 +248,12 @@ class FittedOperatorState:
                 raise TypeError(f"{name} must be a string")
             if not value:
                 raise ValueError(f"{name} must be a non-empty string")
+        start_kind, training_start = _parse_training_boundary(self.training_start)
+        end_kind, training_end = _parse_training_boundary(self.training_end)
+        if start_kind != end_kind:
+            raise ValueError("training boundaries must be ISO 8601 values of the same kind")
+        if training_start > training_end:
+            raise ValueError("training_start must not be after training_end")
         for name in ("training_data_digest", "state_digest"):
             if not _DIGEST_RE.fullmatch(getattr(self, name)):
                 raise ValueError(f"{name} must be a sha256 digest")

@@ -744,6 +744,43 @@ def test_catalog_rejects_duplicate_operator_ids(valid_manifest_payload) -> None:
         load_operator_catalog(payload)
 
 
+@pytest.mark.parametrize("suffix", [".json", ".yaml"])
+def test_catalog_rejects_duplicate_keys_inside_nested_operator_manifest(
+    valid_manifest_payload,
+    tmp_path,
+    suffix,
+) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+    source = tmp_path / f"catalog{suffix}"
+    if suffix == ".json":
+        raw = json.dumps(payload, separators=(",", ":"))
+        raw = raw.replace('"min_assets":1', '"min_assets":1,"min_assets":1')
+    else:
+        raw = yaml.safe_dump(payload, sort_keys=False)
+        raw = raw.replace("    min_assets: 1\n", "    min_assets: 1\n    min_assets: 1\n")
+    source.write_text(raw, encoding="utf-8")
+
+    with pytest.raises(
+        InvalidManifestError,
+        match=r"catalog\.operators\[0\]\.inputs.*duplicate.*min_assets",
+    ) as exc_info:
+        load_operator_catalog(source)
+
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"
+
+
 def test_catalog_rejects_invalid_package_semantic_version(valid_manifest_payload) -> None:
     manifest = load_operator_manifest(valid_manifest_payload)
     payload = {

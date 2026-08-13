@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-from dataclasses import replace
+from dataclasses import FrozenInstanceError, replace
 from types import MappingProxyType
 
 import numpy as np
@@ -93,6 +93,22 @@ def test_fake_provider_passes_reusable_contract_suite(
     assert report.parameters_digest == "sha256:" + hashlib.sha256(b'{"period":2}').hexdigest()
     with pytest.raises(TypeError):
         report.parameters["period"] = 3
+    expected_context = {
+        "calendar": "XSHG",
+        "currency": "CNY",
+        "data_version": "fixture-v1",
+        "evaluation_time": "close_t",
+        "frequency": "1d",
+        "price_adjustment": "forward_adjusted",
+        "source": "fake",
+        "timestamp_semantics": "session_date",
+        "timezone": "Asia/Shanghai",
+    }
+    canonical_context = json.dumps(expected_context, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    assert report.context == daily_context
+    assert report.context_digest == "sha256:" + hashlib.sha256(canonical_context.encode()).hexdigest()
+    with pytest.raises(FrozenInstanceError):
+        report.context.source = "mutated"
     assert report.passed is True
     assert report.checks == (
         "request",
@@ -483,7 +499,7 @@ def test_contract_suite_enforces_dtype_of_present_optional_columns(
         verify_operator_contract(_load_contract_manifest(payload), sma, request)
 
 
-def test_contract_suite_probes_each_present_optional_column_independently(
+def test_contract_suite_probes_every_valid_optional_column_subset(
     daily_context,
     daily_symbol_frames,
     valid_manifest_payload,
@@ -499,12 +515,11 @@ def test_contract_suite_probes_each_present_optional_column_independently(
         input_panel=panel,
         context=daily_context,
     )
-    absent_optional_columns: list[tuple[str, ...]] = []
+    observed_optional_subsets: set[tuple[str, ...]] = set()
 
     def optional_aware_provider(provider_request: OperatorRequest):
-        absent = tuple(column for column in ("volume", "quality") if column not in provider_request.input_panel)
-        if absent:
-            absent_optional_columns.append(absent)
+        present = tuple(column for column in ("volume", "quality") if column in provider_request.input_panel)
+        observed_optional_subsets.add(present)
         return sma(provider_request)
 
     report = verify_operator_contract(
@@ -515,7 +530,147 @@ def test_contract_suite_probes_each_present_optional_column_independently(
 
     assert report.passed is True
     assert "optional_inputs" in report.checks
-    assert absent_optional_columns == [("volume",), ("volume",), ("quality",), ("quality",)]
+    assert observed_optional_subsets == {(), ("volume",), ("quality",), ("volume", "quality")}
+
+
+def test_contract_suite_requires_fixture_to_cover_every_declared_optional_column(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["inputs"]["optional_columns"] = ["volume", "quality"]
+    payload["inputs"]["dtypes"].update({"volume": ["int64"], "quality": ["float64"]})
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="fixture.*optional") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {"columns": ["quality"]}
+
+
+def test_contract_suite_rejects_unbounded_optional_input_shape_certification(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    optional_columns = [f"optional_{index}" for index in range(9)]
+    payload["inputs"]["optional_columns"] = optional_columns
+    payload["inputs"]["dtypes"].update({column: ["float64"] for column in optional_columns})
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    for column in optional_columns:
+        panel[column] = 1.0
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="at most 8 optional") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {"actual": 9, "maximum": 8}
+
+
+@pytest.mark.parametrize("phase", ["causality", "scope", "unordered"])
+def test_contract_suite_runs_behavioral_probes_for_each_optional_input_shape(
+    phase,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["inputs"]["optional_columns"] = ["volume"]
+    payload["inputs"]["dtypes"]["volume"] = ["int64"]
+    if phase == "causality":
+        payload["execution_scope"] = "panel"
+        payload["inputs"]["requires_sorted"] = True
+    elif phase == "scope":
+        payload["causality"] = "future_using"
+        payload["inputs"]["requires_sorted"] = True
+    else:
+        payload["execution_scope"] = "panel"
+        payload["causality"] = "future_using"
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    full_rows = len(panel)
+    full_assets = int(panel["code"].nunique())
+
+    def shape_dependent_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        provider_panel = provider_request.input_panel
+        optional_absent = "volume" not in provider_panel
+        keys = provider_panel[["date", "code"]].reset_index(drop=True)
+        canonical_keys = keys.sort_values(["date", "code"], kind="stable", ignore_index=True)
+        violates_probe = (
+            (phase == "causality" and len(provider_panel) < full_rows)
+            or (phase == "scope" and provider_panel["code"].nunique() < full_assets)
+            or (phase == "unordered" and not keys.equals(canonical_keys))
+        )
+        if optional_absent and violates_probe:
+            result.data.loc[:, "sma_2"] += 100.0
+        return result
+
+    expected_message = {
+        "causality": "past_only",
+        "scope": "other symbols",
+        "unordered": "incidental input order",
+    }[phase]
+    with pytest.raises(ContractViolationError, match=expected_message):
+        verify_operator_contract(load_operator_manifest(payload), shape_dependent_provider, request)
+
+
+@pytest.mark.parametrize("nonfinite", [float("inf"), float("-inf")])
+def test_contract_suite_rejects_nonfinite_numeric_output(
+    nonfinite,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context).drop(columns=["volume"]),
+        context=daily_context,
+    )
+
+    def nonfinite_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        result.data.loc[result.data.index[-1], "sma_2"] = nonfinite
+        return result
+
+    with pytest.raises(ContractViolationError, match="finite"):
+        verify_operator_contract(load_operator_manifest(payload), nonfinite_provider, request)
 
 
 def test_contract_suite_checks_optional_probe_determinism(

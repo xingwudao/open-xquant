@@ -6,7 +6,8 @@ import copy
 import hashlib
 import json
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
+from itertools import combinations
 from typing import Any
 
 import numpy as np
@@ -25,6 +26,7 @@ from oxq.operators.panel import QuantPanelAdapter
 from oxq.operators.types import (
     OperatorAvailability,
     OperatorCausality,
+    OperatorContext,
     OperatorLifecycle,
     OperatorRequest,
     OperatorResult,
@@ -32,6 +34,7 @@ from oxq.operators.types import (
 )
 
 OperatorCallable = Callable[[OperatorRequest], OperatorResult]
+_MAX_CERTIFIED_OPTIONAL_COLUMNS = 8
 _TRADING_AVAILABILITY_ORDER = {
     OperatorAvailability.PRE_OPEN: 0,
     OperatorAvailability.OPEN: 1,
@@ -51,6 +54,8 @@ class ContractReport:
     implementation_digest: str
     parameters: Mapping[str, Any]
     parameters_digest: str
+    context: OperatorContext
+    context_digest: str
     passed: bool
     checks: tuple[str, ...]
 
@@ -134,6 +139,7 @@ def verify_operator_contract(
     parameters = manifest.validate_parameters(request.parameters)
     parameters_digest = _resolved_parameters_digest(parameters, manifest.operator_id)
     normalized = _copy_request(request, parameters=parameters)
+    context_digest = _operator_context_digest(normalized.context, manifest.operator_id)
     determinism = manifest.raw.get("determinism", {})
     if determinism.get("bitwise", True):
         object_fields = [
@@ -161,6 +167,20 @@ def verify_operator_contract(
         raise ContractViolationError(
             f"input is missing declared columns: {', '.join(missing_columns)}",
             operator_id=manifest.operator_id,
+        )
+    optional_columns = tuple(input_spec["optional_columns"])
+    if len(optional_columns) > _MAX_CERTIFIED_OPTIONAL_COLUMNS:
+        raise ContractViolationError(
+            f"contract checker supports at most {_MAX_CERTIFIED_OPTIONAL_COLUMNS} optional input columns",
+            operator_id=manifest.operator_id,
+            details={"actual": len(optional_columns), "maximum": _MAX_CERTIFIED_OPTIONAL_COLUMNS},
+        )
+    missing_optional_columns = [column for column in optional_columns if column not in normalized.input_panel]
+    if missing_optional_columns:
+        raise ContractViolationError(
+            "contract fixture must contain every declared optional input column",
+            operator_id=manifest.operator_id,
+            details={"columns": missing_optional_columns},
         )
     asset_count = normalized.input_panel["code"].nunique()
     if asset_count < input_spec["min_assets"]:
@@ -195,9 +215,8 @@ def verify_operator_contract(
             operator_id=manifest.operator_id,
             details={"rows_by_code": {str(code): int(rows) for code, rows in history.items()}},
         )
-    declared_columns = required_columns | set(input_spec["optional_columns"])
+    declared_columns = required_columns | set(optional_columns)
     present_declared_columns = sorted(declared_columns & set(normalized.input_panel.columns))
-    present_optional_columns = [column for column in input_spec["optional_columns"] if column in normalized.input_panel.columns]
     undeclared_columns = [column for column in normalized.input_panel.columns if column not in declared_columns | {"date", "code"}]
     if input_spec["missing_value_policy"]["kind"] == "require_complete":
         incomplete_columns = [column for column in present_declared_columns if normalized.input_panel[column].isna().any()]
@@ -253,50 +272,60 @@ def verify_operator_contract(
         )
     checks.extend(("output_contract", "provenance"))
 
-    for column in present_optional_columns:
-        panel_without_optional = normalized.input_panel.drop(columns=[column])
-        optional_request = _copy_request(normalized, panel=panel_without_optional)
-        failure_message = f"operator failed without optional input column {column}"
-        optional_result = _invoke_operator(
-            manifest,
-            operator,
-            optional_request,
-            failure_message=failure_message,
-            failure_details={"column": column},
-        )
-        _validate_result(manifest, optional_request, optional_result, expected_implementation_digest)
-        optional_data = _deepcopy_frame(optional_result.data)
-        optional_metadata = _snapshot_metadata(optional_result.metadata)
-        optional_repeated = _invoke_operator(
-            manifest,
-            operator,
-            _copy_request(optional_request),
-            failure_message=failure_message,
-            failure_details={"column": column},
-        )
-        _validate_result(manifest, optional_request, optional_repeated, expected_implementation_digest)
-        _require_deterministic_data(
-            optional_data,
-            optional_repeated.data,
-            manifest,
-            f"operator without optional input column {column} must be deterministic",
-        )
-        if optional_result.diagnostics != optional_repeated.diagnostics:
-            raise ContractViolationError(
-                f"operator diagnostics without optional input column {column} must be deterministic",
-                operator_id=manifest.operator_id,
+    for present_count in range(len(optional_columns)):
+        for present_subset in combinations(optional_columns, present_count):
+            omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
+            panel_without_optional = normalized.input_panel.drop(columns=list(omitted_columns))
+            optional_request = _copy_request(normalized, panel=panel_without_optional)
+            failure_message, failure_details = _optional_probe_failure(omitted_columns)
+            optional_result = _invoke_operator(
+                manifest,
+                operator,
+                optional_request,
+                failure_message=failure_message,
+                failure_details=failure_details,
             )
-        if optional_result.provenance != optional_repeated.provenance:
-            raise ContractViolationError(
-                f"operator provenance without optional input column {column} must be deterministic",
-                operator_id=manifest.operator_id,
+            _validate_result(manifest, optional_request, optional_result, expected_implementation_digest)
+            optional_data = _deepcopy_frame(optional_result.data)
+            optional_metadata = _snapshot_metadata(optional_result.metadata)
+            optional_repeated = _invoke_operator(
+                manifest,
+                operator,
+                _copy_request(optional_request),
+                failure_message=failure_message,
+                failure_details=failure_details,
             )
-        if not _metadata_equal(optional_metadata, optional_repeated.metadata):
-            raise ContractViolationError(
-                f"operator metadata without optional input column {column} must be deterministic",
-                operator_id=manifest.operator_id,
+            _validate_result(manifest, optional_request, optional_repeated, expected_implementation_digest)
+            omission_label = _optional_omission_label(omitted_columns)
+            _require_deterministic_data(
+                optional_data,
+                optional_repeated.data,
+                manifest,
+                f"operator without optional input {omission_label} must be deterministic",
             )
-    if present_optional_columns:
+            if optional_result.diagnostics != optional_repeated.diagnostics:
+                raise ContractViolationError(
+                    f"operator diagnostics without optional input {omission_label} must be deterministic",
+                    operator_id=manifest.operator_id,
+                )
+            if optional_result.provenance != optional_repeated.provenance:
+                raise ContractViolationError(
+                    f"operator provenance without optional input {omission_label} must be deterministic",
+                    operator_id=manifest.operator_id,
+                )
+            if not _metadata_equal(optional_metadata, optional_repeated.metadata):
+                raise ContractViolationError(
+                    f"operator metadata without optional input {omission_label} must be deterministic",
+                    operator_id=manifest.operator_id,
+                )
+            _verify_behavioral_probes(
+                manifest,
+                operator,
+                optional_request,
+                optional_data,
+                expected_implementation_digest,
+            )
+    if optional_columns:
         checks.append("optional_inputs")
 
     first_data = _deepcopy_frame(result.data)
@@ -338,65 +367,8 @@ def verify_operator_contract(
         )
     checks.append("determinism")
 
-    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
-        OperatorScope.TIME_SERIES,
-        OperatorScope.PANEL,
-        OperatorScope.RESEARCH_ONLY,
-    }:
-        _verify_past_only_causality(
-            manifest,
-            operator,
-            normalized,
-            first_data,
-            expected_implementation_digest,
-        )
-        checks.append("causality")
-
-    if not input_spec["requires_sorted"]:
-        permuted_panels = [normalized.input_panel.iloc[::-1].reset_index(drop=True)]
-        if len(normalized.input_panel) >= 3:
-            permuted_panels.append(
-                pd.concat(
-                    (normalized.input_panel.iloc[1:], normalized.input_panel.iloc[:1]),
-                    ignore_index=True,
-                )
-            )
-        for permuted_panel in permuted_panels:
-            permuted_request = _copy_request(normalized, panel=permuted_panel)
-            permuted_result = _invoke_operator(manifest, operator, permuted_request)
-            _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
-            _require_exact_data(
-                _canonical(first_data),
-                _canonical(permuted_result.data),
-                manifest,
-                "operator output must not depend on incidental input order",
-            )
-        checks.append("unordered_input")
-
-    if manifest.execution_scope is OperatorScope.TIME_SERIES:
-        for excluded_code in normalized.input_panel["code"].drop_duplicates():
-            isolated_panel = normalized.input_panel.loc[normalized.input_panel["code"] != excluded_code].reset_index(drop=True)
-            isolated_request = _copy_request(normalized, panel=isolated_panel)
-            isolated_result = _invoke_operator(manifest, operator, isolated_request)
-            _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
-            expected = first_data.loc[first_data["code"] != excluded_code]
-            _require_exact_data(
-                _canonical(expected),
-                _canonical(isolated_result.data),
-                manifest,
-                "time_series output must not depend on other symbols",
-            )
-        checks.append("batch_consistency")
-
-    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
-        _verify_cross_section_scope(
-            manifest,
-            operator,
-            normalized,
-            first_data,
-            expected_implementation_digest,
-        )
-        checks.append("scope_consistency")
+    _verify_behavioral_probes(manifest, operator, normalized, first_data, expected_implementation_digest)
+    checks.extend(_behavioral_check_names(manifest))
 
     return ContractReport(
         operator_id=manifest.operator_id,
@@ -407,6 +379,8 @@ def verify_operator_contract(
         implementation_digest=expected_implementation_digest,
         parameters=normalized.parameters,
         parameters_digest=parameters_digest,
+        context=normalized.context,
+        context_digest=context_digest,
         passed=True,
         checks=tuple(checks),
     )
@@ -499,6 +473,11 @@ def _validate_result(
                 operator_id=manifest.operator_id,
             )
         non_null = result.data[name].dropna()
+        if pd.api.types.is_numeric_dtype(result.data[name].dtype) and not np.isfinite(non_null.to_numpy()).all():
+            raise ContractViolationError(
+                f"output column {name} must contain only finite numeric values",
+                operator_id=manifest.operator_id,
+            )
         try:
             below_minimum = "minimum" in declaration and non_null.lt(declaration["minimum"]).any()
             above_maximum = "maximum" in declaration and non_null.gt(declaration["maximum"]).any()
@@ -632,6 +611,38 @@ def _resolved_parameters_digest(parameters: Mapping[str, Any], operator_id: str)
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
 
 
+def _operator_context_digest(context: OperatorContext, operator_id: str) -> str:
+    payload = {field.name: getattr(context, field.name) for field in fields(context)}
+    try:
+        canonical = json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+    except (TypeError, ValueError) as exc:
+        raise ContractViolationError(
+            "operator context must be canonically serializable",
+            operator_id=operator_id,
+        ) from exc
+    return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _optional_probe_failure(omitted_columns: tuple[str, ...]) -> tuple[str, Mapping[str, Any]]:
+    if len(omitted_columns) == 1:
+        column = omitted_columns[0]
+        return f"operator failed without optional input column {column}", {"column": column}
+    columns = list(omitted_columns)
+    return f"operator failed without optional input columns {', '.join(columns)}", {"columns": columns}
+
+
+def _optional_omission_label(omitted_columns: tuple[str, ...]) -> str:
+    if len(omitted_columns) == 1:
+        return f"column {omitted_columns[0]}"
+    return f"columns {', '.join(omitted_columns)}"
+
+
 def _invoke_operator(
     manifest: OperatorManifest,
     operator: OperatorCallable,
@@ -722,6 +733,87 @@ def _deepcopy_frame(panel: pd.DataFrame) -> pd.DataFrame:
     for column in panel.select_dtypes(include="object").columns:
         snapshot[column] = panel[column].map(copy.deepcopy)
     return snapshot
+
+
+def _behavioral_check_names(manifest: OperatorManifest) -> tuple[str, ...]:
+    checks: list[str] = []
+    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
+        OperatorScope.TIME_SERIES,
+        OperatorScope.PANEL,
+        OperatorScope.RESEARCH_ONLY,
+    }:
+        checks.append("causality")
+    if not manifest.raw["inputs"]["requires_sorted"]:
+        checks.append("unordered_input")
+    if manifest.execution_scope is OperatorScope.TIME_SERIES:
+        checks.append("batch_consistency")
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        checks.append("scope_consistency")
+    return tuple(checks)
+
+
+def _verify_behavioral_probes(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    baseline: pd.DataFrame,
+    expected_implementation_digest: str,
+) -> None:
+    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
+        OperatorScope.TIME_SERIES,
+        OperatorScope.PANEL,
+        OperatorScope.RESEARCH_ONLY,
+    }:
+        _verify_past_only_causality(
+            manifest,
+            operator,
+            request,
+            baseline,
+            expected_implementation_digest,
+        )
+
+    if not manifest.raw["inputs"]["requires_sorted"]:
+        permuted_panels = [request.input_panel.iloc[::-1].reset_index(drop=True)]
+        if len(request.input_panel) >= 3:
+            permuted_panels.append(
+                pd.concat(
+                    (request.input_panel.iloc[1:], request.input_panel.iloc[:1]),
+                    ignore_index=True,
+                )
+            )
+        for permuted_panel in permuted_panels:
+            permuted_request = _copy_request(request, panel=permuted_panel)
+            permuted_result = _invoke_operator(manifest, operator, permuted_request)
+            _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
+            _require_exact_data(
+                _canonical(baseline),
+                _canonical(permuted_result.data),
+                manifest,
+                "operator output must not depend on incidental input order",
+            )
+
+    if manifest.execution_scope is OperatorScope.TIME_SERIES:
+        for excluded_code in request.input_panel["code"].drop_duplicates():
+            isolated_panel = request.input_panel.loc[request.input_panel["code"] != excluded_code].reset_index(drop=True)
+            isolated_request = _copy_request(request, panel=isolated_panel)
+            isolated_result = _invoke_operator(manifest, operator, isolated_request)
+            _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
+            expected = baseline.loc[baseline["code"] != excluded_code]
+            _require_exact_data(
+                _canonical(expected),
+                _canonical(isolated_result.data),
+                manifest,
+                "time_series output must not depend on other symbols",
+            )
+
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        _verify_cross_section_scope(
+            manifest,
+            operator,
+            request,
+            baseline,
+            expected_implementation_digest,
+        )
 
 
 def _verify_past_only_causality(
