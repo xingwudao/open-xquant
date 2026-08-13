@@ -36,25 +36,20 @@ def load_workspace_config(
     config_path = Path(path)
     if config_path.name != "workspace.yaml" or config_path.parent.name != ".open-xquant":
         raise WorkspaceConfigError(f"workspace configuration path is not canonical: {config_path}")
-    unsafe_component = _first_link_component(config_path)
-    if unsafe_component is not None:
-        raise WorkspaceConfigError(f"workspace configuration path component must not be a symlink: {unsafe_component}")
-    if not config_path.exists() and not config_path.is_symlink():
+    try:
+        config_text = _read_regular_file_nofollow(config_path)
+    except FileNotFoundError as exc:
         if missing_ok:
             return {}
-        raise WorkspaceConfigError(f"workspace configuration does not exist: {config_path}")
-    if config_path.parent.is_symlink():
-        raise WorkspaceConfigError(f"workspace configuration directory must not be a symlink: {config_path.parent}")
-    if not config_path.parent.is_dir():
-        raise WorkspaceConfigError(f"workspace configuration directory is invalid: {config_path.parent}")
-    if config_path.is_symlink():
-        raise WorkspaceConfigError(f"workspace configuration must not be a symlink: {config_path}")
-    try:
-        payload = yaml.safe_load(_read_regular_file_nofollow(config_path))
-    except yaml.YAMLError as exc:
-        raise WorkspaceConfigError(f"workspace configuration contains invalid YAML: {config_path}: {exc}") from exc
+        raise WorkspaceConfigError(f"workspace configuration does not exist: {config_path}") from exc
+    except WorkspaceConfigError:
+        raise
     except (OSError, UnicodeDecodeError) as exc:
         raise WorkspaceConfigError(f"workspace configuration could not be read: {config_path}: {exc}") from exc
+    try:
+        payload = yaml.safe_load(config_text)
+    except yaml.YAMLError as exc:
+        raise WorkspaceConfigError(f"workspace configuration contains invalid YAML: {config_path}: {exc}") from exc
     if payload is None and allow_empty:
         return {}
     if not isinstance(payload, dict):
@@ -64,11 +59,71 @@ def load_workspace_config(
 
 def _read_regular_file_nofollow(path: Path) -> str:
     nofollow = getattr(os, "O_NOFOLLOW", None)
-    if nofollow is None:
-        raise WorkspaceConfigError("workspace configuration cannot be read: atomic nofollow protection is unavailable")
+    directory = getattr(os, "O_DIRECTORY", None)
+    if not isinstance(nofollow, int) or nofollow == 0 or not isinstance(directory, int) or directory == 0:
+        raise _nofollow_unavailable()
+
+    absolute = path.absolute()
+    directory_flags = os.O_RDONLY | nofollow | directory
+    directory_descriptor = _open_directory_nofollow(
+        absolute.anchor,
+        directory_flags,
+        display_path=Path(absolute.anchor),
+    )
+    current_path = Path(absolute.anchor)
 
     try:
-        descriptor = os.open(path, os.O_RDONLY | nofollow)
+        for component in absolute.parts[1:-1]:
+            current_path /= component
+            child_descriptor = _open_directory_nofollow(
+                component,
+                directory_flags,
+                display_path=current_path,
+                dir_fd=directory_descriptor,
+            )
+            previous_descriptor = directory_descriptor
+            directory_descriptor = child_descriptor
+            os.close(previous_descriptor)
+        return _read_regular_file_at(absolute.name, path, directory_descriptor, nofollow)
+    finally:
+        os.close(directory_descriptor)
+
+
+def _open_directory_nofollow(
+    path: str,
+    flags: int,
+    *,
+    display_path: Path,
+    dir_fd: int | None = None,
+) -> int:
+    try:
+        if dir_fd is None:
+            descriptor = os.open(path, flags)
+        else:
+            descriptor = os.open(path, flags, dir_fd=dir_fd)
+    except (NotImplementedError, TypeError) as exc:
+        raise _nofollow_unavailable() from exc
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise WorkspaceConfigError(
+                f"workspace configuration path component must be a directory and must not be a symlink: {display_path}"
+            ) from exc
+        raise
+
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise WorkspaceConfigError(f"workspace configuration path component must be a directory: {display_path}")
+    except BaseException:
+        os.close(descriptor)
+        raise
+    return descriptor
+
+
+def _read_regular_file_at(name: str, path: Path, directory_descriptor: int, nofollow: int) -> str:
+    try:
+        descriptor = os.open(name, os.O_RDONLY | nofollow, dir_fd=directory_descriptor)
+    except (NotImplementedError, TypeError) as exc:
+        raise _nofollow_unavailable() from exc
     except OSError as exc:
         if exc.errno == errno.ELOOP:
             raise WorkspaceConfigError(f"workspace configuration must not be a symlink: {path}") from exc
@@ -86,15 +141,8 @@ def _read_regular_file_nofollow(path: Path) -> str:
             os.close(descriptor)
 
 
-def _first_link_component(path: Path) -> Path | None:
-    absolute = path.absolute()
-    current = Path(absolute.anchor)
-    for part in absolute.parts[1:]:
-        current /= part
-        is_junction = getattr(current, "is_junction", lambda: False)
-        if current.is_symlink() or is_junction():
-            return current
-    return None
+def _nofollow_unavailable() -> WorkspaceConfigError:
+    return WorkspaceConfigError("workspace configuration cannot be read: atomic directory-descriptor nofollow protection is unavailable")
 
 
 def discover_workspace_config(path: str | Path) -> DiscoveredWorkspaceConfig | None:

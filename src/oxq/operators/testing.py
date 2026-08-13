@@ -169,6 +169,15 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"required_dates": 2, "available_dates": available_dates},
             )
+    if manifest.execution_scope is OperatorScope.TIME_SERIES:
+        available_assets = int(normalized.input_panel["code"].nunique())
+        required_assets = input_spec["min_assets"] + 1
+        if available_assets < required_assets:
+            raise ContractViolationError(
+                "time_series scope probe requires enough assets to exclude one symbol",
+                operator_id=manifest.operator_id,
+                details={"required_assets": required_assets, "available_assets": available_assets},
+            )
     checks = ["request"]
 
     result = _invoke_operator(manifest, operator, normalized)
@@ -235,27 +244,18 @@ def verify_operator_contract(
         checks.append("unordered_input")
 
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
-        available_assets = int(normalized.input_panel["code"].nunique())
-        if available_assets < 2:
-            raise ContractViolationError(
-                "time_series scope probe requires at least two assets",
-                operator_id=manifest.operator_id,
-                details={"required_assets": 2, "available_assets": available_assets},
+        for excluded_code in normalized.input_panel["code"].drop_duplicates():
+            isolated_panel = normalized.input_panel.loc[normalized.input_panel["code"] != excluded_code].reset_index(drop=True)
+            isolated_request = _copy_request(normalized, panel=isolated_panel)
+            isolated_result = _invoke_operator(manifest, operator, isolated_request)
+            _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
+            expected = first_data.loc[first_data["code"] != excluded_code]
+            _require_equal_data(
+                _canonical(expected),
+                _canonical(isolated_result.data),
+                manifest,
+                "time_series output must not depend on other symbols",
             )
-        pieces: list[pd.DataFrame] = []
-        for code in normalized.input_panel["code"].drop_duplicates():
-            symbol_panel = normalized.input_panel.loc[normalized.input_panel["code"] == code].reset_index(drop=True)
-            symbol_request = _copy_request(normalized, panel=symbol_panel)
-            symbol_result = _invoke_operator(manifest, operator, symbol_request)
-            _validate_result(manifest, symbol_request, symbol_result, expected_implementation_digest)
-            pieces.append(symbol_result.data)
-        per_symbol = pd.concat(pieces, ignore_index=True) if pieces else result.data.iloc[0:0].copy()
-        _require_equal_data(
-            _canonical(first_data),
-            _canonical(per_symbol),
-            manifest,
-            "batch output must match per-symbol output",
-        )
         checks.append("batch_consistency")
 
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
@@ -304,7 +304,7 @@ def _validate_result(
         raise _enrich_operator_error(exc, manifest.operator_id) from exc
     try:
         resolved_fields = [field["name_template"].format(**request.parameters) for field in outputs["fields"]]
-    except (KeyError, IndexError, ValueError, TypeError) as exc:
+    except (AttributeError, KeyError, IndexError, ValueError, TypeError) as exc:
         raise ContractViolationError(
             "operator output field template could not be resolved",
             operator_id=manifest.operator_id,
@@ -561,7 +561,7 @@ def _verify_past_only_causality(
         prefix_result = _invoke_operator(manifest, operator, prefix_request)
         _validate_result(manifest, prefix_request, prefix_result, expected_implementation_digest)
         expected = baseline.loc[baseline["date"] <= cutoff]
-        _require_equal_data(
+        _require_exact_data(
             _canonical(expected),
             _canonical(prefix_result.data),
             manifest,
@@ -648,5 +648,17 @@ def _require_equal_data(
             atol=absolute_tolerance,
             rtol=relative_tolerance,
         )
+    except AssertionError as exc:
+        raise ContractViolationError(message, operator_id=manifest.operator_id) from exc
+
+
+def _require_exact_data(
+    left: pd.DataFrame,
+    right: pd.DataFrame,
+    manifest: OperatorManifest,
+    message: str,
+) -> None:
+    try:
+        pd.testing.assert_frame_equal(left, right, check_exact=True)
     except AssertionError as exc:
         raise ContractViolationError(message, operator_id=manifest.operator_id) from exc

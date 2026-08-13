@@ -690,6 +690,42 @@ def test_contract_suite_rejects_required_parameter_resolving_to_empty_output_nam
     assert exc_info.value.to_dict()["details"] == {"fields": [""]}
 
 
+def test_contract_suite_structures_attribute_errors_from_output_name_templates(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": "object",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{options.missing}"
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2, "options": {}},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    with pytest.raises(ContractViolationError, match="field template could not be resolved") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), sma, request)
+
+    assert exc_info.value.to_dict() == {
+        "code": "contract_violation",
+        "operator_id": "fake.indicators.sma",
+        "message": "operator output field template could not be resolved",
+        "details": {},
+        "retryable": False,
+    }
+    assert isinstance(exc_info.value.__cause__, AttributeError)
+
+
 def test_contract_suite_checks_immutability_on_unordered_probe(
     daily_context,
     daily_symbol_frames,
@@ -968,6 +1004,39 @@ def test_contract_suite_verifies_past_only_causality_with_truncated_histories(
         verify_operator_contract(
             load_operator_manifest(valid_manifest_payload),
             future_using_provider,
+            request,
+        )
+
+
+def test_contract_suite_uses_exact_comparison_for_past_only_causality(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["determinism"] = {
+        "bitwise": False,
+        "absolute_tolerance": 1e-5,
+        "relative_tolerance": 0.0,
+    }
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def subtly_future_using_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        final_close = provider_request.input_panel.groupby("code", sort=False)["close"].last()
+        future_adjustment = result.data["code"].map(final_close).astype("float64") * 1e-7
+        result.data.loc[:, "sma_2"] += future_adjustment
+        return result
+
+    with pytest.raises(ContractViolationError, match="past_only"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            subtly_future_using_provider,
             request,
         )
 
@@ -1340,6 +1409,73 @@ def test_contract_suite_rejects_time_series_scope_probe_with_one_asset(
     }
 
 
+def test_contract_suite_time_series_scope_probes_retain_manifest_min_assets(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    extra_symbol = panel.loc[panel["code"] == panel["code"].min()].copy()
+    extra_symbol.loc[:, "code"] = "300001.SZ"
+    extra_symbol.loc[:, "close"] += 5.0
+    panel = pd.concat([panel, extra_symbol], ignore_index=True).sort_values(["date", "code"], kind="stable", ignore_index=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    probed_asset_counts: list[int] = []
+
+    def min_assets_enforcing_provider(provider_request: OperatorRequest):
+        asset_count = int(provider_request.input_panel["code"].nunique())
+        if asset_count < 2:
+            raise AssertionError("provider received a probe below manifest min_assets")
+        probed_asset_counts.append(asset_count)
+        return sma(provider_request)
+
+    report = verify_operator_contract(
+        load_operator_manifest(payload),
+        min_assets_enforcing_provider,
+        request,
+    )
+
+    assert report.passed is True
+    assert min(probed_asset_counts) == 2
+
+
+def test_contract_suite_rejects_time_series_scope_probe_without_support_assets(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["min_assets"] = 2
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="time_series scope probe") as exc_info:
+        verify_operator_contract(load_operator_manifest(payload), tracked_provider, request)
+
+    assert provider_calls == 0
+    assert exc_info.value.to_dict()["details"] == {
+        "required_assets": 3,
+        "available_assets": 2,
+    }
+
+
 def test_contract_suite_uses_exact_determinism_by_default(
     daily_context,
     daily_symbol_frames,
@@ -1386,12 +1522,14 @@ def test_contract_suite_applies_declared_determinism_tolerances(
         context=daily_context,
     )
     calls = 0
+    full_input_rows = len(request.input_panel)
 
     def tolerant_provider(provider_request: OperatorRequest):
         nonlocal calls
         result = sma(provider_request)
-        calls += 1
-        result.data.loc[result.data.index[-1], "sma_2"] += calls * 1e-7
+        if len(provider_request.input_panel) == full_input_rows:
+            calls += 1
+            result.data.loc[result.data.index[-1], "sma_2"] += calls * 1e-7
         return result
 
     report = verify_operator_contract(load_operator_manifest(payload), tolerant_provider, request)

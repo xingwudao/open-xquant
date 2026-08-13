@@ -109,7 +109,6 @@ def test_load_workspace_config_rejects_symlink_replacement_before_open(tmp_path:
     config_path.write_text("name: trusted\n", encoding="utf-8")
     link_target = tmp_path / "outside.yaml"
     link_target.write_text("name: link-target\n", encoding="utf-8")
-    real_is_file = Path.is_file
     real_open = os.open
     replaced = False
 
@@ -121,18 +120,13 @@ def test_load_workspace_config_rejects_symlink_replacement_before_open(tmp_path:
         config_path.symlink_to(link_target)
         replaced = True
 
-    def racing_is_file(path: Path) -> bool:
-        result = real_is_file(path)
-        if path == config_path and result:
+    def racing_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if Path(path) == config_path or (dir_fd is not None and path == config_path.name):
             replace_config()
-        return result
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
 
-    def racing_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777) -> int:
-        if Path(path) == config_path:
-            replace_config()
-        return real_open(path, flags, mode)
-
-    monkeypatch.setattr(Path, "is_file", racing_is_file)
     monkeypatch.setattr(os, "open", racing_open)
 
     try:
@@ -151,8 +145,7 @@ def test_load_workspace_config_reads_open_descriptor_after_path_replacement(tmp_
     config_path.write_text("name: trusted\n", encoding="utf-8")
     link_target = tmp_path / "outside.yaml"
     link_target.write_text("name: link-target\n", encoding="utf-8")
-    real_is_file = Path.is_file
-    real_fstat = os.fstat
+    real_open = os.open
     replaced = False
 
     def replace_config() -> None:
@@ -163,22 +156,129 @@ def test_load_workspace_config_reads_open_descriptor_after_path_replacement(tmp_
         config_path.symlink_to(link_target)
         replaced = True
 
-    def racing_is_file(path: Path) -> bool:
-        result = real_is_file(path)
-        if path == config_path and result:
+    def racing_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if dir_fd is None:
+            descriptor = real_open(path, flags, mode)
+        else:
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if Path(path) == config_path or (dir_fd is not None and path == config_path.name):
             replace_config()
-        return result
+        return descriptor
 
-    def racing_fstat(fd: int) -> os.stat_result:
-        result = real_fstat(fd)
-        replace_config()
-        return result
-
-    monkeypatch.setattr(Path, "is_file", racing_is_file)
-    monkeypatch.setattr(os, "fstat", racing_fstat)
+    monkeypatch.setattr(os, "open", racing_open)
 
     assert load_workspace_config(config_path) == {"name": "trusted"}
     assert replaced
+
+
+def test_load_workspace_config_rejects_ancestor_symlink_replacement_before_directory_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workspace = tmp_path / "workspace-under-test"
+    config_dir = workspace / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: trusted\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside_config_dir = outside / ".open-xquant"
+    outside_config_dir.mkdir(parents=True)
+    (outside_config_dir / "workspace.yaml").write_text("name: link-target\n", encoding="utf-8")
+    held_workspace = tmp_path / "held-workspace"
+    real_open = os.open
+    replaced = False
+
+    def replace_ancestor() -> None:
+        nonlocal replaced
+        if replaced:
+            return
+        workspace.rename(held_workspace)
+        workspace.symlink_to(outside, target_is_directory=True)
+        replaced = True
+
+    def racing_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if (dir_fd is None and Path(path) == config_path) or (dir_fd is not None and path == workspace.name):
+            replace_ancestor()
+        if dir_fd is None:
+            return real_open(path, flags, mode)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(os, "open", racing_open)
+
+    with pytest.raises(WorkspaceConfigError, match="symlink"):
+        load_workspace_config(config_path)
+    assert replaced
+
+
+def test_load_workspace_config_reads_from_open_ancestor_after_path_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = tmp_path / "workspace-under-test"
+    config_dir = workspace / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: trusted\n", encoding="utf-8")
+    outside = tmp_path / "outside"
+    outside_config_dir = outside / ".open-xquant"
+    outside_config_dir.mkdir(parents=True)
+    (outside_config_dir / "workspace.yaml").write_text("name: link-target\n", encoding="utf-8")
+    held_workspace = tmp_path / "held-workspace"
+    real_open = os.open
+    replaced = False
+
+    def replace_ancestor() -> None:
+        nonlocal replaced
+        if replaced:
+            return
+        workspace.rename(held_workspace)
+        workspace.symlink_to(outside, target_is_directory=True)
+        replaced = True
+
+    def racing_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if dir_fd is None and Path(path) == config_path:
+            replace_ancestor()
+        if dir_fd is None:
+            descriptor = real_open(path, flags, mode)
+        else:
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        if dir_fd is not None and path == workspace.name:
+            replace_ancestor()
+        return descriptor
+
+    monkeypatch.setattr(os, "open", racing_open)
+
+    assert load_workspace_config(config_path) == {"name": "trusted"}
+    assert replaced
+
+
+def test_load_workspace_config_fstats_and_closes_every_opened_descriptor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir = tmp_path / "workspace" / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: trusted\n", encoding="utf-8")
+    real_open = os.open
+    real_fstat = os.fstat
+    opened: list[int] = []
+    fstatted: list[int] = []
+
+    def tracking_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if dir_fd is None:
+            descriptor = real_open(path, flags, mode)
+        else:
+            descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.append(descriptor)
+        return descriptor
+
+    def tracking_fstat(descriptor: int) -> os.stat_result:
+        fstatted.append(descriptor)
+        return real_fstat(descriptor)
+
+    monkeypatch.setattr(os, "open", tracking_open)
+    monkeypatch.setattr(os, "fstat", tracking_fstat)
+
+    assert load_workspace_config(config_path) == {"name": "trusted"}
+    assert len(opened) >= 3
+    assert fstatted == opened
+    for descriptor in set(opened):
+        with pytest.raises(OSError):
+            real_fstat(descriptor)
 
 
 def test_load_workspace_config_fails_closed_without_nofollow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,6 +287,35 @@ def test_load_workspace_config_fails_closed_without_nofollow(tmp_path: Path, mon
     config_path = config_dir / "workspace.yaml"
     config_path.write_text("name: trusted\n", encoding="utf-8")
     monkeypatch.delattr(os, "O_NOFOLLOW", raising=False)
+
+    with pytest.raises(WorkspaceConfigError, match="nofollow"):
+        load_workspace_config(config_path)
+
+
+def test_load_workspace_config_fails_closed_without_directory_nofollow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: trusted\n", encoding="utf-8")
+    monkeypatch.delattr(os, "O_DIRECTORY", raising=False)
+
+    with pytest.raises(WorkspaceConfigError, match="nofollow"):
+        load_workspace_config(config_path)
+
+
+def test_load_workspace_config_fails_closed_without_directory_descriptor_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text("name: trusted\n", encoding="utf-8")
+    real_open = os.open
+
+    def no_directory_descriptor_open(path: str | os.PathLike[str], flags: int, mode: int = 0o777, *, dir_fd: int | None = None) -> int:
+        if dir_fd is not None:
+            raise NotImplementedError("dir_fd unavailable")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", no_directory_descriptor_open)
 
     with pytest.raises(WorkspaceConfigError, match="nofollow"):
         load_workspace_config(config_path)

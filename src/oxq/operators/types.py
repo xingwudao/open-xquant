@@ -215,7 +215,7 @@ class FittedOperatorState:
         for name in ("training_data_digest", "state_digest"):
             if not _DIGEST_RE.fullmatch(getattr(self, name)):
                 raise ValueError(f"{name} must be a sha256 digest")
-        if not self.feature_order or any(not feature for feature in self.feature_order):
+        if not self.feature_order or any(not isinstance(feature, str) or not feature for feature in self.feature_order):
             raise ValueError("feature_order must contain non-empty feature names")
         object.__setattr__(self, "feature_order", tuple(self.feature_order))
         for name in ("training_data_summary", "parameters", "learned_state"):

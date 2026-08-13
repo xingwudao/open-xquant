@@ -200,6 +200,12 @@ def test_fitted_state_snapshots_training_metadata() -> None:
         state.learned_state["mean"] = (0.0,)  # type: ignore[index]
 
 
+@pytest.mark.parametrize("feature_order", [(1,), ("",), ("value", None)])
+def test_fitted_state_requires_non_empty_string_feature_names(feature_order: tuple[Any, ...]) -> None:
+    with pytest.raises((TypeError, ValueError), match="feature_order"):
+        _fitted_state(feature_order=feature_order)
+
+
 def test_fitted_state_permanently_freezes_numpy_arrays_in_all_state_mappings() -> None:
     summary_array = np.array([252, 253])
     parameter_array = np.array([0.25, 0.75])
