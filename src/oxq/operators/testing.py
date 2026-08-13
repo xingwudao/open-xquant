@@ -302,44 +302,16 @@ def verify_operator_contract(
                 failure_details=failure_details,
             )
             _validate_result(manifest, optional_request, optional_result, expected_implementation_digest)
-            optional_data = _deepcopy_frame(optional_result.data)
-            optional_metadata = _snapshot_metadata(optional_result.metadata)
-            optional_repeated = _invoke_operator(
-                manifest,
-                operator,
-                _copy_request(optional_request),
-                failure_message=failure_message,
-                failure_details=failure_details,
-            )
-            _validate_result(manifest, optional_request, optional_repeated, expected_implementation_digest)
             omission_label = _optional_omission_label(omitted_columns)
-            _require_deterministic_data(
-                optional_data,
-                optional_repeated.data,
-                manifest,
-                f"operator without optional input {omission_label} must be deterministic",
-            )
-            if optional_result.diagnostics != optional_repeated.diagnostics:
-                raise ContractViolationError(
-                    f"operator diagnostics without optional input {omission_label} must be deterministic",
-                    operator_id=manifest.operator_id,
-                )
-            if optional_result.provenance != optional_repeated.provenance:
-                raise ContractViolationError(
-                    f"operator provenance without optional input {omission_label} must be deterministic",
-                    operator_id=manifest.operator_id,
-                )
-            if not _metadata_equal(optional_metadata, optional_repeated.metadata, manifest):
-                raise ContractViolationError(
-                    f"operator metadata without optional input {omission_label} must be deterministic",
-                    operator_id=manifest.operator_id,
-                )
-            _verify_behavioral_probes(
+            _verify_shape(
                 manifest,
                 operator,
                 optional_request,
-                optional_data,
+                optional_result,
                 expected_implementation_digest,
+                qualifier=f"without optional input {omission_label}",
+                failure_message=failure_message,
+                failure_details=failure_details,
             )
     if optional_columns:
         checks.append("optional_inputs")
@@ -355,34 +327,32 @@ def verify_operator_contract(
             failure_details={"columns": undeclared_columns},
         )
         _validate_result(manifest, declared_request, declared_result, expected_implementation_digest)
+        declared_data = _deepcopy_frame(declared_result.data)
         _require_exact_data(
             _canonical(first_data),
-            _canonical(declared_result.data),
+            _canonical(declared_data),
             manifest,
             "operator output must not depend on undeclared input columns",
         )
-    first_metadata = _snapshot_metadata(result.metadata)
-    repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
-    _validate_result(manifest, normalized, repeated, expected_implementation_digest)
-    _require_deterministic_data(first_data, repeated.data, manifest, "operator output must be deterministic")
-    if result.diagnostics != repeated.diagnostics:
-        raise ContractViolationError(
-            "operator diagnostics must be deterministic",
-            operator_id=manifest.operator_id,
+        _verify_shape(
+            manifest,
+            operator,
+            declared_request,
+            declared_result,
+            expected_implementation_digest,
+            qualifier="with only declared input columns",
+            failure_message="operator failed without undeclared input columns",
+            failure_details={"columns": undeclared_columns},
         )
-    if result.provenance != repeated.provenance:
-        raise ContractViolationError(
-            "operator provenance must be deterministic",
-            operator_id=manifest.operator_id,
-        )
-    if not _metadata_equal(first_metadata, repeated.metadata, manifest):
-        raise ContractViolationError(
-            "operator metadata must be deterministic",
-            operator_id=manifest.operator_id,
-        )
-    checks.append("determinism")
 
-    _verify_behavioral_probes(manifest, operator, normalized, first_data, expected_implementation_digest)
+    _verify_shape(
+        manifest,
+        operator,
+        normalized,
+        result,
+        expected_implementation_digest,
+    )
+    checks.append("determinism")
     checks.extend(_behavioral_check_names(manifest))
 
     return ContractReport(
@@ -735,6 +705,58 @@ def _invoke_operator(
             operator_id=manifest.operator_id,
         ) from exc
     return result
+
+
+def _verify_shape(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    result: OperatorResult,
+    expected_implementation_digest: str,
+    *,
+    qualifier: str = "",
+    failure_message: str = "operator invocation failed",
+    failure_details: Mapping[str, Any] | None = None,
+) -> None:
+    suffix = f" {qualifier}" if qualifier else ""
+    baseline_data = _deepcopy_frame(result.data)
+    baseline_metadata = _snapshot_metadata(result.metadata)
+    repeated = _invoke_operator(
+        manifest,
+        operator,
+        _copy_request(request),
+        failure_message=failure_message,
+        failure_details=failure_details,
+    )
+    _validate_result(manifest, request, repeated, expected_implementation_digest)
+    _require_deterministic_data(
+        baseline_data,
+        repeated.data,
+        manifest,
+        f"operator output{suffix} must be deterministic",
+    )
+    if result.diagnostics != repeated.diagnostics:
+        raise ContractViolationError(
+            f"operator diagnostics{suffix} must be deterministic",
+            operator_id=manifest.operator_id,
+        )
+    if result.provenance != repeated.provenance:
+        raise ContractViolationError(
+            f"operator provenance{suffix} must be deterministic",
+            operator_id=manifest.operator_id,
+        )
+    if not _metadata_equal(baseline_metadata, repeated.metadata, manifest):
+        raise ContractViolationError(
+            f"operator metadata{suffix} must be deterministic",
+            operator_id=manifest.operator_id,
+        )
+    _verify_behavioral_probes(
+        manifest,
+        operator,
+        request,
+        baseline_data,
+        expected_implementation_digest,
+    )
 
 
 def _metadata_equal(left: Any, right: Any, manifest: OperatorManifest) -> bool:

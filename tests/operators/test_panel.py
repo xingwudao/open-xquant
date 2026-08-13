@@ -181,6 +181,48 @@ def test_panel_rejects_duplicate_keys_and_missing_identifiers(daily_context) -> 
         QuantPanelAdapter.validate_panel(duplicate.drop(columns="code"), daily_context)
 
 
+@pytest.mark.parametrize(
+    "columns",
+    [
+        [0, "code", "close"],
+        ["date", "", "close"],
+        ["date", "code", 0],
+        ["date", "code", ""],
+    ],
+)
+def test_panel_rejects_non_string_or_empty_column_labels(
+    daily_context: OperatorContext,
+    columns: list[object],
+) -> None:
+    panel = pd.DataFrame(
+        [[pd.Timestamp("2026-01-05"), "000001.SZ", 10.0]],
+        columns=columns,
+    )
+
+    with pytest.raises(InvalidPanelError, match="columns must be non-empty strings"):
+        QuantPanelAdapter.validate_panel(panel, daily_context)
+
+
+def test_validate_output_inherits_column_label_validation(daily_context: OperatorContext) -> None:
+    input_panel = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2026-01-05")],
+            "code": ["000001.SZ"],
+            "close": [10.0],
+        }
+    )
+    output_panel = input_panel[["date", "code"]].copy()
+    output_panel[0] = 1.0
+
+    with pytest.raises(InvalidPanelError, match="columns must be non-empty strings"):
+        QuantPanelAdapter.validate_output(
+            input_panel,
+            output_panel,
+            daily_context,
+            alignment="preserve_input_order",
+        )
+
+
 def test_symbol_frames_reject_reserved_quant_panel_columns(daily_context) -> None:
     frame = pd.DataFrame(
         {"date": ["shadow"], "close": [10.0]},

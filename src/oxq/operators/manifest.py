@@ -15,6 +15,7 @@ from typing import Any
 
 import yaml  # type: ignore[import-untyped]
 from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+from pandas.api.types import is_float_dtype, is_integer_dtype, pandas_dtype
 
 from oxq.operators._schema import load_contract_schema
 from oxq.operators._version import is_semantic_version
@@ -108,7 +109,14 @@ class OperatorManifest:
             assert isinstance(declaration_value, Mapping)
             declaration = declaration_value
             if name in supplied:
-                value = _thaw(supplied[name])
+                value = supplied[name]
+                if isinstance(supplied, MappingProxyType):
+                    if _find_recursive_container(value, f"parameter {name}") is not None:
+                        raise InvalidParameterError(
+                            f"parameter {name} must form a finite JSON tree",
+                            operator_id=self.operator_id,
+                        )
+                    value = _thaw(value)
             elif "default" in declaration:
                 value = _thaw(declaration["default"])
             elif declaration["required"]:
@@ -347,6 +355,8 @@ def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, A
     }[expected]
     if not valid:
         raise InvalidParameterError(f"parameter {name} must have type {expected}", operator_id=operator_id)
+    if expected in {"array", "object"}:
+        _validate_parameter_json_tree(name, value, operator_id)
     if isinstance(value, float) and not math.isfinite(value):
         raise InvalidParameterError(f"parameter {name} must be finite", operator_id=operator_id)
     if "enum" in declaration and value not in declaration["enum"]:
@@ -355,6 +365,31 @@ def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, A
         raise InvalidParameterError(f"parameter {name} is below minimum {declaration['minimum']}", operator_id=operator_id)
     if "maximum" in declaration and value > declaration["maximum"]:
         raise InvalidParameterError(f"parameter {name} exceeds maximum {declaration['maximum']}", operator_id=operator_id)
+
+
+def _validate_parameter_json_tree(name: str, value: Any, operator_id: str) -> None:
+    path = f"parameter {name}"
+    if _find_recursive_container(value, path) is not None:
+        raise InvalidParameterError(f"parameter {name} must form a finite JSON tree", operator_id=operator_id)
+    non_string_key_path = _find_non_string_mapping_key(value, path)
+    if non_string_key_path is not None:
+        raise InvalidParameterError(
+            f"parameter {name} JSON object must use string keys: {non_string_key_path}",
+            operator_id=operator_id,
+        )
+    nonfinite_path = _find_nonfinite_number(value, path)
+    if nonfinite_path is not None:
+        raise InvalidParameterError(
+            f"parameter {name} JSON numbers must be finite: {nonfinite_path}",
+            operator_id=operator_id,
+        )
+    non_json_value = _find_non_json_value(value, path)
+    if non_json_value is not None:
+        invalid_path, type_name = non_json_value
+        raise InvalidParameterError(
+            f"parameter {name} must form a JSON tree: {invalid_path} contains {type_name}",
+            operator_id=operator_id,
+        )
 
 
 def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
@@ -367,6 +402,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
         )
     required = set(inputs["required_columns"])
     optional = set(inputs["optional_columns"])
+    reserved_optional = sorted(optional & {"date", "code"})
+    if reserved_optional:
+        raise InvalidManifestError(
+            "inputs optional_columns must not contain reserved QuantPanel keys date or code: " + ", ".join(reserved_optional),
+            operator_id=operator_id,
+        )
     overlap = sorted(required & optional)
     if overlap:
         raise InvalidManifestError(
@@ -490,6 +531,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             )
     resolved_output_names: set[str] = set()
     for field in outputs["fields"]:
+        has_bounds = "minimum" in field or "maximum" in field
+        if has_bounds and not _is_ordered_numeric_dtype(field["dtype"]):
+            raise InvalidManifestError(
+                "output field bounds require a numeric dtype",
+                operator_id=operator_id,
+            )
         if "minimum" in field and "maximum" in field and field["minimum"] > field["maximum"]:
             raise InvalidManifestError(
                 "output field minimum must not exceed maximum",
@@ -499,7 +546,7 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             references = _template_references(field["name_template"])
         except ValueError as exc:
             raise InvalidManifestError(
-                f"output field template is invalid: {field['name_template']}",
+                f"output field template is invalid: {field['name_template']}: {exc}",
                 operator_id=operator_id,
             ) from exc
         unknown = sorted(references - set(parameters))
@@ -557,7 +604,17 @@ def _template_references(template: str) -> set[str]:
     references: set[str] = set()
     for _, field_name, format_spec, _ in string.Formatter().parse(template):
         if field_name is not None:
-            references.add(field_name.split(".", 1)[0].split("[", 1)[0])
+            if "." in field_name or "[" in field_name:
+                raise ValueError("template fields must reference parameters directly")
+            references.add(field_name)
         if format_spec:
             references.update(_template_references(format_spec))
     return references
+
+
+def _is_ordered_numeric_dtype(dtype: str) -> bool:
+    try:
+        parsed = pandas_dtype(dtype)
+    except TypeError:
+        return False
+    return bool(is_integer_dtype(parsed) or is_float_dtype(parsed))

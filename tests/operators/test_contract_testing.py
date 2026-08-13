@@ -943,7 +943,165 @@ def test_contract_suite_probes_with_only_declared_input_columns(
     )
 
     assert report.passed is True
-    assert observed_columns.count(("date", "code", "close")) == 1
+    assert observed_columns.count(("date", "code", "close")) > 1
+
+
+@pytest.mark.parametrize("optional_column", [None, "quality"])
+@pytest.mark.parametrize("component", ["data", "diagnostics", "provenance", "metadata"])
+def test_contract_suite_repeats_declared_only_full_shape(
+    component,
+    optional_column,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    payload["execution_scope"] = "panel"
+    payload["causality"] = "future_using"
+    payload["inputs"]["requires_sorted"] = True
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    declared_full_columns = {"date", "code", "close"}
+    if optional_column is not None:
+        payload["inputs"]["optional_columns"] = [optional_column]
+        payload["inputs"]["dtypes"][optional_column] = ["float64"]
+        panel[optional_column] = 1.0
+        declared_full_columns.add(optional_column)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    declared_full_calls = 0
+
+    def unstable_declared_full_provider(provider_request: OperatorRequest):
+        nonlocal declared_full_calls
+        result = sma(provider_request)
+        if set(provider_request.input_panel.columns) != declared_full_columns:
+            return result
+        declared_full_calls += 1
+        if declared_full_calls != 2:
+            return result
+        if component == "data":
+            result.data.loc[result.data.index[-1], "sma_2"] += 1.0
+            return result
+        if component == "diagnostics":
+            return replace(result, diagnostics=replace(result.diagnostics, warnings=("changed",)))
+        if component == "metadata":
+            return replace(result, metadata={"changed": True})
+
+        class UnequalProvenance(type(result.provenance)):
+            def __eq__(self, other):
+                return self is other
+
+        return replace(
+            result,
+            provenance=UnequalProvenance(
+                operator_id=result.provenance.operator_id,
+                operator_version=result.provenance.operator_version,
+                implementation_digest=result.provenance.implementation_digest,
+            ),
+        )
+
+    with pytest.raises(ContractViolationError, match=component if component != "data" else "deterministic"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            unstable_declared_full_provider,
+            request,
+        )
+
+    assert declared_full_calls == 2
+
+
+@pytest.mark.parametrize("optional_column", [None, "quality"])
+@pytest.mark.parametrize("phase", ["causality", "unordered", "batch", "scope"])
+def test_contract_suite_runs_behavioral_probes_for_declared_only_full_shape(
+    phase,
+    optional_column,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = _artifact_wide_payload(valid_manifest_payload)
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    declared_full_columns = {"date", "code", "close"}
+    if optional_column is not None:
+        payload["inputs"]["optional_columns"] = [optional_column]
+        payload["inputs"]["dtypes"][optional_column] = ["float64"]
+        panel[optional_column] = 1.0
+        declared_full_columns.add(optional_column)
+    if phase == "causality":
+        payload["execution_scope"] = "panel"
+        payload["inputs"]["requires_sorted"] = True
+    elif phase == "unordered":
+        payload["execution_scope"] = "panel"
+        payload["causality"] = "future_using"
+    elif phase == "batch":
+        payload["causality"] = "future_using"
+        payload["inputs"]["requires_sorted"] = True
+    else:
+        payload["execution_scope"] = "cross_section"
+        payload["causality"] = "future_using"
+        payload["inputs"]["requires_sorted"] = True
+        payload["inputs"]["min_history"] = 1
+        payload["outputs"] = {
+            "fields": [{"name_template": "identity", "dtype": "float64"}],
+            "alignment": "canonical_order",
+            "warmup": {"kind": "fixed", "rows": 0},
+            "nan_policy": "none",
+            "multiple": False,
+        }
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+    full_rows = len(panel)
+    full_assets = int(panel["code"].nunique())
+    full_dates = int(panel["date"].nunique())
+
+    def probe_violating_declared_full_provider(provider_request: OperatorRequest):
+        provider_panel = provider_request.input_panel
+        if phase == "scope":
+            ordered = provider_panel.sort_values(["date", "code"], kind="stable", ignore_index=True)
+            base = sma(provider_request)
+            output = ordered[["date", "code"]].copy()
+            output["identity"] = ordered["close"].astype("float64")
+            result = type(base)(
+                data=output,
+                diagnostics=replace(base.diagnostics, output_rows=len(output), warmup_rows=0),
+                provenance=base.provenance,
+            )
+        else:
+            result = sma(provider_request)
+        if set(provider_panel.columns) != declared_full_columns:
+            return result
+        keys = provider_panel[["date", "code"]].reset_index(drop=True)
+        canonical_keys = keys.sort_values(["date", "code"], kind="stable", ignore_index=True)
+        violates_probe = (
+            (phase == "causality" and len(provider_panel) < full_rows)
+            or (phase == "unordered" and not keys.equals(canonical_keys))
+            or (phase == "batch" and provider_panel["code"].nunique() < full_assets)
+            or (phase == "scope" and provider_panel["date"].nunique() < full_dates)
+        )
+        if violates_probe:
+            output_field = "identity" if phase == "scope" else "sma_2"
+            result.data.loc[:, output_field] += 100.0
+        return result
+
+    expected_message = {
+        "causality": "past_only",
+        "unordered": "incidental input order",
+        "batch": "other symbols",
+        "scope": "per-date",
+    }[phase]
+    with pytest.raises(ContractViolationError, match=expected_message):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            probe_violating_declared_full_provider,
+            request,
+        )
 
 
 def test_contract_suite_rejects_unconditional_reads_of_undeclared_columns(
@@ -2257,7 +2415,8 @@ def test_contract_suite_skips_invalid_past_only_prefixes_for_staggered_panel(
     )
 
     assert "causality" in report.checks
-    assert probed_prefixes == [panel["date"].drop_duplicates().sort_values().iloc[-2]]
+    expected_prefix = panel["date"].drop_duplicates().sort_values().iloc[-2]
+    assert probed_prefixes == [expected_prefix, expected_prefix]
 
 
 @pytest.mark.parametrize("window_alignment", ["centered", "trailing"])

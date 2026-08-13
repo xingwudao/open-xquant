@@ -35,6 +35,74 @@ def test_manifest_validates_parameters_and_rejects_unknowns(valid_manifest_paylo
         manifest.validate_parameters({"period": 0})
 
 
+@pytest.mark.parametrize(
+    ("parameter_type", "supplied"),
+    [
+        ("object", {"nested": [float("inf")]}),
+        ("object", {1: "invalid"}),
+        ("object", {"nested": (1, 2)}),
+        ("object", {"nested": date(2026, 8, 13)}),
+        ("array", (1, 2)),
+    ],
+    ids=["nonfinite", "non-string-key", "nested-tuple", "custom-leaf", "tuple-array"],
+)
+def test_manifest_rejects_supplied_composite_parameters_outside_finite_json_tree(
+    valid_manifest_payload,
+    parameter_type,
+    supplied,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": parameter_type,
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    manifest = load_operator_manifest(payload)
+
+    with pytest.raises(InvalidParameterError, match="JSON|finite|string keys|array"):
+        manifest.validate_parameters({"options": supplied})
+
+
+def test_manifest_rejects_recursive_supplied_composite_parameters(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": "object",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    recursive: list[object] = []
+    recursive.append(recursive)
+    manifest = load_operator_manifest(payload)
+
+    with pytest.raises(InvalidParameterError, match="finite JSON tree"):
+        manifest.validate_parameters({"options": {"nested": recursive}})
+
+
+def test_manifest_accepts_supplied_composite_parameters_as_plain_json_tree(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["options"] = {
+        "type": "object",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": False,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    manifest = load_operator_manifest(payload)
+
+    supplied = {"nested": [1, 2.5, True, None, "value"]}
+    assert manifest.validate_parameters({"options": supplied}) == {"period": 2, "options": supplied}
+
+
 def test_manifest_preserves_json_collection_types_when_resolving_defaults(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["parameters"].update(
@@ -309,6 +377,23 @@ def test_manifest_rejects_inverted_output_bounds(valid_manifest_payload) -> None
         load_operator_manifest(payload)
 
 
+@pytest.mark.parametrize("dtype", ["string", "boolean", "object", "datetime64[ns]", "complex128"])
+def test_manifest_rejects_output_bounds_for_non_ordered_numeric_dtypes(valid_manifest_payload, dtype) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"][0].update({"dtype": dtype, "minimum": 0})
+
+    with pytest.raises(InvalidManifestError, match="output field bounds require a numeric dtype"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("dtype", ["int64", "float64", "Int64", "Float64"])
+def test_manifest_accepts_output_bounds_for_numeric_dtypes(valid_manifest_payload, dtype) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"][0].update({"dtype": dtype, "minimum": 0, "maximum": 1})
+
+    assert load_operator_manifest(payload).raw["outputs"]["fields"][0]["dtype"] == dtype
+
+
 @pytest.mark.parametrize(
     ("multiple", "fields"),
     [
@@ -386,6 +471,16 @@ def test_manifest_rejects_overlapping_input_columns(valid_manifest_payload) -> N
     payload["inputs"]["optional_columns"] = ["close"]
 
     with pytest.raises(InvalidManifestError, match="required_columns"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("reserved_name", ["date", "code"])
+def test_manifest_rejects_quant_panel_keys_as_optional_inputs(valid_manifest_payload, reserved_name) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["inputs"]["optional_columns"] = [reserved_name]
+    payload["inputs"]["dtypes"][reserved_name] = ["object"]
+
+    with pytest.raises(InvalidManifestError, match="optional_columns.*reserved.*date.*code"):
         load_operator_manifest(payload)
 
 
@@ -654,6 +749,37 @@ def test_catalog_accepts_nested_read_only_mapping_input_without_mutability_leaka
     assert json.loads(catalog.to_json())["operators"][0]["semantic_name"] == "SMA"
 
 
+def test_catalog_raw_snapshot_rejects_nested_mutation_without_changing_serialization(
+    valid_manifest_payload,
+) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    catalog = load_operator_catalog(
+        {
+            "schema_version": 1,
+            "contract_version": 1,
+            "package": {
+                "distribution": "fake-quant-operators",
+                "version": "1.0.0",
+                "source_commit": "a" * 40,
+                "source_tree_digest": "sha256:" + "b" * 64,
+                "build_identifier": "ci-42",
+            },
+            "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+        }
+    )
+    serialized = catalog.to_json()
+
+    with pytest.raises(TypeError):
+        catalog._raw["package"]["build_identifier"] = "mutated"  # type: ignore[index]
+    with pytest.raises(TypeError):
+        catalog._raw["operators"][0]["semantic_name"] = "mutated"
+    with pytest.raises(AttributeError):
+        catalog._raw["operators"][0]["inputs"]["required_columns"].append("volume")
+
+    assert catalog.to_json() == serialized
+    assert json.loads(serialized)["catalog_digest"] == catalog.digest
+
+
 @pytest.mark.parametrize("source_kind", ["mapping", "yaml"])
 @pytest.mark.parametrize("cycle_location", ["package", "operator"])
 def test_catalog_rejects_recursive_container_graphs_before_traversal(
@@ -912,7 +1038,29 @@ def test_manifest_rejects_composite_parameter_attribute_access_in_output_templat
     }
     payload["outputs"]["fields"][0]["name_template"] = "sma_{options.name}"
 
-    with pytest.raises(InvalidManifestError, match="template parameters must be scalar: options"):
+    with pytest.raises(InvalidManifestError, match="reference parameters directly"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("name_template", ["sma_{suffix.upper}", "sma_{suffix[0]}"])
+def test_manifest_requires_output_template_fields_to_reference_parameters_directly(
+    valid_manifest_payload,
+    name_template,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": "string",
+        "default": "fast",
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = name_template
+
+    with pytest.raises(InvalidManifestError, match="reference parameters directly"):
         load_operator_manifest(payload)
 
 

@@ -64,6 +64,30 @@ def test_load_workspace_config_accepts_canonical_mapping(tmp_path: Path) -> None
     assert config == {"paths": {"versions_dir": "research_versions"}}
 
 
+@pytest.mark.parametrize(
+    ("content", "location"),
+    [
+        ("workflow: first\nworkflow: second\n", "workspace.workflow"),
+        (
+            "paths:\n  versions_dir: first\n  versions_dir: second\n",
+            "workspace.paths.versions_dir",
+        ),
+    ],
+)
+def test_load_workspace_config_rejects_duplicate_mapping_keys(
+    tmp_path: Path,
+    content: str,
+    location: str,
+) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    config_path = config_dir / "workspace.yaml"
+    config_path.write_text(content, encoding="utf-8")
+
+    with pytest.raises(WorkspaceConfigError, match=rf"{location}: duplicate mapping key"):
+        load_workspace_config(config_path)
+
+
 def test_load_workspace_config_missing_behavior_is_explicit(tmp_path: Path) -> None:
     path = tmp_path / ".open-xquant" / "workspace.yaml"
     assert load_workspace_config(path, missing_ok=True) == {}

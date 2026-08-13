@@ -94,6 +94,8 @@ class QuantPanelAdapter:
     ) -> None:
         if not isinstance(panel, pd.DataFrame):
             raise InvalidPanelError("QuantPanel must be a pandas DataFrame")
+        if any(not isinstance(column, str) or not column for column in panel.columns):
+            raise InvalidPanelError("QuantPanel columns must be non-empty strings")
         for column in _KEY_COLUMNS:
             if column not in panel.columns:
                 raise MissingColumnError(f"QuantPanel requires {column}", details={"column": column})

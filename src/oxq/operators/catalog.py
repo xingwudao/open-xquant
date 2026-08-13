@@ -24,6 +24,14 @@ _COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
+def _freeze(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return MappingProxyType({key: _freeze(item) for key, item in value.items()})
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze(item) for item in value)
+    return copy.deepcopy(value)
+
+
 def _thaw(value: Any) -> Any:
     if isinstance(value, Mapping):
         return {key: _thaw(item) for key, item in value.items()}
@@ -102,7 +110,7 @@ class OperatorCatalog:
         raise KeyError(operator_id)
 
     def to_json(self) -> str:
-        payload = copy.deepcopy(dict(self._raw))
+        payload = _thaw(self._raw)
         payload["catalog_digest"] = self.digest
         return json.dumps(payload, ensure_ascii=True, sort_keys=True, indent=2) + "\n"
 
@@ -166,7 +174,7 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
         package=MappingProxyType(dict(package)),
         operators=tuple(sorted(operators, key=lambda item: item.operator_id)),
         digest=digest,
-        _raw=MappingProxyType(normalized),
+        _raw=_freeze(normalized),
     )
 
 
