@@ -130,6 +130,36 @@ def test_manifest_rejects_bounds_on_nonnumeric_parameters(valid_manifest_payload
         load_operator_manifest(payload)
 
 
+def test_manifest_rejects_inverted_parameter_bounds(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["period"].update({"minimum": 5, "maximum": 2})
+
+    with pytest.raises(InvalidManifestError, match="minimum must not exceed maximum"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_enum_members_with_the_wrong_parameter_type(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["period"]["enum"] = ["fast", "slow"]
+
+    with pytest.raises(InvalidManifestError, match="enum member"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_nonfinite_numeric_defaults_and_enum_members(valid_manifest_payload) -> None:
+    invalid_default = copy.deepcopy(valid_manifest_payload)
+    invalid_default["parameters"]["period"]["type"] = "number"
+    invalid_default["parameters"]["period"]["default"] = float("nan")
+    with pytest.raises(InvalidManifestError, match="finite"):
+        load_operator_manifest(invalid_default)
+
+    invalid_enum = copy.deepcopy(valid_manifest_payload)
+    invalid_enum["parameters"]["period"]["type"] = "number"
+    invalid_enum["parameters"]["period"]["enum"] = [1.0, float("inf")]
+    with pytest.raises(InvalidManifestError, match="finite"):
+        load_operator_manifest(invalid_enum)
+
+
 def test_manifest_rejects_overlapping_input_columns(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["optional_columns"] = ["close"]
@@ -168,6 +198,41 @@ def test_manifest_requires_template_parameters_to_affect_output_fields(valid_man
     payload["parameters"]["period"]["affects_output_fields"] = False
 
     with pytest.raises(InvalidManifestError, match="affects_output_fields"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_validates_nested_output_format_references(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{period:0{width}d}"
+
+    with pytest.raises(InvalidManifestError, match="unknown parameters: width"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize("reserved_name", ["date", "code"])
+def test_manifest_rejects_reserved_static_output_names(valid_manifest_payload, reserved_name) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"][0]["name_template"] = reserved_name
+
+    with pytest.raises(InvalidManifestError, match="reserved QuantPanel key"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_reserved_output_name_resolved_from_defaults(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "default": "date",
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{field}"
+
+    with pytest.raises(InvalidManifestError, match="reserved QuantPanel key"):
         load_operator_manifest(payload)
 
 

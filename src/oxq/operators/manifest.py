@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import math
 import string
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -164,6 +165,8 @@ def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, A
     }[expected]
     if not valid:
         raise InvalidParameterError(f"parameter {name} must have type {expected}", operator_id=operator_id)
+    if expected in {"integer", "number"} and not math.isfinite(value):
+        raise InvalidParameterError(f"parameter {name} must be finite", operator_id=operator_id)
     if "enum" in declaration and value not in declaration["enum"]:
         raise InvalidParameterError(f"parameter {name} must be one of {declaration['enum']}", operator_id=operator_id)
     if "minimum" in declaration and value < declaration["minimum"]:
@@ -198,6 +201,25 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"parameter {name} bounds require a numeric parameter type",
                 operator_id=operator_id,
             )
+        if (
+            "minimum" in declaration
+            and "maximum" in declaration
+            and declaration["minimum"] > declaration["maximum"]
+        ):
+            raise InvalidManifestError(
+                f"parameter {name} minimum must not exceed maximum",
+                operator_id=operator_id,
+            )
+        if "enum" in declaration:
+            enum_declaration = {key: value for key, value in declaration.items() if key != "enum"}
+            for index, member in enumerate(declaration["enum"]):
+                try:
+                    _validate_parameter_value(name, member, enum_declaration, operator_id)
+                except InvalidParameterError as exc:
+                    raise InvalidManifestError(
+                        f"parameter {name} enum member {index} is invalid: {exc}",
+                        operator_id=operator_id,
+                    ) from exc
         if declaration["required"] and "default" in declaration:
             raise InvalidManifestError(
                 f"required parameter {name} must not declare a default",
@@ -238,11 +260,7 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             )
     for field in outputs["fields"]:
         try:
-            references = {
-                name
-                for _, name, _, _ in string.Formatter().parse(field["name_template"])
-                if name is not None
-            }
+            references = _template_references(field["name_template"])
         except ValueError as exc:
             raise InvalidManifestError(
                 f"output field template is invalid: {field['name_template']}",
@@ -272,3 +290,21 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 + ", ".join(inconsistent),
                 operator_id=operator_id,
             )
+        if not references or all("default" in parameters[name] for name in references):
+            defaults = {name: parameters[name]["default"] for name in references}
+            resolved_name = field["name_template"].format(**defaults)
+            if resolved_name in {"date", "code"}:
+                raise InvalidManifestError(
+                    f"output field resolves to reserved QuantPanel key: {resolved_name}",
+                    operator_id=operator_id,
+                )
+
+
+def _template_references(template: str) -> set[str]:
+    references: set[str] = set()
+    for _, field_name, format_spec, _ in string.Formatter().parse(template):
+        if field_name is not None:
+            references.add(field_name.split(".", 1)[0].split("[", 1)[0])
+        if format_spec:
+            references.update(_template_references(format_spec))
+    return references

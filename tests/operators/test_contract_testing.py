@@ -11,6 +11,7 @@ from oxq.operators.errors import (
     ContractViolationError,
     InsufficientCrossSectionError,
     InsufficientHistoryError,
+    InvalidParameterError,
 )
 from oxq.operators.manifest import load_operator_manifest
 from oxq.operators.panel import QuantPanelAdapter
@@ -187,6 +188,26 @@ def test_contract_suite_enforces_declared_input_dtype_and_history(
     )
     with pytest.raises(InsufficientHistoryError, match="history"):
         verify_operator_contract(manifest, sma, short_request)
+
+
+def test_contract_suite_rejects_nonfinite_supplied_numeric_parameters(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["period"].update({"type": "number", "default": 2.0})
+    payload["outputs"]["warmup"] = {"kind": "fixed", "rows": 1}
+    payload["outputs"]["fields"][0]["name_template"] = "sma"
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": float("nan")},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    with pytest.raises(InvalidParameterError, match="finite"):
+        verify_operator_contract(load_operator_manifest(payload), sma, request)
 
 
 def test_contract_suite_enforces_dtype_of_present_optional_columns(
@@ -428,6 +449,33 @@ def test_contract_suite_rejects_duplicate_resolved_output_names(
         verify_operator_contract(load_operator_manifest(payload), sma, request)
 
 
+def test_contract_suite_rejects_dynamic_reserved_output_names(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["field"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{field}"
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2, "field": "date"},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    with pytest.raises(ContractViolationError, match="reserved QuantPanel key"):
+        verify_operator_contract(load_operator_manifest(payload), sma, request)
+
+
 def test_contract_suite_checks_immutability_on_unordered_probe(
     daily_context,
     daily_symbol_frames,
@@ -450,6 +498,61 @@ def test_contract_suite_checks_immutability_on_unordered_probe(
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
         verify_operator_contract(load_operator_manifest(valid_manifest_payload), unordered_mutating_provider, request)
+
+
+def test_contract_suite_snapshots_first_result_before_repeat_probe(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    shared = None
+    calls = 0
+
+    def shared_result_provider(provider_request: OperatorRequest):
+        nonlocal calls, shared
+        result = sma(provider_request)
+        if shared is None:
+            shared = result.data
+        calls += 1
+        shared.loc[shared.index[-1], "sma_2"] = float(calls)
+        return type(result)(data=shared, diagnostics=result.diagnostics, provenance=result.provenance)
+
+    with pytest.raises(ContractViolationError, match="deterministic"):
+        verify_operator_contract(load_operator_manifest(valid_manifest_payload), shared_result_provider, request)
+
+
+def test_contract_suite_includes_metadata_in_determinism_check(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    calls = 0
+
+    def varying_metadata_provider(provider_request: OperatorRequest):
+        nonlocal calls
+        result = sma(provider_request)
+        calls += 1
+        return type(result)(
+            data=result.data,
+            diagnostics=result.diagnostics,
+            provenance=result.provenance,
+            metadata={"call": calls},
+        )
+
+    with pytest.raises(ContractViolationError, match="metadata"):
+        verify_operator_contract(load_operator_manifest(valid_manifest_payload), varying_metadata_provider, request)
 
 
 def test_contract_suite_uses_exact_determinism_by_default(

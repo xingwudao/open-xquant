@@ -126,9 +126,10 @@ def verify_operator_contract(
     _validate_result(manifest, normalized, result)
     checks.extend(("output_contract", "provenance"))
 
+    first_data = result.data.copy(deep=True)
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated)
-    _require_equal_data(result.data, repeated.data, manifest, "operator output must be deterministic")
+    _require_equal_data(first_data, repeated.data, manifest, "operator output must be deterministic")
     if result.diagnostics != repeated.diagnostics:
         raise ContractViolationError(
             "operator diagnostics must be deterministic",
@@ -137,6 +138,11 @@ def verify_operator_contract(
     if result.provenance != repeated.provenance:
         raise ContractViolationError(
             "operator provenance must be deterministic",
+            operator_id=manifest.operator_id,
+        )
+    if result.metadata != repeated.metadata:
+        raise ContractViolationError(
+            "operator metadata must be deterministic",
             operator_id=manifest.operator_id,
         )
     checks.append("determinism")
@@ -202,6 +208,13 @@ def _validate_result(
             operator_id=manifest.operator_id,
             details={"fields": resolved_fields},
         )
+    reserved_fields = sorted(set(resolved_fields) & {"date", "code"})
+    if reserved_fields:
+        raise ContractViolationError(
+            "operator output fields contain a reserved QuantPanel key",
+            operator_id=manifest.operator_id,
+            details={"fields": reserved_fields},
+        )
     expected_fields = set(resolved_fields)
     actual_fields = set(result.data.columns) - {"date", "code"}
     if actual_fields != expected_fields:
@@ -239,7 +252,7 @@ def _validate_result(
             )
     warmup_rows = _resolve_warmup_rows(manifest, request)
     warmup_mask = _output_warmup_mask(request.input_panel, result.data, warmup_rows)
-    expected_warmup_rows = int(warmup_mask.sum())
+    expected_warmup_rows = _expected_warmup_rows(request.input_panel, warmup_rows)
     if result.diagnostics.warmup_rows != expected_warmup_rows:
         raise ContractViolationError(
             "diagnostics.warmup_rows mismatch",
@@ -319,6 +332,11 @@ def _output_warmup_mask(
     output_keys = pd.MultiIndex.from_frame(output_panel[["date", "code"]])
     output_positions = positions.reindex(output_keys)
     return pd.Series(output_positions.to_numpy() < warmup_rows, dtype="bool")
+
+
+def _expected_warmup_rows(input_panel: pd.DataFrame, warmup_rows: int) -> int:
+    history = input_panel.groupby("code", sort=False, observed=True).size()
+    return int(history.clip(upper=warmup_rows).sum())
 
 
 def _invoke_operator(
