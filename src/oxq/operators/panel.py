@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date, datetime
 from typing import Any, Literal
 
 import pandas as pd
-from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+from jsonschema import Draft202012Validator, FormatChecker  # type: ignore[import-untyped]
 from pandas.api.types import is_datetime64_any_dtype, is_string_dtype
 
 from oxq.operators._schema import load_contract_schema
@@ -167,15 +168,20 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
     """Validate the JSON Schema and composite-key semantics of a serialized QuantPanel."""
 
     schema = load_contract_schema("quant-panel-v1.schema.json")
-    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.absolute_path))
+    errors = sorted(
+        Draft202012Validator(schema, format_checker=FormatChecker()).iter_errors(payload),
+        key=lambda error: list(error.absolute_path),
+    )
     if errors:
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)
         raise InvalidPanelError(f"serialized QuantPanel {path or 'payload'}: {error.message}")
     rows = payload["rows"]
+    timestamp_semantics = payload["context"]["timestamp_semantics"]
     seen: set[tuple[str, str]] = set()
     duplicates: list[tuple[str, str]] = []
     for row in rows:
+        _validate_serialized_date(row["date"], timestamp_semantics)
         key = (row["date"], row["code"])
         if key in seen:
             duplicates.append(key)
@@ -185,3 +191,19 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
             "serialized QuantPanel contains duplicate (date, code) keys",
             details={"keys": [list(key) for key in duplicates]},
         )
+
+
+def _validate_serialized_date(value: str, timestamp_semantics: str) -> None:
+    try:
+        if timestamp_semantics == TimestampSemantics.SESSION_DATE:
+            parsed = date.fromisoformat(value)
+            if parsed.isoformat() != value:
+                raise ValueError
+        else:
+            parsed_datetime = datetime.fromisoformat(value.replace("Z", "+00:00"))
+            if parsed_datetime.tzinfo is None:
+                raise ValueError
+    except ValueError as exc:
+        raise InvalidPanelError(
+            f"serialized QuantPanel date is invalid for timestamp_semantics={timestamp_semantics}: {value}"
+        ) from exc

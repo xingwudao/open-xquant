@@ -371,6 +371,21 @@ def test_manifest_converts_default_output_format_failures_to_manifest_errors(val
         load_operator_manifest(payload)
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [(('outputs', 'fields', 0, 'minimum'), float('nan')), (('determinism', 'absolute_tolerance'), float('inf'))],
+)
+def test_manifest_converts_nonfinite_declarations_to_manifest_errors(valid_manifest_payload, path, value) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    if path[0] == "outputs":
+        payload["outputs"]["fields"][0]["minimum"] = value
+    else:
+        payload["determinism"] = {"absolute_tolerance": value}
+
+    with pytest.raises(InvalidManifestError, match="finite"):
+        load_operator_manifest(payload)
+
+
 def test_catalog_rejects_unsupported_source_commit_lengths(valid_manifest_payload) -> None:
     manifest = load_operator_manifest(valid_manifest_payload)
     payload = {

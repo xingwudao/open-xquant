@@ -92,6 +92,12 @@ class OperatorManifest:
 
 def load_operator_manifest(source: str | Path | Mapping[str, Any]) -> OperatorManifest:
     payload = _read_payload(source)
+    nonfinite_path = _find_nonfinite_number(payload)
+    if nonfinite_path is not None:
+        raise InvalidManifestError(
+            f"manifest numeric declaration must be finite: {nonfinite_path}",
+            operator_id=_optional_operator_id(payload),
+        )
     schema = load_contract_schema("operator-manifest-v1.schema.json")
     errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.absolute_path))
     if errors:
@@ -151,6 +157,22 @@ def _read_payload(source: str | Path | Mapping[str, Any]) -> dict[str, Any]:
 def _optional_operator_id(payload: Mapping[str, Any]) -> str | None:
     value = payload.get("operator_id")
     return value if isinstance(value, str) else None
+
+
+def _find_nonfinite_number(value: Any, path: str = "manifest") -> str | None:
+    if isinstance(value, float) and not math.isfinite(value):
+        return path
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            found = _find_nonfinite_number(item, f"{path}.{key}")
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found = _find_nonfinite_number(item, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None
 
 
 def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, Any], operator_id: str) -> None:

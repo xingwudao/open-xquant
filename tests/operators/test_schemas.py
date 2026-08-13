@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from jsonschema import Draft202012Validator
 
-from oxq.operators.errors import DuplicateKeyError
+from oxq.operators.errors import DuplicateKeyError, InvalidPanelError
 from oxq.operators.panel import validate_serialized_quant_panel
 
 SCHEMA_DIR = Path("contracts/quant-operators")
@@ -64,4 +64,24 @@ def test_serialized_quant_panel_validation_rejects_duplicate_keys() -> None:
     }
 
     with pytest.raises(DuplicateKeyError, match="duplicate"):
+        validate_serialized_quant_panel(payload)
+
+
+def test_serialized_quant_panel_validation_enforces_date_formats() -> None:
+    payload = {
+        "schema_version": 1,
+        "context": {
+            "timezone": "Asia/Shanghai",
+            "calendar": "XSHG",
+            "frequency": "1d",
+            "timestamp_semantics": "session_date",
+            "currency": "CNY",
+            "price_adjustment": "forward_adjusted",
+            "data_version": "fixture-v1",
+            "source": "fake",
+        },
+        "rows": [{"date": "not-a-date", "code": "000001.SZ"}],
+    }
+
+    with pytest.raises(InvalidPanelError, match="date"):
         validate_serialized_quant_panel(payload)

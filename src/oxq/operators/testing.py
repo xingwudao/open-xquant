@@ -19,6 +19,7 @@ from oxq.operators.manifest import OperatorManifest
 from oxq.operators.panel import QuantPanelAdapter
 from oxq.operators.types import (
     OperatorAvailability,
+    OperatorCausality,
     OperatorLifecycle,
     OperatorRequest,
     OperatorResult,
@@ -128,7 +129,7 @@ def verify_operator_contract(
     _validate_result(manifest, normalized, result)
     checks.extend(("output_contract", "provenance"))
 
-    first_data = result.data.copy(deep=True)
+    first_data = _deepcopy_frame(result.data)
     first_metadata = copy.deepcopy(dict(result.metadata))
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated)
@@ -150,13 +151,17 @@ def verify_operator_contract(
         )
     checks.append("determinism")
 
+    if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope is OperatorScope.TIME_SERIES:
+        _verify_past_only_causality(manifest, operator, normalized, first_data)
+        checks.append("causality")
+
     if not input_spec["requires_sorted"]:
         shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
         shuffled_request = _copy_request(normalized, panel=shuffled_panel)
         shuffled_result = _invoke_operator(manifest, operator, shuffled_request)
         _validate_result(manifest, shuffled_request, shuffled_result)
         _require_equal_data(
-            _canonical(result.data),
+            _canonical(first_data),
             _canonical(shuffled_result.data),
             manifest,
             "operator output must not depend on incidental input order",
@@ -173,12 +178,16 @@ def verify_operator_contract(
             pieces.append(symbol_result.data)
         per_symbol = pd.concat(pieces, ignore_index=True) if pieces else result.data.iloc[0:0].copy()
         _require_equal_data(
-            _canonical(result.data),
+            _canonical(first_data),
             _canonical(per_symbol),
             manifest,
             "batch output must match per-symbol output",
         )
         checks.append("batch_consistency")
+
+    if manifest.execution_scope is OperatorScope.CROSS_SECTION:
+        _verify_cross_section_scope(manifest, operator, normalized, first_data)
+        checks.append("scope_consistency")
 
     return ContractReport(operator_id=manifest.operator_id, passed=True, checks=tuple(checks))
 
@@ -353,7 +362,7 @@ def _invoke_operator(
     operator: OperatorCallable,
     request: OperatorRequest,
 ) -> OperatorResult:
-    snapshot = request.input_panel.copy(deep=True)
+    snapshot = _deepcopy_frame(request.input_panel)
     result = operator(request)
     try:
         pd.testing.assert_frame_equal(request.input_panel, snapshot)
@@ -384,6 +393,8 @@ def _metadata_equal(left: Any, right: Any) -> bool:
         except AssertionError:
             return False
         return True
+    if _both_scalar_missing(left, right):
+        return True
     try:
         equal = left == right
     except (TypeError, ValueError):
@@ -398,6 +409,68 @@ def _metadata_equal(left: Any, right: Any) -> bool:
     return False
 
 
+def _both_scalar_missing(left: Any, right: Any) -> bool:
+    if not pd.api.types.is_scalar(left) or not pd.api.types.is_scalar(right):
+        return False
+    try:
+        return bool(pd.isna(left)) and bool(pd.isna(right))
+    except (TypeError, ValueError):
+        return False
+
+
+def _deepcopy_frame(panel: pd.DataFrame) -> pd.DataFrame:
+    snapshot = panel.copy(deep=True)
+    for column in panel.select_dtypes(include="object").columns:
+        snapshot[column] = panel[column].map(copy.deepcopy)
+    return snapshot
+
+
+def _verify_past_only_causality(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    baseline: pd.DataFrame,
+) -> None:
+    dates = request.input_panel["date"].drop_duplicates().sort_values()
+    input_spec = manifest.raw["inputs"]
+    for cutoff in dates.iloc[:-1]:
+        prefix = request.input_panel.loc[request.input_panel["date"] <= cutoff].reset_index(drop=True)
+        history = prefix.groupby("code", sort=False, observed=True).size()
+        if history.empty or int(history.min()) < input_spec["min_history"]:
+            continue
+        prefix_request = _copy_request(request, panel=prefix)
+        prefix_result = _invoke_operator(manifest, operator, prefix_request)
+        _validate_result(manifest, prefix_request, prefix_result)
+        expected = baseline.loc[baseline["date"] <= cutoff]
+        _require_equal_data(
+            _canonical(expected),
+            _canonical(prefix_result.data),
+            manifest,
+            "past_only output changed when future history was truncated",
+        )
+
+
+def _verify_cross_section_scope(
+    manifest: OperatorManifest,
+    operator: OperatorCallable,
+    request: OperatorRequest,
+    baseline: pd.DataFrame,
+) -> None:
+    pieces: list[pd.DataFrame] = []
+    for _, date_panel in request.input_panel.groupby("date", sort=True, observed=True):
+        date_request = _copy_request(request, panel=date_panel.reset_index(drop=True))
+        date_result = _invoke_operator(manifest, operator, date_request)
+        _validate_result(manifest, date_request, date_result)
+        pieces.append(date_result.data)
+    per_date = pd.concat(pieces, ignore_index=True) if pieces else baseline.iloc[0:0].copy()
+    _require_equal_data(
+        _canonical(baseline),
+        _canonical(per_date),
+        manifest,
+        "cross_section output must match combined per-date output",
+    )
+
+
 def _copy_request(
     request: OperatorRequest,
     *,
@@ -407,7 +480,7 @@ def _copy_request(
     return OperatorRequest(
         operator_id=request.operator_id,
         parameters=request.parameters if parameters is None else parameters,
-        input_panel=request.input_panel.copy(deep=True) if panel is None else panel.copy(deep=True),
+        input_panel=_deepcopy_frame(request.input_panel if panel is None else panel),
         context=request.context,
     )
 
