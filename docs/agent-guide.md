@@ -292,7 +292,12 @@ Tushare 首版仅支持 A 股日线，代码必须完全匹配
 前复权（qfq）公式为
 `raw_price * row_adj_factor / reference_adj_factor`；参考因子取包含端点的
 `end` 当日或之前的最新有效复权因子，它可以独立于最后一条日线交易记录。
-`volume` 单位为股。权限、积分和限流由 Tushare 平台决定。Agent 绝不能
+`volume` 单位为股。权限、积分和限流由 Tushare 平台决定。
+Tushare `daily` 单次最多返回 6000 行。下载器会把长区间自动切成每块最多
+3650 个包含端点的日历日，并让 `daily` 与 `adj_factor` 使用完全相同、无
+重叠且无缺口的边界；短区间仍只请求一次。任一分块响应达到 6000 行时会在
+写入前失败，避免接受可能被截断的数据；成功 manifest 仍记录用户请求的
+完整范围。Agent 绝不能
 打印或存储 token；open-xquant 不会将 token 持久化到本地状态、日志、异常
 或产物。凭据传输由上游 Tushare SDK 控制，其当前官方客户端使用 HTTP，
 Agent 应将其视为需要用户自行评估的上游安全边界。

@@ -134,7 +134,7 @@ def test_load_symbols_tushare_returns_partial_errors_without_token(tmp_path: Pat
     )
     factors = pd.DataFrame({"ts_code": ["600519.SH"], "trade_date": ["20240102"], "adj_factor": [2.0]})
     client = MagicMock()
-    client.daily.side_effect = [daily, RuntimeError("provider failure")]
+    client.daily.side_effect = [daily, RuntimeError("provider failure tool-secret")]
     client.adj_factor.return_value = factors
     tushare = SimpleNamespace(__version__="1.4.29", pro_api=MagicMock(return_value=client))
     with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
@@ -146,5 +146,8 @@ def test_load_symbols_tushare_returns_partial_errors_without_token(tmp_path: Pat
             data_dir=str(tmp_path),
         )
     assert result["rows"] == {"600519.SH": 1}
-    assert result["errors"] == {"000001.SZ": "Tushare request failed for '000001.SZ': provider failure"}
+    assert result["errors"] == {
+        "000001.SZ": "Tushare request failed for '000001.SZ': provider failure ***"
+    }
+    assert "***" in result["errors"]["000001.SZ"]
     assert "tool-secret" not in str(result)

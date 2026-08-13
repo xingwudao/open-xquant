@@ -4,7 +4,7 @@ import json
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import numpy as np
 import pandas as pd
@@ -105,6 +105,138 @@ def test_tushare_download_writes_qfq_share_volume_and_manifest(tmp_path: Path) -
     client.adj_factor.assert_called_once_with(
         ts_code="600519.SH", start_date="20240102", end_date="20240104"
     )
+
+
+def test_tushare_long_range_uses_matching_inclusive_chunks_and_sorts_output(
+    tmp_path: Path,
+) -> None:
+    chunk_ranges = [
+        ("20000101", "20091228"),
+        ("20091229", "20191226"),
+        ("20191227", "20200101"),
+    ]
+    daily_chunks = [
+        pd.DataFrame(
+            {
+                "ts_code": ["600519.SH", "600519.SH"],
+                "trade_date": ["20091228", "20000103"],
+                "open": [12.0, 10.0],
+                "high": [13.0, 11.0],
+                "low": [11.0, 9.0],
+                "close": [12.5, 10.5],
+                "vol": [12.0, 10.0],
+            }
+        ),
+        pd.DataFrame(
+            {
+                "ts_code": ["600519.SH", "600519.SH"],
+                "trade_date": ["20191226", "20100104"],
+                "open": [16.0, 14.0],
+                "high": [17.0, 15.0],
+                "low": [15.0, 13.0],
+                "close": [16.5, 14.5],
+                "vol": [16.0, 14.0],
+            }
+        ),
+        pd.DataFrame(
+            {
+                "ts_code": ["600519.SH", "600519.SH"],
+                "trade_date": ["20200101", "20191227"],
+                "open": [20.0, 18.0],
+                "high": [21.0, 19.0],
+                "low": [19.0, 17.0],
+                "close": [20.5, 18.5],
+                "vol": [20.0, 18.0],
+            }
+        ),
+    ]
+    factor_chunks = [
+        chunk.loc[:, ["ts_code", "trade_date"]].assign(adj_factor=1.0)
+        for chunk in daily_chunks
+    ]
+    client = MagicMock()
+    client.daily.side_effect = daily_chunks
+    client.adj_factor.side_effect = factor_chunks
+    tushare = _module(client)
+
+    with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
+        path = TushareDownloader(token="secret").download(
+            "600519.SH", "2000-01-01", "2020-01-01", tmp_path
+        )
+
+    expected_calls = [
+        call(ts_code="600519.SH", start_date=start, end_date=end)
+        for start, end in chunk_ranges
+    ]
+    assert client.daily.call_args_list == expected_calls
+    assert client.adj_factor.call_args_list == expected_calls
+    result = pd.read_parquet(path)
+    assert result.index.strftime("%Y%m%d").tolist() == [
+        "20000103",
+        "20091228",
+        "20100104",
+        "20191226",
+        "20191227",
+        "20200101",
+    ]
+    manifest = json.loads(path.with_suffix(".manifest.json").read_text("utf-8"))
+    assert manifest["start"] == "2000-01-01"
+    assert manifest["end"] == "2020-01-01"
+
+
+@pytest.mark.parametrize("empty_chunk_index", [0, 1], ids=["leading", "middle"])
+def test_tushare_long_range_accepts_empty_chunks_when_other_chunks_have_data(
+    tmp_path: Path, empty_chunk_index: int
+) -> None:
+    daily_chunks = [
+        _daily().iloc[[0]].assign(trade_date="20000103"),
+        _daily().iloc[[0]].assign(trade_date="20100104"),
+        _daily().iloc[[0]].assign(trade_date="20200101"),
+    ]
+    factor_chunks = [
+        chunk.loc[:, ["ts_code", "trade_date"]].assign(adj_factor=1.0)
+        for chunk in daily_chunks
+    ]
+    daily_chunks[empty_chunk_index] = pd.DataFrame()
+    factor_chunks[empty_chunk_index] = pd.DataFrame()
+    client = MagicMock()
+    client.daily.side_effect = daily_chunks
+    client.adj_factor.side_effect = factor_chunks
+    tushare = _module(client)
+
+    with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
+        path = TushareDownloader(token="secret").download(
+            "600519.SH", "20000101", "20200101", tmp_path
+        )
+
+    result = pd.read_parquet(path)
+    assert len(result) == 2
+    assert result.index.is_monotonic_increasing
+
+
+@pytest.mark.parametrize("source", ["daily", "factors"])
+def test_tushare_rejects_chunk_at_provider_row_limit_without_output(
+    tmp_path: Path, source: str
+) -> None:
+    daily = pd.concat([_daily().iloc[[0]]] * 6000, ignore_index=True)
+    factors = pd.concat(
+        [_factors_with_later_reference().iloc[[0]]] * 6000, ignore_index=True
+    )
+    client = MagicMock()
+    client.daily.return_value = daily if source == "daily" else _daily().iloc[[0]]
+    client.adj_factor.return_value = (
+        factors if source == "factors" else _factors_with_later_reference().iloc[[0]]
+    )
+    tushare = _module(client)
+    output_dir = tmp_path / "new-output"
+
+    with patch("oxq.data.loaders.importlib.import_module", return_value=tushare):
+        with pytest.raises(DownloadError, match="6000-row provider limit"):
+            TushareDownloader(token="secret").download(
+                "600519.SH", "20240102", "20240102", output_dir
+            )
+
+    assert not output_dir.exists()
 
 
 def test_tushare_rejects_factor_after_requested_end_without_output(
@@ -253,6 +385,41 @@ def test_generic_tushare_import_error_is_sanitized_and_unchained(
     rendered = "".join(traceback.format_exception(captured.value))
     assert token not in rendered
     assert "***" in str(captured.value)
+    assert captured.value.__cause__ is None
+    assert captured.value.__context__ is None
+    assert not output_dir.exists()
+
+
+@pytest.mark.parametrize(
+    "import_error",
+    [
+        RuntimeError("runtime loader included import-secret"),
+        ModuleNotFoundError(
+            "transitive loader included import-secret", name="transitive_dependency"
+        ),
+    ],
+    ids=["runtime-error", "transitive-module-not-found"],
+)
+def test_non_missing_tushare_import_failure_is_sanitized_and_unchained(
+    tmp_path: Path, import_error: Exception
+) -> None:
+    token = "import-secret"
+    output_dir = tmp_path / "new-output"
+
+    with patch("oxq.data.loaders.importlib.import_module", side_effect=import_error):
+        with pytest.raises(DownloadError) as captured:
+            TushareDownloader(token=token).download(
+                "600519.SH", "20240102", "20240104", output_dir
+            )
+
+    message = str(captured.value)
+    rendered = "".join(traceback.format_exception(captured.value))
+    assert type(captured.value) is DownloadError
+    assert message.startswith("Tushare import failed: ")
+    assert "uv sync --extra tushare" not in message
+    assert "***" in message
+    assert token not in message
+    assert token not in rendered
     assert captured.value.__cause__ is None
     assert captured.value.__context__ is None
     assert not output_dir.exists()

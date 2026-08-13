@@ -83,14 +83,21 @@ API 的用户可以显式传入 token。
 
 1. 解析凭据并校验 symbol、start、end。
 2. 通过 lazy import 获得 `tushare` 模块和 Pro client。
-3. 调用 `pro.daily(ts_code=symbol, start_date=start, end_date=end)`。
-4. 调用 `pro.adj_factor(ts_code=symbol, start_date=start, end_date=end)`。
-5. 分别验证响应证券、请求区间、必需字段、日期唯一性和数值合法性。
-6. 按 `trade_date` 将每个日线行与唯一复权因子一对一合并。
-7. 取复权因子结果中不晚于 `end` 的最大 `trade_date` 对应因子作为区间基准。
-8. 对 open、high、low、close 应用前复权公式。
-9. 转换成交量、排序、设置索引和时区。
-10. 写 Parquet 和 manifest。
+3. 把用户区间切成包含端点、无重叠且无缺口的日期块；每块最多 3650 个
+   日历日。短区间仍只产生一个日期块。
+4. 对每个日期块调用 `pro.daily(...)` 和 `pro.adj_factor(...)`，两个接口使用
+   完全相同的 `start_date`、`end_date` 边界。
+5. 任一分块响应达到 Tushare 的 6000 行单次上限时立即失败，避免把可能截断
+   的结果误当作完整结果。
+6. 合并所有分块；允许前置或中间空块，但完整合并结果仍必须通过原有非空、
+   响应证券、用户请求区间、必需字段、日期唯一性和数值合法性校验。
+7. 按 `trade_date` 将每个日线行与唯一复权因子一对一合并。
+8. 取复权因子结果中不晚于用户原始完整范围 `end` 的最大 `trade_date`
+   对应因子作为区间基准。
+9. 对 open、high、low、close 应用前复权公式。
+10. 转换成交量、排序、设置索引和时区。
+11. 写 Parquet 和 manifest；manifest 仍记录调用方传入的完整 `start` 和
+    `end`，而不是内部日期块边界。
 
 前复权公式遵循 Tushare 公布的 qfq 语义：
 
@@ -119,6 +126,8 @@ Tushare `daily.vol` 的单位是“手”，且可能以带两位小数的浮点
 
 - token 缺失或为空；
 - symbol 或日期格式非法，或者开始日期晚于结束日期；
+- 任一 `daily` 或 `adj_factor` 分块响应达到 6000 行，因为该块可能已被
+  provider 截断；
 - 日线或复权因子结果为 `None`、空表或非 DataFrame；
 - 缺少必需列；
 - 任一响应的 `ts_code` 不等于请求 symbol；
@@ -135,8 +144,11 @@ Tushare `daily.vol` 的单位是“手”，且可能以带两位小数的浮点
 traceback；实现应在离开捕获原始异常的 `except` 块后抛出清洗后的错误。
 缺失 token 的错误只说明可传构造参数或设置 `TUSHARE_TOKEN`。
 
-若 optional dependency 未安装，抛出不带异常链的 `DownloadError`，并提示
-执行 `uv sync --extra tushare`，而不是暴露裸 `ModuleNotFoundError`。
+只有导入异常为 `ModuleNotFoundError` 且 `exc.name == "tushare"` 时，才将其
+解释为 optional dependency 未安装，并抛出不带异常链、提示执行
+`uv sync --extra tushare` 的 `DownloadError`。缺少 Tushare 的传递依赖、
+`ImportError` 及其他普通 `Exception` 都包装为去敏、无异常链的
+`DownloadError`，不能误报成 Tushare 未安装。
 
 发生输入、请求或落盘前数据校验失败时不写新的 Parquet 或 manifest。成功
 进入落盘阶段后沿用现有下载器的直接覆盖行为，本次不引入临时文件或跨
@@ -203,8 +215,13 @@ token、网络或 Tushare 权限，也不增加默认执行的 live integration 
 - 显式 token 优先，环境变量回退，空 token 失败；
 - 环境变量在首次 client 初始化时读取，client 在实例内懒创建并复用；
 - optional dependency 缺失时给出安装提示且不保留原始异常链；
+- 缺失传递依赖或其他普通导入异常时返回去敏、无异常链的 import failure，
+  不误报 Tushare 未安装；
 - symbol 和两种日期格式正确规范化，非法输入在请求前失败；
 - `daily` 与 `adj_factor` 的调用参数正确；
+- 长区间使用相同的包含端点日期块，边界无重叠和缺口，分块合并后按日期
+  排序，且 manifest 保留用户原始完整范围；
+- 前置或中间空块可与其他非空块合并，任一块达到 6000 行时在写入前失败；
 - 手算样例验证 qfq 公式，以及停牌时使用独立于日线末端的最新因子基准；
 - 拒绝混入其他证券或请求区间外日期的响应；
 - `vol * 100`、五列 schema、升序和上海时区正确；
@@ -238,6 +255,9 @@ README 中英文部分和 agent guide 必须提供：
 - `600519.SH` 等规范代码示例；
 - 仅支持 A 股日线、默认 qfq、`end` 包含端点、`volume` 为股；
 - Tushare 账户权限、积分和限流由 Tushare 平台决定；
+- Tushare `daily` 单次最多返回 6000 行；下载器会把长区间自动切成每块最多
+  3650 个包含端点的日历日，并让 `daily` 与 `adj_factor` 使用相同边界；
+- 任一分块响应达到 6000 行会在写入前失败，以防静默接受截断结果；
 - 下载后回测仍使用 `data.provider: local`。
 
 文档还要披露凭据传输由第三方 Tushare SDK 负责。当前官方 SDK 客户端源码中
@@ -250,6 +270,8 @@ API endpoint 使用 HTTP；本次将此第三方传输风险作为用户选择 T
 
 - 新类满足未修改的 `Downloader` protocol。
 - 使用显式 token 或 `TUSHARE_TOKEN` 可下载并标准化 A 股 qfq 日线。
+- 长区间自动安全分块，短区间保持单次调用；任何达到 provider 6000 行上限
+  的分块响应都不会被写成完整数据。
 - 输出 schema、日期方向、时区、价格和成交量单位符合本设计。
 - 输入、请求和落盘前校验失败不产生新输出；落盘阶段沿用现有非原子边界。
 - 除明确排除的第三方网络传输外，本地状态、日志、异常和产物均无 token 泄露。

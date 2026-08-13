@@ -145,6 +145,11 @@ explicit = TushareDownloader(token="your-token")
 `raw_price * row_adj_factor / reference_adj_factor`；参考因子取包含端点的
 `end` 当日或之前的最新有效复权因子，它可以独立于最后一条日线交易记录。
 `volume` 的单位为股。Tushare 账户权限、积分和限流由 Tushare 平台决定。
+Tushare `daily` 单次最多返回 6000 行。下载器会把长区间自动切成每块最多
+3650 个包含端点的日历日，`daily` 与 `adj_factor` 使用完全相同、无重叠且
+无缺口的边界；短区间仍只请求一次。任一分块响应达到 6000 行时会在写入前
+失败，避免静默接受可能被截断的数据；成功 manifest 仍记录用户请求的完整
+`start` 和 `end`。
 下载得到的标准 Parquet 仍通过 `data.provider: local` 用于研究和回测，不能
 把 provider 设置为 `tushare`。
 
@@ -424,8 +429,15 @@ forward adjustment (qfq), calculated as
 the latest valid adjustment factor on or before the inclusive `end` and may be
 independent of the last daily trading row. `volume` is in shares. Tushare
 account permissions, points, and rate limits are determined by the Tushare
-platform. Research and backtests continue to consume the downloaded standard
-Parquet through `data.provider: local`; do not set the provider to `tushare`.
+platform. Tushare `daily` returns at most 6,000 rows per call. The downloader
+automatically splits long ranges into inclusive chunks of at most 3,650
+calendar days; `daily` and `adj_factor` use identical, gap-free,
+non-overlapping boundaries, while short ranges still use one call. A chunk
+that reaches 6,000 rows is rejected before output is written, because it may
+have been truncated. A successful manifest still records the user's complete
+original `start` and `end` range. Research and backtests continue to consume
+the downloaded standard Parquet through `data.provider: local`; do not set
+the provider to `tushare`.
 
 open-xquant does not persist the token or write it to logs, exceptions, or
 output artifacts. Credential transport is controlled by the upstream Tushare

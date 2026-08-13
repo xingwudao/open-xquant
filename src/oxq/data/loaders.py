@@ -2,11 +2,11 @@ from __future__ import annotations
 
 import os
 import re
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from importlib import import_module as _import_module
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -38,6 +38,8 @@ _TUSHARE_DAILY_COLUMNS = {
 }
 _TUSHARE_FACTOR_COLUMNS = {"ts_code", "trade_date", "adj_factor"}
 _TUSHARE_PRICE_COLUMNS = ["open", "high", "low", "close"]
+_TUSHARE_CHUNK_CALENDAR_DAYS = 3650
+_TUSHARE_PROVIDER_ROW_LIMIT = 6000
 importlib = SimpleNamespace(import_module=_import_module)
 
 
@@ -52,6 +54,46 @@ def _normalize_tushare_date(value: str, *, field: str) -> str:
         except ValueError:
             continue
     raise DownloadError(f"Invalid Tushare {field} date '{value}'. Use YYYY-MM-DD or YYYYMMDD.")
+
+
+def _tushare_date_chunks(start: str, end: str) -> list[tuple[str, str]]:
+    current: date = datetime.strptime(start, "%Y%m%d").date()
+    final: date = datetime.strptime(end, "%Y%m%d").date()
+    chunks: list[tuple[str, str]] = []
+    while current <= final:
+        chunk_end = min(
+            current + timedelta(days=_TUSHARE_CHUNK_CALENDAR_DAYS - 1), final
+        )
+        chunks.append((current.strftime("%Y%m%d"), chunk_end.strftime("%Y%m%d")))
+        current = chunk_end + timedelta(days=1)
+    return chunks
+
+
+def _validate_tushare_chunk(
+    frame: object,
+    *,
+    response_name: Literal["daily", "adjustment"],
+    start: str,
+    end: str,
+) -> pd.DataFrame:
+    if not isinstance(frame, pd.DataFrame):
+        raise DownloadError(
+            f"Tushare {response_name} response must be a pandas DataFrame."
+        )
+    if len(frame) >= _TUSHARE_PROVIDER_ROW_LIMIT:
+        raise DownloadError(
+            f"Tushare {response_name} response reached the "
+            f"{_TUSHARE_PROVIDER_ROW_LIMIT}-row provider limit for "
+            f"{start} to {end}; the chunk may be truncated."
+        )
+    return frame
+
+
+def _combine_tushare_chunks(chunks: list[pd.DataFrame]) -> pd.DataFrame:
+    nonempty = [chunk for chunk in chunks if not chunk.empty]
+    if not nonempty:
+        return chunks[0].copy()
+    return pd.concat(nonempty, ignore_index=True)
 
 
 def resolve_data_dir(dest_dir: Path | None = None) -> Path:
@@ -291,12 +333,14 @@ class TushareDownloader:
             )
         missing_module = False
         import_error: str | None = None
+        module: Any = None
         try:
             module = importlib.import_module("tushare")
-        except ModuleNotFoundError:
-            missing_module = True
-        except ImportError as exc:
-            import_error = str(exc).replace(token, "***")
+        except Exception as exc:
+            if isinstance(exc, ModuleNotFoundError) and exc.name == "tushare":
+                missing_module = True
+            else:
+                import_error = str(exc).replace(token, "***")
         if missing_module:
             raise DownloadError(
                 "Tushare is not installed; run `uv sync --extra tushare`."
@@ -331,20 +375,43 @@ class TushareDownloader:
         if normalized_start > normalized_end:
             raise DownloadError("Tushare start date must not be after end date.")
         module, client = self._get_module_and_client()
-        request_error: str | None = None
-        try:
-            daily = client.daily(
-                ts_code=symbol, start_date=normalized_start, end_date=normalized_end
+        daily_chunks: list[pd.DataFrame] = []
+        factor_chunks: list[pd.DataFrame] = []
+        for chunk_start, chunk_end in _tushare_date_chunks(
+            normalized_start, normalized_end
+        ):
+            request_error: str | None = None
+            try:
+                daily_chunk = client.daily(
+                    ts_code=symbol, start_date=chunk_start, end_date=chunk_end
+                )
+                factor_chunk = client.adj_factor(
+                    ts_code=symbol, start_date=chunk_start, end_date=chunk_end
+                )
+            except Exception as exc:
+                request_error = str(exc).replace(self._resolved_token or "", "***")
+            if request_error is not None:
+                raise DownloadError(
+                    f"Tushare request failed for '{symbol}': {request_error}"
+                )
+            daily_chunks.append(
+                _validate_tushare_chunk(
+                    daily_chunk,
+                    response_name="daily",
+                    start=chunk_start,
+                    end=chunk_end,
+                )
             )
-            factors = client.adj_factor(
-                ts_code=symbol, start_date=normalized_start, end_date=normalized_end
+            factor_chunks.append(
+                _validate_tushare_chunk(
+                    factor_chunk,
+                    response_name="adjustment",
+                    start=chunk_start,
+                    end=chunk_end,
+                )
             )
-        except Exception as exc:
-            request_error = str(exc).replace(self._resolved_token or "", "***")
-        if request_error is not None:
-            raise DownloadError(
-                f"Tushare request failed for '{symbol}': {request_error}"
-            )
+        daily = _combine_tushare_chunks(daily_chunks)
+        factors = _combine_tushare_chunks(factor_chunks)
         frame, reference_date, reference_factor = _normalize_tushare_frames(
             daily,
             factors,
