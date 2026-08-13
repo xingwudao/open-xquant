@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import replace
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -553,6 +554,32 @@ def test_contract_suite_includes_metadata_in_determinism_check(
 
     with pytest.raises(ContractViolationError, match="metadata"):
         verify_operator_contract(load_operator_manifest(valid_manifest_payload), varying_metadata_provider, request)
+
+
+def test_contract_suite_compares_array_metadata_without_ambiguous_truth_values(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def array_metadata_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        return type(result)(
+            data=result.data,
+            diagnostics=result.diagnostics,
+            provenance=result.provenance,
+            metadata={"weights": np.array([1.0, 2.0])},
+        )
+
+    report = verify_operator_contract(load_operator_manifest(valid_manifest_payload), array_metadata_provider, request)
+
+    assert report.passed is True
 
 
 def test_contract_suite_uses_exact_determinism_by_default(

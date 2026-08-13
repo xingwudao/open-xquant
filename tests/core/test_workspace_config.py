@@ -89,6 +89,18 @@ def test_load_workspace_config_rejects_broken_symlink_marker(tmp_path: Path) -> 
         load_workspace_config(path, missing_ok=True)
 
 
+def test_load_workspace_config_rejects_symlinked_ancestor(tmp_path: Path) -> None:
+    target = tmp_path / "outside"
+    config_dir = target / ".open-xquant"
+    config_dir.mkdir(parents=True)
+    (config_dir / "workspace.yaml").write_text("name: outside\n", encoding="utf-8")
+    workspace_link = tmp_path / "workspace-link"
+    workspace_link.symlink_to(target, target_is_directory=True)
+
+    with pytest.raises(WorkspaceConfigError, match="symlink"):
+        load_workspace_config(workspace_link / ".open-xquant" / "workspace.yaml")
+
+
 def test_discover_workspace_config_uses_nearest_canonical_workspace(tmp_path: Path) -> None:
     outer_config = tmp_path / ".open-xquant"
     outer_config.mkdir()

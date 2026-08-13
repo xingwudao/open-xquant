@@ -325,6 +325,52 @@ def test_catalog_rejects_invalid_package_semantic_version(valid_manifest_payload
         load_operator_catalog(payload)
 
 
+def test_catalog_rejects_unicode_digits_in_semantic_version(valid_manifest_payload) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1\u0660.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+
+    with pytest.raises(InvalidManifestError, match="semantic versioning"):
+        load_operator_catalog(payload)
+
+
+@pytest.mark.parametrize("module", ["vendor..operators", "vendor.1operators", "vendor."])
+def test_manifest_rejects_invalid_module_segments(valid_manifest_payload, module) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["module"] = module
+
+    with pytest.raises(InvalidManifestError, match="module"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_converts_default_output_format_failures_to_manifest_errors(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["suffix"] = {
+        "type": "string",
+        "default": "fast",
+        "required": False,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "sma_{suffix:d}"
+
+    with pytest.raises(InvalidManifestError, match="format"):
+        load_operator_manifest(payload)
+
+
 def test_catalog_rejects_unsupported_source_commit_lengths(valid_manifest_payload) -> None:
     manifest = load_operator_manifest(valid_manifest_payload)
     payload = {

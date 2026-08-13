@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Literal
+from typing import Any, Literal
 
 import pandas as pd
+from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
 from pandas.api.types import is_datetime64_any_dtype, is_string_dtype
 
+from oxq.operators._schema import load_contract_schema
 from oxq.operators.errors import DuplicateKeyError, InvalidPanelError, MissingColumnError
 from oxq.operators.types import OperatorContext, TimestampSemantics
 
@@ -115,10 +117,11 @@ class QuantPanelAdapter:
                 raise InvalidPanelError("daily session-date QuantPanel must contain normalized session dates")
         elif not date_is_aware:
             raise InvalidPanelError("intraday/event QuantPanel dates must be timezone-aware")
-        if require_canonical_order and not panel.index.equals(
-            panel.sort_values(_KEY_COLUMNS, kind="stable").index
-        ):
-            raise InvalidPanelError("QuantPanel must use canonical date/code order")
+        if require_canonical_order:
+            keys = panel[_KEY_COLUMNS].reset_index(drop=True)
+            canonical = panel.sort_values(_KEY_COLUMNS, kind="stable", ignore_index=True)[_KEY_COLUMNS]
+            if not keys.equals(canonical):
+                raise InvalidPanelError("QuantPanel must use canonical date/code order")
 
     @staticmethod
     def validate_output(
@@ -158,3 +161,27 @@ class QuantPanelAdapter:
         if index.tz is None:
             raise InvalidPanelError(f"intraday/event index must be timezone-aware: {code}")
         return index.tz_convert("UTC")
+
+
+def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
+    """Validate the JSON Schema and composite-key semantics of a serialized QuantPanel."""
+
+    schema = load_contract_schema("quant-panel-v1.schema.json")
+    errors = sorted(Draft202012Validator(schema).iter_errors(payload), key=lambda error: list(error.absolute_path))
+    if errors:
+        error = errors[0]
+        path = ".".join(str(part) for part in error.absolute_path)
+        raise InvalidPanelError(f"serialized QuantPanel {path or 'payload'}: {error.message}")
+    rows = payload["rows"]
+    seen: set[tuple[str, str]] = set()
+    duplicates: list[tuple[str, str]] = []
+    for row in rows:
+        key = (row["date"], row["code"])
+        if key in seen:
+            duplicates.append(key)
+        seen.add(key)
+    if duplicates:
+        raise DuplicateKeyError(
+            "serialized QuantPanel contains duplicate (date, code) keys",
+            details={"keys": [list(key) for key in duplicates]},
+        )

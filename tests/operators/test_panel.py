@@ -127,6 +127,20 @@ def test_panel_rejects_non_session_daily_timestamps(daily_context) -> None:
         QuantPanelAdapter.validate_panel(panel, daily_context)
 
 
+def test_canonical_order_validation_compares_keys_not_index_labels(daily_context) -> None:
+    panel = pd.DataFrame(
+        {
+            "date": [pd.Timestamp("2026-01-06"), pd.Timestamp("2026-01-05")],
+            "code": ["000001.SZ", "000001.SZ"],
+            "close": [11.0, 10.0],
+        },
+        index=[0, 0],
+    )
+
+    with pytest.raises(InvalidPanelError, match="canonical"):
+        QuantPanelAdapter.validate_panel(panel, daily_context, require_canonical_order=True)
+
+
 def test_validate_output_enforces_declared_alignment(daily_context, daily_symbol_frames) -> None:
     input_panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
     output = input_panel[["date", "code"]].copy()

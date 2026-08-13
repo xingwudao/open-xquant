@@ -16,6 +16,9 @@ directory while operator providers remain independently versioned.
 - JSON Schemas are the portable validation interface for external repositories.
 - Markdown is normative where a semantic requirement cannot be expressed by
   JSON Schema.
+- Serialized QuantPanel fixtures are conforming only after both JSON Schema
+  validation and `validate_serialized_quant_panel()` semantic validation;
+  JSON Schema cannot express uniqueness of the composite `(date, code)` key.
 - A provider release must pin immutable source, tree, manifest, and build
   identities. Editable installs and local source paths are not certifiable.
 

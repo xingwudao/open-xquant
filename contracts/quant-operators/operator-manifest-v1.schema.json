@@ -32,7 +32,10 @@
     },
     "semantic_name": {"type": "string", "minLength": 1},
     "distribution": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*$"},
-    "module": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_.]*$"},
+    "module": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
     "callable": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
     "execution_scope": {
       "enum": ["time_series", "cross_section", "panel", "research_only"]

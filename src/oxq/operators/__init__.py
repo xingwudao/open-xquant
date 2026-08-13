@@ -17,7 +17,7 @@ from oxq.operators.errors import (
     OperatorError,
 )
 from oxq.operators.manifest import OperatorManifest, load_operator_manifest
-from oxq.operators.panel import QuantPanelAdapter
+from oxq.operators.panel import QuantPanelAdapter, validate_serialized_quant_panel
 from oxq.operators.types import (
     FittedOperatorState,
     OperatorAvailability,
@@ -66,4 +66,5 @@ __all__ = [
     "TimestampSemantics",
     "load_operator_catalog",
     "load_operator_manifest",
+    "validate_serialized_quant_panel",
 ]

@@ -33,6 +33,9 @@ def load_workspace_config(
     config_path = Path(path)
     if config_path.name != "workspace.yaml" or config_path.parent.name != ".open-xquant":
         raise WorkspaceConfigError(f"workspace configuration path is not canonical: {config_path}")
+    unsafe_component = _first_link_component(config_path)
+    if unsafe_component is not None:
+        raise WorkspaceConfigError(f"workspace configuration path component must not be a symlink: {unsafe_component}")
     if not config_path.exists() and not config_path.is_symlink():
         if missing_ok:
             return {}
@@ -56,6 +59,17 @@ def load_workspace_config(
     if not isinstance(payload, dict):
         raise WorkspaceConfigError(f"workspace configuration must contain an object: {config_path}")
     return payload
+
+
+def _first_link_component(path: Path) -> Path | None:
+    absolute = path.absolute()
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        is_junction = getattr(current, "is_junction", lambda: False)
+        if current.is_symlink() or is_junction():
+            return current
+    return None
 
 
 def discover_workspace_config(path: str | Path) -> DiscoveredWorkspaceConfig | None:

@@ -2,6 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://open-xquant.org/contracts/quant-operators/quant-panel-v1.schema.json",
   "title": "open-xquant Serialized QuantPanel v1",
+  "$comment": "Composite (date, code) uniqueness is semantic and MUST also be checked with validate_serialized_quant_panel().",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema_version", "context", "rows"],

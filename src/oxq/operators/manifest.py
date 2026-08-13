@@ -292,7 +292,13 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
             )
         if not references or all("default" in parameters[name] for name in references):
             defaults = {name: parameters[name]["default"] for name in references}
-            resolved_name = field["name_template"].format(**defaults)
+            try:
+                resolved_name = field["name_template"].format(**defaults)
+            except (KeyError, IndexError, ValueError, TypeError) as exc:
+                raise InvalidManifestError(
+                    f"output field template cannot format declared defaults: {field['name_template']}",
+                    operator_id=operator_id,
+                ) from exc
             if resolved_name in {"date", "code"}:
                 raise InvalidManifestError(
                     f"output field resolves to reserved QuantPanel key: {resolved_name}",

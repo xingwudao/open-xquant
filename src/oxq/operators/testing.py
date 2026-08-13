@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import copy
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
+from typing import Any
 
 import pandas as pd
 
@@ -127,6 +129,7 @@ def verify_operator_contract(
     checks.extend(("output_contract", "provenance"))
 
     first_data = result.data.copy(deep=True)
+    first_metadata = copy.deepcopy(dict(result.metadata))
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
     _validate_result(manifest, normalized, repeated)
     _require_equal_data(first_data, repeated.data, manifest, "operator output must be deterministic")
@@ -140,7 +143,7 @@ def verify_operator_contract(
             "operator provenance must be deterministic",
             operator_id=manifest.operator_id,
         )
-    if result.metadata != repeated.metadata:
+    if not _metadata_equal(first_metadata, repeated.metadata):
         raise ContractViolationError(
             "operator metadata must be deterministic",
             operator_id=manifest.operator_id,
@@ -198,10 +201,16 @@ def _validate_result(
     outputs = manifest.raw["outputs"]
     alignment = outputs["alignment"]
     QuantPanelAdapter.validate_output(request.input_panel, result.data, request.context, alignment=alignment)
-    resolved_fields = [
-        field["name_template"].format(**request.parameters)
-        for field in outputs["fields"]
-    ]
+    try:
+        resolved_fields = [
+            field["name_template"].format(**request.parameters)
+            for field in outputs["fields"]
+        ]
+    except (KeyError, IndexError, ValueError, TypeError) as exc:
+        raise ContractViolationError(
+            "operator output field template could not be resolved",
+            operator_id=manifest.operator_id,
+        ) from exc
     if len(set(resolved_fields)) != len(resolved_fields):
         raise ContractViolationError(
             "operator manifest contains duplicate resolved output fields",
@@ -354,6 +363,39 @@ def _invoke_operator(
             operator_id=manifest.operator_id,
         ) from exc
     return result
+
+
+def _metadata_equal(left: Any, right: Any) -> bool:
+    if isinstance(left, Mapping) and isinstance(right, Mapping):
+        if set(left) != set(right):
+            return False
+        return all(_metadata_equal(left[key], right[key]) for key in left)
+    if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
+        return len(left) == len(right) and all(_metadata_equal(a, b) for a, b in zip(left, right, strict=True))
+    if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
+        try:
+            pd.testing.assert_frame_equal(left, right)
+        except AssertionError:
+            return False
+        return True
+    if isinstance(left, pd.Series) and isinstance(right, pd.Series):
+        try:
+            pd.testing.assert_series_equal(left, right)
+        except AssertionError:
+            return False
+        return True
+    try:
+        equal = left == right
+    except (TypeError, ValueError):
+        return False
+    if isinstance(equal, bool):
+        return equal
+    if hasattr(equal, "all"):
+        try:
+            return bool(equal.all())
+        except (TypeError, ValueError):
+            return False
+    return False
 
 
 def _copy_request(
