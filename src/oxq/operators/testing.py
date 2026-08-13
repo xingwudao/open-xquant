@@ -8,6 +8,7 @@ import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
 from itertools import combinations
+from types import MappingProxyType
 from typing import Any
 
 import numpy as np
@@ -54,6 +55,8 @@ class ContractReport:
     implementation_digest: str
     parameters: Mapping[str, Any]
     parameters_digest: str
+    input_dtypes: Mapping[str, str]
+    input_dtypes_digest: str
     context: OperatorContext
     context_digest: str
     passed: bool
@@ -235,6 +238,12 @@ def verify_operator_contract(
                 operator_id=manifest.operator_id,
                 details={"allowed": list(allowed_dtypes)},
             )
+    input_dtypes = MappingProxyType({column: str(normalized.input_panel[column].dtype) for column in present_declared_columns})
+    input_dtypes_digest = _canonical_mapping_digest(
+        input_dtypes,
+        manifest.operator_id,
+        label="input dtypes",
+    )
     if not input_spec["requires_sorted"] and len(normalized.input_panel) < 2:
         raise ContractViolationError(
             "unordered input probe requires at least two rows",
@@ -272,10 +281,11 @@ def verify_operator_contract(
         )
     checks.extend(("output_contract", "provenance"))
 
+    declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
     for present_count in range(len(optional_columns)):
         for present_subset in combinations(optional_columns, present_count):
             omitted_columns = tuple(column for column in optional_columns if column not in present_subset)
-            panel_without_optional = normalized.input_panel.drop(columns=list(omitted_columns))
+            panel_without_optional = declared_panel.drop(columns=list(omitted_columns))
             optional_request = _copy_request(normalized, panel=panel_without_optional)
             failure_message, failure_details = _optional_probe_failure(omitted_columns)
             optional_result = _invoke_operator(
@@ -330,7 +340,6 @@ def verify_operator_contract(
 
     first_data = _deepcopy_frame(result.data)
     if undeclared_columns:
-        declared_panel = normalized.input_panel.drop(columns=undeclared_columns)
         declared_request = _copy_request(normalized, panel=declared_panel)
         declared_result = _invoke_operator(
             manifest,
@@ -379,6 +388,8 @@ def verify_operator_contract(
         implementation_digest=expected_implementation_digest,
         parameters=normalized.parameters,
         parameters_digest=parameters_digest,
+        input_dtypes=input_dtypes,
+        input_dtypes_digest=input_dtypes_digest,
         context=normalized.context,
         context_digest=context_digest,
         passed=True,
@@ -595,9 +606,18 @@ def _expected_warmup_rows(input_panel: pd.DataFrame, warmup_rows: int) -> int:
 
 
 def _resolved_parameters_digest(parameters: Mapping[str, Any], operator_id: str) -> str:
+    return _canonical_mapping_digest(parameters, operator_id, label="resolved parameters")
+
+
+def _canonical_mapping_digest(
+    value: Mapping[str, Any],
+    operator_id: str,
+    *,
+    label: str,
+) -> str:
     try:
         canonical = json.dumps(
-            parameters,
+            _materialize_canonical_json(value),
             ensure_ascii=True,
             sort_keys=True,
             separators=(",", ":"),
@@ -605,10 +625,18 @@ def _resolved_parameters_digest(parameters: Mapping[str, Any], operator_id: str)
         )
     except (TypeError, ValueError) as exc:
         raise ContractViolationError(
-            "resolved parameters must be canonically serializable",
+            f"{label} must be canonically serializable",
             operator_id=operator_id,
         ) from exc
     return "sha256:" + hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _materialize_canonical_json(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {key: _materialize_canonical_json(item) for key, item in value.items()}
+    if isinstance(value, (tuple, list)):
+        return [_materialize_canonical_json(item) for item in value]
+    return value
 
 
 def _operator_context_digest(context: OperatorContext, operator_id: str) -> str:
@@ -663,7 +691,7 @@ def _invoke_operator(
             details=failure_details,
         ) from exc
     try:
-        pd.testing.assert_frame_equal(request.input_panel, snapshot)
+        _assert_frame_bitwise_equal(request.input_panel, snapshot)
     except AssertionError as exc:
         raise ContractViolationError(
             "operator mutated input_panel",
@@ -785,7 +813,7 @@ def _verify_behavioral_probes(
             permuted_request = _copy_request(request, panel=permuted_panel)
             permuted_result = _invoke_operator(manifest, operator, permuted_request)
             _validate_result(manifest, permuted_request, permuted_result, expected_implementation_digest)
-            _require_exact_data(
+            _require_deterministic_data(
                 _canonical(baseline),
                 _canonical(permuted_result.data),
                 manifest,
@@ -799,7 +827,7 @@ def _verify_behavioral_probes(
             isolated_result = _invoke_operator(manifest, operator, isolated_request)
             _validate_result(manifest, isolated_request, isolated_result, expected_implementation_digest)
             expected = baseline.loc[baseline["code"] != excluded_code]
-            _require_exact_data(
+            _require_deterministic_data(
                 _canonical(expected),
                 _canonical(isolated_result.data),
                 manifest,
@@ -835,7 +863,7 @@ def _verify_past_only_causality(
         prefix_result = _invoke_operator(manifest, operator, prefix_request)
         _validate_result(manifest, prefix_request, prefix_result, expected_implementation_digest)
         expected = baseline.loc[baseline["date"] <= cutoff]
-        _require_exact_data(
+        _require_deterministic_data(
             _canonical(expected),
             _canonical(prefix_result.data),
             manifest,
@@ -878,7 +906,7 @@ def _verify_cross_section_scope(
         _validate_result(manifest, date_request, date_result, expected_implementation_digest)
         pieces.append(date_result.data)
     per_date = pd.concat(pieces, ignore_index=True) if pieces else baseline.iloc[0:0].copy()
-    _require_exact_data(
+    _require_deterministic_data(
         _canonical(baseline),
         _canonical(per_date),
         manifest,

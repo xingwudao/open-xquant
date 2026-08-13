@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import re
 from dataclasses import FrozenInstanceError, replace
 from typing import Any
@@ -9,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from oxq.operators.errors import OperatorError
 from oxq.operators.manifest import load_operator_manifest
 from oxq.operators.testing import _copy_request
 from oxq.operators.types import (
@@ -70,6 +72,67 @@ def test_operator_enums_match_contract_values() -> None:
         "after_close_t",
         "publication_time",
     }
+
+
+def test_operator_error_snapshots_nested_structured_details() -> None:
+    columns = ["close"]
+    groups = {"large", "small"}
+    thresholds = np.array([[0.1, 0.9]])
+    nested = {
+        "columns": columns,
+        "groups": groups,
+        "thresholds": thresholds,
+    }
+    error = OperatorError("invalid output", details={"output": nested})
+    expected = {
+        "code": "operator_error",
+        "operator_id": None,
+        "message": "invalid output",
+        "details": {
+            "output": {
+                "columns": ["close"],
+                "groups": ["large", "small"],
+                "thresholds": [[0.1, 0.9]],
+            }
+        },
+        "retryable": False,
+    }
+
+    columns.append("volume")
+    groups.add("micro")
+    thresholds[0, 0] = -1.0
+    nested["status"] = "changed"
+
+    assert error.to_dict() == expected
+    assert json.loads(json.dumps(error.to_dict(), sort_keys=True)) == expected
+
+
+def test_operator_error_recursively_freezes_exposed_details() -> None:
+    error = OperatorError(
+        "invalid output",
+        details={
+            "output": {
+                "columns": ["close"],
+                "groups": {"large", "small"},
+                "thresholds": np.array([0.1, 0.9]),
+            }
+        },
+    )
+    expected = error.to_dict()
+    output = error.details["output"]
+
+    with pytest.raises(TypeError):
+        output["status"] = "changed"
+    with pytest.raises(AttributeError):
+        output["columns"].append("volume")
+    with pytest.raises(AttributeError):
+        output["groups"].add("micro")
+    with pytest.raises(ValueError):
+        output["thresholds"][0] = -1.0
+    with pytest.raises(ValueError):
+        output["thresholds"].setflags(write=True)
+
+    assert error.to_dict() == expected
 
 
 def test_operator_request_snapshots_parameters_and_is_frozen(daily_context) -> None:

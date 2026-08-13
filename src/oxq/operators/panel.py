@@ -182,6 +182,7 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
         error = errors[0]
         path = ".".join(str(part) for part in error.absolute_path)
         raise InvalidPanelError(f"serialized QuantPanel {path or 'payload'}: {error.message}")
+    _validate_serialized_context(materialized_payload["context"])
     rows = materialized_payload["rows"]
     timestamp_semantics = materialized_payload["context"]["timestamp_semantics"]
     seen: set[tuple[str | datetime, str]] = set()
@@ -197,6 +198,13 @@ def validate_serialized_quant_panel(payload: Mapping[str, Any]) -> None:
             "serialized QuantPanel contains duplicate (date, code) keys",
             details={"keys": [list(key) for key in duplicates]},
         )
+
+
+def _validate_serialized_context(context: Mapping[str, Any]) -> None:
+    try:
+        OperatorContext(**context, evaluation_time="intraday_t")
+    except (TypeError, ValueError) as exc:
+        raise InvalidPanelError(f"serialized QuantPanel context is invalid: {exc}") from exc
 
 
 def _materialize_json_tree(value: Any) -> Any:

@@ -313,6 +313,14 @@ def test_serialized_panel_accepts_nested_read_only_mappings() -> None:
     validate_serialized_quant_panel(payload)
 
 
+def test_serialized_panel_rejects_context_timezone_outside_zoneinfo() -> None:
+    payload = _serialized_daily_panel()
+    payload["context"]["timezone"] = "Mars/Base"  # type: ignore[index]
+
+    with pytest.raises(InvalidPanelError, match=r"timezone.*Mars/Base.*zoneinfo"):
+        validate_serialized_quant_panel(payload)
+
+
 @pytest.mark.parametrize(
     "value",
     [b"binary", ("tuple",), {"set"}, object()],
