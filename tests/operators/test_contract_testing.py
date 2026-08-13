@@ -17,9 +17,24 @@ from oxq.operators.errors import (
 )
 from oxq.operators.manifest import load_operator_manifest
 from oxq.operators.panel import QuantPanelAdapter
-from oxq.operators.testing import verify_operator_contract
+from oxq.operators.testing import verify_operator_contract as _verify_operator_contract
 from oxq.operators.types import OperatorRequest
-from tests.operators.fake_provider import sma
+from tests.operators.fake_provider import IMPLEMENTATION_DIGEST, sma
+
+
+def verify_operator_contract(
+    manifest,
+    operator,
+    request,
+    *,
+    expected_implementation_digest=IMPLEMENTATION_DIGEST,
+):
+    return _verify_operator_contract(
+        manifest,
+        operator,
+        request,
+        expected_implementation_digest=expected_implementation_digest,
+    )
 
 
 def test_fake_provider_passes_reusable_contract_suite(
@@ -49,6 +64,27 @@ def test_fake_provider_passes_reusable_contract_suite(
         "unordered_input",
         "batch_consistency",
     )
+
+
+def test_contract_suite_rejects_unexpected_implementation_digest(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    with pytest.raises(ContractViolationError, match="implementation_digest mismatch"):
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            sma,
+            request,
+            expected_implementation_digest="sha256:" + "d" * 64,
+        )
 
 
 def test_contract_suite_detects_input_mutation(
@@ -90,7 +126,11 @@ def test_contract_suite_detects_undeclared_output(
         return result
 
     with pytest.raises(ContractViolationError, match="declared fields"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), extra_output_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            extra_output_provider,
+            request,
+        )
 
 
 def test_contract_suite_detects_nondeterminism(
@@ -429,7 +469,11 @@ def test_contract_suite_validates_all_diagnostic_row_counts(
         )
 
     with pytest.raises(ContractViolationError, match=message):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), invalid_diagnostics_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            invalid_diagnostics_provider,
+            request,
+        )
 
 
 def test_contract_suite_rejects_duplicate_resolved_output_names(
@@ -438,10 +482,19 @@ def test_contract_suite_rejects_duplicate_resolved_output_names(
     valid_manifest_payload,
 ) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
-    payload["outputs"]["fields"].append({"name_template": "sma_{period}", "dtype": "float64", "minimum": 0.0})
+    payload["parameters"]["alias"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"].append({"name_template": "sma_{alias}", "dtype": "float64", "minimum": 0.0})
     request = OperatorRequest(
         operator_id="fake.indicators.sma",
-        parameters={"period": 2},
+        parameters={"period": 2, "alias": 2},
         input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
         context=daily_context,
     )
@@ -532,7 +585,11 @@ def test_contract_suite_checks_immutability_on_unordered_probe(
         return sma(provider_request)
 
     with pytest.raises(ContractViolationError, match="mutated input_panel"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), unordered_mutating_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            unordered_mutating_provider,
+            request,
+        )
 
 
 def test_contract_suite_snapshots_first_result_before_repeat_probe(
@@ -559,7 +616,11 @@ def test_contract_suite_snapshots_first_result_before_repeat_probe(
         return type(result)(data=shared, diagnostics=result.diagnostics, provenance=result.provenance)
 
     with pytest.raises(ContractViolationError, match="deterministic"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), shared_result_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            shared_result_provider,
+            request,
+        )
 
 
 def test_contract_suite_includes_metadata_in_determinism_check(
@@ -587,7 +648,11 @@ def test_contract_suite_includes_metadata_in_determinism_check(
         )
 
     with pytest.raises(ContractViolationError, match="metadata"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), varying_metadata_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            varying_metadata_provider,
+            request,
+        )
 
 
 def test_contract_suite_compares_array_metadata_without_ambiguous_truth_values(
@@ -611,7 +676,51 @@ def test_contract_suite_compares_array_metadata_without_ambiguous_truth_values(
             metadata={"weights": np.array([1.0, 2.0])},
         )
 
-    report = verify_operator_contract(load_operator_manifest(valid_manifest_payload), array_metadata_provider, request)
+    report = verify_operator_contract(
+        load_operator_manifest(valid_manifest_payload),
+        array_metadata_provider,
+        request,
+    )
+
+    assert report.passed is True
+
+
+@pytest.mark.parametrize(
+    "metadata_array",
+    [
+        np.array([1.0, np.nan]),
+        np.array([1, pd.NA], dtype=object),
+        np.array([np.datetime64("2024-01-01"), np.datetime64("NaT")]),
+    ],
+    ids=["nan", "pandas-na", "nat"],
+)
+def test_contract_suite_treats_matching_missing_values_in_array_metadata_as_equal(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+    metadata_array,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def array_metadata_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        return type(result)(
+            data=result.data,
+            diagnostics=result.diagnostics,
+            provenance=result.provenance,
+            metadata={"values": metadata_array.copy()},
+        )
+
+    report = verify_operator_contract(
+        load_operator_manifest(valid_manifest_payload),
+        array_metadata_provider,
+        request,
+    )
 
     assert report.passed is True
 
@@ -676,7 +785,11 @@ def test_contract_suite_treats_repeated_missing_metadata_as_equal(
             metadata={"score": missing},
         )
 
-    report = verify_operator_contract(load_operator_manifest(valid_manifest_payload), missing_metadata_provider, request)
+    report = verify_operator_contract(
+        load_operator_manifest(valid_manifest_payload),
+        missing_metadata_provider,
+        request,
+    )
 
     assert report.passed is True
 
@@ -726,7 +839,11 @@ def test_contract_suite_verifies_past_only_causality_with_truncated_histories(
         return result
 
     with pytest.raises(ContractViolationError, match="past_only"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), future_using_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            future_using_provider,
+            request,
+        )
 
 
 def test_contract_suite_verifies_past_only_causality_for_panel_scope(
@@ -752,6 +869,35 @@ def test_contract_suite_verifies_past_only_causality_for_panel_scope(
 
     with pytest.raises(ContractViolationError, match="past_only"):
         verify_operator_contract(load_operator_manifest(payload), future_using_panel_provider, request)
+
+
+def test_contract_suite_verifies_past_only_causality_for_research_only_scope(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "research_only"
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+
+    def future_using_research_provider(provider_request: OperatorRequest):
+        result = sma(provider_request)
+        ordered = provider_request.input_panel.sort_values(["code", "date"], kind="stable").copy()
+        ordered["sma_2"] = ordered.groupby("code", sort=False)["close"].shift(-1).fillna(ordered["close"])
+        result.data.loc[:, "sma_2"] = ordered.sort_values(["date", "code"], kind="stable")["sma_2"].to_numpy()
+        return result
+
+    with pytest.raises(ContractViolationError, match="past_only"):
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            future_using_research_provider,
+            request,
+        )
 
 
 def test_contract_suite_rejects_past_only_fixture_without_a_valid_proper_prefix(
@@ -866,6 +1012,63 @@ def test_contract_suite_verifies_cross_section_scope_per_date(
         verify_operator_contract(load_operator_manifest(payload), time_mixing_provider, request)
 
 
+def test_contract_suite_rejects_cross_section_scope_probe_with_one_date(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["execution_scope"] = "cross_section"
+    payload["inputs"]["min_history"] = 1
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel = panel.loc[panel["date"] == panel["date"].min()].reset_index(drop=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    with pytest.raises(ContractViolationError, match="cross_section scope probe") as exc_info:
+        verify_operator_contract(
+            load_operator_manifest(payload),
+            sma,
+            request,
+        )
+
+    assert exc_info.value.to_dict()["details"] == {
+        "required_dates": 2,
+        "available_dates": 1,
+    }
+
+
+def test_contract_suite_rejects_time_series_scope_probe_with_one_asset(
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    panel = QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context)
+    panel = panel.loc[panel["code"] == panel["code"].min()].reset_index(drop=True)
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=panel,
+        context=daily_context,
+    )
+
+    with pytest.raises(ContractViolationError, match="time_series scope probe") as exc_info:
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            sma,
+            request,
+        )
+
+    assert exc_info.value.to_dict()["details"] == {
+        "required_assets": 2,
+        "available_assets": 1,
+    }
+
+
 def test_contract_suite_uses_exact_determinism_by_default(
     daily_context,
     daily_symbol_frames,
@@ -887,7 +1090,11 @@ def test_contract_suite_uses_exact_determinism_by_default(
         return result
 
     with pytest.raises(ContractViolationError, match="deterministic"):
-        verify_operator_contract(load_operator_manifest(valid_manifest_payload), subtly_unstable_provider, request)
+        verify_operator_contract(
+            load_operator_manifest(valid_manifest_payload),
+            subtly_unstable_provider,
+            request,
+        )
 
 
 def test_contract_suite_applies_declared_determinism_tolerances(

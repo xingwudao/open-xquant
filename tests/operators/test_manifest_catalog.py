@@ -4,6 +4,7 @@ import copy
 import json
 
 import pytest
+import yaml  # type: ignore[import-untyped]
 
 from oxq.operators.catalog import load_operator_catalog
 from oxq.operators.errors import InvalidManifestError, InvalidParameterError
@@ -185,6 +186,33 @@ def test_manifest_rejects_nonfinite_numeric_defaults_and_enum_members(valid_mani
         load_operator_manifest(invalid_enum)
 
 
+def test_manifest_accepts_arbitrary_size_integer_default(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    huge_integer = 10**1000
+    payload["parameters"]["period"]["default"] = huge_integer
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.validate_parameters({}) == {"period": huge_integer}
+
+
+def test_manifest_accepts_arbitrary_size_integer_enum_member(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    huge_integer = 10**1000
+    payload["parameters"]["period"]["enum"] = [2, huge_integer]
+
+    manifest = load_operator_manifest(payload)
+
+    assert huge_integer in manifest.raw["parameters"]["period"]["enum"]
+
+
+def test_manifest_accepts_arbitrary_size_integer_request(valid_manifest_payload) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    huge_integer = 10**1000
+
+    assert manifest.validate_parameters({"period": huge_integer}) == {"period": huge_integer}
+
+
 def test_manifest_rejects_overlapping_input_columns(valid_manifest_payload) -> None:
     payload = copy.deepcopy(valid_manifest_payload)
     payload["inputs"]["optional_columns"] = ["close"]
@@ -276,6 +304,14 @@ def test_manifest_rejects_empty_output_name_resolved_from_defaults(valid_manifes
     payload["outputs"]["fields"][0]["name_template"] = "{field}"
 
     with pytest.raises(InvalidManifestError, match="output field name must not be empty"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_duplicate_default_resolved_output_names(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["outputs"]["fields"].append({"name_template": "sma_2", "dtype": "float64"})
+
+    with pytest.raises(InvalidManifestError, match="duplicate output field name: sma_2"):
         load_operator_manifest(payload)
 
 
@@ -446,3 +482,44 @@ def test_catalog_rejects_unsupported_source_commit_lengths(valid_manifest_payloa
 
     with pytest.raises(InvalidManifestError, match="full hexadecimal commit"):
         load_operator_catalog(payload)
+
+
+@pytest.mark.parametrize("source_kind", ["mapping", "yaml"])
+@pytest.mark.parametrize("key_location", ["top_level", "nested"])
+def test_catalog_rejects_non_string_mapping_keys_before_field_processing(
+    valid_manifest_payload,
+    tmp_path,
+    source_kind,
+    key_location,
+) -> None:
+    manifest = load_operator_manifest(valid_manifest_payload)
+    payload = {
+        "schema_version": 1,
+        "contract_version": 1,
+        "package": {
+            "distribution": "fake-quant-operators",
+            "version": "1.0.0",
+            "source_commit": "a" * 40,
+            "source_tree_digest": "sha256:" + "b" * 64,
+            "build_identifier": "ci-42",
+        },
+        "operators": [{**valid_manifest_payload, "manifest_digest": manifest.digest}],
+    }
+    if key_location == "top_level":
+        payload["unknown"] = "field"
+        payload[1] = "invalid"
+        expected_path = "catalog[1]"
+    else:
+        payload["unknown"] = {"nested": [{1: "invalid"}]}
+        expected_path = "catalog.unknown.nested[0][1]"
+
+    source = payload
+    if source_kind == "yaml":
+        source = tmp_path / "catalog.yaml"
+        source.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    with pytest.raises(InvalidManifestError, match="catalog mapping keys must be strings") as exc_info:
+        load_operator_catalog(source)
+
+    assert expected_path in str(exc_info.value)
+    assert exc_info.value.to_dict()["code"] == "invalid_manifest"

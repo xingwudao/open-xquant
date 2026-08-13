@@ -209,7 +209,7 @@ def _validate_parameter_value(name: str, value: Any, declaration: Mapping[str, A
     }[expected]
     if not valid:
         raise InvalidParameterError(f"parameter {name} must have type {expected}", operator_id=operator_id)
-    if expected in {"integer", "number"} and not math.isfinite(value):
+    if isinstance(value, float) and not math.isfinite(value):
         raise InvalidParameterError(f"parameter {name} must be finite", operator_id=operator_id)
     if "enum" in declaration and value not in declaration["enum"]:
         raise InvalidParameterError(f"parameter {name} must be one of {declaration['enum']}", operator_id=operator_id)
@@ -296,6 +296,7 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                 f"outputs warmup parameter must set affects_warmup=true: {warmup_name}",
                 operator_id=operator_id,
             )
+    resolved_output_names: set[str] = set()
     for field in outputs["fields"]:
         if "minimum" in field and "maximum" in field and field["minimum"] > field["maximum"]:
             raise InvalidManifestError(
@@ -346,6 +347,12 @@ def _validate_manifest_semantics(payload: dict[str, Any]) -> None:
                     f"output field resolves to reserved QuantPanel key: {resolved_name}",
                     operator_id=operator_id,
                 )
+            if resolved_name in resolved_output_names:
+                raise InvalidManifestError(
+                    f"duplicate output field name: {resolved_name}",
+                    operator_id=operator_id,
+                )
+            resolved_output_names.add(resolved_name)
 
 
 def _template_references(template: str) -> set[str]:

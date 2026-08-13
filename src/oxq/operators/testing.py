@@ -7,6 +7,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from oxq.operators.errors import (
@@ -47,6 +48,8 @@ def verify_operator_contract(
     manifest: OperatorManifest,
     operator: OperatorCallable,
     request: OperatorRequest,
+    *,
+    expected_implementation_digest: str,
 ) -> ContractReport:
     """Run provider-neutral checks for a stateless operator entry point.
 
@@ -137,13 +140,13 @@ def verify_operator_contract(
     result = _invoke_operator(manifest, operator, normalized)
     checks.append("input_immutability")
 
-    _validate_result(manifest, normalized, result)
+    _validate_result(manifest, normalized, result, expected_implementation_digest)
     checks.extend(("output_contract", "provenance"))
 
     first_data = _deepcopy_frame(result.data)
     first_metadata = _snapshot_metadata(result.metadata)
     repeated = _invoke_operator(manifest, operator, _copy_request(normalized))
-    _validate_result(manifest, normalized, repeated)
+    _validate_result(manifest, normalized, repeated, expected_implementation_digest)
     _require_equal_data(first_data, repeated.data, manifest, "operator output must be deterministic")
     if result.diagnostics != repeated.diagnostics:
         raise ContractViolationError(
@@ -165,15 +168,22 @@ def verify_operator_contract(
     if manifest.causality is OperatorCausality.PAST_ONLY and manifest.execution_scope in {
         OperatorScope.TIME_SERIES,
         OperatorScope.PANEL,
+        OperatorScope.RESEARCH_ONLY,
     }:
-        _verify_past_only_causality(manifest, operator, normalized, first_data)
+        _verify_past_only_causality(
+            manifest,
+            operator,
+            normalized,
+            first_data,
+            expected_implementation_digest,
+        )
         checks.append("causality")
 
     if not input_spec["requires_sorted"]:
         shuffled_panel = normalized.input_panel.sample(frac=1, random_state=731).reset_index(drop=True)
         shuffled_request = _copy_request(normalized, panel=shuffled_panel)
         shuffled_result = _invoke_operator(manifest, operator, shuffled_request)
-        _validate_result(manifest, shuffled_request, shuffled_result)
+        _validate_result(manifest, shuffled_request, shuffled_result, expected_implementation_digest)
         _require_equal_data(
             _canonical(first_data),
             _canonical(shuffled_result.data),
@@ -183,12 +193,19 @@ def verify_operator_contract(
         checks.append("unordered_input")
 
     if manifest.execution_scope is OperatorScope.TIME_SERIES:
+        available_assets = int(normalized.input_panel["code"].nunique())
+        if available_assets < 2:
+            raise ContractViolationError(
+                "time_series scope probe requires at least two assets",
+                operator_id=manifest.operator_id,
+                details={"required_assets": 2, "available_assets": available_assets},
+            )
         pieces: list[pd.DataFrame] = []
         for code in normalized.input_panel["code"].drop_duplicates():
             symbol_panel = normalized.input_panel.loc[normalized.input_panel["code"] == code].reset_index(drop=True)
             symbol_request = _copy_request(normalized, panel=symbol_panel)
             symbol_result = _invoke_operator(manifest, operator, symbol_request)
-            _validate_result(manifest, symbol_request, symbol_result)
+            _validate_result(manifest, symbol_request, symbol_result, expected_implementation_digest)
             pieces.append(symbol_result.data)
         per_symbol = pd.concat(pieces, ignore_index=True) if pieces else result.data.iloc[0:0].copy()
         _require_equal_data(
@@ -200,7 +217,13 @@ def verify_operator_contract(
         checks.append("batch_consistency")
 
     if manifest.execution_scope is OperatorScope.CROSS_SECTION:
-        _verify_cross_section_scope(manifest, operator, normalized, first_data)
+        _verify_cross_section_scope(
+            manifest,
+            operator,
+            normalized,
+            first_data,
+            expected_implementation_digest,
+        )
         checks.append("scope_consistency")
 
     return ContractReport(operator_id=manifest.operator_id, passed=True, checks=tuple(checks))
@@ -210,6 +233,7 @@ def _validate_result(
     manifest: OperatorManifest,
     request: OperatorRequest,
     result: OperatorResult,
+    expected_implementation_digest: str,
 ) -> None:
     if not isinstance(result, OperatorResult):
         raise ContractViolationError("operator must return OperatorResult", operator_id=manifest.operator_id)
@@ -217,6 +241,15 @@ def _validate_result(
         raise ContractViolationError("result provenance operator_id mismatch", operator_id=manifest.operator_id)
     if result.provenance.operator_version != manifest.operator_version:
         raise ContractViolationError("result provenance operator_version mismatch", operator_id=manifest.operator_id)
+    if result.provenance.implementation_digest != expected_implementation_digest:
+        raise ContractViolationError(
+            "result provenance implementation_digest mismatch",
+            operator_id=manifest.operator_id,
+            details={
+                "expected": expected_implementation_digest,
+                "actual": result.provenance.implementation_digest,
+            },
+        )
     if result.diagnostics.input_rows != len(request.input_panel):
         raise ContractViolationError("diagnostics.input_rows mismatch", operator_id=manifest.operator_id)
     if result.diagnostics.output_rows != len(result.data):
@@ -399,6 +432,8 @@ def _metadata_equal(left: Any, right: Any) -> bool:
         return all(_metadata_equal(left[key], right[key]) for key in left)
     if isinstance(left, (tuple, list)) and isinstance(right, (tuple, list)):
         return len(left) == len(right) and all(_metadata_equal(a, b) for a, b in zip(left, right, strict=True))
+    if isinstance(left, np.ndarray) and isinstance(right, np.ndarray):
+        return left.shape == right.shape and _metadata_equal(left.tolist(), right.tolist())
     if isinstance(left, pd.DataFrame) and isinstance(right, pd.DataFrame):
         try:
             pd.testing.assert_frame_equal(left, right)
@@ -458,6 +493,7 @@ def _verify_past_only_causality(
     operator: OperatorCallable,
     request: OperatorRequest,
     baseline: pd.DataFrame,
+    expected_implementation_digest: str,
 ) -> None:
     dates = request.input_panel["date"].drop_duplicates().sort_values()
     input_spec = manifest.raw["inputs"]
@@ -470,7 +506,7 @@ def _verify_past_only_causality(
         probe_executed = True
         prefix_request = _copy_request(request, panel=prefix)
         prefix_result = _invoke_operator(manifest, operator, prefix_request)
-        _validate_result(manifest, prefix_request, prefix_result)
+        _validate_result(manifest, prefix_request, prefix_result, expected_implementation_digest)
         expected = baseline.loc[baseline["date"] <= cutoff]
         _require_equal_data(
             _canonical(expected),
@@ -491,12 +527,20 @@ def _verify_cross_section_scope(
     operator: OperatorCallable,
     request: OperatorRequest,
     baseline: pd.DataFrame,
+    expected_implementation_digest: str,
 ) -> None:
+    available_dates = int(request.input_panel["date"].nunique())
+    if available_dates < 2:
+        raise ContractViolationError(
+            "cross_section scope probe requires at least two unique dates",
+            operator_id=manifest.operator_id,
+            details={"required_dates": 2, "available_dates": available_dates},
+        )
     pieces: list[pd.DataFrame] = []
     for _, date_panel in request.input_panel.groupby("date", sort=True, observed=True):
         date_request = _copy_request(request, panel=date_panel.reset_index(drop=True))
         date_result = _invoke_operator(manifest, operator, date_request)
-        _validate_result(manifest, date_request, date_result)
+        _validate_result(manifest, date_request, date_result, expected_implementation_digest)
         pieces.append(date_result.data)
     per_date = pd.concat(pieces, ignore_index=True) if pieces else baseline.iloc[0:0].copy()
     _require_equal_data(

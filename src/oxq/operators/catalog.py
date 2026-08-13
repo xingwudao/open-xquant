@@ -24,6 +24,22 @@ _COMMIT_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
+def _find_non_string_mapping_key(value: Any, path: str = "catalog") -> str | None:
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return f"{path}[{key!r}]"
+            found = _find_non_string_mapping_key(item, f"{path}.{key}")
+            if found is not None:
+                return found
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found = _find_non_string_mapping_key(item, f"{path}[{index}]")
+            if found is not None:
+                return found
+    return None
+
+
 def _canonical_json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
@@ -55,6 +71,9 @@ class OperatorCatalog:
 
 def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCatalog:
     payload = _read_catalog(source)
+    non_string_key_path = _find_non_string_mapping_key(payload)
+    if non_string_key_path is not None:
+        raise InvalidManifestError(f"catalog mapping keys must be strings: {non_string_key_path}")
     unknown = sorted(set(payload) - _CATALOG_KEYS)
     if unknown:
         raise InvalidManifestError(f"catalog contains unknown fields: {', '.join(unknown)}")
@@ -65,9 +84,7 @@ def load_operator_catalog(source: str | Path | Mapping[str, Any]) -> OperatorCat
         raise InvalidManifestError("catalog only supports schema_version=1 and contract_version=1")
     package = payload["package"]
     valid_package = (
-        isinstance(package, dict)
-        and set(package) == _PACKAGE_KEYS
-        and all(isinstance(value, str) and value for value in package.values())
+        isinstance(package, dict) and set(package) == _PACKAGE_KEYS and all(isinstance(value, str) and value for value in package.values())
     )
     if not valid_package:
         raise InvalidManifestError(f"catalog package must contain exactly {sorted(_PACKAGE_KEYS)}")
