@@ -304,6 +304,42 @@ def test_contract_suite_rejects_unexpected_implementation_digest(
         )
 
 
+@pytest.mark.parametrize(
+    "digest",
+    ["sha256:invalid", object()],
+    ids=["malformed", "non-string"],
+)
+def test_contract_suite_rejects_invalid_expected_implementation_digest_before_provider_invocation(
+    digest,
+    daily_context,
+    daily_symbol_frames,
+    valid_manifest_payload,
+) -> None:
+    request = OperatorRequest(
+        operator_id="fake.indicators.sma",
+        parameters={"period": 2},
+        input_panel=QuantPanelAdapter.to_panel(daily_symbol_frames, daily_context),
+        context=daily_context,
+    )
+    provider_calls = 0
+
+    def tracked_provider(provider_request: OperatorRequest):
+        nonlocal provider_calls
+        provider_calls += 1
+        return sma(provider_request)
+
+    with pytest.raises(ContractViolationError, match="expected_implementation_digest.*SHA-256"):
+        _verify_operator_contract(
+            _load_contract_manifest(valid_manifest_payload),
+            tracked_provider,
+            request,
+            expected_distribution_version="1.0.0",
+            expected_implementation_digest=digest,
+        )
+
+    assert provider_calls == 0
+
+
 @pytest.mark.parametrize("version", ["1.0", "1.0.0-01", "1\u0660.0.0"])
 def test_contract_suite_rejects_invalid_distribution_semantic_versions(
     version,

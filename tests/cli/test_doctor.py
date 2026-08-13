@@ -44,6 +44,30 @@ def test_doctor_fails_closed_for_broken_workspace_marker(monkeypatch, tmp_path) 
 
 
 @pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
+def test_doctor_fix_diagnoses_dangling_workspace_marker_without_initializing(monkeypatch, tmp_path) -> None:
+    config_dir = tmp_path / ".open-xquant"
+    config_dir.mkdir()
+    (config_dir / "workspace.yaml").symlink_to(tmp_path / "missing.yaml")
+    monkeypatch.chdir(tmp_path)
+    initialize_calls: list[Path] = []
+
+    def unexpected_initialize(path: Path) -> None:
+        initialize_calls.append(path)
+        raise AssertionError("doctor --fix must not initialize over a dangling workspace marker")
+
+    monkeypatch.setattr("oxq.cli.doctor.initialize_workspace", unexpected_initialize)
+
+    result = CliRunner().invoke(main, ["doctor", "--fix", "--json"])
+
+    assert result.exit_code == 0, result.exception
+    assert initialize_calls == []
+    workspace = json.loads(result.output)["checks"]["workspace"]
+    assert workspace["status"] == "fail"
+    assert "symlink" in workspace["error"]
+    assert workspace["fixes"] == ["oxq research init --force"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="requires POSIX symlinks")
 def test_doctor_does_not_suggest_force_init_for_symlinked_config_directory(monkeypatch, tmp_path) -> None:
     external = tmp_path / "external"
     external.mkdir()

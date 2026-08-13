@@ -46,6 +46,7 @@ def doctor(as_json: bool, fix: bool) -> None:
     if (
         fix
         and not (Path.cwd() / ".open-xquant" / "workspace.yaml").exists()
+        and not (Path.cwd() / ".open-xquant" / "workspace.yaml").is_symlink()
         and not _workspace_config_directory_is_link(Path.cwd())
     ):
         if as_json:

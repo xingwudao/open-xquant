@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
+import re
 import struct
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, fields
@@ -39,6 +40,7 @@ from oxq.operators.types import (
 OperatorCallable = Callable[[OperatorRequest], OperatorResult]
 _MAX_CERTIFIED_OPTIONAL_COLUMNS = 8
 _MAX_CERTIFIED_PROBES = 4096
+_IMPLEMENTATION_DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$")
 _TRADING_AVAILABILITY_ORDER = {
     OperatorAvailability.PRE_OPEN: 0,
     OperatorAvailability.OPEN: 1,
@@ -95,6 +97,13 @@ def verify_operator_contract(
             "expected_distribution_version must be semantic versioning",
             operator_id=manifest.operator_id,
             details={"distribution_version": expected_distribution_version},
+        )
+    if not isinstance(expected_implementation_digest, str) or not _IMPLEMENTATION_DIGEST_RE.fullmatch(
+        expected_implementation_digest
+    ):
+        raise ContractViolationError(
+            "expected_implementation_digest must be a lowercase SHA-256 digest",
+            operator_id=manifest.operator_id,
         )
     causality_parameters = sorted(name for name, declaration in manifest.raw["parameters"].items() if declaration["affects_causality"])
     if causality_parameters:

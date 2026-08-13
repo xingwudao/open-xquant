@@ -22,6 +22,8 @@ from oxq.operators._version import is_semantic_version
 from oxq.operators.errors import InvalidManifestError, InvalidParameterError
 from oxq.operators.types import OperatorAvailability, OperatorCausality, OperatorLifecycle, OperatorScope
 
+_MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS = 256
+
 
 def _canonical_json(payload: Mapping[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=True, sort_keys=True, separators=(",", ":"), allow_nan=False)
@@ -696,10 +698,35 @@ def _validate_template_parameter_domains(
     for _, field_name, format_spec, _ in string.Formatter().parse(template):
         if field_name is None:
             continue
-        if format_spec and format_spec.endswith("c") and parameters[field_name]["type"] == "integer":
-            _validate_code_point_parameter_domain(parameters[field_name])
+        for resolved_format_spec in _resolve_finite_format_specs(format_spec or "", parameters):
+            if resolved_format_spec.endswith("c") and parameters[field_name]["type"] == "integer":
+                _validate_code_point_parameter_domain(parameters[field_name])
         if format_spec:
             _validate_template_parameter_domains(format_spec, parameters)
+
+
+def _resolve_finite_format_specs(
+    format_spec: str,
+    parameters: Mapping[str, Mapping[str, Any]],
+) -> tuple[str, ...]:
+    references = sorted(_template_references(format_spec))
+    if not references:
+        return (format_spec,)
+    domains: list[tuple[Any, ...]] = []
+    combination_count = 1
+    for name in references:
+        declaration = parameters[name]
+        if "enum" not in declaration:
+            raise ValueError("dynamic format specifications require finite enum domains")
+        domain = tuple(declaration["enum"])
+        combination_count *= len(domain)
+        if combination_count > _MAX_DYNAMIC_FORMAT_SPEC_COMBINATIONS:
+            raise ValueError("dynamic format specification domain is too large to certify")
+        domains.append(domain)
+    combinations: list[dict[str, Any]] = [{}]
+    for name, domain in zip(references, domains, strict=True):
+        combinations = [{**values, name: item} for values in combinations for item in domain]
+    return tuple(format_spec.format(**values) for values in combinations)
 
 
 def _validate_code_point_parameter_domain(declaration: Mapping[str, Any]) -> None:

@@ -121,6 +121,7 @@ def test_manifest_converts_required_output_format_failure_to_parameter_error(
             "affects_causality": False,
             "affects_availability": False,
         }
+    payload["parameters"]["spec"]["enum"] = ["d"]
     payload["outputs"]["fields"] = [{"name_template": "{value:{spec}}", "dtype": "float64"}]
     manifest = load_operator_manifest(payload)
 
@@ -1245,6 +1246,133 @@ def test_manifest_accepts_provably_safe_domain_for_value_sensitive_output_format
     manifest = load_operator_manifest(payload)
 
     assert manifest.raw["outputs"]["fields"][0]["name_template"] == "prefix_{value:c}"
+
+
+@pytest.mark.parametrize("format_specs", [["c"], ["d", "c"]], ids=["c", "mixed-with-c"])
+def test_manifest_rejects_dynamic_value_sensitive_output_format_outside_parameter_domain(
+    valid_manifest_payload,
+    format_specs,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        "minimum": 1_114_112,
+    }
+    payload["parameters"]["spec"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        "enum": format_specs,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{value:{spec}}"
+
+    with pytest.raises(InvalidManifestError, match="format.*declared parameter domain"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_dynamic_output_format_without_finite_spec_domain(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["parameters"]["spec"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{value:{spec}}"
+
+    with pytest.raises(InvalidManifestError, match="format.*declared parameter domain"):
+        load_operator_manifest(payload)
+
+
+def test_manifest_rejects_excessive_dynamic_output_format_combinations(valid_manifest_payload) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+    }
+    for name in ("width", "precision"):
+        payload["parameters"][name] = {
+            "type": "integer",
+            "required": True,
+            "unit": None,
+            "affects_warmup": False,
+            "affects_output_fields": True,
+            "affects_causality": False,
+            "affects_availability": False,
+            "enum": list(range(17)),
+        }
+    payload["outputs"]["fields"][0]["name_template"] = "{value:{width}.{precision}f}"
+
+    with pytest.raises(InvalidManifestError, match="format.*declared parameter domain"):
+        load_operator_manifest(payload)
+
+
+@pytest.mark.parametrize(
+    ("format_specs", "value_domain"),
+    [
+        (["c"], {"minimum": 0, "maximum": 1_114_111}),
+        (["d", "08x"], {}),
+    ],
+    ids=["unicode-code-point", "non-value-sensitive"],
+)
+def test_manifest_accepts_provably_safe_dynamic_output_format_domains(
+    valid_manifest_payload,
+    format_specs,
+    value_domain,
+) -> None:
+    payload = copy.deepcopy(valid_manifest_payload)
+    payload["parameters"]["value"] = {
+        "type": "integer",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        **value_domain,
+    }
+    payload["parameters"]["spec"] = {
+        "type": "string",
+        "required": True,
+        "unit": None,
+        "affects_warmup": False,
+        "affects_output_fields": True,
+        "affects_causality": False,
+        "affects_availability": False,
+        "enum": format_specs,
+    }
+    payload["outputs"]["fields"][0]["name_template"] = "{value:{spec}}"
+
+    manifest = load_operator_manifest(payload)
+
+    assert manifest.raw["outputs"]["fields"][0]["name_template"] == "{value:{spec}}"
 
 
 @pytest.mark.parametrize("format_spec", ["d", "08x", ",d", ">12d"])
