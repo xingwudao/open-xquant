@@ -43,11 +43,20 @@ def _sha256(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
 
 
-def _wheel_bytes(distribution: str, package: str, source: str) -> bytes:
+def _wheel_bytes(
+    distribution: str,
+    package: str,
+    source: str,
+    *,
+    purelib_data: bool = False,
+) -> bytes:
     buffer = io.BytesIO()
     dist_info = distribution.replace("-", "_")
     with zipfile.ZipFile(buffer, "w") as archive:
-        archive.writestr(f"{package}/__init__.py", source)
+        package_path = f"{package}/__init__.py"
+        if purelib_data:
+            package_path = f"{dist_info}-1.0.0.data/purelib/{package_path}"
+        archive.writestr(package_path, source)
         archive.writestr(
             f"{dist_info}-1.0.0.dist-info/WHEEL",
             "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
@@ -709,6 +718,67 @@ def test_rejects_nonfinite_float_tolerance_before_child_execution(
     _assert_failure(candidate, "baseline_input_invalid")
 
 
+def test_requires_baseline_coverage_for_every_declared_output(tmp_path: Path) -> None:
+    candidate = _contract(tmp_path)
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["output"]["fields"].append(
+        {
+            "name_template": "ema_{window}",
+            "dtype": "float64",
+            "value_range": "finite_or_nan",
+        }
+    )
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+    )
+
+    _assert_failure(candidate, "baseline_input_invalid")
+
+
+def test_accepts_baseline_coverage_for_all_declared_outputs(tmp_path: Path) -> None:
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.DataFrame({
+        f"sma_{window}": [None, None, 2.0],
+        f"ema_{window}": [None, None, 2.0],
+    }, index=frame.index)
+"""
+    candidate = _contract(tmp_path, source)
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["output"]["fields"].append(
+        {
+            "name_template": "ema_{window}",
+            "dtype": "float64",
+            "value_range": "finite_or_nan",
+        }
+    )
+    ema_case = replace(
+        candidate.baseline_cases[0],
+        case_id="ema-3",
+        expected={"ema_3": [None, None, 2.0]},
+    )
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+        baseline_cases=(*candidate.baseline_cases, ema_case),
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [
+        ("sma-3", "passed"),
+        ("ema-3", "passed"),
+    ]
+
+
 def test_float_tolerance_does_not_relax_missing_value_positions(tmp_path: Path) -> None:
     source = SUCCESS_SOURCE.replace(
         'rolling_mean(frame["close"].tolist(), window)',
@@ -1053,6 +1123,66 @@ def sma(frame, *, window):
             expected={"sma_3": [1.0, 2.0, 3.0]},
         ),
         "explicit_keyed_output",
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_delivers_quant_panel_context_to_provider_frame(tmp_path: Path) -> None:
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    context = frame.attrs["open_xquant_context"]
+    value = 2.0 if context["timezone"] == "Asia/Shanghai" else 0.0
+    return pd.Series([None, None, value], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(tmp_path, source)
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_blocks_provider_access_to_preloaded_ambient_modules(tmp_path: Path) -> None:
+    source = """
+import sys
+AMBIENT_PARSER = sys.modules["dateutil.parser"]
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+
+
+def test_executes_module_from_wheel_purelib_data_layout(tmp_path: Path) -> None:
+    candidate = _contract(tmp_path)
+    operator = candidate.operators[0]
+    implementation, dependency = candidate.artifacts
+    wheel_bytes = _wheel_bytes(
+        "baseline-provider",
+        "baseline_provider",
+        SUCCESS_SOURCE,
+        purelib_data=True,
+    )
+    implementation.wheel_path.write_bytes(wheel_bytes)
+    implementation = replace(implementation, digest=_sha256(wheel_bytes))
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["implementation"]["implementation_digest"] = implementation.digest
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+        artifacts=(implementation, dependency),
     )
 
     results = run_research_baselines(

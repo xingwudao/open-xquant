@@ -24,6 +24,7 @@ from jsonschema import (  # type: ignore[import-untyped]
 )
 
 from oxq.operators.certification import (
+    _is_issued_research_certification,
     _load_reference_validator,
     _snapshot_contract_surface,
     _validate_binding_semantics,
@@ -242,6 +243,8 @@ class CertificationRegistry:
 def _prepare_certification(result: ResearchCertification) -> _PreparedCertification:
     if not isinstance(result, ResearchCertification):
         raise _input_error("publisher requires a research certification result")
+    if not _is_issued_research_certification(result):
+        raise _input_error("publisher requires a certification issued by certify_provider")
     if (
         not isinstance(result.provider, str)
         or not isinstance(result.release, str)

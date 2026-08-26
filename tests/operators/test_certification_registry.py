@@ -15,7 +15,10 @@ import pytest
 from jsonschema import Draft202012Validator, FormatChecker
 
 import oxq.operators.registry as registry_module
-from oxq.operators.certification import certify_provider
+from oxq.operators.certification import (
+    _issue_research_certification,
+    certify_provider,
+)
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import (
     BaselineCase,
@@ -152,16 +155,18 @@ def _result(
         digest=wheel_digest,
         wheel_path=wheel,
     )
-    return ResearchCertification(
-        provider=provider,
-        release=release,
-        submission_commit="git-sha1:" + "f" * 40,
-        source_commit="git-sha1:" + "a" * 40,
-        source_root=source_root,
-        operators=(candidate,),
-        artifacts=(artifact,),
-        baseline_cases=(baseline,),
-        baseline_results=(baseline_result,),
+    return _issue_research_certification(
+        ResearchCertification(
+            provider=provider,
+            release=release,
+            submission_commit="git-sha1:" + "f" * 40,
+            source_commit="git-sha1:" + "a" * 40,
+            source_root=source_root,
+            operators=(candidate,),
+            artifacts=(artifact,),
+            baseline_cases=(baseline,),
+            baseline_results=(baseline_result,),
+        )
     )
 
 
@@ -195,9 +200,11 @@ def _with_manifest(
     candidate.manifest_path.write_bytes(manifest_bytes)
     binding = dict(candidate.binding)
     binding["manifest_digest"] = _sha256(manifest_bytes)
-    return replace(
-        result,
-        operators=(replace(candidate, manifest=manifest, binding=binding),),
+    return _issue_research_certification(
+        replace(
+            result,
+            operators=(replace(candidate, manifest=manifest, binding=binding),),
+        )
     )
 
 
@@ -290,6 +297,34 @@ def test_real_submission_certification_publishes_and_resolves(tmp_path: Path) ->
     assert published.record["source_commit"] == certified.source_commit
     assert binding is not None
     assert binding["certification_state"] == "research-certified"
+
+
+def test_rejects_a_directly_constructed_research_certification_clone(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_certifiable_provider(tmp_path, expected=[None, None, 2.0])
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        certified = certify_provider(submission)
+        forged = ResearchCertification(
+            provider=certified.provider,
+            release=certified.release,
+            submission_commit=certified.submission_commit,
+            source_commit=certified.source_commit,
+            source_root=certified.source_root,
+            operators=certified.operators,
+            artifacts=certified.artifacts,
+            baseline_cases=certified.baseline_cases,
+            baseline_results=certified.baseline_results,
+        )
+
+        with pytest.raises(OperatorCertificationError) as caught:
+            publish_certification(forged, tmp_path / "certifications")
+
+    assert caught.value.code == "certification_input_invalid"
 
 
 def test_failure_before_atomic_replace_leaves_no_release_or_index(
@@ -526,7 +561,9 @@ def test_allows_release_artifacts_to_share_one_build_invocation_identifier(
     output = tmp_path / "certifications"
 
     publication = publish_certification(
-        replace(result, artifacts=(*result.artifacts, dependency)),
+        _issue_research_certification(
+            replace(result, artifacts=(*result.artifacts, dependency))
+        ),
         output,
     )
 
@@ -695,9 +732,11 @@ def test_source_tree_read_cannot_escape_through_parent_symlink_swap(
     binding = dict(candidate.binding)
     binding["manifest_digest"] = _sha256(manifest_bytes)
     binding["source_tree_digest"] = outside_digest
-    result = replace(
-        result,
-        operators=(replace(candidate, manifest=manifest, binding=binding),),
+    result = _issue_research_certification(
+        replace(
+            result,
+            operators=(replace(candidate, manifest=manifest, binding=binding),),
+        )
     )
     real_open = registry_module.os.open
     swapped = False
@@ -811,11 +850,13 @@ def test_allows_multiple_operators_bound_to_one_implementation_artifact(
         case_id="ema-window-3",
         operator_id="equant.ttr.ema",
     )
-    shared = replace(
-        result,
-        operators=(first, second),
-        baseline_cases=(*result.baseline_cases, second_case),
-        baseline_results=(*result.baseline_results, second_pass),
+    shared = _issue_research_certification(
+        replace(
+            result,
+            operators=(first, second),
+            baseline_cases=(*result.baseline_cases, second_case),
+            baseline_results=(*result.baseline_results, second_pass),
+        )
     )
     output = tmp_path / "certifications"
 

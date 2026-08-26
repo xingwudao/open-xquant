@@ -8,10 +8,12 @@ import importlib.util
 import json
 import math
 import os
+import stat
 import sys
+import zipfile
 from collections.abc import Mapping
 from datetime import date, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import ModuleType
 from typing import Any, cast
 
@@ -245,6 +247,26 @@ def _new_modules_are_allowed(
     return True
 
 
+def _visible_modules(verified_roots: list[str]) -> Mapping[str, object]:
+    return {
+        name: module
+        for name, module in sys.modules.items()
+        if name.partition(".")[0] in sys.stdlib_module_names
+        or name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS
+        or (
+            isinstance(module, ModuleType)
+            and _module_is_from_archives(module, verified_roots)
+        )
+    }
+
+
+def _restricted_sys_module(verified_roots: list[str]) -> ModuleType:
+    restricted = ModuleType("sys")
+    restricted.__dict__.update(sys.__dict__)
+    restricted.modules = _visible_modules(verified_roots)  # type: ignore[attr-defined]
+    return restricted
+
+
 def _globals_are_from_archives(
     globals_value: Mapping[str, object] | None,
     archives: list[str],
@@ -285,7 +307,7 @@ class _ProviderImportGate:
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        provider_call = _globals_are_from_archives(
+        provider_call = globals is None or _globals_are_from_archives(
             globals,
             self._verified_archives,
         )
@@ -301,6 +323,8 @@ class _ProviderImportGate:
         if not self._provider_import_is_allowed(absolute_name):
             self.violation = True
             raise ImportError(f"provider import is outside the verified closure: {absolute_name}")
+        if absolute_name == "sys":
+            return _restricted_sys_module(self._verified_archives)
         return imported
 
     def _guarded_import_module(
@@ -332,6 +356,8 @@ class _ProviderImportGate:
         if provider_call and not self._provider_import_is_allowed(absolute_name):
             self.violation = True
             raise ImportError(f"provider import is outside the verified closure: {absolute_name}")
+        if provider_call and absolute_name == "sys":
+            return _restricted_sys_module(self._verified_archives)
         return imported
 
     def _absolute_name(
@@ -370,6 +396,62 @@ def _provider_error(
     return _error(path, code)
 
 
+def _materialize_wheels(wheel_paths: list[str], root: Path) -> list[str]:
+    root.mkdir()
+    roots: list[str] = []
+    for index, wheel_path in enumerate(wheel_paths):
+        destination = root / str(index)
+        destination.mkdir()
+        _extract_wheel(Path(wheel_path), destination)
+        roots.append(str(destination))
+    return roots
+
+
+def _extract_wheel(wheel_path: Path, destination: Path) -> None:
+    written: set[Path] = set()
+    with zipfile.ZipFile(wheel_path) as wheel:
+        for member in wheel.infolist():
+            relative = _wheel_member_destination(member)
+            if relative is None:
+                continue
+            target = destination.joinpath(*relative.parts)
+            if target in written:
+                raise ValueError("wheel members map to the same destination")
+            written.add(target)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(wheel.read(member))
+            mode = (member.external_attr >> 16) & 0o777
+            target.chmod(mode or 0o644)
+
+
+def _wheel_member_destination(member: zipfile.ZipInfo) -> PurePosixPath | None:
+    raw_name = member.filename
+    path = PurePosixPath(raw_name)
+    mode = member.external_attr >> 16
+    if (
+        not raw_name
+        or "\\" in raw_name
+        or path.is_absolute()
+        or any(part in {"", ".", ".."} for part in path.parts)
+        or stat.S_ISLNK(mode)
+    ):
+        raise ValueError("wheel member path is unsafe")
+    if member.is_dir():
+        return None
+    parts = path.parts
+    if parts[0].endswith(".data"):
+        if len(parts) < 3:
+            raise ValueError("wheel data member is invalid")
+        scheme = parts[1]
+        if scheme in {"purelib", "platlib", "data"}:
+            parts = parts[2:]
+        elif scheme in {"headers", "scripts"}:
+            return None
+        else:
+            raise ValueError("wheel data scheme is invalid")
+    return PurePosixPath(*parts)
+
+
 def _execute(request: dict[str, object], response_path: Path) -> int:
     implementation_artifact = request["implementation_artifact"]
     dependency_artifacts = request["dependency_artifacts"]
@@ -402,15 +484,21 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
     except BaseException:
         return _error(response_path, "provider_execution_failed")
 
+    try:
+        verified_archives = _materialize_wheels(
+            [implementation_artifact, *dependency_artifacts],
+            response_path.parent / "wheel-layout",
+        )
+    except BaseException:
+        return _error(response_path, "provider_import_failed")
     modules_before_provider = set(sys.modules)
-    verified_archives = [implementation_artifact, *dependency_artifacts]
     sys.path[:0] = verified_archives
     import_gate = _ProviderImportGate(verified_archives)
     import_gate.install()
     try:
         try:
             module = importlib.import_module(module_name)
-            if not _module_is_from_archives(module, [implementation_artifact]):
+            if not _module_is_from_archives(module, [verified_archives[0]]):
                 raise ImportError("manifest module is not from implementation artifact")
             implementation = getattr(module, callable_name)
             if not callable(implementation):
@@ -432,6 +520,10 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
             if not isinstance(records, list):
                 raise TypeError("panel records are not a list")
             frame = pd.DataFrame.from_records(records)
+            context = panel.get("context")
+            if not isinstance(context, dict):
+                raise TypeError("panel context is not an object")
+            frame.attrs["open_xquant_context"] = dict(context)
             frame.index = pd.MultiIndex.from_frame(
                 frame[["date", "code"]],
                 names=["__oxq_date", "__oxq_code"],

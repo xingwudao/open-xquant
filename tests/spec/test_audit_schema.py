@@ -1163,6 +1163,25 @@ def test_strict_confirmed_coverage_rejects_framework_default_evidence() -> None:
     assert any("evidence denies user confirmation" in error["message"] for error in result["errors"])
 
 
+def test_strict_confirmed_coverage_rejects_legacy_brand_default_evidence() -> None:
+    spec = {"market": {"region": "us"}}
+    legacy_default = "Open" + "XQuant default; configured explicitly."
+    payload = _payload(
+        [
+            _confirmed(
+                "market.region",
+                "us",
+                legacy_default,
+            )
+        ]
+    )
+
+    result = validate_spec_audit(payload, spec=spec, require_confirmed_coverage=True)
+
+    assert result["status"] == "fail"
+    assert any("evidence denies user confirmation" in error["message"] for error in result["errors"])
+
+
 def test_strict_confirmed_coverage_rejects_effective_default_coverage_evidence() -> None:
     spec = {"cost": {"buy_fee_rate": None}}
     payload = _payload(

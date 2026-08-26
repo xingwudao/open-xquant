@@ -12,6 +12,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType, ModuleType
 from typing import Protocol, cast
+from weakref import ReferenceType, ref
 
 from jsonschema import (  # type: ignore[import-untyped]
     Draft202012Validator,
@@ -49,6 +50,10 @@ _SURFACE_FILENAMES = {
     "operator_binding_schema": "operator-binding-v1.schema.json",
     "reference_validator": "reference_validator_v1.py",
 }
+_ISSUED_RESEARCH_CERTIFICATIONS: dict[
+    int,
+    ReferenceType[ResearchCertification],
+] = {}
 
 
 class _ReferenceValidator(Protocol):
@@ -208,19 +213,39 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
                 )
             )
 
-    return ResearchCertification(
-        provider=contract.provider,
-        release=contract.release,
-        submission_commit=contract.submission_commit,
-        source_commit=contract.source_commit,
-        source_root=contract.source_root,
-        operators=tuple(promoted),
-        artifacts=contract.artifacts,
-        baseline_cases=tuple(
-            _freeze_baseline_case(case) for case in contract.baseline_cases
-        ),
-        baseline_results=baseline_results,
+    return _issue_research_certification(
+        ResearchCertification(
+            provider=contract.provider,
+            release=contract.release,
+            submission_commit=contract.submission_commit,
+            source_commit=contract.source_commit,
+            source_root=contract.source_root,
+            operators=tuple(promoted),
+            artifacts=contract.artifacts,
+            baseline_cases=tuple(
+                _freeze_baseline_case(case) for case in contract.baseline_cases
+            ),
+            baseline_results=baseline_results,
+        )
     )
+
+
+def _issue_research_certification(
+    result: ResearchCertification,
+) -> ResearchCertification:
+    identifier = id(result)
+
+    def remove_issued(reference: ReferenceType[ResearchCertification]) -> None:
+        if _ISSUED_RESEARCH_CERTIFICATIONS.get(identifier) is reference:
+            _ISSUED_RESEARCH_CERTIFICATIONS.pop(identifier, None)
+
+    _ISSUED_RESEARCH_CERTIFICATIONS[identifier] = ref(result, remove_issued)
+    return result
+
+
+def _is_issued_research_certification(result: ResearchCertification) -> bool:
+    reference = _ISSUED_RESEARCH_CERTIFICATIONS.get(id(result))
+    return reference is not None and reference() is result
 
 
 def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:

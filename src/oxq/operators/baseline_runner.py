@@ -55,6 +55,12 @@ def run_research_baselines(
         raise _error("baseline_input_invalid", "baseline operator identity is invalid")
 
     cases_by_operator = {identity: 0 for identity in operators}
+    declared_outputs_by_operator: dict[tuple[str, str], set[str]] = {
+        identity: set() for identity in operators
+    }
+    covered_outputs_by_operator: dict[tuple[str, str], set[str]] = {
+        identity: set() for identity in operators
+    }
     results: list[BaselineResult] = []
     with _snapshot_contract_surface() as (surface_bytes, surface_paths):
         quant_panel_schema = _load_schema(
@@ -101,7 +107,12 @@ def run_research_baselines(
                 operator.manifest,
                 validate_parameters,
             )
-            output_field, output_dtype = _output_field(case, operator.manifest)
+            output_field, output_dtype, declared_outputs = _output_field(
+                case,
+                operator.manifest,
+            )
+            declared_outputs_by_operator[identity].update(declared_outputs)
+            covered_outputs_by_operator[identity].add(output_field)
             _validate_case_tolerance(case)
             actual = _run_child(
                 manifest=operator.manifest,
@@ -132,6 +143,18 @@ def run_research_baselines(
             "baseline_input_invalid",
             "every contract-valid operator requires a numerical baseline",
             missing[0][0],
+        )
+    missing_output_coverage = [
+        identity
+        for identity in operators
+        if declared_outputs_by_operator[identity]
+        != covered_outputs_by_operator[identity]
+    ]
+    if missing_output_coverage:
+        raise _error(
+            "baseline_input_invalid",
+            "every resolved manifest output requires numerical baseline coverage",
+            missing_output_coverage[0][0],
         )
     return tuple(results)
 
@@ -289,7 +312,7 @@ def _validate_case_tolerance(case: BaselineCase) -> None:
 def _output_field(
     case: BaselineCase,
     manifest: Mapping[str, object],
-) -> tuple[str, str]:
+) -> tuple[str, str, set[str]]:
     if len(case.expected) != 1:
         raise _error(
             "baseline_input_invalid",
@@ -328,7 +351,7 @@ def _output_field(
             "baseline expected output is not declared by the manifest",
             case.operator_id,
         )
-    return matches[0]
+    return matches[0][0], matches[0][1], {name for name, _ in declared_fields}
 
 
 def _run_child(
