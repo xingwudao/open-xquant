@@ -696,7 +696,7 @@ def _select_agent_profile(profile: str | None, target_ids: list[str], yes: bool)
     if yes:
         click.echo(f"Agent install profile: {recommended}")
         return recommended
-    click.echo("Choose how OpenXQuant skills should be installed for this machine.")
+    click.echo("Choose how open-xquant skills should be installed for this machine.")
     click.echo("- multi-agent: recommended when your Agent supports multi-Agent/subagent workflows.")
     click.echo("- standalone-agent: for a single Agent that orchestrates the same narrow phase skills itself.")
     return click.prompt(

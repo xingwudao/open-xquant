@@ -1,16 +1,16 @@
 # Builder Output Schema
 
 Use this reference before writing `builder_phase_result.json` or recording
-OpenXQuant package-version provenance.
+open-xquant package-version provenance.
 
 ## Contents
 
-- OpenXQuant Version Provenance
+- open-xquant Version Provenance
 - Validation
 - `builder_phase_result.json`
 - Phase Output
 
-## OpenXQuant Version Provenance
+## open-xquant Version Provenance
 
 Read the package version with the resolved runner's virtualenv Python. Do not
 call `oxq --version`, `oxq version`, or `oxq spec show`; those are not the

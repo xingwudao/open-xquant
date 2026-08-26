@@ -1,7 +1,7 @@
 ---
 name: oxq-report-writer-worker
 description: >-
-  OpenXQuant worker for producing chart assets and final research reports from
+  open-xquant worker for producing chart assets and final research reports from
   gated run artifacts without modifying run artifacts.
 mode: subagent
 role_kind: report_writer

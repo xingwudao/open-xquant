@@ -68,7 +68,7 @@ uv run oxq agent status
 安装器会询问本机使用哪种 Agent profile：
 
 - `multi-agent`: 推荐给支持 multi-Agent / subagent 的 Agent。安装窄
-  skill 和预制 OpenXQuant worker 角色，不安装
+  skill 和预制 open-xquant worker 角色，不安装
   `strategy-builder-standalone`、`quant-research` 等端到端入口。
 - `standalone-agent`: 给单 Agent 顺序编排同一组窄 skill 的环境使用；不安装
   预制 worker 角色，也不安装端到端 workflow skill。
@@ -422,7 +422,7 @@ skill 决定是否需要运行 `research init` 或 `research init --sdk`。
 当 builder 输出 `needs_custom_component` 时，multi-agent 编排应调用
 `oxq-component-author-worker`，而不是让 builder 写组件代码。
 workspace-local custom Rule 当前不属于普通 authoring 能力；如果需要 Rule，
-应阻塞并要求用户明确是否进入 OpenXQuant 框架开发。
+应阻塞并要求用户明确是否进入 open-xquant 框架开发。
 
 组件 authoring 阶段写入已解析的组件根：
 

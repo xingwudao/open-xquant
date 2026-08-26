@@ -255,7 +255,7 @@ Use these next-phase labels in findings:
 ## Provenance And Data Boundaries
 
 Audit `required_oxq_version` as a material provenance field.
-OpenXQuant version provenance is not a user strategy assumption, so the user
+open-xquant version provenance is not a user strategy assumption, so the user
 does not choose a default version value during brainstorm. The builder must
 still record it from the resolved runner/package version, and the coordinator
 must show it in the full SPEC confirmation table.

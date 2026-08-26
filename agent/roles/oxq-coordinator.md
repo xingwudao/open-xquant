@@ -2,8 +2,8 @@
 
 name: oxq-coordinator
 description: >-
-  User-facing OpenXQuant coordinator that routes research work across narrow
-  OpenXQuant worker agents without running the full research workflow itself.
+  User-facing open-xquant coordinator that routes research work across narrow
+  open-xquant worker agents without running the full research workflow itself.
 mode: primary
 role_kind: coordinator
 required_skills:

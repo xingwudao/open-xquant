@@ -1,9 +1,9 @@
-# open-xquant × eQuant-Py 目标架构
+# open-xquant × equant-py 目标架构
 
 ## Overview
 
 open-xquant 是 AI 原生的实用量化研究系统；
-eQuant-Py 是其首个官方认证量化计算层。
+equant-py 是其首个官方认证量化计算层。
 
 两个仓库继续独立演进，open-xquant 保持对研究语义、因果执行、审计、
 机器学习和 Agent 工作流的控制权。
@@ -20,27 +20,27 @@ The viewer will understand:
 
 ## Section 1: 最终关系
 
-**Key Concept**: open-xquant 负责研究真实性，eQuant-Py 负责计算能力。
+**Key Concept**: open-xquant 负责研究真实性，equant-py 负责计算能力。
 
 **Content**:
 
 - open-xquant 是 AI 原生的实用量化研究系统；
-- eQuant-Py 是其首个官方认证量化计算层。
+- equant-py 是其首个官方认证量化计算层。
 - eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。
 - 两个仓库可以独立发布和独立升级。
 
 **Visual Element**:
 
 - Type: 三方边界图。
-- Subject: open-xquant 为主系统，eQuant-Py 为外部认证计算层，
+- Subject: open-xquant 为主系统，equant-py 为外部认证计算层，
   eBacktestCraft 为独立旁路项目。
-- Treatment: open-xquant 使用主色，eQuant-Py 使用互补色，
+- Treatment: open-xquant 使用主色，equant-py 使用互补色，
   eBacktestCraft 使用灰色虚线并标注“不成为正式执行引擎”。
 
 **Text Labels**:
 
 - Headline: "方案 B：独立仓库，认证整合"
-- Labels: "open-xquant", "eQuant-Py", "eBacktestCraft",
+- Labels: "open-xquant", "equant-py", "eBacktestCraft",
   "官方认证量化计算层", "正式执行引擎"
 
 ---
@@ -105,7 +105,7 @@ The viewer will understand:
 
 ## Section 4: 谁拥有交易语义
 
-**Key Concept**: eQuant-Py 不参与订单和成交语义。
+**Key Concept**: equant-py 不参与订单和成交语义。
 
 **Content**:
 
@@ -117,7 +117,7 @@ The viewer will understand:
 - Broker lifecycle。
 - Fill 和 Position。
 - paper/live 一致性。
-- eQuant-Py 不参与订单和成交语义。
+- equant-py 不参与订单和成交语义。
 
 **Visual Element**:
 
@@ -284,9 +284,9 @@ The viewer will understand:
 ### Quotes
 
 - "open-xquant 是 AI 原生的实用量化研究系统；"
-- "eQuant-Py 是其首个官方认证量化计算层。"
+- "equant-py 是其首个官方认证量化计算层。"
 - "它只执行通过认证的 operator binding。"
-- "eQuant-Py 不参与订单和成交语义。"
+- "equant-py 不参与订单和成交语义。"
 - "Agent 不能直接改变正式运行语义。"
 - "模型不能绕过训练边界、数据版本和推理时点。"
 - "两个仓库可以独立发布和独立升级。"
@@ -306,7 +306,7 @@ The viewer will understand:
 
 - 中文技术信息图。
 - 简洁画布、留白充分，不使用复杂背景纹理。
-- open-xquant、eQuant-Py、ML 和删除项使用稳定且可区分的颜色编码。
+- open-xquant、equant-py、ML 和删除项使用稳定且可区分的颜色编码。
 - 不在图中放置代码段或大段正文。
 
 ### Layout Preferences
@@ -320,6 +320,6 @@ The viewer will understand:
 ### Other Requirements
 
 - 图内技术名称保持英文原文，解释性标签使用中文。
-- 清晰区分“归 open-xquant 所有”“由 eQuant-Py 提供”和“必须删除”。
+- 清晰区分“归 open-xquant 所有”“由 equant-py 提供”和“必须删除”。
 - eBacktestCraft 必须显示为独立项目，且不是正式执行引擎。
 - 重点标签必须可读，避免将全部目录和验收条目塞入图片。

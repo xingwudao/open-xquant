@@ -72,7 +72,7 @@ status must be `agent_added` or `unconfirmed`, and the field must block the
 backtest unless it is a documented default accepted by the user.
 
 Never mark a field `confirmed` when the only evidence is a framework, parser,
-runtime, template, or OpenXQuant default. Evidence such as "Framework default",
+runtime, template, or open-xquant default. Evidence such as "Framework default",
 "runtime default", "parser default", "template default", "框架默认", "运行时默认",
 or "系统默认" is not user confirmation. Likewise, do not reword a default as
 "Effective StrategySpec default value", "Documented for full SPEC coverage", or
@@ -99,7 +99,7 @@ non-operative.
 `default` is not a passing final status. A default may appear while the audit is
 blocked and asking grouped confirmation questions, but every effective SPEC
 field must become `confirmed` before `spec_audit.json` can pass. This includes
-fields omitted from YAML but injected by OpenXQuant defaults, such as
+fields omitted from YAML but injected by open-xquant defaults, such as
 execution, cost, cash, validation, metrics, empty dictionaries, and empty
 lists.
 
@@ -184,4 +184,4 @@ assumptions. Use these values:
 - `risk_assumption`: risk controls and robustness settings
 - `metric_assumption`: risk-free rate, metrics profile, annualization, and
   decision metrics
-- `system_provenance`: OpenXQuant version and generated provenance fields
+- `system_provenance`: open-xquant version and generated provenance fields

@@ -7,7 +7,7 @@ description: >-
 
 # Component Creator
 
-Use this skill when the user explicitly asks to modify OpenXQuant source code
+Use this skill when the user explicitly asks to modify open-xquant source code
 or add a built-in component to the framework.
 
 For workspace-local custom components in a research task, use

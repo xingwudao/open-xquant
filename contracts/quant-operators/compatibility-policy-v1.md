@@ -2,7 +2,7 @@
 
 ## 1. Ownership
 
-OpenXQuant owns the normative schemas and certification results.
+open-xquant owns the normative schemas and certification results.
 Providers own their releases and manifests.
 
 ## 2. Binding
@@ -56,13 +56,13 @@ formal signal execution.
 ## 5. Engine boundary
 
 Provider backtests, reports, apps, and workflow artifacts are never governed
-OpenXQuant runs.
+open-xquant runs.
 
 ## 6. Release flow
 
 The release flow is: provider release candidate, provider contract tests,
-OpenXQuant certification, compatibility record, and binding enablement.
-Provider contract tests and OpenXQuant certification MUST both execute the
+open-xquant certification, compatibility record, and binding enablement.
+Provider contract tests and open-xquant certification MUST both execute the
 published JSON Schema structure layer and the non-bypassable
 `reference_validator_v1.py` semantic layer. Binding enablement MUST additionally
 execute `validate_operator_binding()` against the certified exact artifacts.

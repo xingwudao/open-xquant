@@ -1,7 +1,7 @@
 ---
 name: oxq-data-inspection-worker
 description: >-
-  OpenXQuant worker for inspecting data availability, local parquet quality,
+  open-xquant worker for inspecting data availability, local parquet quality,
   and provider/download readiness before audited strategy runs.
 mode: subagent
 role_kind: data_inspection

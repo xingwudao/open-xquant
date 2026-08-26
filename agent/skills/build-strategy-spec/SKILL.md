@@ -95,7 +95,7 @@ Read these one-level references only when the matching work is needed:
 - `references/source-mapping-and-catalog.md`: source mapping, unsupported
   disclosure, mapping-contract fields, component catalog query patterns,
   canonical recipe selection, and cross-sectional feasibility.
-- `references/builder-output-schema.md`: OpenXQuant version provenance,
+- `references/builder-output-schema.md`: open-xquant version provenance,
   validation commands, `builder_phase_result.json`, and output schema.
 
 ## Version-Governed Artifact Gate
@@ -211,10 +211,10 @@ appropriate inside a source checkout where `oxq` is installed for that project.
 ## Provenance And SPEC Shape
 
 Every generated `strategy_spec.yaml` must distinguish the SPEC schema version
-from the OpenXQuant package version:
+from the open-xquant package version:
 
 - `schema_version` is the SPEC schema version.
-- `required_oxq_version` is the OpenXQuant package version used by the
+- `required_oxq_version` is the open-xquant package version used by the
   resolved runner for this builder phase.
 
 Do not change `schema_version` to the package version. When writing or
@@ -262,7 +262,7 @@ The builder owns the repair.
 For contradictions that include `effective_field_path`, `source_yaml_path`, and
 `builder_required_fix`:
 
-- move the value to the effective field path that OpenXQuant actually parses
+- move the value to the effective field path that open-xquant actually parses
 - remove the non-operative YAML path when it is not part of
   `StrategySpec.from_yaml(...).to_effective_dict()`
 - preserve the original user-confirmed value and cite the audit finding in

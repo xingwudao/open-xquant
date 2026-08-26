@@ -98,7 +98,7 @@ def test_component_author_forbidden_outputs_do_not_conflict_with_owned_outputs()
     assert "<components_dir>/bundles/<bundle_id>/component_manifest.json" in role
     assert "<components_dir>/bundles/<bundle_id>/component_catalog.json" in role
     assert "<installed_sdk_bundle>/**" in metadata["forbidden_outputs"]
-    assert "installed OpenXQuant SDK bundle" in role
+    assert "installed open-xquant SDK bundle" in role
 
 
 def test_runtime_and_backtest_contracts_resolve_configured_component_root() -> None:

@@ -1,7 +1,7 @@
 ---
 name: oxq-strategy-idea-auditor-worker
 description: >-
-  OpenXQuant worker for auditing the strategy brainstorm workflow before SPEC
+  open-xquant worker for auditing the strategy brainstorm workflow before SPEC
   construction is allowed.
 mode: subagent
 role_kind: strategy_idea_auditor

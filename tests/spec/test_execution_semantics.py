@@ -16,7 +16,7 @@ def test_missing_metrics_section_defaults_to_open_xquant_profile(tmp_path: Path)
 schema_version: "0.1"
 strategy_id: metrics_default
 research:
-  hypothesis: missing metrics should use the open xquant profile
+  hypothesis: missing metrics should use the open-xquant profile
 universe:
   type: static
   symbols: [SPY]

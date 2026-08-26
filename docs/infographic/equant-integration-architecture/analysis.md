@@ -1,5 +1,5 @@
 ---
-title: "open-xquant 与 eQuant-Py 整合架构设计"
+title: "open-xquant 与 equant-py 整合架构设计"
 topic: "AI 原生量化研究系统与官方量化计算层整合"
 data_type: "分层架构、职责边界、迁移路线"
 complexity: "complex"
@@ -11,7 +11,7 @@ user_language: "zh"
 ## Main Topic
 
 open-xquant 是 AI 原生的实用量化研究系统；
-eQuant-Py 是其首个官方认证量化计算层。
+equant-py 是其首个官方认证量化计算层。
 
 该方案在两个仓库继续独立演进的前提下，保持 open-xquant 对研究语义、
 因果执行、审计、机器学习和 Agent 工作流的控制权。
@@ -20,7 +20,7 @@ eQuant-Py 是其首个官方认证量化计算层。
 
 After viewing this infographic, the viewer should understand:
 
-1. open-xquant、eQuant-Py 与 eBacktestCraft 的最终职责边界。
+1. open-xquant、equant-py 与 eBacktestCraft 的最终职责边界。
 2. Agent、研究治理、编译、量化计算、Engine/执行和 ML 六层如何连接。
 3. 本地需要新增、修改、删除什么，以及下一次 PR 如何分阶段整合。
 
@@ -28,13 +28,13 @@ After viewing this infographic, the viewer should understand:
 
 - **Knowledge Level**: 熟悉 open-xquant 代码结构、量化系统或跨仓库集成的
   中高级工程师和维护者。
-- **Context**: 在 eQuant-Py 完整满足 Quant Operator Contract v1 后，
+- **Context**: 在 equant-py 完整满足 Quant Operator Contract v1 后，
   评审下一次集成 PR 的架构与范围。
 - **Expectations**: 快速看清控制权、执行路径、代码改动、删减项和迁移顺序。
 
 ## Content Type Analysis
 
-- **Data Structure**: 六层纵向架构连接 Agent 到执行与审计；eQuant-Py 作为
+- **Data Structure**: 六层纵向架构连接 Agent 到执行与审计；equant-py 作为
   外部计算层通过官方集成边界横向接入；底部用新增、修改、删除和 PR 序列
   表达落地路线。
 - **Key Relationships**: Strategy Spec 和 Model Spec 经过 Compiler 与 Runtime
@@ -48,11 +48,11 @@ After viewing this infographic, the viewer should understand:
 ## Key Data Points (Verbatim)
 
 - "open-xquant 是 AI 原生的实用量化研究系统；"
-- "eQuant-Py 是其首个官方认证量化计算层。"
+- "equant-py 是其首个官方认证量化计算层。"
 - "eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。"
 - "它不等于“任意插件系统”。"
 - "它只执行通过认证的 operator binding。"
-- "eQuant-Py 不参与订单和成交语义。"
+- "equant-py 不参与订单和成交语义。"
 - "Agent 不能直接改变正式运行语义。"
 - "模型不能绕过训练边界、数据版本和推理时点。"
 - "Agent -> Catalog -> Spec -> Compile -> Certified Executor"

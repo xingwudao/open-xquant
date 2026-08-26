@@ -3,7 +3,7 @@
 Use case: infographic-diagram
 Asset type: project architecture and migration documentation infographic
 Primary request: Create a professional Chinese infographic explaining the target
-architecture for integrating open-xquant with eQuant-Py under方案 B while the two
+architecture for integrating open-xquant with equant-py under方案 B while the two
 repositories remain independent.
 Canvas: landscape 16:9, wide composition, publication-ready, high resolution.
 Language: Simplified Chinese for explanatory labels; preserve English technical
@@ -33,7 +33,7 @@ Strict craft-handmade paper-cutout infographic style.
 - Hand-drawn outlines with consistent line weight.
 - Professional multi-color palette with stable role coding:
   - open-xquant: muted teal
-  - eQuant-Py: mustard yellow
+  - equant-py: mustard yellow
   - ML: forest green
   - delete or reject: brick red
   - neutral governance and artifacts: soft blue and charcoal
@@ -51,7 +51,7 @@ Strict craft-handmade paper-cutout infographic style.
 
 Render exactly:
 
-- Main title: "open-xquant × eQuant-Py 目标架构"
+- Main title: "open-xquant × equant-py 目标架构"
 - Subtitle: "方案 B：独立仓库，认证整合"
 
 ### Responsibility boundary cell
@@ -62,12 +62,12 @@ Show three project modules:
 
 - "open-xquant"
 - "AI 原生的实用量化研究系统"
-- "eQuant-Py"
+- "equant-py"
 - "官方认证量化计算层"
 - "eBacktestCraft"
 - "独立，但不是正式执行引擎"
 
-Connect eQuant-Py to open-xquant through a locked certified binding.
+Connect equant-py to open-xquant through a locked certified binding.
 Place eBacktestCraft to the side with a gray dashed line, not inside the engine.
 
 ### Central six-layer architecture cell
@@ -98,7 +98,7 @@ The main flow is:
 Researcher and Agent -> Strategy Spec / Model Spec -> Compiler -> Compiled Plan ->
 Quant Compute Integration -> Engine & Execution -> Broker & Fill and Run Artifacts.
 
-Show eQuant-Py as an external yellow module connected only to
+Show equant-py as an external yellow module connected only to
 Quant Compute Integration through "Certified Operators".
 
 Show ML Research as a green cross-cutting layer connected to Spec, Quant Compute
@@ -142,7 +142,7 @@ Use a shielded group containing these exact labels:
 
 Add the exact statement:
 
-- "eQuant-Py 不参与订单和成交语义"
+- "equant-py 不参与订单和成交语义"
 
 ### Local changes cell
 
@@ -244,7 +244,7 @@ Render exactly:
 
 - open-xquant must be visually presented as the owner of research truth,
   governance, compiler, engine, execution, audit, ML boundaries, and Agent workflow.
-- eQuant-Py must remain an external independently released certified compute layer.
+- equant-py must remain an external independently released certified compute layer.
 - eBacktestCraft must remain separate and must not appear as the formal engine.
 - Do not present this as an arbitrary plugin platform.
 - All important text must remain legible at normal document width.

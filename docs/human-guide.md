@@ -4,7 +4,7 @@
 具体安装命令、profile 选择、目标目录和校验步骤由 `docs/agent-guide.md`
 提供给 Agent 执行。
 
-![OpenXQuant SubAgent 协作框架](images/openxquant-subagent-collaboration.png)
+![open-xquant SubAgent 协作框架](images/open-xquant-subagent-collaboration.png)
 
 ## 1. Clone 代码
 

@@ -1549,7 +1549,7 @@ def _preflight_compile_preview_target(
     target_kind = _compile_preview_path_kind_at(parent, target.name)
     if target_kind == "unrecognized":
         raise click.ClickException(
-            f"compile preview output is nonempty and not an OpenXQuant-managed compile preview: {target}"
+            f"compile preview output is nonempty and not an open-xquant-managed compile preview: {target}"
         )
     return parent.identity
 

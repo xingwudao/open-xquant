@@ -1284,7 +1284,7 @@ def _build_strategy_py_artifact(
     del spec, compiled_plan, spec_hash, compiled_plan_hash
     lines = [
         '"""',
-        "Generated OpenXQuant strategy script.",
+        "Generated open-xquant strategy script.",
         "",
         "Canonical source: strategy_spec.yaml",
         "Runtime plan source: compiled_plan.json",
@@ -1574,7 +1574,7 @@ def _build_strategy_py_artifact(
         "    market: LocalMarketDataProvider,",
         "    broker: SimBroker,",
         ") -> RunResult:",
-        '    """Execute the backtest with OpenXQuant SDK objects."""',
+        '    """Execute the backtest with open-xquant SDK objects."""',
         "    start, end = resolve_backtest_period(spec)",
         "    plan = load_compiled_plan()",
         "    execution = plan.get('execution', {})",

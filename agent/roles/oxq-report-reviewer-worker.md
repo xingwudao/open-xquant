@@ -1,7 +1,7 @@
 ---
 name: oxq-report-reviewer-worker
 description: >-
-  OpenXQuant worker for semantic review of a completed research report against
+  open-xquant worker for semantic review of a completed research report against
   gated artifacts, audits, metrics, robustness, and charts.
 mode: subagent
 role_kind: report_reviewer

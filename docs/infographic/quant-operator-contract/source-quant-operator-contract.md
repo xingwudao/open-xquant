@@ -5,7 +5,7 @@
 > 适用对象：向 open-xquant 提供指标、因子、数据处理、研究评价、
 > 机器学习特征或其他量化计算能力的独立算子仓库。
 >
-> 首个目标实现：eQuant-Py。
+> 首个目标实现：equant-py。
 
 ## 1. 文档目的
 
@@ -15,7 +15,7 @@
 或研究目录。外部项目可以继续保持独立仓库、独立 API、独立发布节奏和
 独立用户群体。
 
-只有被声明为“OpenXQuant Compatible”的算子，才必须满足本规范。
+只有被声明为“open-xquant Compatible”的算子，才必须满足本规范。
 
 本规范解决以下问题：
 
@@ -922,9 +922,9 @@ flowchart LR
 
 任何一项无法回答，都不能进入正式认证。
 
-## 24. 对 eQuant-Py 的首轮适配建议
+## 24. 对 equant-py 的首轮适配建议
 
-eQuant-Py 作为首个目标实现，应优先完成：
+equant-py 作为首个目标实现，应优先完成：
 
 1. 解决 distribution name 和正式发布问题。
 2. 修正 Python、pandas、numpy 的真实兼容声明。

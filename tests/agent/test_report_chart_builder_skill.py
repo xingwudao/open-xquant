@@ -73,7 +73,7 @@ def test_report_chart_builder_skill_defines_unified_visual_style_defaults() -> N
 
     text = skill.read_text(encoding="utf-8")
 
-    assert "OpenXQuant Report Chart Style" in text
+    assert "open-xquant Report Chart Style" in text
     assert "OXQ_REPORT_STYLE" in text
     assert "figure.figsize" in text
     assert "(12, 6.75)" in text
@@ -1457,15 +1457,15 @@ def test_strategy_builder_records_required_open_xquant_version() -> None:
     spec_auditor = _skill_bundle_text("audit-strategy-spec")
     runtime_auditor = Path("agent/skills/audit-runtime-semantics/SKILL.md").read_text(encoding="utf-8")
 
-    assert "OpenXQuant Version Provenance" in builder
+    assert "open-xquant Version Provenance" in builder
     assert "`schema_version` is the SPEC schema version" in builder
-    assert "`required_oxq_version` is the OpenXQuant package version" in builder
+    assert "`required_oxq_version` is the open-xquant package version" in builder
     assert "Do not change `schema_version` to the package version" in builder
     assert "write `required_oxq_version`" in builder
     assert "builder_phase_result.json" in builder
 
     assert "`required_oxq_version`" in spec_auditor
-    assert "OpenXQuant version provenance" in spec_auditor
+    assert "open-xquant version provenance" in spec_auditor
     assert "blocks formal backtest" in spec_auditor
 
     assert "`required_oxq_version`" in runtime_auditor

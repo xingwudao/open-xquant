@@ -1,7 +1,7 @@
 ---
 name: oxq-component-author-worker
 description: >-
-  OpenXQuant worker for authoring workspace-local custom Indicator, Signal,
+  open-xquant worker for authoring workspace-local custom Indicator, Signal,
   or PortfolioOptimizer components with tests, manifest hashes, and
   catalog refresh.
 mode: subagent
@@ -138,7 +138,7 @@ Use the `author-component` skill.
 - Create custom components only when the registry and recipe catalog cannot
   satisfy the requested behavior.
 - Implement task-local or workspace-local `Indicator`, `Signal`, or
-  `PortfolioOptimizer` components using OpenXQuant protocols.
+  `PortfolioOptimizer` components using open-xquant protocols.
 - Write targeted tests proving protocol compliance and behavior.
 - Expose components through a local extension manifest, without mutating the
   global SDK bundle.
@@ -154,7 +154,7 @@ Use the `author-component` skill.
   component-authoring artifacts.
 - Block workspace-local custom `Rule` requests. The current audited
   SPEC/runtime path only consumes built-in runtime rules; custom rules require
-  explicit OpenXQuant framework development and runtime support.
+  explicit open-xquant framework development and runtime support.
 
 ## Inputs
 
@@ -192,8 +192,8 @@ recorded in that result.
 - Do not run formal backtests.
 - Do not write reports.
 - Do not modify run artifacts.
-- Do not mutate the installed OpenXQuant SDK bundle.
-- Do not modify OpenXQuant source code unless the user explicitly says this is
+- Do not mutate the installed open-xquant SDK bundle.
+- Do not modify open-xquant source code unless the user explicitly says this is
   framework development.
 
 ## Result

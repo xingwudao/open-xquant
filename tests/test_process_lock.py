@@ -215,7 +215,7 @@ def test_mixed_case_aliases_reuse_existing_inode_state_at_entry(
 
 
 def test_stable_path_location_identity_casefolds_a_missing_suffix(tmp_path) -> None:
-    upper = tmp_path / "Config" / "Open-XQuant"
+    upper = tmp_path / "Config" / "open-xquant"
     lower = tmp_path / "config" / "open-xquant"
 
     assert process_lock.stable_path_location_identity(upper) == process_lock.stable_path_location_identity(lower)
@@ -232,14 +232,14 @@ def test_stable_path_location_identity_uses_existing_ancestor_identity_for_alias
     except OSError as exc:
         pytest.skip(f"directory symlinks are unavailable: {exc}")
 
-    canonical = backing / "Config" / "Open-XQuant"
+    canonical = backing / "Config" / "open-xquant"
     alternate = alias / "config" / "open-xquant"
 
     assert process_lock.stable_path_location_identity(canonical) == process_lock.stable_path_location_identity(alternate)
 
 
 def test_stable_path_location_identity_collapses_an_existing_final_alias(tmp_path) -> None:
-    location = tmp_path / "Open-XQuant"
+    location = tmp_path / "open-xquant"
     location.mkdir()
     alias = tmp_path / "agent-config-alias"
     try:

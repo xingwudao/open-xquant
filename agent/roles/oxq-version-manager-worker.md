@@ -1,7 +1,7 @@
 ---
 name: oxq-version-manager-worker
 description: >-
-  OpenXQuant worker for deciding whether strategy conversation changes create
+  open-xquant worker for deciding whether strategy conversation changes create
   new versions, continue phases, or append runs.
 mode: subagent
 role_kind: version_manager

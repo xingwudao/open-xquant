@@ -1,7 +1,7 @@
 ---
 name: oxq-lineage-auditor-worker
 description: >-
-  OpenXQuant worker for auditing artifact lineage across versions, runs,
+  open-xquant worker for auditing artifact lineage across versions, runs,
   comparisons, and final selection references.
 mode: subagent
 role_kind: lineage_auditor

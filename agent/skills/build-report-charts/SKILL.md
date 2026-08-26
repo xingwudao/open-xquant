@@ -145,7 +145,7 @@ outside the version's `10_reports/<run_id>/` package.
      governed report package.
    - Keep plotting deterministic and local; do not download new data unless the
      user explicitly asks.
-   - Require `seaborn` for the default OpenXQuant report chart style. The
+   - Require `seaborn` for the default open-xquant report chart style. The
      project `chart` extra includes `seaborn>=0.13`; if import fails, treat it
      as an environment problem and fix the chart environment or block with a
      clear message; do not silently downgrade to arbitrary Matplotlib defaults.
@@ -153,7 +153,7 @@ outside the version's `10_reports/<run_id>/` package.
      `uv run --extra chart python <temporary_staging>/<script>.py` so the
      `chart` extra is active. In an installed SDK bundle, verify
      `import seaborn` works in the runner environment before plotting.
-   - Use the OpenXQuant Report Chart Style below in every generated script
+   - Use the open-xquant Report Chart Style below in every generated script
      before plotting any figure.
 
 ```python
