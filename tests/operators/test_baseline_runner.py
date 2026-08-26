@@ -555,7 +555,7 @@ def test_parent_rejects_out_of_range_int64_child_response(
     child = tmp_path / "out_of_range_int_child.py"
     child.write_text(
         "import json, pathlib, sys\n"
-        f"value = {{'status': 'ok', 'output': [{value}, None, {value}]}}\n"
+        f"value = {{'status': 'ok', 'outputs': {{'sma_3': [{value}, None, {value}]}}}}\n"
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
@@ -618,7 +618,7 @@ def test_parent_rejects_unconvertible_float64_child_response(
     child = tmp_path / "unconvertible_float_child.py"
     child.write_text(
         "import json, pathlib, sys\n"
-        f"value = {{'status': 'ok', 'output': [{value}, None, {value}]}}\n"
+        f"value = {{'status': 'ok', 'outputs': {{'sma_3': [{value}, None, {value}]}}}}\n"
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
@@ -810,6 +810,47 @@ def sma(frame, *, window):
     assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
 
 
+def test_rejects_provider_that_fabricates_one_requested_output_per_invocation(
+    tmp_path: Path,
+) -> None:
+    source = """
+import json
+import pathlib
+import sys
+import pandas as pd
+
+def sma(frame, *, window):
+    request = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    requested = request.get("output_fields")
+    field = request["output_field"] if requested is None else requested[0]["name"]
+    return pd.DataFrame({field: [None, None, 2.0]}, index=frame.index)
+"""
+    candidate = _contract(tmp_path, source)
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["output"]["fields"].append(
+        {
+            "name_template": "ema_{window}",
+            "dtype": "float64",
+            "value_range": "finite_or_nan",
+        }
+    )
+    complete_case = replace(
+        candidate.baseline_cases[0],
+        expected={
+            "sma_3": [None, None, 2.0],
+            "ema_3": [None, None, 2.0],
+        },
+    )
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+        baseline_cases=(complete_case,),
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
 def test_requires_every_output_on_each_parameterized_baseline_case(
     tmp_path: Path,
 ) -> None:
@@ -885,7 +926,7 @@ def test_rejects_non_iso_date_child_output_even_when_expected_matches(
     child = tmp_path / "invalid_date_child.py"
     child.write_text(
         "import json, pathlib, sys\n"
-        f"value = {{'status': 'ok', 'output': {invalid_dates!r}}}\n"
+        f"value = {{'status': 'ok', 'outputs': {{'sma_3': {invalid_dates!r}}}}}\n"
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
@@ -1423,7 +1464,7 @@ def test_rejects_child_json_with_undeclared_response_fields(
     child.write_text(
         "import json, pathlib, sys\n"
         "pathlib.Path(sys.argv[2]).write_text("
-        "json.dumps({'status': 'ok', 'output': [None, None, 2.0], 'extra': 1}))\n",
+        "json.dumps({'status': 'ok', 'outputs': {'sma_3': [None, None, 2.0]}, 'extra': 1}))\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
@@ -1514,12 +1555,28 @@ def test_linux_supervisor_always_cleans_children_when_launch_is_interrupted() ->
             isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr == "Popen" for child in ast.walk(node)
         )
     )
-
     assert any(
         isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "terminate_adopted_children"
         for statement in supervision.finalbody
         for child in ast.walk(statement)
     )
+
+
+def test_linux_guardian_inserts_launcher_between_itself_and_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(baseline_runner, "_posix_platform", lambda: "linux")
+    provider = [sys.executable, "-c", "pass"]
+
+    command = baseline_runner._contained_posix_command(provider)
+
+    assert command[4:8] == [
+        sys.executable,
+        "-I",
+        "-c",
+        baseline_runner._LINUX_LAUNCHER_SCRIPT,
+    ]
+    assert command[8:] == provider
 
 
 def test_successful_linux_supervisor_is_not_signalled_after_it_is_reaped(
@@ -1720,6 +1777,29 @@ def test_success_contains_detached_atexit_descendant_when_tracking_misses(
                 os.kill(descendant_pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux guardian assertion")
+def test_linux_guardian_reaps_provider_after_provider_kills_launcher(
+    tmp_path: Path,
+) -> None:
+    pid_path = tmp_path / "provider-that-killed-launcher.pid"
+    script = (
+        "import os, pathlib, signal, time\n"
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "os.kill(os.getppid(), signal.SIGKILL)\n"
+        "time.sleep(60)\n"
+    )
+
+    returncode = baseline_runner._run_child_process(
+        [sys.executable, "-c", script],
+        5,
+    )
+
+    assert returncode != 0
+    provider_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(provider_pid, 0)
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows Job Object assertion")
@@ -1941,6 +2021,72 @@ def sma(frame, *, window):
     )
 
     assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_large_verified_artifacts_are_snapshotted_with_bounded_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = _contract(tmp_path)
+    implementation, dependency = candidate.artifacts
+    provider_bytes = _wheel_bytes(
+        "baseline-provider",
+        "baseline_provider",
+        SUCCESS_SOURCE,
+        prefix_data={"share/padding.bin": "x" * (6 * 1024 * 1024)},
+    )
+    implementation.wheel_path.write_bytes(provider_bytes)
+    implementation = replace(
+        implementation,
+        digest=_sha256(provider_bytes),
+    )
+    del provider_bytes
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["implementation"]["implementation_digest"] = implementation.digest
+    candidate = replace(
+        candidate,
+        artifacts=(implementation, dependency),
+        operators=(replace(operator, manifest=manifest),),
+    )
+    artifact_paths = {
+        implementation.wheel_path.resolve(),
+        dependency.wheel_path.resolve(),
+    }
+    read_sizes: list[int] = []
+    real_open = Path.open
+
+    class BoundedReader:
+        def __init__(self, file: object) -> None:
+            self._file = file
+
+        def __enter__(self) -> BoundedReader:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._file.close()  # type: ignore[attr-defined]
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            assert 0 < size <= 1024 * 1024
+            return cast(bytes, self._file.read(size))  # type: ignore[attr-defined]
+
+    def bounded_open(path: Path, *args: object, **kwargs: object) -> object:
+        file = real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path.resolve() in artifact_paths and "r" in cast(str, args[0] if args else kwargs.get("mode", "r")):
+            return BoundedReader(file)
+        return file
+
+    monkeypatch.setattr(Path, "open", bounded_open)
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+    assert read_sizes
 
 
 def test_rejects_nondeterministic_provider_output(tmp_path: Path) -> None:

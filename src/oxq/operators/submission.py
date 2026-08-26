@@ -506,7 +506,12 @@ def _verify_wheel_identity(
             dist_info_directory = PurePosixPath(wheel_files[0]).parent.name
             build_version = Version(version)
             compatible_tags = set(sys_tags())
-            if not wheel_tags or not wheel_tags.intersection(compatible_tags) or not filename_tags.intersection(compatible_tags):
+            if (
+                not wheel_tags
+                or wheel_tags != filename_tags
+                or not wheel_tags.intersection(compatible_tags)
+                or not filename_tags.intersection(compatible_tags)
+            ):
                 raise zipfile.BadZipFile("wheel tags are incompatible")
             metadata_name = package_metadata.get("Name")
             metadata_version = package_metadata.get("Version")

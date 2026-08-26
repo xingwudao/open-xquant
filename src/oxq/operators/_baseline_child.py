@@ -12,7 +12,7 @@ import stat
 import sys
 import time
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from types import ModuleType
@@ -62,8 +62,7 @@ def _read_request(path: Path) -> dict[str, object]:
         "callable",
         "parameters",
         "input",
-        "output_field",
-        "output_dtype",
+        "output_fields",
         "output_alignment",
     }:
         raise ValueError("request fields are invalid")
@@ -164,6 +163,24 @@ def _extract_output(
         values = [_json_value(value, output_dtype) for value in result[output_field].tolist()]
         return _align_output(values, output_keys, input_keys, output_alignment)
     raise TypeError("provider output must be a Series or DataFrame")
+
+
+def _extract_outputs(
+    result: object,
+    frame: Any,
+    output_fields: list[tuple[str, str]],
+    output_alignment: str,
+) -> dict[str, list[object]]:
+    return {
+        output_field: _extract_output(
+            result,
+            frame,
+            output_field,
+            output_dtype,
+            output_alignment,
+        )
+        for output_field, output_dtype in output_fields
+    }
 
 
 def _frame_keys(frame: Any) -> list[tuple[object, object]]:
@@ -301,15 +318,55 @@ class _ProviderImportGate:
         self._verified_archives = verified_archives
         self._original_import = builtins.__import__
         self._original_import_module = importlib.import_module
+        self._original_compile: Callable[..., object] = builtins.compile
+        self._original_exec: Callable[..., None] = builtins.exec
+        self._original_eval: Callable[..., object] = builtins.eval
         self.violation = False
 
     def install(self) -> None:
         setattr(builtins, "__import__", self._guarded_import)
+        setattr(builtins, "compile", self._guarded_compile)
+        setattr(builtins, "exec", self._guarded_exec)
+        setattr(builtins, "eval", self._guarded_eval)
         setattr(importlib, "import_module", self._guarded_import_module)
 
     def restore(self) -> None:
         setattr(builtins, "__import__", self._original_import)
+        setattr(builtins, "compile", self._original_compile)
+        setattr(builtins, "exec", self._original_exec)
+        setattr(builtins, "eval", self._original_eval)
         setattr(importlib, "import_module", self._original_import_module)
+
+    def _guarded_compile(self, *args: object, **kwargs: object) -> object:
+        self._reject_provider_dynamic_code("compile")
+        return self._original_compile(*args, **kwargs)
+
+    def _guarded_exec(self, *args: object, **kwargs: object) -> None:
+        self._reject_provider_dynamic_code("exec")
+        self._original_exec(*args, **kwargs)
+
+    def _guarded_eval(self, *args: object, **kwargs: object) -> object:
+        self._reject_provider_dynamic_code("eval")
+        return self._original_eval(*args, **kwargs)
+
+    def _reject_provider_dynamic_code(self, operation: str) -> None:
+        caller = sys._getframe(2)
+        try:
+            provider_call = any(
+                _location_is_in_archive(
+                    caller.f_code.co_filename,
+                    archive,
+                )
+                for archive in self._verified_archives
+            ) or _globals_are_from_archives(
+                caller.f_globals,
+                self._verified_archives,
+            )
+        finally:
+            del caller
+        if provider_call:
+            self.violation = True
+            raise ImportError(f"provider dynamic code execution is outside the verified closure: {operation}")
 
     def _guarded_import(
         self,
@@ -525,9 +582,24 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
     callable_name = request["callable"]
     parameters = request["parameters"]
     panel = request["input"]
-    output_field = request["output_field"]
-    output_dtype = request["output_dtype"]
+    output_descriptors = request["output_fields"]
     output_alignment = request["output_alignment"]
+    try:
+        if not isinstance(output_descriptors, list) or not output_descriptors:
+            raise TypeError("output fields are invalid")
+        output_fields = [
+            (descriptor["name"], descriptor["dtype"])
+            for descriptor in output_descriptors
+            if isinstance(descriptor, dict)
+            and set(descriptor) == {"name", "dtype"}
+            and isinstance(descriptor["name"], str)
+            and isinstance(descriptor["dtype"], str)
+            and descriptor["dtype"] in _OUTPUT_DTYPES
+        ]
+        if len(output_fields) != len(output_descriptors) or len({name for name, _ in output_fields}) != len(output_fields):
+            raise TypeError("output fields are invalid")
+    except (KeyError, TypeError):
+        return _error(response_path, "provider_execution_failed")
     if (
         not isinstance(implementation_artifact, str)
         or not Path(implementation_artifact).is_absolute()
@@ -537,9 +609,6 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         or not isinstance(callable_name, str)
         or not isinstance(parameters, dict)
         or not isinstance(panel, dict)
-        or not isinstance(output_field, str)
-        or not isinstance(output_dtype, str)
-        or output_dtype not in _OUTPUT_DTYPES
         or not isinstance(output_alignment, str)
         or output_alignment not in _OUTPUT_ALIGNMENTS
     ):
@@ -613,11 +682,10 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                     "provider_mutated_input",
                 )
             try:
-                output = _extract_output(
+                outputs = _extract_outputs(
                     result,
                     original,
-                    output_field,
-                    output_dtype,
+                    output_fields,
                     output_alignment,
                 )
             except KeyError:
@@ -638,7 +706,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                     import_gate,
                     "provider_alignment_failed",
                 )
-            response_bytes = _encode_response({"status": "ok", "output": output})
+            response_bytes = _encode_response({"status": "ok", "outputs": outputs})
             if import_gate.violation or not _new_modules_are_allowed(
                 modules_before_provider,
                 verified_archives,

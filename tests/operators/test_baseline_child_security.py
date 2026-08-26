@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import subprocess
 import sys
@@ -61,8 +62,9 @@ def _run_child(tmp_path: Path, provider_source: str) -> dict[str, object]:
                         },
                     ],
                 },
-                "output_field": "sma_3",
-                "output_dtype": "float64",
+                "output_fields": [
+                    {"name": "sma_3", "dtype": "float64"},
+                ],
                 "output_alignment": "preserve_input_order",
             },
             allow_nan=False,
@@ -87,6 +89,48 @@ def _run_child(tmp_path: Path, provider_source: str) -> dict[str, object]:
 
     assert completed.returncode == 0, completed.stderr
     return cast(dict[str, object], json.loads(response_path.read_text(encoding="utf-8")))
+
+
+def test_dynamic_code_gate_allows_trusted_callers_and_restores_builtins() -> None:
+    original_compile = builtins.compile
+    original_exec = builtins.exec
+    original_eval = builtins.eval
+    gate = _baseline_child._ProviderImportGate([])
+
+    gate.install()
+    try:
+        code = compile("40 + 2", "<trusted-test>", "eval")
+        assert eval(code) == 42
+        namespace: dict[str, object] = {}
+        exec("value = 42", namespace)
+        assert namespace["value"] == 42
+    finally:
+        gate.restore()
+
+    assert builtins.compile is original_compile
+    assert builtins.exec is original_exec
+    assert builtins.eval is original_eval
+
+
+def test_importlib_can_still_load_and_execute_verified_provider(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+    }
 
 
 def test_restricted_sys_path_does_not_alias_real_sys_path(
@@ -124,3 +168,56 @@ def sma(frame, *, window):
         "status": "error",
         "code": "provider_mutated_input",
     }
+
+
+def _assert_provider_cannot_execute_ambient_source(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    ambient_root = tmp_path / "ambient" / "site-packages"
+    ambient_root.mkdir(parents=True)
+    ambient_source = ambient_root / "ambient_payload.py"
+    if operation == "eval":
+        ambient_source.write_text("2.0\n", encoding="utf-8")
+        dynamic_execution = "value = eval(source)"
+    elif operation == "exec":
+        ambient_source.write_text("VALUE = 2.0\n", encoding="utf-8")
+        dynamic_execution = "exec(source, namespace)\n    value = namespace['VALUE']"
+    else:
+        ambient_source.write_text("VALUE = 2.0\n", encoding="utf-8")
+        dynamic_execution = "code = compile(source, str(ambient_path), 'exec')\n    exec(code, namespace)\n    value = namespace['VALUE']"
+    source = f"""
+import pathlib
+import pandas as pd
+
+def sma(frame, *, window):
+    ambient_path = pathlib.Path({str(ambient_source)!r})
+    source = ambient_path.read_text(encoding="utf-8")
+    namespace = {{}}
+    {dynamic_execution}
+    return pd.Series(
+        [None, None, value],
+        index=frame.index,
+        name=f"sma_{{window}}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_import_failed",
+    }
+
+
+def test_provider_cannot_compile_ambient_site_packages_source(
+    tmp_path: Path,
+) -> None:
+    _assert_provider_cannot_execute_ambient_source(tmp_path, "compile")
+
+
+def test_provider_cannot_exec_ambient_site_packages_source(tmp_path: Path) -> None:
+    _assert_provider_cannot_execute_ambient_source(tmp_path, "exec")
+
+
+def test_provider_cannot_eval_ambient_site_packages_source(tmp_path: Path) -> None:
+    _assert_provider_cannot_execute_ambient_source(tmp_path, "eval")

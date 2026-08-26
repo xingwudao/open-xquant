@@ -11,11 +11,12 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
-from tempfile import TemporaryDirectory
-from typing import cast
+from tempfile import TemporaryDirectory, TemporaryFile
+from typing import BinaryIO, cast
 
 import numpy as np
 
@@ -44,7 +45,22 @@ _AUXILIARY_REQUIREMENTS = {
 }
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
+_ARTIFACT_COPY_CHUNK_BYTES = 1024 * 1024
 _DARWIN_SANDBOX_PROFILE = "(version 1) (allow default) (deny process-fork)"
+_LINUX_LAUNCHER_SCRIPT = r"""
+import os
+import signal
+import subprocess
+import sys
+
+
+target = subprocess.Popen(sys.argv[1:])
+returncode = target.wait()
+if returncode < 0:
+    signal.signal(-returncode, signal.SIG_DFL)
+    os.kill(os.getpid(), -returncode)
+raise SystemExit(returncode)
+"""
 _LINUX_SUBREAPER_SCRIPT = r"""
 import ctypes
 import os
@@ -130,7 +146,7 @@ raise SystemExit(returncode)
 class _VerifiedArtifact:
     artifact: BuildArtifact
     source_path: Path
-    content: bytes
+    snapshot: BinaryIO
 
 
 def run_research_baselines(
@@ -156,13 +172,17 @@ def run_research_baselines(
 
     cases_by_operator = {identity: 0 for identity in operators}
     results: list[BaselineResult] = []
-    with _snapshot_contract_surface() as (
-        surface_bytes,
-        surface_paths,
+    with (
+        ExitStack() as artifact_snapshots,
+        _snapshot_contract_surface() as (
+            surface_bytes,
+            surface_paths,
+        ),
     ):
         verified_artifacts = _verified_artifacts(
             candidate,
             artifacts,
+            artifact_snapshots,
         )
         quant_panel_schema = _load_schema(
             surface_bytes["quant_panel_schema"],
@@ -215,42 +235,44 @@ def run_research_baselines(
                 resolved_parameters,
             )
             _validate_case_tolerance(case)
+            implementation_artifact = _implementation_artifact(
+                operator.implementation_artifact,
+                verified_artifacts,
+                case.operator_id,
+            )
+            dependency_artifacts = [verified for verified in verified_artifacts if verified.artifact.role == "runtime-dependency"]
+            actual = _run_child(
+                manifest=operator.manifest,
+                case=case,
+                parameters=resolved_parameters,
+                output_fields=output_fields,
+                implementation_artifact=implementation_artifact,
+                dependency_artifacts=dependency_artifacts,
+                timeout_seconds=timeout_seconds,
+            )
             for output_field, output_dtype in output_fields:
-                actual = _run_child(
-                    manifest=operator.manifest,
-                    case=case,
-                    parameters=resolved_parameters,
-                    output_field=output_field,
-                    output_dtype=output_dtype,
-                    implementation_artifact=_implementation_artifact(
-                        operator.implementation_artifact,
-                        verified_artifacts,
-                        case.operator_id,
-                    ),
-                    dependency_artifacts=[verified for verified in verified_artifacts if verified.artifact.role == "runtime-dependency"],
-                    timeout_seconds=timeout_seconds,
+                _assert_expected(
+                    case,
+                    output_field,
+                    actual[output_field],
+                    output_dtype,
                 )
-                _assert_expected(case, output_field, actual, output_dtype)
-                repeated = _run_child(
-                    manifest=operator.manifest,
-                    case=case,
-                    parameters=resolved_parameters,
-                    output_field=output_field,
-                    output_dtype=output_dtype,
-                    implementation_artifact=_implementation_artifact(
-                        operator.implementation_artifact,
-                        verified_artifacts,
-                        case.operator_id,
-                    ),
-                    dependency_artifacts=[verified for verified in verified_artifacts if verified.artifact.role == "runtime-dependency"],
-                    timeout_seconds=timeout_seconds,
-                )
+            repeated = _run_child(
+                manifest=operator.manifest,
+                case=case,
+                parameters=resolved_parameters,
+                output_fields=output_fields,
+                implementation_artifact=implementation_artifact,
+                dependency_artifacts=dependency_artifacts,
+                timeout_seconds=timeout_seconds,
+            )
+            for output_field, output_dtype in output_fields:
                 _assert_deterministic(
                     case,
                     operator.manifest,
                     output_dtype,
-                    actual,
-                    repeated,
+                    actual[output_field],
+                    repeated[output_field],
                 )
             results.append(
                 BaselineResult(
@@ -274,6 +296,7 @@ def run_research_baselines(
 def _verified_artifacts(
     candidate: ContractCertification,
     artifacts: tuple[BuildArtifact, ...],
+    snapshots: ExitStack,
 ) -> list[_VerifiedArtifact]:
     if artifacts != candidate.artifacts or not artifacts:
         raise _error(
@@ -284,14 +307,27 @@ def _verified_artifacts(
     try:
         for artifact in artifacts:
             path = artifact.wheel_path.resolve(strict=True)
-            raw = path.read_bytes()
-            if not path.is_file() or f"sha256:{hashlib.sha256(raw).hexdigest()}" != artifact.digest:
+            if not path.is_file():
+                raise OSError("runtime artifact is not a regular file")
+            snapshot = cast(
+                BinaryIO,
+                snapshots.enter_context(TemporaryFile(mode="w+b")),
+            )
+            os.set_inheritable(snapshot.fileno(), False)
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                while chunk := source.read(_ARTIFACT_COPY_CHUNK_BYTES):
+                    snapshot.write(chunk)
+                    digest.update(chunk)
+            snapshot.flush()
+            snapshot.seek(0)
+            if f"sha256:{digest.hexdigest()}" != artifact.digest:
                 raise OSError("runtime artifact digest mismatch")
             verified.append(
                 _VerifiedArtifact(
                     artifact=artifact,
                     source_path=path,
-                    content=raw,
+                    snapshot=snapshot,
                 )
             )
     except OSError:
@@ -484,12 +520,11 @@ def _run_child(
     manifest: Mapping[str, object],
     case: BaselineCase,
     parameters: Mapping[str, object],
-    output_field: str,
-    output_dtype: str,
+    output_fields: list[tuple[str, str]],
     implementation_artifact: _VerifiedArtifact,
     dependency_artifacts: list[_VerifiedArtifact],
     timeout_seconds: float,
-) -> list[object]:
+) -> dict[str, list[object]]:
     timeout_seconds = _validated_timeout(timeout_seconds, case.operator_id)
     with TemporaryDirectory(prefix="oxq-baseline-") as directory:
         root = Path(directory)
@@ -512,8 +547,7 @@ def _run_child(
             "callable": manifest["callable"],
             "parameters": parameters,
             "input": case.input,
-            "output_field": output_field,
-            "output_dtype": output_dtype,
+            "output_fields": [{"name": name, "dtype": dtype} for name, dtype in output_fields],
             "output_alignment": cast(Mapping[str, object], manifest["output"])["alignment"],
         }
         try:
@@ -562,14 +596,20 @@ def _run_child(
         if not isinstance(code, str) or code not in _CHILD_FAILURE_CODES:
             code = "provider_execution_failed"
         raise _error(code, "provider baseline execution failed", case.operator_id)
-    output = response.get("output")
-    if response["status"] != "ok" or not isinstance(output, list):
+    outputs = response.get("outputs")
+    expected_names = {name for name, _ in output_fields}
+    if (
+        response["status"] != "ok"
+        or not isinstance(outputs, dict)
+        or set(outputs) != expected_names
+        or not all(isinstance(value, list) for value in outputs.values())
+    ):
         raise _error(
             "provider_execution_failed",
             "provider baseline child response is invalid",
             case.operator_id,
         )
-    return output
+    return cast(dict[str, list[object]], outputs)
 
 
 def _validated_timeout(timeout_seconds: float, operator_id: str) -> float:
@@ -599,8 +639,14 @@ def _materialize_artifacts(
         destination_root = root / str(index)
         destination_root.mkdir()
         destination = destination_root / verified.artifact.filename
-        destination.write_bytes(verified.content)
-        if f"sha256:{hashlib.sha256(destination.read_bytes()).hexdigest()}" != verified.artifact.digest:
+        digest = hashlib.sha256()
+        verified.snapshot.seek(0)
+        with destination.open("wb") as target:
+            while chunk := verified.snapshot.read(_ARTIFACT_COPY_CHUNK_BYTES):
+                target.write(chunk)
+                digest.update(chunk)
+        verified.snapshot.seek(0)
+        if f"sha256:{digest.hexdigest()}" != verified.artifact.digest:
             raise OSError("runtime artifact snapshot digest mismatch")
         destination.chmod(0o444)
         paths.append(destination)
@@ -735,6 +781,10 @@ def _contained_posix_command(command: list[str]) -> list[str]:
             "-I",
             "-c",
             _LINUX_SUBREAPER_SCRIPT,
+            sys.executable,
+            "-I",
+            "-c",
+            _LINUX_LAUNCHER_SCRIPT,
             *command,
         ]
     if platform == "darwin":
@@ -938,7 +988,7 @@ def _read_response(
         if returncode != 0 or not isinstance(value, dict):
             raise ValueError("invalid child response")
         status = value.get("status")
-        valid_ok = status == "ok" and set(value) == {"status", "output"}
+        valid_ok = status == "ok" and set(value) == {"status", "outputs"}
         valid_error = status == "error" and set(value) == {"status", "code"}
         if not valid_ok and not valid_error:
             raise ValueError("invalid child response fields")
