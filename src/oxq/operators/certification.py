@@ -7,6 +7,7 @@ import json
 import stat
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import ModuleType
@@ -26,6 +27,7 @@ from oxq.operators.models import (
     ContractCandidate,
     ContractCertification,
     ProviderSubmission,
+    ResearchCertification,
 )
 from oxq.operators.resources import materialize_contract_surface
 
@@ -49,6 +51,14 @@ _SURFACE_FILENAMES = {
 
 
 class _ReferenceValidator(Protocol):
+    def validate_quant_panel(self, panel: Mapping[str, object]) -> None: ...
+
+    def validate_operator_request_parameters(
+        self,
+        manifest: Mapping[str, object],
+        parameters: Mapping[str, object],
+    ) -> None: ...
+
     def validate_operator_manifest(self, manifest: Mapping[str, object]) -> None: ...
 
     def validate_operator_binding(
@@ -132,6 +142,81 @@ def validate_provider_contract(
         operators=tuple(candidates),
         artifacts=submission.artifacts,
         baseline_cases=submission.baseline_cases,
+    )
+
+
+def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
+    """Validate the frozen contract and promote only after every baseline passes."""
+    from oxq.operators.baseline_runner import run_research_baselines
+
+    contract = validate_provider_contract(submission)
+    baseline_results = run_research_baselines(contract, contract.artifacts)
+    if len(baseline_results) != len(contract.baseline_cases) or any(
+        result.status != "passed" for result in baseline_results
+    ):
+        raise _error(
+            "baseline_mismatch",
+            "not every numerical baseline passed",
+            "baseline",
+        )
+
+    promoted: list[ContractCandidate] = []
+    with _snapshot_contract_surface() as (surface_bytes, surface_paths):
+        binding_schema = _load_schema(
+            surface_bytes["operator_binding_schema"],
+            "binding_validation_failed",
+            "binding",
+        )
+        validator = _load_reference_validator(
+            surface_bytes["reference_validator"],
+            surface_paths["reference_validator"],
+        )
+        for candidate in contract.operators:
+            binding = deepcopy(candidate.binding)
+            binding["certification_state"] = "research-certified"
+            operator_id = cast(str, candidate.manifest["operator_id"])
+            _validate_schema(
+                binding,
+                binding_schema,
+                code="binding_validation_failed",
+                message="operator binding validation failed",
+                stage="binding",
+                operator_id=operator_id,
+            )
+            entry = CatalogEntry(
+                operator_id=operator_id,
+                operator_version=cast(str, candidate.manifest["operator_version"]),
+                manifest_path=candidate.manifest_path,
+                baseline_path=candidate.manifest_path,
+            )
+            _validate_binding_semantics(
+                validator,
+                binding,
+                candidate.manifest,
+                entry,
+                contract.source_root,
+                candidate.implementation_artifact,
+                surface_paths,
+            )
+            promoted.append(
+                ContractCandidate(
+                    manifest=candidate.manifest,
+                    binding=binding,
+                    manifest_path=candidate.manifest_path,
+                    implementation_artifact=candidate.implementation_artifact,
+                )
+            )
+
+    return ResearchCertification(
+        provider=contract.provider,
+        release=contract.release,
+        submission_commit=contract.submission_commit,
+        source_commit=contract.source_commit,
+        source_root=contract.source_root,
+        operators=tuple(promoted),
+        artifacts=contract.artifacts,
+        baseline_cases=contract.baseline_cases,
+        baseline_results=baseline_results,
     )
 
 

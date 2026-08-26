@@ -68,6 +68,31 @@ class ContractCertification:
 
 
 @dataclass(frozen=True)
+class BaselineResult:
+    """One numerical baseline case that passed exact-wheel execution."""
+
+    operator_id: str
+    operator_version: str
+    case_id: str
+    status: str
+
+
+@dataclass(frozen=True)
+class ResearchCertification:
+    """A provider release whose exact wheels passed every numerical baseline."""
+
+    provider: str
+    release: str
+    submission_commit: str
+    source_commit: str
+    source_root: Path
+    operators: tuple[ContractCandidate, ...]
+    artifacts: tuple[BuildArtifact, ...]
+    baseline_cases: tuple[BaselineCase, ...]
+    baseline_results: tuple[BaselineResult, ...]
+
+
+@dataclass(frozen=True)
 class ProviderSubmission:
     """A verified archive, retaining its temporary directory until exit."""
 
