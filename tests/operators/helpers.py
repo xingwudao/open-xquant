@@ -8,6 +8,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+BUILD_IDENTIFIER = "build-20260826-equant-ttr"
+
 
 def sha256(value: bytes) -> str:
     """Return the contract digest for literal fixture bytes."""
@@ -48,11 +50,24 @@ def write_provider_repository(
     wheel_bytes = _wheel_bytes()
     wheel_digest = sha256(wheel_bytes)
     _write_json(repository / "provider-catalog-v1.json", _catalog())
-    _write_json(repository / "candidate-build-v1.json", _build(implementation_commit, wheel_name, wheel_digest))
+    _write_json(
+        repository / "candidate-build-v1.json",
+        _build(
+            implementation_commit,
+            wheel_name,
+            wheel_digest,
+            BUILD_IDENTIFIER,
+        ),
+    )
     _write_json(repository / "numerical_baselines" / "technical-v1.json", _baseline())
     _write_json(
         repository / "manifests" / "equant.ttr.sma.operator.json",
-        _manifest(implementation_commit, source_tree_digest, wheel_digest),
+        _manifest(
+            implementation_commit,
+            source_tree_digest,
+            wheel_digest,
+            BUILD_IDENTIFIER,
+        ),
     )
     if mutate is not None:
         mutate(repository)
@@ -140,7 +155,12 @@ def _catalog() -> dict[str, object]:
     }
 
 
-def _build(source_commit: str, wheel_name: str, wheel_digest: str) -> dict[str, object]:
+def _build(
+    source_commit: str,
+    wheel_name: str,
+    wheel_digest: str,
+    build_identifier: str,
+) -> dict[str, object]:
     return {
         "schema_version": 1,
         "provider": "equant-py",
@@ -153,6 +173,7 @@ def _build(source_commit: str, wheel_name: str, wheel_digest: str) -> dict[str, 
             "version": "1.0.0",
             "filename": wheel_name,
             "role": "implementation",
+            "build_identifier": build_identifier,
             "digest": wheel_digest,
         }],
     }
@@ -185,7 +206,10 @@ def _source_tree_digest(root: Path, source_files: list[str]) -> str:
 
 
 def _manifest(
-    source_commit: str, source_tree_digest: str, implementation_digest: str
+    source_commit: str,
+    source_tree_digest: str,
+    implementation_digest: str,
+    build_identifier: str,
 ) -> dict[str, object]:
     return {
         "schema_version": 1,
@@ -257,6 +281,6 @@ def _manifest(
             "source_files": ["src/equant_ttr/sma.py"],
             "source_tree_digest": source_tree_digest,
             "implementation_digest": implementation_digest,
-            "build_identifier": "equant-ttr-1.0.0",
+            "build_identifier": build_identifier,
         },
     }

@@ -289,6 +289,7 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
                 version=_string(artifact["version"], "artifact"),
                 filename=filename,
                 role=_string(artifact["role"], "artifact"),
+                build_identifier=_string(artifact["build_identifier"], "artifact"),
                 digest=digest,
                 wheel_path=wheel_path,
             )

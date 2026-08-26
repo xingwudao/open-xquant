@@ -22,12 +22,13 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["distribution", "version", "filename", "role", "digest"],
+        "required": ["distribution", "version", "filename", "role", "build_identifier", "digest"],
         "properties": {
           "distribution": {"$ref": "#/$defs/provider"},
           "version": {"$ref": "#/$defs/semanticVersion"},
           "filename": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"},
           "role": {"enum": ["implementation", "runtime-dependency"]},
+          "build_identifier": {"type": "string", "minLength": 1},
           "digest": {"$ref": "#/$defs/sha256Digest"}
         }
       }

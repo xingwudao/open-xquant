@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
-import importlib.util
 import json
-from collections.abc import Mapping
+import stat
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import ModuleType
 from typing import Protocol, cast
 
@@ -38,6 +40,12 @@ _FROZEN_SURFACE_DIGESTS = {
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
     "reference_validator": "sha256:48099f887ebfc9fd9857ba8cececaa8b52c1dd5a2020ccc5eca21c3120664d9a",
 }
+_SURFACE_FILENAMES = {
+    "quant_panel_schema": "quant-panel-v1.schema.json",
+    "operator_manifest_schema": "operator-manifest-v1.schema.json",
+    "operator_binding_schema": "operator-binding-v1.schema.json",
+    "reference_validator": "reference_validator_v1.py",
+}
 
 
 class _ReferenceValidator(Protocol):
@@ -59,20 +67,21 @@ def validate_provider_contract(
 ) -> ContractCertification:
     """Validate all provider manifests and construct contract-valid bindings."""
     candidates: list[ContractCandidate] = []
-    with materialize_contract_surface() as surface_paths:
+    with _snapshot_contract_surface() as (surface_bytes, surface_paths):
         manifest_schema = _load_schema(
-            surface_paths,
-            "operator_manifest_schema",
+            surface_bytes["operator_manifest_schema"],
             "manifest_schema_invalid",
             "manifest",
         )
         binding_schema = _load_schema(
-            surface_paths,
-            "operator_binding_schema",
+            surface_bytes["operator_binding_schema"],
             "binding_validation_failed",
             "binding",
         )
-        validator: _ReferenceValidator | None = None
+        validator = _load_reference_validator(
+            surface_bytes["reference_validator"],
+            surface_paths["reference_validator"],
+        )
         for entry in submission.operators:
             manifest, manifest_bytes = _read_manifest(entry)
             _validate_schema(
@@ -83,11 +92,6 @@ def validate_provider_contract(
                 stage="manifest",
                 operator_id=entry.operator_id,
             )
-            if validator is None:
-                _validate_frozen_surface(surface_paths, entry.operator_id)
-                validator = _load_reference_validator(
-                    surface_paths["reference_validator"], entry.operator_id
-                )
             _validate_manifest_semantics(validator, manifest, entry.operator_id)
             implementation, artifact = _validate_manifest_identity(
                 submission, entry, manifest
@@ -166,19 +170,70 @@ def _reject_nonstandard_constant(value: str) -> None:
     raise ValueError("non-standard manifest number")
 
 
+@contextmanager
+def _snapshot_contract_surface() -> Iterator[
+    tuple[dict[str, bytes], dict[str, Path]]
+]:
+    try:
+        with materialize_contract_surface() as materialized_paths:
+            if set(materialized_paths) != set(_FROZEN_SURFACE_DIGESTS):
+                raise _surface_validation_error()
+            surface_bytes = {
+                name: materialized_paths[name].read_bytes()
+                for name in _FROZEN_SURFACE_DIGESTS
+            }
+            actual_digests = {
+                name: _sha256_bytes(value)
+                for name, value in surface_bytes.items()
+            }
+            if actual_digests != _FROZEN_SURFACE_DIGESTS:
+                raise _surface_validation_error()
+
+            with TemporaryDirectory(prefix="oxq-contract-snapshot-") as directory:
+                snapshot_root = Path(directory)
+                snapshot_paths: dict[str, Path] = {}
+                for name, filename in _SURFACE_FILENAMES.items():
+                    snapshot_path = snapshot_root / filename
+                    snapshot_path.write_bytes(surface_bytes[name])
+                    snapshot_path.chmod(stat.S_IRUSR)
+                    snapshot_paths[name] = snapshot_path
+                snapshot_root.chmod(stat.S_IRUSR | stat.S_IXUSR)
+                yield surface_bytes, snapshot_paths
+    except OperatorCertificationError:
+        raise
+    except OSError:
+        raise _error(
+            "binding_validation_failed",
+            "frozen contract resources are unavailable",
+            "binding",
+        ) from None
+
+
+def _surface_validation_error() -> OperatorCertificationError:
+    return _error(
+        "binding_validation_failed",
+        "frozen contract surface validation failed",
+        "binding",
+    )
+
+
 def _load_schema(
-    surface_paths: Mapping[str, Path],
-    name: str,
+    schema_bytes: bytes,
     code: str,
     stage: str,
 ) -> dict[str, object]:
     try:
-        path = surface_paths[name]
-        value = json.loads(path.read_text(encoding="utf-8"))
+        value = json.loads(schema_bytes.decode("utf-8"))
         if not isinstance(value, dict):
             raise ValueError("schema is not an object")
         Draft202012Validator.check_schema(value)
-    except (KeyError, OSError, UnicodeError, ValueError, SchemaError):
+    except (
+        UnicodeError,
+        json.JSONDecodeError,
+        ValueError,
+        RecursionError,
+        SchemaError,
+    ):
         message = (
             "operator manifest schema is unavailable"
             if stage == "manifest"
@@ -206,44 +261,27 @@ def _validate_schema(
         raise _error(code, message, stage, operator_id) from None
 
 
-def _validate_frozen_surface(
-    surface_paths: Mapping[str, Path], operator_id: str
-) -> None:
+def _load_reference_validator(
+    source_bytes: bytes,
+    snapshot_path: Path,
+) -> _ReferenceValidator:
     try:
-        if set(surface_paths) != set(_FROZEN_SURFACE_DIGESTS):
-            raise ValueError("contract surface names differ")
-        actual = {
-            name: _sha256_file(surface_paths[name])
-            for name in _FROZEN_SURFACE_DIGESTS
-        }
-        if actual != _FROZEN_SURFACE_DIGESTS:
-            raise ValueError("contract surface bytes differ")
-    except (KeyError, OSError, ValueError):
-        raise _error(
-            "binding_validation_failed",
-            "frozen contract surface validation failed",
-            "binding",
-            operator_id,
-        ) from None
-
-
-def _load_reference_validator(path: Path, operator_id: str) -> _ReferenceValidator:
-    try:
-        spec = importlib.util.spec_from_file_location(
-            "_oxq_packaged_operator_reference_validator_v1",
-            path,
+        source = source_bytes.decode("utf-8")
+        code = compile(
+            source,
+            str(snapshot_path),
+            "exec",
+            dont_inherit=True,
         )
-        if spec is None or spec.loader is None:
-            raise ImportError("reference validator loader unavailable")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
+        module = ModuleType("_oxq_packaged_operator_reference_validator_v1")
+        module.__file__ = str(snapshot_path)
+        exec(code, module.__dict__)
         _require_validator_functions(module)
-    except Exception:
+    except (UnicodeError, ValueError, SyntaxError, TypeError, ImportError):
         raise _error(
             "binding_validation_failed",
             "frozen reference validator is unavailable",
             "binding",
-            operator_id,
         ) from None
     return cast(_ReferenceValidator, module)
 
@@ -284,19 +322,18 @@ def _validate_manifest_identity(
         and artifact.distribution == manifest["distribution"]
         and artifact.version == implementation["package_version"]
     ]
-    expected_build_identifier = (
-        f"{manifest['distribution']}-{implementation['package_version']}"
-    )
     if (
         manifest["operator_id"] != entry.operator_id
         or manifest["operator_version"] != entry.operator_version
         or implementation["source_commit"] != submission.source_commit
-        or implementation["build_identifier"] != expected_build_identifier
         or len(matching_artifacts) != 1
     ):
         raise _manifest_identity_error(entry.operator_id)
     artifact = matching_artifacts[0]
-    if implementation["implementation_digest"] != artifact.digest:
+    if (
+        implementation["build_identifier"] != artifact.build_identifier
+        or implementation["implementation_digest"] != artifact.digest
+    ):
         raise _manifest_identity_error(entry.operator_id)
     return implementation, artifact
 
@@ -362,14 +399,6 @@ def _validate_binding_semantics(
             "binding",
             entry.operator_id,
         ) from None
-
-
-def _sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as file:
-        for chunk in iter(lambda: file.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return f"sha256:{digest.hexdigest()}"
 
 
 def _sha256_bytes(value: bytes) -> str:

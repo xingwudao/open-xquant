@@ -2,6 +2,8 @@
 
 import hashlib
 import json
+import os
+import py_compile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -43,6 +45,25 @@ EXPECTED_BINDING_FIELDS = {
 def sha256_file(path: Path) -> str:
     """Return a frozen-contract digest for exact file bytes."""
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+
+
+def _copy_contract_surface(root: Path) -> dict[str, Path]:
+    copied_paths: dict[str, Path] = {}
+    with materialize_contract_surface() as paths:
+        for name, path in paths.items():
+            copied = root / path.name
+            copied.parent.mkdir(parents=True, exist_ok=True)
+            copied.write_bytes(path.read_bytes())
+            copied_paths[name] = copied
+    return copied_paths
+
+
+def _materialized_surface(paths: dict[str, Path]) -> Callable[[], object]:
+    @contextmanager
+    def copied_surface() -> Iterator[dict[str, Path]]:
+        yield paths
+
+    return copied_surface
 
 
 def _rewrite_manifest(
@@ -97,6 +118,22 @@ def test_constructs_an_exact_contract_valid_binding_from_real_artifacts(
             name: {"release": "1.0.0", "digest": digest}
             for name, digest in EXPECTED_SURFACE_DIGESTS.items()
         }
+
+
+def test_accepts_an_explicit_build_identifier_that_is_not_derived(
+    tmp_path: Path,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        assert submission.artifacts[0].build_identifier == (
+            "build-20260826-equant-ttr"
+        )
+        result = validate_provider_contract(submission)
+
+    implementation = result.operators[0].manifest["implementation"]
+    assert implementation["build_identifier"] == "build-20260826-equant-ttr"  # type: ignore[index]
 
 
 def test_hashes_the_implementation_commit_archive_not_submission_metadata(
@@ -237,13 +274,7 @@ def test_rejects_any_contract_surface_digest_mismatch(
     artifact: str,
 ) -> None:
     fixture = write_provider_repository(tmp_path / "provider-fixture")
-    copied_paths: dict[str, Path] = {}
-    with materialize_contract_surface() as paths:
-        for name, path in paths.items():
-            copied = tmp_path / "surface" / path.name
-            copied.parent.mkdir(exist_ok=True)
-            copied.write_bytes(path.read_bytes())
-            copied_paths[name] = copied
+    copied_paths = _copy_contract_surface(tmp_path / "surface")
     copied_paths[artifact].write_bytes(
         copied_paths[artifact].read_bytes() + b"\n"
     )
@@ -266,6 +297,215 @@ def test_rejects_any_contract_surface_digest_mismatch(
     assert caught.value.code == "binding_validation_failed"
     assert caught.value.stage == "binding"
     assert caught.value.message == "frozen contract surface validation failed"
+
+
+def test_executes_verified_validator_source_instead_of_a_valid_bytecode_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = write_provider_repository(tmp_path / "provider-fixture")
+    copied_paths = _copy_contract_surface(tmp_path / "surface")
+    validator_path = copied_paths["reference_validator"]
+    verified_source = validator_path.read_bytes()
+    malicious_prefix = b'raise RuntimeError("cached validator executed")\n'
+    malicious_source = malicious_prefix + b"#" * (
+        len(verified_source) - len(malicious_prefix)
+    )
+    assert len(malicious_source) == len(verified_source)
+    timestamp = 1_700_000_000
+    validator_path.write_bytes(malicious_source)
+    os.utime(validator_path, (timestamp, timestamp))
+    py_compile.compile(str(validator_path), doraise=True)
+    validator_path.write_bytes(verified_source)
+    os.utime(validator_path, (timestamp, timestamp))
+    monkeypatch.setattr(
+        certification,
+        "materialize_contract_surface",
+        _materialized_surface(copied_paths),
+    )
+
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        result = validate_provider_contract(submission)
+
+    assert result.operators[0].binding["certification_state"] == "contract-valid"
+
+
+def test_binding_validation_uses_private_snapshot_after_materialized_path_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = write_provider_repository(tmp_path / "provider-fixture")
+    copied_paths = _copy_contract_surface(tmp_path / "surface")
+    monkeypatch.setattr(
+        certification,
+        "materialize_contract_surface",
+        _materialized_surface(copied_paths),
+    )
+    validate_semantics = certification._validate_manifest_semantics
+
+    def replace_materialized_path(*args: object) -> None:
+        validate_semantics(*args)  # type: ignore[arg-type]
+        copied_paths["quant_panel_schema"].write_bytes(b"swapped after verification")
+
+    monkeypatch.setattr(
+        certification,
+        "_validate_manifest_semantics",
+        replace_materialized_path,
+    )
+
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        result = validate_provider_contract(submission)
+
+    assert result.operators[0].binding["certification_state"] == "contract-valid"
+
+
+def test_private_snapshot_is_read_only_during_binding_validation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    validate_binding = certification._validate_binding_semantics
+
+    def assert_snapshot_is_read_only(*args: object) -> None:
+        snapshot_paths = args[-1]
+        assert isinstance(snapshot_paths, dict)
+        with pytest.raises(OSError):
+            snapshot_paths["quant_panel_schema"].write_bytes(b"replacement")
+        validate_binding(*args)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(
+        certification,
+        "_validate_binding_semantics",
+        assert_snapshot_is_read_only,
+    )
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        result = validate_provider_contract(submission)
+
+    assert result.operators[0].binding["certification_state"] == "contract-valid"
+
+
+def test_reads_each_materialized_surface_artifact_exactly_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = write_provider_repository(tmp_path / "provider-fixture")
+    copied_paths = _copy_contract_surface(tmp_path / "surface")
+    reads = {path: 0 for path in copied_paths.values()}
+    read_bytes = Path.read_bytes
+
+    def tracked_read_bytes(path: Path) -> bytes:
+        if path in reads:
+            reads[path] += 1
+        return read_bytes(path)
+
+    monkeypatch.setattr(Path, "read_bytes", tracked_read_bytes)
+    monkeypatch.setattr(
+        certification,
+        "materialize_contract_surface",
+        _materialized_surface(copied_paths),
+    )
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        validate_provider_contract(submission)
+
+    assert set(reads.values()) == {1}
+
+
+@pytest.mark.parametrize("phase", ["enter", "cleanup"])
+def test_normalizes_contract_surface_materialization_failures(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    phase: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+
+    @contextmanager
+    def broken_surface() -> Iterator[dict[str, Path]]:
+        if phase == "enter":
+            raise OSError("raw materialization failure")
+        with materialize_contract_surface() as paths:
+            yield paths
+        raise OSError("raw cleanup failure")
+
+    monkeypatch.setattr(
+        certification,
+        "materialize_contract_surface",
+        broken_surface,
+    )
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        with pytest.raises(OperatorCertificationError) as caught:
+            validate_provider_contract(submission)
+
+    assert caught.value.as_dict() == {
+        "status": "fail",
+        "stage": "binding",
+        "code": "binding_validation_failed",
+        "message": "frozen contract resources are unavailable",
+    }
+
+
+def test_preserves_existing_certification_error_from_materialization(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    expected = OperatorCertificationError(
+        "sentinel",
+        "already normalized",
+        stage="resource",
+    )
+
+    @contextmanager
+    def broken_surface() -> Iterator[dict[str, Path]]:
+        raise expected
+        yield {}
+
+    monkeypatch.setattr(
+        certification,
+        "materialize_contract_surface",
+        broken_surface,
+    )
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        with pytest.raises(OperatorCertificationError) as caught:
+            validate_provider_contract(submission)
+
+    assert caught.value is expected
+
+
+def test_normalizes_schema_parser_recursion_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+
+    def recurse(*args: object, **kwargs: object) -> object:
+        del args, kwargs
+        raise RecursionError("raw schema parser failure")
+
+    with load_provider_submission(
+        fixture.path, fixture.submission_commit, fixture.artifact_dir
+    ) as submission:
+        monkeypatch.setattr(certification.json, "loads", recurse)
+        with pytest.raises(OperatorCertificationError) as caught:
+            validate_provider_contract(submission)
+
+    assert caught.value.as_dict() == {
+        "status": "fail",
+        "stage": "manifest",
+        "code": "manifest_schema_invalid",
+        "message": "operator manifest schema is unavailable",
+    }
 
 
 @pytest.mark.parametrize(

@@ -9,6 +9,7 @@ import pytest
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.submission import load_provider_submission
 from tests.operators.helpers import (
+    BUILD_IDENTIFIER,
     commit_mutation,
     rewrite_json,
     sha256,
@@ -33,6 +34,7 @@ def test_loads_a_committed_submission_into_an_independent_archive(tmp_path: Path
         assert submission.operators[0].manifest_path.is_file()
         assert submission.operators[0].baseline_path.is_file()
         assert submission.artifacts[0].wheel_path == fixture.artifact_dir / fixture.wheel_name
+        assert submission.artifacts[0].build_identifier == BUILD_IDENTIFIER
 
 
 def test_uses_committed_data_not_a_dirty_working_tree(tmp_path: Path) -> None:
@@ -210,6 +212,7 @@ def test_rejects_duplicate_or_missing_artifacts(tmp_path: Path) -> None:
                 "version": "1.0.0",
                 "filename": fixture.wheel_name,
                 "role": "runtime-dependency",
+                "build_identifier": "duplicate-test-build",
                 "digest": sha256(b"another artifact"),
             }
         ),

@@ -26,6 +26,7 @@ class BuildArtifact:
     version: str
     filename: str
     role: str
+    build_identifier: str
     digest: str
     wheel_path: Path
 

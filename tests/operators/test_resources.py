@@ -97,6 +97,7 @@ def _valid_profile_instances() -> dict[str, dict[str, object]]:
                     "version": "1.0.0",
                     "filename": "equant_ttr-1.0.0-py3-none-any.whl",
                     "role": "implementation",
+                    "build_identifier": "build-20260826-equant-ttr",
                     "digest": digest,
                 }
             ],
@@ -219,6 +220,14 @@ def test_catalog_rejects_duplicate_operator_identity_json_keys() -> None:
         (
             "candidate_build",
             lambda instance: instance["artifacts"][0].update({"digest": "sha256:bad"}),
+        ),
+        (
+            "candidate_build",
+            lambda instance: instance["artifacts"][0].update({"build_identifier": ""}),
+        ),
+        (
+            "candidate_build",
+            lambda instance: instance["artifacts"][0].pop("build_identifier"),
         ),
         (
             "numerical_baseline",
