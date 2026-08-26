@@ -288,6 +288,19 @@ def _assert_failure(
     assert caught.value.operator_id == "fixture.baseline.sma"
 
 
+def _with_output_dtype(
+    candidate: ContractCertification,
+    dtype: str,
+) -> ContractCertification:
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["output"]["fields"][0]["dtype"] = dtype
+    return replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+    )
+
+
 def test_executes_exact_provider_and_dependency_wheels_without_parent_imports(
     tmp_path: Path,
 ) -> None:
@@ -312,6 +325,288 @@ def test_executes_exact_provider_and_dependency_wheels_without_parent_imports(
         name == "baseline_provider" or name.startswith("baseline_provider.")
         for name in sys.modules
     )
+
+
+def test_executes_equant_style_groupby_code_with_key_columns_preserved(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    assert list(frame.index.names) == ["__oxq_date", "__oxq_code"]
+    assert frame.index.get_level_values("__oxq_date").tolist() == frame["date"].tolist()
+    assert frame.index.get_level_values("__oxq_code").tolist() == frame["code"].tolist()
+    output = frame.groupby("code", sort=False)["close"].transform(
+        lambda values: values.rolling(window).mean()
+    )
+    return pd.Series(output, index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(tmp_path, source)
+
+    results = run_research_baselines(candidate, candidate.artifacts, timeout_seconds=5)
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_rejects_float_output_for_boolean_manifest_field(tmp_path: Path) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    return pd.Series([0.0, 0.0, 1.0], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": [False, False, True]}),
+        "boolean",
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+def test_accepts_exact_string_output_for_string_manifest_field(tmp_path: Path) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    return pd.Series(["low", "mid", "high"], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": ["low", "mid", "high"]}),
+        "string",
+    )
+
+    results = run_research_baselines(candidate, candidate.artifacts, timeout_seconds=5)
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_accepts_date_objects_for_date_manifest_field(tmp_path: Path) -> None:
+    source = """
+import datetime
+import pandas as pd
+
+def sma(frame, *, window):
+    values = [datetime.date.fromisoformat(value) for value in frame["date"]]
+    return pd.Series(values, index=frame.index, name=f"sma_{window}", dtype="object")
+"""
+    expected = ["2026-08-24", "2026-08-25", "2026-08-26"]
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": expected}),
+        "date",
+    )
+
+    results = run_research_baselines(candidate, candidate.artifacts, timeout_seconds=5)
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+@pytest.mark.parametrize(
+    ("dtype", "source_values", "expected"),
+    [
+        ("float64", "[False, False, True]", [0.0, 0.0, 1.0]),
+        ("int64", "[1.0, 2.0, 3.0]", [1, 2, 3]),
+        ("boolean", "[0, 0, 1]", [False, False, True]),
+        ("string", "[1, 2, 3]", ["1", "2", "3"]),
+        (
+            "date",
+            "frame['date'].tolist()",
+            ["2026-08-24", "2026-08-25", "2026-08-26"],
+        ),
+        (
+            "datetime",
+            "[value + 'T12:34:56' for value in frame['date']]",
+            [
+                "2026-08-24T12:34:56",
+                "2026-08-25T12:34:56",
+                "2026-08-26T12:34:56",
+            ],
+        ),
+    ],
+)
+def test_rejects_wrong_actual_scalar_type_for_manifest_field(
+    tmp_path: Path,
+    dtype: str,
+    source_values: str,
+    expected: list[object],
+) -> None:
+    source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    values = {source_values}\n"
+        "    return pd.Series(values, index=frame.index, name=f'sma_{window}')\n"
+    )
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": expected}),
+        dtype,
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+@pytest.mark.parametrize(
+    ("dtype", "source_values", "expected"),
+    [
+        ("int64", "[1, 2, 3]", [1, 2, 3]),
+        ("boolean", "[False, False, True]", [False, False, True]),
+        (
+            "datetime",
+            "[pd.Timestamp(value + 'T12:34:56') for value in frame['date']]",
+            [
+                "2026-08-24T12:34:56",
+                "2026-08-25T12:34:56",
+                "2026-08-26T12:34:56",
+            ],
+        ),
+    ],
+)
+def test_accepts_manifest_typed_exact_outputs(
+    tmp_path: Path,
+    dtype: str,
+    source_values: str,
+    expected: list[object],
+) -> None:
+    source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    values = {source_values}\n"
+        "    return pd.Series(values, index=frame.index, name=f'sma_{window}')\n"
+    )
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": expected}),
+        dtype,
+    )
+
+    results = run_research_baselines(candidate, candidate.artifacts, timeout_seconds=5)
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+@pytest.mark.parametrize(
+    ("dtype", "source_values", "expected"),
+    [
+        ("float64", "[0.0, 0.0, 1.0]", [False, False, True]),
+        ("int64", "[1, 2, 3]", [1.0, 2.0, 3.0]),
+        ("boolean", "[False, False, True]", [0, 0, 1]),
+        ("string", "['1', '2', '3']", [1, 2, 3]),
+        ("date", "[pd.Timestamp(value).date() for value in frame['date']]", [1, 2, 3]),
+        (
+            "datetime",
+            "[pd.Timestamp(value + 'T12:34:56') for value in frame['date']]",
+            [1, 2, 3],
+        ),
+    ],
+)
+def test_rejects_wrong_expected_scalar_type_for_manifest_field(
+    tmp_path: Path,
+    dtype: str,
+    source_values: str,
+    expected: list[object],
+) -> None:
+    source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    values = {source_values}\n"
+        "    return pd.Series(values, index=frame.index, name=f'sma_{window}')\n"
+    )
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": expected}),
+        dtype,
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+def test_numeric_tolerance_applies_only_to_float64_outputs(tmp_path: Path) -> None:
+    float_candidate = _contract(
+        tmp_path / "float",
+        SUCCESS_SOURCE.replace("[None, None, 2.0]", "[None, None, 2.001]"),
+    )
+    float_candidate = replace(
+        float_candidate,
+        baseline_cases=(
+            replace(
+                float_candidate.baseline_cases[0],
+                tolerance={"absolute": 0.01, "relative": 0.0},
+            ),
+        ),
+    )
+    float_results = run_research_baselines(
+        float_candidate,
+        float_candidate.artifacts,
+        timeout_seconds=5,
+    )
+    assert [(item.case_id, item.status) for item in float_results] == [
+        ("sma-3", "passed")
+    ]
+
+    integer_source = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([1, 2, 4], index=frame.index, name=f"sma_{window}")
+"""
+    integer_candidate = _with_output_dtype(
+        _contract(
+            tmp_path / "integer",
+            integer_source,
+            expected={"sma_3": [1, 2, 3]},
+        ),
+        "int64",
+    )
+    integer_candidate = replace(
+        integer_candidate,
+        baseline_cases=(
+            replace(
+                integer_candidate.baseline_cases[0],
+                tolerance={"absolute": 100.0, "relative": 100.0},
+            ),
+        ),
+    )
+    _assert_failure(integer_candidate, "baseline_mismatch")
+
+
+def test_float_tolerance_does_not_relax_missing_value_positions(tmp_path: Path) -> None:
+    source = SUCCESS_SOURCE.replace(
+        "rolling_mean(frame[\"close\"].tolist(), window)",
+        "[None, 0.0, 2.0]",
+    )
+    candidate = _contract(
+        tmp_path,
+        source,
+        expected={"sma_3": [0.0, None, 2.0]},
+    )
+    candidate = replace(
+        candidate,
+        baseline_cases=(
+            replace(
+                candidate.baseline_cases[0],
+                tolerance={"absolute": 100.0, "relative": 100.0},
+            ),
+        ),
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+def test_rejects_non_iso_date_child_output_even_when_expected_matches(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid_dates = ["2026-08-24", "2026-08-25", "2026-08-99"]
+    candidate = _with_output_dtype(
+        _contract(tmp_path / "candidate", expected={"sma_3": invalid_dates}),
+        "date",
+    )
+    child = tmp_path / "invalid_date_child.py"
+    child.write_text(
+        "import json, pathlib, sys\n"
+        f"value = {{'status': 'ok', 'output': {invalid_dates!r}}}\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+
+    _assert_failure(candidate, "baseline_mismatch")
 
 
 def test_rejects_shadow_dependency_instead_of_skipping_bound_implementation(

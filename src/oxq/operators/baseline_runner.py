@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
+from datetime import date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -29,6 +30,7 @@ _CHILD_FAILURE_CODES = {
     "provider_alignment_failed",
     "baseline_mismatch",
 }
+_OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
 
 
 def run_research_baselines(
@@ -95,11 +97,12 @@ def run_research_baselines(
                 operator.manifest,
                 validate_parameters,
             )
-            output_field = _output_field(case, operator.manifest)
+            output_field, output_dtype = _output_field(case, operator.manifest)
             actual = _run_child(
                 manifest=operator.manifest,
                 case=case,
                 output_field=output_field,
+                output_dtype=output_dtype,
                 implementation_artifact=_implementation_artifact(
                     operator.implementation_artifact,
                     verified_artifacts,
@@ -112,7 +115,7 @@ def run_research_baselines(
                 ],
                 timeout_seconds=timeout_seconds,
             )
-            _assert_expected(case, actual)
+            _assert_expected(case, actual, output_dtype)
             results.append(
                 BaselineResult(
                     operator_id=case.operator_id,
@@ -232,7 +235,7 @@ def _validate_case_parameters(
 def _output_field(
     case: BaselineCase,
     manifest: Mapping[str, object],
-) -> str:
+) -> tuple[str, str]:
     if len(case.expected) != 1:
         raise _error(
             "baseline_input_invalid",
@@ -254,23 +257,27 @@ def _output_field(
         }
         output = cast(Mapping[str, object], manifest["output"])
         fields = cast(list[Mapping[str, object]], output["fields"])
-        declared_fields = {
-            cast(str, field["name_template"]).format(**resolved_parameters)
+        declared_fields = [
+            (
+                cast(str, field["name_template"]).format(**resolved_parameters),
+                cast(str, field["dtype"]),
+            )
             for field in fields
-        }
+        ]
     except (IndexError, KeyError, TypeError, ValueError):
         raise _error(
             "baseline_input_invalid",
             "manifest output field cannot be resolved for the baseline",
             case.operator_id,
         ) from None
-    if output_field not in declared_fields:
+    matches = [field for field in declared_fields if field[0] == output_field]
+    if len(matches) != 1 or matches[0][1] not in _OUTPUT_DTYPES:
         raise _error(
             "baseline_input_invalid",
             "baseline expected output is not declared by the manifest",
             case.operator_id,
         )
-    return output_field
+    return matches[0]
 
 
 def _run_child(
@@ -278,6 +285,7 @@ def _run_child(
     manifest: Mapping[str, object],
     case: BaselineCase,
     output_field: str,
+    output_dtype: str,
     implementation_artifact: str,
     dependency_artifacts: list[str],
     timeout_seconds: float,
@@ -290,6 +298,7 @@ def _run_child(
         "parameters": case.parameters,
         "input": case.input,
         "output_field": output_field,
+        "output_dtype": output_dtype,
     }
     try:
         request_bytes = json.dumps(
@@ -386,32 +395,80 @@ def _read_response(
         ) from None
 
 
-def _assert_expected(case: BaselineCase, actual: list[object]) -> None:
+def _assert_expected(
+    case: BaselineCase,
+    actual: list[object],
+    output_dtype: str,
+) -> None:
     expected = next(iter(case.expected.values()))
     try:
-        if not isinstance(expected, list):
-            raise TypeError("expected output is not a list")
-        actual_values = np.asarray(
-            [np.nan if value is None else value for value in actual],
-            dtype=float,
-        )
-        expected_values = np.asarray(
-            [np.nan if value is None else value for value in expected],
-            dtype=float,
-        )
-        np.testing.assert_allclose(
-            actual_values,
-            expected_values,
-            rtol=float(cast(float, case.tolerance["relative"])),
-            atol=float(cast(float, case.tolerance["absolute"])),
-            equal_nan=True,
-        )
+        if (
+            not isinstance(expected, list)
+            or len(actual) != len(expected)
+            or [value is None for value in actual]
+            != [value is None for value in expected]
+        ):
+            raise TypeError("baseline output shape or missing positions differ")
+        if output_dtype == "float64":
+            if not all(_valid_scalar(value, output_dtype) for value in (*actual, *expected)):
+                raise TypeError("float output contains an invalid scalar")
+            np.testing.assert_allclose(
+                np.asarray([value for value in actual if value is not None], dtype=float),
+                np.asarray([value for value in expected if value is not None], dtype=float),
+                rtol=float(cast(float, case.tolerance["relative"])),
+                atol=float(cast(float, case.tolerance["absolute"])),
+            )
+        else:
+            if not all(_valid_scalar(value, output_dtype) for value in (*actual, *expected)):
+                raise TypeError("exact output contains an invalid scalar")
+            if actual != expected:
+                raise AssertionError("exact output differs")
     except (AssertionError, KeyError, TypeError, ValueError):
         raise _error(
             "baseline_mismatch",
             "provider output does not match the numerical baseline",
             case.operator_id,
         ) from None
+
+
+def _valid_scalar(value: object, output_dtype: str) -> bool:
+    if value is None:
+        return True
+    if output_dtype == "float64":
+        return type(value) in {int, float}
+    if output_dtype == "int64":
+        return type(value) is int
+    if output_dtype == "boolean":
+        return type(value) is bool
+    if output_dtype == "string":
+        return type(value) is str
+    if output_dtype == "date":
+        return isinstance(value, str) and _valid_iso_date(value)
+    if output_dtype == "datetime":
+        return isinstance(value, str) and _valid_iso_datetime(value)
+    return False
+
+
+def _valid_iso_date(value: str) -> bool:
+    try:
+        return (
+            len(value) == 10
+            and value[4] == "-"
+            and value[7] == "-"
+            and date.fromisoformat(value).isoformat() == value
+        )
+    except ValueError:
+        return False
+
+
+def _valid_iso_datetime(value: str) -> bool:
+    if len(value) <= 10 or value[10] != "T":
+        return False
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return True
 
 
 def _child_script_path() -> Path:

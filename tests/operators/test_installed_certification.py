@@ -9,7 +9,7 @@ import sys
 import sysconfig
 from pathlib import Path
 
-from tests.operators.helpers import write_provider_repository
+from tests.operators.test_baseline_runner import _write_certifiable_provider
 
 _SMOKE_SCRIPT = r"""
 import hashlib
@@ -18,12 +18,13 @@ import sys
 from pathlib import Path
 
 import oxq
-from oxq.operators.certification import validate_provider_contract
+from click.testing import CliRunner
+from oxq.cli.main import main
+from oxq.operators.registry import CertificationRegistry
 from oxq.operators.resources import (
     materialize_certification_profile,
     materialize_contract_surface,
 )
-from oxq.operators.submission import load_provider_submission
 
 EXPECTED_DIGESTS = {
     "quant_panel_schema": "fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
@@ -41,6 +42,7 @@ provider_commit = sys.argv[2]
 artifact_dir = Path(sys.argv[3])
 installed_environment = Path(sys.argv[4]).resolve()
 checkout = Path(sys.argv[5]).resolve()
+output_dir = Path(sys.argv[6]).resolve()
 module_path = Path(oxq.__file__).resolve()
 assert module_path.is_relative_to(installed_environment), module_path
 assert not module_path.is_relative_to(checkout), module_path
@@ -54,23 +56,47 @@ with materialize_contract_surface() as surface:
         }
 assert actual == EXPECTED_DIGESTS
 
-with load_provider_submission(provider_repo, provider_commit, artifact_dir) as submission:
-    certified = validate_provider_contract(submission)
-    result = {
-        "module": str(module_path),
-        "operator_count": len(certified.operators),
-        "provider": certified.provider,
-        "release": certified.release,
-        "resource_count": len(actual),
-        "state": certified.operators[0].binding["certification_state"],
-    }
+completed = CliRunner().invoke(
+    main,
+    [
+        "operator",
+        "certify-provider",
+        "--provider-repo",
+        str(provider_repo),
+        "--provider-commit",
+        provider_commit,
+        "--artifact-dir",
+        str(artifact_dir),
+        "--output-dir",
+        str(output_dir),
+        "--trust-provider-code",
+        "--json",
+    ],
+)
+assert completed.exit_code == 0, (completed.output, completed.exception)
+payload = json.loads(completed.output)
+binding = CertificationRegistry(output_dir).get("equant.ttr.sma", "1.0.0")
+assert binding is not None
+result = {
+    "cli_status": payload["status"],
+    "module": str(module_path),
+    "operator_count": payload["operator_count"],
+    "output": payload["output"],
+    "provider": payload["provider"],
+    "release": payload["release"],
+    "resource_count": len(actual),
+    "state": binding["certification_state"],
+}
 print(json.dumps(result, sort_keys=True))
 """
 
 
 def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> None:
     repository_root = Path(__file__).resolve().parents[2]
-    fixture = write_provider_repository(tmp_path / "provider-fixture")
+    fixture = _write_certifiable_provider(
+        tmp_path / "provider-fixture",
+        expected=[None, None, 2.0],
+    )
     wheel_directory = tmp_path / "open-xquant-wheel"
     wheel_directory.mkdir()
     subprocess.run(
@@ -140,6 +166,7 @@ def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> No
 
     outside_checkout = tmp_path / "outside-checkout"
     outside_checkout.mkdir()
+    output_dir = outside_checkout / "certifications"
     script = outside_checkout / "installed_smoke.py"
     script.write_text(_SMOKE_SCRIPT, encoding="utf-8")
     completed = subprocess.run(
@@ -151,6 +178,7 @@ def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> No
             str(fixture.artifact_dir),
             str(environment),
             str(repository_root),
+            str(output_dir),
         ],
         cwd=outside_checkout,
         check=True,
@@ -160,12 +188,14 @@ def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> No
     )
 
     assert json.loads(completed.stdout) == {
+        "cli_status": "research-certified",
         "module": str(
             (Path(installed_site_packages) / "oxq" / "__init__.py").resolve()
         ),
         "operator_count": 1,
+        "output": str((output_dir / "equant-py" / "1.0.0").resolve()),
         "provider": "equant-py",
         "release": "1.0.0",
         "resource_count": 8,
-        "state": "contract-valid",
+        "state": "research-certified",
     }

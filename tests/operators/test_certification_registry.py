@@ -508,6 +508,37 @@ def test_rejects_invalid_artifact_sets(tmp_path: Path, mutation: str) -> None:
     assert caught.value.code == "certification_input_invalid"
 
 
+def test_allows_release_artifacts_to_share_one_build_invocation_identifier(
+    tmp_path: Path,
+) -> None:
+    result = _result(tmp_path)
+    dependency_path = tmp_path / "equant_core-1.0.0-py3-none-any.whl"
+    dependency_path.write_bytes(b"exact shared-build dependency wheel")
+    dependency = BuildArtifact(
+        distribution="equant-core",
+        version="1.0.0",
+        filename=dependency_path.name,
+        role="runtime-dependency",
+        build_identifier=result.artifacts[0].build_identifier,
+        digest=_sha256(dependency_path.read_bytes()),
+        wheel_path=dependency_path,
+    )
+    output = tmp_path / "certifications"
+
+    publication = publish_certification(
+        replace(result, artifacts=(*result.artifacts, dependency)),
+        output,
+    )
+
+    assert [artifact["build_identifier"] for artifact in publication.record["artifacts"]] == [
+        "registry-test-build",
+        "registry-test-build",
+    ]
+    binding = CertificationRegistry(output).get("equant.ttr.sma", "1.0.0")
+    assert binding is not None
+    assert binding["certification_state"] == "research-certified"
+
+
 def test_rejects_unrelated_extra_implementation_artifact(tmp_path: Path) -> None:
     result = _result(tmp_path)
     unrelated_path = tmp_path / "unrelated.whl"
@@ -866,6 +897,34 @@ def test_registry_rejects_binding_source_commit_rewrite(tmp_path: Path) -> None:
     record = json.loads(record_path.read_text())
     entry = json.loads(entry_path.read_text())
     binding["source_commit"] = "git-sha1:" + "9" * 40
+    _write_canonical_json(binding_path, binding)
+    binding_digest = _sha256(binding_path.read_bytes())
+    record["operators"][0]["binding_digest"] = binding_digest
+    _write_canonical_json(record_path, record)
+    entry["operators"][0]["binding_digest"] = binding_digest
+    entry["certification_record_digest"] = _sha256(record_path.read_bytes())
+    _write_canonical_json(entry_path, entry)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        CertificationRegistry(output).get("equant.ttr.sma", "1.0.0")
+
+    assert caught.value.code == "registry_invalid"
+
+
+@pytest.mark.parametrize("state", ["runtime-certified", "ml-certified"])
+def test_registry_rejects_binding_state_that_disagrees_with_record(
+    tmp_path: Path,
+    state: str,
+) -> None:
+    output = tmp_path / "certifications"
+    release = publish_certification(_result(tmp_path), output).release_dir
+    binding_path = release / "bindings/equant.ttr.sma@1.0.0.binding.json"
+    record_path = release / "certification-record.json"
+    entry_path = release / "registry-entry.json"
+    binding = json.loads(binding_path.read_text())
+    record = json.loads(record_path.read_text())
+    entry = json.loads(entry_path.read_text())
+    binding["certification_state"] = state
     _write_canonical_json(binding_path, binding)
     binding_digest = _sha256(binding_path.read_bytes())
     record["operators"][0]["binding_digest"] = binding_digest

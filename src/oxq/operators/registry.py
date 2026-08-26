@@ -59,11 +59,6 @@ _OPERATOR_ID_PATTERN = re.compile(
 )
 _SHA1_PATTERN = re.compile(r"^git-sha1:[0-9a-f]{40}$")
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
-_RESEARCH_STATES = {
-    "research-certified",
-    "runtime-certified",
-    "ml-certified",
-}
 _ENTRY_FIELDS = {
     "schema_version",
     "provider",
@@ -559,7 +554,6 @@ def _prepare_artifacts(
     identities: set[tuple[str, str, str]] = set()
     filenames: set[str] = set()
     digests: set[str] = set()
-    build_identifiers: set[str] = set()
     records: list[dict[str, object]] = []
     implementations: list[BuildArtifact] = []
     for artifact in artifacts:
@@ -579,7 +573,6 @@ def _prepare_artifacts(
             or identity in identities
             or artifact.filename in filenames
             or artifact.digest in digests
-            or artifact.build_identifier in build_identifiers
         ):
             raise _input_error("certification artifact identity is invalid or duplicated")
         try:
@@ -591,7 +584,6 @@ def _prepare_artifacts(
         identities.add(identity)
         filenames.add(artifact.filename)
         digests.add(artifact.digest)
-        build_identifiers.add(artifact.build_identifier)
         records.append(value)
         if artifact.role == "implementation":
             implementations.append(artifact)
@@ -991,10 +983,12 @@ def _read_publication(
                 message="published binding is invalid",
                 operator_id=identity[0],
             )
-            if _operator_identity(binding) != identity or binding.get(
-                "certification_state"
-            ) not in _RESEARCH_STATES:
-                raise ValueError("binding is not research capable")
+            if (
+                _operator_identity(binding) != identity
+                or binding.get("certification_state") != record["state"]
+                or binding.get("certification_state") != "research-certified"
+            ):
+                raise ValueError("binding state does not match certification record")
             matching_artifacts = [
                 artifact
                 for artifact in implementation_artifacts
@@ -1106,7 +1100,6 @@ def _validate_record_artifacts(
     identities: set[tuple[str, str, str]] = set()
     filenames: set[str] = set()
     digests: set[str] = set()
-    build_identifiers: set[str] = set()
     implementations: list[dict[str, object]] = []
     for artifact in artifacts:
         if not _valid_entry_artifact(artifact):
@@ -1118,18 +1111,15 @@ def _validate_record_artifacts(
         )
         filename = cast(str, artifact["filename"])
         digest = cast(str, artifact["digest"])
-        build_identifier = cast(str, artifact["build_identifier"])
         if (
             identity in identities
             or filename in filenames
             or digest in digests
-            or build_identifier in build_identifiers
         ):
             raise ValueError("certification artifact identity is duplicated")
         identities.add(identity)
         filenames.add(filename)
         digests.add(digest)
-        build_identifiers.add(build_identifier)
         if artifact["role"] == "implementation":
             implementations.append(artifact)
     if not implementations:

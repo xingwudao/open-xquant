@@ -9,11 +9,17 @@ import json
 import os
 import sys
 from collections.abc import Mapping
+from datetime import date, datetime
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
 _PLATFORM_RUNTIME_ROOTS = {"numpy", "pandas"}
+_OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
+
+
+class _OutputTypeError(TypeError):
+    pass
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -46,6 +52,7 @@ def _read_request(path: Path) -> dict[str, object]:
         "parameters",
         "input",
         "output_field",
+        "output_dtype",
     }:
         raise ValueError("request fields are invalid")
     return value
@@ -69,7 +76,7 @@ def _error(path: Path, code: str) -> int:
     return 0
 
 
-def _json_value(value: object) -> object:
+def _json_value(value: object, output_dtype: str) -> object:
     import pandas as pd
 
     missing = pd.isna(value)  # type: ignore[call-overload]
@@ -78,15 +85,31 @@ def _json_value(value: object) -> object:
     item = getattr(value, "item", None)
     if callable(item):
         value = item()
-    if value is None or isinstance(value, (bool, int, float, str)):
+    if value is None:
         return value
-    raise TypeError("provider output is not JSON scalar data")
+    if output_dtype == "float64" and type(value) in {int, float}:
+        return value
+    if output_dtype == "int64" and type(value) is int:
+        return value
+    if output_dtype == "boolean" and type(value) is bool:
+        return value
+    if output_dtype == "string" and type(value) is str:
+        return value
+    if output_dtype == "date" and isinstance(value, date) and not isinstance(
+        value,
+        datetime,
+    ):
+        return value.isoformat()
+    if output_dtype == "datetime" and isinstance(value, datetime):
+        return value.isoformat()
+    raise _OutputTypeError("provider output scalar does not match manifest dtype")
 
 
 def _extract_output(
     result: object,
     frame: Any,
     output_field: str,
+    output_dtype: str,
 ) -> list[object]:
     import pandas as pd
 
@@ -95,7 +118,7 @@ def _extract_output(
             raise KeyError("declared output field is missing")
         if len(result) != len(frame) or not result.index.equals(frame.index):
             raise IndexError("series alignment changed")
-        return [_json_value(value) for value in result.tolist()]
+        return [_json_value(value, output_dtype) for value in result.tolist()]
     if isinstance(result, pd.DataFrame):
         if output_field not in result.columns:
             raise KeyError("declared output field is missing")
@@ -111,7 +134,10 @@ def _extract_output(
                 raise IndexError("dataframe keys changed")
         elif not result.index.equals(frame.index):
             raise IndexError("dataframe index changed")
-        return [_json_value(value) for value in result[output_field].tolist()]
+        return [
+            _json_value(value, output_dtype)
+            for value in result[output_field].tolist()
+        ]
     raise TypeError("provider output must be a Series or DataFrame")
 
 
@@ -307,6 +333,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
     parameters = request["parameters"]
     panel = request["input"]
     output_field = request["output_field"]
+    output_dtype = request["output_dtype"]
     if (
         not isinstance(implementation_artifact, str)
         or not Path(implementation_artifact).is_absolute()
@@ -320,6 +347,8 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         or not isinstance(parameters, dict)
         or not isinstance(panel, dict)
         or not isinstance(output_field, str)
+        or not isinstance(output_dtype, str)
+        or output_dtype not in _OUTPUT_DTYPES
     ):
         return _error(response_path, "provider_execution_failed")
     try:
@@ -358,7 +387,10 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
             if not isinstance(records, list):
                 raise TypeError("panel records are not a list")
             frame = pd.DataFrame.from_records(records)
-            frame.index = pd.MultiIndex.from_frame(frame[["date", "code"]])
+            frame.index = pd.MultiIndex.from_frame(
+                frame[["date", "code"]],
+                names=["__oxq_date", "__oxq_code"],
+            )
             original = frame.copy(deep=True)
             result = implementation(frame, **parameters)
             try:
@@ -375,8 +407,19 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                     "provider_mutated_input",
                 )
             try:
-                output = _extract_output(result, original, output_field)
+                output = _extract_output(
+                    result,
+                    original,
+                    output_field,
+                    output_dtype,
+                )
             except KeyError:
+                return _provider_error(
+                    response_path,
+                    import_gate,
+                    "baseline_mismatch",
+                )
+            except _OutputTypeError:
                 return _provider_error(
                     response_path,
                     import_gate,
