@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import sys
 import zipfile
 from pathlib import Path
 from types import ModuleType
@@ -1011,6 +1012,7 @@ def test_operator_binding_manifest_artifact_review_hashes_single_snapshot(
         f"sha256:{hashlib.sha256(second_snapshot).hexdigest()}"
     )
     validator = _reference_validator()
+    mutating_path = MutatingPath()
 
     with pytest.raises(
         validator.ContractValidationError,
@@ -1021,8 +1023,9 @@ def test_operator_binding_manifest_artifact_review_hashes_single_snapshot(
             tmp_path,
             binding=binding,
             manifest=manifest,
-            manifest_path=MutatingPath(),
+            manifest_path=mutating_path,
         )
+    assert mutating_path.calls == 1
 
 
 def test_operator_binding_manifest_artifact_review_normalizes_read_oserror(
@@ -1037,6 +1040,73 @@ def test_operator_binding_manifest_artifact_review_normalizes_read_oserror(
             validator,
             tmp_path,
             manifest_path=tmp_path / "missing-operator.json",
+        )
+
+
+def test_operator_binding_manifest_artifact_final_review_normalizes_path_value_error(
+    tmp_path: Path,
+) -> None:
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: manifest artifact",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            manifest_path=f"{tmp_path / 'operator.json'}\0",
+        )
+
+
+def test_operator_binding_manifest_artifact_final_review_normalizes_integer_limit(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "oversized-integer-operator.json"
+    manifest_path.write_bytes(b"1" * 641)
+    validator = _reference_validator()
+    original_max_digits = sys.get_int_max_str_digits()
+    try:
+        sys.set_int_max_str_digits(640)
+        with pytest.raises(
+            validator.ContractValidationError,
+            match="operator binding mismatch: manifest artifact",
+        ):
+            _validate_binding_fixture(
+                validator,
+                tmp_path,
+                manifest_path=manifest_path,
+            )
+    finally:
+        sys.set_int_max_str_digits(original_max_digits)
+
+
+def test_operator_binding_manifest_artifact_final_review_normalizes_recursion_limit(
+    tmp_path: Path,
+) -> None:
+    manifest = _valid_manifest()
+    nested_value: object = 0
+    for _ in range(2_000):
+        nested_value = [nested_value]
+    manifest["semantic_name"] = nested_value
+
+    nested_json = "[" * 2_000 + "0" + "]" * 2_000
+    artifact_text = json.dumps(_valid_manifest()).replace(
+        '"semantic_name": "SMA"',
+        f'"semantic_name": {nested_json}',
+        1,
+    )
+    manifest_path = tmp_path / "deeply-nested-operator.json"
+    manifest_path.write_text(artifact_text, encoding="utf-8")
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: manifest artifact",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            manifest=manifest,
+            manifest_path=manifest_path,
         )
 
 

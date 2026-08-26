@@ -420,7 +420,7 @@ def _read_manifest_artifact(
 ) -> tuple[bytes, object]:
     try:
         manifest_bytes = Path(manifest_path).read_bytes()
-    except OSError as error:
+    except (OSError, ValueError) as error:
         raise _binding_mismatch(f"manifest artifact: {error}") from error
 
     try:
@@ -429,7 +429,7 @@ def _read_manifest_artifact(
             object_pairs_hook=_strict_manifest_object,
             parse_constant=_reject_manifest_constant,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, _StrictManifestJsonError) as error:
+    except (ValueError, RecursionError) as error:
         raise _binding_mismatch(f"manifest artifact: {error}") from error
     return manifest_bytes, manifest_object
 
@@ -486,7 +486,11 @@ def validate_operator_binding(
     """Validate one binding against exact manifest, source, and artifact bytes."""
 
     manifest_bytes, manifest_artifact = _read_manifest_artifact(manifest_path)
-    if not _json_values_equal(manifest_artifact, manifest):
+    try:
+        manifest_matches_artifact = _json_values_equal(manifest_artifact, manifest)
+    except RecursionError as error:
+        raise _binding_mismatch(f"manifest artifact: {error}") from error
+    if not manifest_matches_artifact:
         raise _binding_mismatch(
             "manifest artifact: manifest object does not match manifest artifact"
         )
