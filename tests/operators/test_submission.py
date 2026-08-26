@@ -530,6 +530,58 @@ def test_rejects_wheel_tags_incompatible_with_certifier_runtime(
     )
 
 
+def test_rejects_wheel_filename_identity_that_differs_from_metadata(
+    tmp_path: Path,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    filename = "other_project-9.9.0-py3-none-any.whl"
+    wheel_path.rename(wheel_path.with_name(filename))
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"filename": filename}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(
+            fixture.path,
+            commit,
+            fixture.artifact_dir,
+        ),
+        "artifact_identity_mismatch",
+    )
+
+
+def test_ignores_local_git_replacement_objects(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
+        lambda value: value["provider"].update({"name": "replacement-provider"}),  # type: ignore[union-attr]
+    )
+    replacement_commit = commit_mutation(fixture.path)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(fixture.path),
+            "replace",
+            fixture.submission_commit,
+            replacement_commit,
+        ],
+        check=True,
+    )
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert submission.provider == "equant-py"
+
+
 def test_normalizes_an_artifact_read_race_to_artifact_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fixture = write_provider_repository(tmp_path)
     wheel_path = fixture.artifact_dir / fixture.wheel_name

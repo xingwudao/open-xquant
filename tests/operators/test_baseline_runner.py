@@ -580,6 +580,27 @@ def test_rejects_float64_integer_that_cannot_convert_to_finite_ieee_value(
     _assert_failure(candidate, "baseline_mismatch")
 
 
+def test_float_comparison_preserves_large_integer_distinctions(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 9007199254740992.0],
+        index=frame.index,
+        name=f"sma_{window}",
+    )
+"""
+    candidate = _contract(
+        tmp_path,
+        source,
+        expected={"sma_3": [None, None, 9007199254740993]},
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
 @pytest.mark.parametrize("value", [10**400, -(10**400)])
 def test_parent_rejects_unconvertible_float64_child_response(
     tmp_path: Path,
@@ -763,15 +784,17 @@ def sma(frame, *, window):
             "value_range": "finite_or_nan",
         }
     )
-    ema_case = replace(
+    complete_case = replace(
         candidate.baseline_cases[0],
-        case_id="ema-3",
-        expected={"ema_3": [None, None, 2.0]},
+        expected={
+            "sma_3": [None, None, 2.0],
+            "ema_3": [None, None, 2.0],
+        },
     )
     candidate = replace(
         candidate,
         operators=(replace(operator, manifest=manifest),),
-        baseline_cases=(*candidate.baseline_cases, ema_case),
+        baseline_cases=(complete_case,),
     )
 
     results = run_research_baselines(
@@ -780,10 +803,47 @@ def sma(frame, *, window):
         timeout_seconds=5,
     )
 
-    assert [(item.case_id, item.status) for item in results] == [
-        ("sma-3", "passed"),
-        ("ema-3", "passed"),
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_requires_every_output_on_each_parameterized_baseline_case(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    field = "alpha" if window == 3 else "beta"
+    return pd.DataFrame({field: [None, None, 2.0]}, index=frame.index)
+"""
+    candidate = _contract(tmp_path, source, expected={"alpha": [None, None, 2.0]})
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["output"]["multiple_outputs"] = True
+    manifest["output"]["fields"] = [
+        {
+            "name_template": "alpha",
+            "dtype": "float64",
+            "value_range": "finite_or_nan",
+        },
+        {
+            "name_template": "beta",
+            "dtype": "float64",
+            "value_range": "finite_or_nan",
+        },
     ]
+    beta_case = replace(
+        candidate.baseline_cases[0],
+        case_id="beta-4",
+        parameters={"window": 4},
+        expected={"beta": [None, None, 2.0]},
+    )
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+        baseline_cases=(*candidate.baseline_cases, beta_case),
+    )
+
+    _assert_failure(candidate, "baseline_input_invalid")
 
 
 def test_float_tolerance_does_not_relax_missing_value_positions(tmp_path: Path) -> None:
@@ -891,7 +951,7 @@ def sma(frame, *, window):
     )
 """
 
-    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+    _assert_failure(_contract(tmp_path, source), "provider_execution_failed")
 
 
 @pytest.mark.parametrize("dependency", ["dateutil", "pytz"])
@@ -915,7 +975,7 @@ def test_rejects_provider_dynamic_import_of_preloaded_environment_dependency(
     )
     candidate = _contract(tmp_path, source)
 
-    _assert_failure(candidate, "provider_import_failed")
+    _assert_failure(candidate, "provider_execution_failed")
 
 
 @pytest.mark.parametrize(
@@ -924,7 +984,7 @@ def test_rejects_provider_dynamic_import_of_preloaded_environment_dependency(
     ids=["ordinary-import", "dynamic-import"],
 )
 @pytest.mark.parametrize("after_violation", ["mutation", "alignment"])
-def test_import_violation_dominates_later_provider_result_failures(
+def test_handled_unavailable_import_preserves_later_provider_failures(
     tmp_path: Path,
     after_violation: str,
     violation_statement: str,
@@ -953,7 +1013,8 @@ def test_import_violation_dominates_later_provider_result_failures(
         f"{consequence}\n"
     )
 
-    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+    expected_code = "provider_mutated_input" if after_violation == "mutation" else "provider_alignment_failed"
+    _assert_failure(_contract(tmp_path, source), expected_code)
 
 
 def test_import_gate_restores_both_import_entry_points() -> None:
@@ -972,7 +1033,7 @@ def test_import_gate_restores_both_import_entry_points() -> None:
     assert importlib.import_module is original_import_module
 
 
-def test_caught_unavailable_dynamic_import_remains_a_sticky_violation(
+def test_allows_caught_unavailable_dynamic_import_fallback(
     tmp_path: Path,
 ) -> None:
     source = (
@@ -983,11 +1044,43 @@ def test_caught_unavailable_dynamic_import_remains_a_sticky_violation(
         "        importlib.import_module('unverified_package_that_does_not_exist')\n"
         "    except ImportError:\n"
         "        pass\n"
-        "    frame.loc[frame.index[0], 'close'] = 99.0\n"
         "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')\n"
     )
 
-    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+    candidate = _contract(tmp_path, source)
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_blocks_loader_execution_from_ambient_sys_path(tmp_path: Path) -> None:
+    source = """
+import importlib.util
+import pathlib
+import sys
+import pandas as pd
+
+def sma(frame, *, window):
+    loaded = False
+    for root in sys.path:
+        candidate = pathlib.Path(root) / "six.py"
+        if not candidate.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("ambient_six", candidate)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        loaded = module.PY3
+        break
+    value = 2.0 if loaded else 99.0
+    return pd.Series([None, None, value], index=frame.index, name=f"sma_{window}")
+"""
+
+    _assert_failure(_contract(tmp_path, source), "baseline_mismatch")
 
 
 def test_allows_pandas_runtime_to_use_its_platform_dependencies(
@@ -1390,7 +1483,8 @@ def test_timeout_reaps_provider_descendant_processes(tmp_path: Path) -> None:
         "import subprocess, sys, time\n"
         "def sma(frame, *, window):\n"
         "    subprocess.Popen([sys.executable, '-c', "
-        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"])\n'
+        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"], '
+        "start_new_session=True)\n"
         "    time.sleep(60)\n"
     )
     _assert_failure(
@@ -1521,6 +1615,28 @@ def test_rejects_unsupported_auxiliary_input_requirements(
     )
 
     _assert_failure(candidate, "baseline_input_invalid")
+
+
+def test_applies_manifest_parameter_defaults_to_provider_call(tmp_path: Path) -> None:
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([None, None, window - 1.0], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(
+        tmp_path,
+        source,
+        parameters={},
+        expected={"sma_3": [None, None, 2.0]},
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
 
 
 @pytest.mark.parametrize("parameters", [{"unknown": 1}, {"window": 0}])

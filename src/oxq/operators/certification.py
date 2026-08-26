@@ -33,16 +33,13 @@ from oxq.operators.models import (
 )
 from oxq.operators.resources import materialize_contract_surface
 
-_SCHEMA_ID = (
-    "https://open-xquant.dev/contracts/quant-operators/"
-    "operator-manifest-v1.schema.json"
-)
+_SCHEMA_ID = "https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json"
 _CONTRACT_RELEASE = "1.0.0"
 _FROZEN_SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:48099f887ebfc9fd9857ba8cececaa8b52c1dd5a2020ccc5eca21c3120664d9a",
+    "reference_validator": "sha256:b863570a443f5dd1e8f26ab94b2b5421dd3a52331d1b8c60bbfeb88d40653524",
 }
 _SURFACE_FILENAMES = {
     "quant_panel_schema": "quant-panel-v1.schema.json",
@@ -109,9 +106,7 @@ def validate_provider_contract(
                 operator_id=entry.operator_id,
             )
             _validate_manifest_semantics(validator, manifest, entry.operator_id)
-            implementation, artifact = _validate_manifest_identity(
-                submission, entry, manifest
-            )
+            implementation, artifact = _validate_manifest_identity(submission, entry, manifest)
             binding = _construct_binding(manifest, implementation, manifest_bytes)
             _validate_schema(
                 binding,
@@ -157,9 +152,7 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
 
     contract = validate_provider_contract(submission)
     baseline_results = run_research_baselines(contract, contract.artifacts)
-    if len(baseline_results) != len(contract.baseline_cases) or any(
-        result.status != "passed" for result in baseline_results
-    ):
+    if len(baseline_results) != len(contract.baseline_cases) or any(result.status != "passed" for result in baseline_results):
         raise _error(
             "baseline_mismatch",
             "not every numerical baseline passed",
@@ -222,9 +215,7 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
             source_root=contract.source_root,
             operators=tuple(promoted),
             artifacts=contract.artifacts,
-            baseline_cases=tuple(
-                _freeze_baseline_case(case) for case in contract.baseline_cases
-            ),
+            baseline_cases=tuple(_freeze_baseline_case(case) for case in contract.baseline_cases),
             baseline_results=baseline_results,
         )
     )
@@ -261,9 +252,7 @@ def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:
 
 
 def _freeze_json_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType(
-        {key: _freeze_json_value(item) for key, item in value.items()}
-    )
+    return MappingProxyType({key: _freeze_json_value(item) for key, item in value.items()})
 
 
 def _freeze_json_value(value: object) -> object:
@@ -314,21 +303,13 @@ def _reject_nonstandard_constant(value: str) -> None:
 
 
 @contextmanager
-def _snapshot_contract_surface() -> Iterator[
-    tuple[dict[str, bytes], dict[str, Path]]
-]:
+def _snapshot_contract_surface() -> Iterator[tuple[dict[str, bytes], dict[str, Path]]]:
     try:
         with materialize_contract_surface() as materialized_paths:
             if set(materialized_paths) != set(_FROZEN_SURFACE_DIGESTS):
                 raise _surface_validation_error()
-            surface_bytes = {
-                name: materialized_paths[name].read_bytes()
-                for name in _FROZEN_SURFACE_DIGESTS
-            }
-            actual_digests = {
-                name: _sha256_bytes(value)
-                for name, value in surface_bytes.items()
-            }
+            surface_bytes = {name: materialized_paths[name].read_bytes() for name in _FROZEN_SURFACE_DIGESTS}
+            actual_digests = {name: _sha256_bytes(value) for name, value in surface_bytes.items()}
             if actual_digests != _FROZEN_SURFACE_DIGESTS:
                 raise _surface_validation_error()
 
@@ -377,11 +358,7 @@ def _load_schema(
         RecursionError,
         SchemaError,
     ):
-        message = (
-            "operator manifest schema is unavailable"
-            if stage == "manifest"
-            else "operator binding schema is unavailable"
-        )
+        message = "operator manifest schema is unavailable" if stage == "manifest" else "operator binding schema is unavailable"
         raise _error(code, message, stage) from None
     return cast(dict[str, object], value)
 
@@ -473,10 +450,7 @@ def _validate_manifest_identity(
     ):
         raise _manifest_identity_error(entry.operator_id)
     artifact = matching_artifacts[0]
-    if (
-        implementation["build_identifier"] != artifact.build_identifier
-        or implementation["implementation_digest"] != artifact.digest
-    ):
+    if implementation["build_identifier"] != artifact.build_identifier or implementation["implementation_digest"] != artifact.digest:
         raise _manifest_identity_error(entry.operator_id)
     return implementation, artifact
 
@@ -509,10 +483,7 @@ def _construct_binding(
         "manifest_digest": _sha256_bytes(manifest_bytes),
         "implementation_digest": implementation["implementation_digest"],
         "surface_release": _CONTRACT_RELEASE,
-        "contract_surface": {
-            name: {"release": _CONTRACT_RELEASE, "digest": digest}
-            for name, digest in _FROZEN_SURFACE_DIGESTS.items()
-        },
+        "contract_surface": {name: {"release": _CONTRACT_RELEASE, "digest": digest} for name, digest in _FROZEN_SURFACE_DIGESTS.items()},
         "certification_state": "contract-valid",
     }
 

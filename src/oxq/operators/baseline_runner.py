@@ -63,8 +63,6 @@ def run_research_baselines(
         raise _error("baseline_input_invalid", "baseline operator identity is invalid")
 
     cases_by_operator = {identity: 0 for identity in operators}
-    declared_outputs_by_operator: dict[tuple[str, str], set[str]] = {identity: set() for identity in operators}
-    covered_outputs_by_operator: dict[tuple[str, str], set[str]] = {identity: set() for identity in operators}
     results: list[BaselineResult] = []
     with _snapshot_contract_surface() as (surface_bytes, surface_paths):
         quant_panel_schema = _load_schema(
@@ -111,27 +109,29 @@ def run_research_baselines(
                 operator.manifest,
                 validate_parameters,
             )
-            output_field, output_dtype, declared_outputs = _output_field(
+            resolved_parameters = _resolved_parameters(case, operator.manifest)
+            output_fields = _output_fields(
                 case,
                 operator.manifest,
+                resolved_parameters,
             )
-            declared_outputs_by_operator[identity].update(declared_outputs)
-            covered_outputs_by_operator[identity].add(output_field)
             _validate_case_tolerance(case)
-            actual = _run_child(
-                manifest=operator.manifest,
-                case=case,
-                output_field=output_field,
-                output_dtype=output_dtype,
-                implementation_artifact=_implementation_artifact(
-                    operator.implementation_artifact,
-                    verified_artifacts,
-                    case.operator_id,
-                ),
-                dependency_artifacts=[str(path) for artifact, path in verified_artifacts if artifact.role == "runtime-dependency"],
-                timeout_seconds=timeout_seconds,
-            )
-            _assert_expected(case, actual, output_dtype)
+            for output_field, output_dtype in output_fields:
+                actual = _run_child(
+                    manifest=operator.manifest,
+                    case=case,
+                    parameters=resolved_parameters,
+                    output_field=output_field,
+                    output_dtype=output_dtype,
+                    implementation_artifact=_implementation_artifact(
+                        operator.implementation_artifact,
+                        verified_artifacts,
+                        case.operator_id,
+                    ),
+                    dependency_artifacts=[str(path) for artifact, path in verified_artifacts if artifact.role == "runtime-dependency"],
+                    timeout_seconds=timeout_seconds,
+                )
+                _assert_expected(case, output_field, actual, output_dtype)
             results.append(
                 BaselineResult(
                     operator_id=case.operator_id,
@@ -147,15 +147,6 @@ def run_research_baselines(
             "baseline_input_invalid",
             "every contract-valid operator requires a numerical baseline",
             missing[0][0],
-        )
-    missing_output_coverage = [
-        identity for identity in operators if declared_outputs_by_operator[identity] != covered_outputs_by_operator[identity]
-    ]
-    if missing_output_coverage:
-        raise _error(
-            "baseline_input_invalid",
-            "every resolved manifest output requires numerical baseline coverage",
-            missing_output_coverage[0][0],
         )
     return tuple(results)
 
@@ -316,26 +307,20 @@ def _validate_case_tolerance(case: BaselineCase) -> None:
         ) from None
 
 
-def _output_field(
+def _resolved_parameters(
     case: BaselineCase,
     manifest: Mapping[str, object],
-) -> tuple[str, str, set[str]]:
-    if len(case.expected) != 1:
-        raise _error(
-            "baseline_input_invalid",
-            "baseline must declare exactly one expected output field",
-            case.operator_id,
-        )
-    output_field = next(iter(case.expected))
-    if not isinstance(output_field, str) or not output_field:
-        raise _error(
-            "baseline_input_invalid",
-            "baseline expected output field is invalid",
-            case.operator_id,
-        )
+) -> dict[str, object]:
+    definitions = cast(Mapping[str, Mapping[str, object]], manifest["parameters"])
+    return {name: case.parameters.get(name, definition["default"]) for name, definition in definitions.items()}
+
+
+def _output_fields(
+    case: BaselineCase,
+    manifest: Mapping[str, object],
+    resolved_parameters: Mapping[str, object],
+) -> list[tuple[str, str]]:
     try:
-        definitions = cast(Mapping[str, Mapping[str, object]], manifest["parameters"])
-        resolved_parameters = {name: case.parameters.get(name, definition["default"]) for name, definition in definitions.items()}
         output = cast(Mapping[str, object], manifest["output"])
         fields = cast(list[Mapping[str, object]], output["fields"])
         declared_fields = [
@@ -351,20 +336,25 @@ def _output_field(
             "manifest output field cannot be resolved for the baseline",
             case.operator_id,
         ) from None
-    matches = [field for field in declared_fields if field[0] == output_field]
-    if len(matches) != 1 or matches[0][1] not in _OUTPUT_DTYPES:
+    declared_names = [name for name, _ in declared_fields]
+    if (
+        len(declared_names) != len(set(declared_names))
+        or set(case.expected) != set(declared_names)
+        or any(dtype not in _OUTPUT_DTYPES for _, dtype in declared_fields)
+    ):
         raise _error(
             "baseline_input_invalid",
-            "baseline expected output is not declared by the manifest",
+            "baseline must cover every resolved manifest output",
             case.operator_id,
         )
-    return matches[0][0], matches[0][1], {name for name, _ in declared_fields}
+    return declared_fields
 
 
 def _run_child(
     *,
     manifest: Mapping[str, object],
     case: BaselineCase,
+    parameters: Mapping[str, object],
     output_field: str,
     output_dtype: str,
     implementation_artifact: str,
@@ -376,7 +366,7 @@ def _run_child(
         "dependency_artifacts": dependency_artifacts,
         "module": manifest["module"],
         "callable": manifest["callable"],
-        "parameters": case.parameters,
+        "parameters": parameters,
         "input": case.input,
         "output_field": output_field,
         "output_dtype": output_dtype,
@@ -482,12 +472,61 @@ def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
             capture_output=True,
         )
     else:
+        descendants = _posix_descendant_pids(process.pid)
+        try:
+            os.killpg(process.pid, signal.SIGSTOP)
+        except ProcessLookupError:
+            pass
+        for pid in descendants:
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except ProcessLookupError:
+                pass
+        descendants.update(_posix_descendant_pids(process.pid))
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+        for pid in descendants:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
     if process.poll() is None:
         process.kill()
+
+
+def _posix_descendant_pids(root_pid: int) -> set[int]:
+    try:
+        result = subprocess.run(
+            ["ps", "-axo", "pid=,ppid="],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return set()
+    if result.returncode != 0:
+        return set()
+    children_by_parent: dict[int, set[int]] = {}
+    for line in result.stdout.splitlines():
+        try:
+            pid_text, parent_text = line.split()
+            pid = int(pid_text)
+            parent = int(parent_text)
+        except ValueError:
+            continue
+        children_by_parent.setdefault(parent, set()).add(pid)
+    descendants: set[int] = set()
+    pending = list(children_by_parent.get(root_pid, set()))
+    while pending:
+        pid = pending.pop()
+        if pid in descendants:
+            continue
+        descendants.add(pid)
+        pending.extend(children_by_parent.get(pid, set()))
+    return descendants
 
 
 def _read_response(
@@ -520,10 +559,11 @@ def _read_response(
 
 def _assert_expected(
     case: BaselineCase,
+    output_field: str,
     actual: list[object],
     output_dtype: str,
 ) -> None:
-    expected = next(iter(case.expected.values()))
+    expected = case.expected[output_field]
     try:
         if (
             not isinstance(expected, list)
@@ -575,7 +615,8 @@ def _valid_float64_scalar(value: object) -> bool:
     if type(value) not in {int, float}:
         return False
     try:
-        return math.isfinite(float(cast(int | float, value)))
+        converted = float(cast(int | float, value))
+        return math.isfinite(converted) and (type(value) is float or int(converted) == value)
     except (OverflowError, TypeError, ValueError):
         return False
 

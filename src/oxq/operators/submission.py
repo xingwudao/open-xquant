@@ -85,7 +85,7 @@ def _is_git_repository(repository: Path) -> bool:
 
 def _git(repository: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", "-C", str(repository), *args],
+        ["git", "--no-replace-objects", "-C", str(repository), *args],
         check=False,
         text=True,
         capture_output=True,
@@ -99,7 +99,7 @@ def _git_bytes(
     input_bytes: bytes | None = None,
 ) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
-        ["git", "-C", str(repository), *args],
+        ["git", "--no-replace-objects", "-C", str(repository), *args],
         check=False,
         input=input_bytes,
         capture_output=True,
@@ -431,7 +431,7 @@ def _verify_wheel_identity(
             wheel_tags = set()
             for header in wheel_metadata.get_all("Tag", []):
                 wheel_tags.update(parse_tag(header))
-            _, _, _, filename_tags = parse_wheel_filename(filename)
+            filename_distribution, filename_version, _, filename_tags = parse_wheel_filename(filename)
             compatible_tags = set(sys_tags())
             if not wheel_tags or not wheel_tags.intersection(compatible_tags) or not filename_tags.intersection(compatible_tags):
                 raise zipfile.BadZipFile("wheel tags are incompatible")
@@ -454,6 +454,8 @@ def _verify_wheel_identity(
         not isinstance(metadata_name, str)
         or _canonical_distribution(metadata_name) != _canonical_distribution(distribution)
         or metadata_version != version
+        or _canonical_distribution(str(filename_distribution)) != _canonical_distribution(distribution)
+        or str(filename_version) != version
     ):
         raise _error(
             "artifact_identity_mismatch",

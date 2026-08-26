@@ -38,21 +38,12 @@ def sha256_file(path: str | os.PathLike[str]) -> str:
 def _source_file_path(path: str) -> PurePosixPath:
     parts = path.split("/")
     candidate = PurePosixPath(path)
-    if (
-        not path
-        or candidate.is_absolute()
-        or "\\" in path
-        or any(part in {"", ".", ".."} for part in parts)
-    ):
-        raise ContractValidationError(
-            f"source file must be a normalized relative POSIX path: {path!r}"
-        )
+    if not path or candidate.is_absolute() or "\\" in path or any(part in {"", ".", ".."} for part in parts):
+        raise ContractValidationError(f"source file must be a normalized relative POSIX path: {path!r}")
     return candidate
 
 
-def sha256_source_tree(
-    root: str | os.PathLike[str], source_files: list[str]
-) -> str:
+def sha256_source_tree(root: str | os.PathLike[str], source_files: list[str]) -> str:
     """Hash an explicit source file set using the v1 source-tree profile."""
 
     if not source_files:
@@ -66,9 +57,7 @@ def sha256_source_tree(
         posix_path = _source_file_path(relative)
         file_path = root_path.joinpath(*posix_path.parts).resolve(strict=True)
         if not file_path.is_relative_to(root_path) or not file_path.is_file():
-            raise ContractValidationError(
-                f"source file escapes root or is not a file: {relative!r}"
-            )
+            raise ContractValidationError(f"source file escapes root or is not a file: {relative!r}")
         digest.update(relative.encode("utf-8"))
         digest.update(b"\0")
         digest.update(_sha256_path_hex(file_path).encode("ascii"))
@@ -80,11 +69,7 @@ def _is_declared_dtype(value: object, dtype: str) -> bool:
     if dtype == "boolean":
         return isinstance(value, bool)
     if dtype == "int64":
-        return (
-            isinstance(value, int)
-            and not isinstance(value, bool)
-            and -(2**63) <= value < 2**63
-        )
+        return isinstance(value, int) and not isinstance(value, bool) and -(2**63) <= value < 2**63
     if dtype == "float64":
         if isinstance(value, float):
             return math.isfinite(value)
@@ -120,10 +105,7 @@ def _is_missing_value(value: object) -> bool:
         return True
 
     value_type = type(value)
-    if (
-        value_type.__module__.startswith("pandas.")
-        and value_type.__name__ in {"NAType", "NaTType"}
-    ):
+    if value_type.__module__.startswith("pandas.") and value_type.__name__ in {"NAType", "NaTType"}:
         return True
 
     return type(value) is float and math.isnan(value)
@@ -149,26 +131,16 @@ def validate_quant_panel(panel: Mapping[str, Any]) -> None:
         undeclared_fields = set(record).difference(allowed_fields)
         if undeclared_fields:
             field = sorted(undeclared_fields)[0]
-            raise ContractValidationError(
-                f"undeclared QuantPanel field: {field!r} in record {record_index}"
-            )
+            raise ContractValidationError(f"undeclared QuantPanel field: {field!r} in record {record_index}")
 
         missing_required = required_columns.difference(record)
         if missing_required:
             field = sorted(missing_required)[0]
-            raise ContractValidationError(
-                f"missing required QuantPanel column: {field!r} in record {record_index}"
-            )
+            raise ContractValidationError(f"missing required QuantPanel column: {field!r} in record {record_index}")
 
         for field, dtype in declared_dtypes.items():
-            if (
-                field in record
-                and not _is_missing_value(record[field])
-                and not _is_declared_dtype(record[field], dtype)
-            ):
-                raise ContractValidationError(
-                    f"invalid QuantPanel value for {field!r}: expected {dtype}"
-                )
+            if field in record and not _is_missing_value(record[field]) and not _is_declared_dtype(record[field], dtype):
+                raise ContractValidationError(f"invalid QuantPanel value for {field!r}: expected {dtype}")
 
         key = (record["date"], record["code"])
         if key in seen_keys:
@@ -184,17 +156,12 @@ def _validate_input_columns(input_contract: Mapping[str, Any]) -> None:
             raise ContractValidationError("duplicate input column")
     overlap = set(required).intersection(optional)
     if overlap:
-        raise ContractValidationError(
-            f"required and optional input columns overlap: {sorted(overlap)!r}"
-        )
+        raise ContractValidationError(f"required and optional input columns overlap: {sorted(overlap)!r}")
 
     executable_sort_keys = {"date", "code", *required}
     for sort_key in input_contract.get("required_sort_order", []):
         if sort_key not in executable_sort_keys:
-            raise ContractValidationError(
-                f"invalid required sort key: {sort_key!r}; expected 'date', "
-                "'code', or a required input column"
-            )
+            raise ContractValidationError(f"invalid required sort key: {sort_key!r}; expected 'date', 'code', or a required input column")
 
 
 _NUMERIC_CONSTRAINTS = {
@@ -211,11 +178,7 @@ def _is_parameter_type(value: object, parameter_type: str) -> bool:
     if parameter_type == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
     if parameter_type == "number":
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(value)
-        )
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
     if parameter_type == "boolean":
         return isinstance(value, bool)
     if parameter_type == "string":
@@ -227,9 +190,7 @@ def _is_parameter_type(value: object, parameter_type: str) -> bool:
     return False
 
 
-def _validate_constraint_applicability(
-    parameter_type: str, constraints: Mapping[str, Any]
-) -> None:
+def _validate_constraint_applicability(parameter_type: str, constraints: Mapping[str, Any]) -> None:
     applicable = {"enum"}
     if parameter_type in {"integer", "number"}:
         applicable.update(_NUMERIC_CONSTRAINTS)
@@ -240,56 +201,30 @@ def _validate_constraint_applicability(
     invalid = set(constraints).difference(applicable)
     if invalid:
         name = sorted(invalid)[0]
-        raise ContractValidationError(
-            f"constraint {name!r} is not valid for parameter type {parameter_type!r}"
-        )
+        raise ContractValidationError(f"constraint {name!r} is not valid for parameter type {parameter_type!r}")
 
 
 def _validate_constraint_coherence(constraints: Mapping[str, Any]) -> None:
-    if (
-        "min_length" in constraints
-        and "max_length" in constraints
-        and constraints["min_length"] > constraints["max_length"]
-    ):
+    if "min_length" in constraints and "max_length" in constraints and constraints["min_length"] > constraints["max_length"]:
         raise ContractValidationError("conflicting constraints: min_length > max_length")
-    if (
-        "min_items" in constraints
-        and "max_items" in constraints
-        and constraints["min_items"] > constraints["max_items"]
-    ):
+    if "min_items" in constraints and "max_items" in constraints and constraints["min_items"] > constraints["max_items"]:
         raise ContractValidationError("conflicting constraints: min_items > max_items")
 
-    lower_bounds = [
-        (constraints[name], name == "exclusive_minimum")
-        for name in ("minimum", "exclusive_minimum")
-        if name in constraints
-    ]
-    upper_bounds = [
-        (constraints[name], name == "exclusive_maximum")
-        for name in ("maximum", "exclusive_maximum")
-        if name in constraints
-    ]
+    lower_bounds = [(constraints[name], name == "exclusive_minimum") for name in ("minimum", "exclusive_minimum") if name in constraints]
+    upper_bounds = [(constraints[name], name == "exclusive_maximum") for name in ("maximum", "exclusive_maximum") if name in constraints]
     if lower_bounds and upper_bounds:
         lower_value = max(value for value, _ in lower_bounds)
         upper_value = min(value for value, _ in upper_bounds)
-        lower_exclusive = any(
-            value == lower_value and exclusive for value, exclusive in lower_bounds
-        )
-        upper_exclusive = any(
-            value == upper_value and exclusive for value, exclusive in upper_bounds
-        )
-        if lower_value > upper_value or (
-            lower_value == upper_value and (lower_exclusive or upper_exclusive)
-        ):
+        lower_exclusive = any(value == lower_value and exclusive for value, exclusive in lower_bounds)
+        upper_exclusive = any(value == upper_value and exclusive for value, exclusive in upper_bounds)
+        if lower_value > upper_value or (lower_value == upper_value and (lower_exclusive or upper_exclusive)):
             raise ContractValidationError("conflicting constraints: empty numeric range")
 
     if "pattern" in constraints:
         try:
             re.compile(constraints["pattern"])
         except re.error as error:
-            raise ContractValidationError(
-                f"invalid pattern constraint: {error}"
-            ) from error
+            raise ContractValidationError(f"invalid pattern constraint: {error}") from error
 
 
 def _validate_parameter_value(
@@ -301,9 +236,7 @@ def _validate_parameter_value(
 ) -> None:
     parameter_type = definition["type"]
     if not _is_parameter_type(value, parameter_type):
-        raise ContractValidationError(
-            f"invalid value for {source} parameter {name!r}: expected {parameter_type}"
-        )
+        raise ContractValidationError(f"invalid value for {source} parameter {name!r}: expected {parameter_type}")
 
     constraints = definition["constraints"]
     label = f"{source} parameter {name!r}"
@@ -337,14 +270,9 @@ def _validate_parameter_definitions(parameters: Mapping[str, Any]) -> None:
         if "enum" in constraints:
             for enum_value in constraints["enum"]:
                 if not _is_parameter_type(enum_value, parameter_type):
-                    raise ContractValidationError(
-                        f"enum value for parameter {name!r} does not match "
-                        f"parameter type {parameter_type!r}"
-                    )
+                    raise ContractValidationError(f"enum value for parameter {name!r} does not match parameter type {parameter_type!r}")
         _validate_constraint_coherence(constraints)
-        _validate_parameter_value(
-            name, definition["default"], definition, source="default for"
-        )
+        _validate_parameter_value(name, definition["default"], definition, source="default for")
 
 
 def _validate_seed_parameter(manifest: Mapping[str, Any]) -> None:
@@ -352,19 +280,27 @@ def _validate_seed_parameter(manifest: Mapping[str, Any]) -> None:
     seed_parameter = determinism.get("seed_parameter")
     if not determinism["random_seed_required"]:
         if seed_parameter is not None:
-            raise ContractValidationError(
-                "seed_parameter is forbidden when random_seed_required is false"
-            )
+            raise ContractValidationError("seed_parameter is forbidden when random_seed_required is false")
         return
     if seed_parameter is None:
-        raise ContractValidationError(
-            "seed_parameter is required when random_seed_required is true"
-        )
+        raise ContractValidationError("seed_parameter is required when random_seed_required is true")
     definition = manifest["parameters"].get(seed_parameter)
     if definition is None:
         raise ContractValidationError(f"unknown seed parameter: {seed_parameter!r}")
     if definition["type"] != "integer":
         raise ContractValidationError("seed parameter must have type 'integer'")
+
+
+def _validate_determinism_tolerance(manifest: Mapping[str, Any]) -> None:
+    tolerance = manifest["determinism"]["tolerance"]
+    for field in ("absolute", "relative"):
+        value = tolerance[field]
+        try:
+            valid = type(value) in {int, float} and math.isfinite(float(value)) and value >= 0
+        except (OverflowError, TypeError, ValueError):
+            valid = False
+        if not valid:
+            raise ContractValidationError("determinism tolerance must be finite and nonnegative")
 
 
 def validate_operator_manifest(manifest: Mapping[str, Any]) -> None:
@@ -373,6 +309,7 @@ def validate_operator_manifest(manifest: Mapping[str, Any]) -> None:
     _validate_input_columns(manifest["input"])
     _validate_parameter_definitions(manifest["parameters"])
     _validate_seed_parameter(manifest)
+    _validate_determinism_tolerance(manifest)
 
 
 _CONTRACT_SURFACE_ARTIFACTS = {
@@ -457,20 +394,14 @@ def _json_values_equal(left: object, right: object) -> bool:
             isinstance(left, list)
             and isinstance(right, list)
             and len(left) == len(right)
-            and all(
-                _json_values_equal(left_item, right_item)
-                for left_item, right_item in zip(left, right, strict=True)
-            )
+            and all(_json_values_equal(left_item, right_item) for left_item, right_item in zip(left, right, strict=True))
         )
     if isinstance(left, Mapping) or isinstance(right, Mapping):
         return (
             isinstance(left, Mapping)
             and isinstance(right, Mapping)
             and left.keys() == right.keys()
-            and all(
-                _json_values_equal(left[key], right[key])
-                for key in left
-            )
+            and all(_json_values_equal(left[key], right[key]) for key in left)
         )
     return False
 
@@ -491,9 +422,7 @@ def validate_operator_binding(
     except RecursionError as error:
         raise _binding_mismatch(f"manifest artifact: {error}") from error
     if not manifest_matches_artifact:
-        raise _binding_mismatch(
-            "manifest artifact: manifest object does not match manifest artifact"
-        )
+        raise _binding_mismatch("manifest artifact: manifest object does not match manifest artifact")
 
     validate_operator_manifest(manifest)
 
@@ -511,13 +440,8 @@ def validate_operator_binding(
         if binding[field] != expected:
             raise _binding_mismatch(field)
 
-    operator_manifest_pin = binding["contract_surface"][
-        "operator_manifest_schema"
-    ]
-    if (
-        binding["schema_release"] != operator_manifest_pin["release"]
-        or binding["schema_digest"] != operator_manifest_pin["digest"]
-    ):
+    operator_manifest_pin = binding["contract_surface"]["operator_manifest_schema"]
+    if binding["schema_release"] != operator_manifest_pin["release"] or binding["schema_digest"] != operator_manifest_pin["digest"]:
         raise _binding_mismatch("legacy operator manifest schema pin")
 
     manifest_digest = f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}"
@@ -555,22 +479,16 @@ def validate_operator_binding(
         ):
             raise _binding_mismatch(digest_field)
 
-    operator_manifest_schema_path = Path(
-        contract_surface_paths["operator_manifest_schema"]
-    )
+    operator_manifest_schema_path = Path(contract_surface_paths["operator_manifest_schema"])
     try:
-        schema_id = json.loads(
-            operator_manifest_schema_path.read_text(encoding="utf-8")
-        )["$id"]
+        schema_id = json.loads(operator_manifest_schema_path.read_text(encoding="utf-8"))["$id"]
     except (KeyError, OSError, UnicodeError, ValueError) as error:
         raise _binding_mismatch("legacy operator manifest schema pin") from error
     if binding["schema_id"] != schema_id:
         raise _binding_mismatch("legacy operator manifest schema pin")
 
 
-def validate_operator_request_parameters(
-    manifest: Mapping[str, Any], parameters: Mapping[str, Any]
-) -> None:
+def validate_operator_request_parameters(manifest: Mapping[str, Any], parameters: Mapping[str, Any]) -> None:
     """Validate request parameters against one already schema-valid manifest."""
 
     validate_operator_manifest(manifest)
@@ -580,16 +498,10 @@ def validate_operator_request_parameters(
         name = sorted(unknown)[0]
         raise ContractValidationError(f"unknown request parameter: {name!r}")
 
-    missing = {
-        name
-        for name, definition in definitions.items()
-        if definition["required"] and name not in parameters
-    }
+    missing = {name for name, definition in definitions.items() if definition["required"] and name not in parameters}
     if missing:
         name = sorted(missing)[0]
         raise ContractValidationError(f"missing required request parameter: {name!r}")
 
     for name, value in parameters.items():
-        _validate_parameter_value(
-            name, value, definitions[name], source="request"
-        )
+        _validate_parameter_value(name, value, definitions[name], source="request")

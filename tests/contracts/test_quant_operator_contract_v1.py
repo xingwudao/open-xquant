@@ -20,9 +20,7 @@ def _load(relative_path: str) -> dict:
 
 
 def _reference_validator() -> ModuleType:
-    spec = importlib.util.spec_from_file_location(
-        "quant_operator_reference_validator_v1", REFERENCE_VALIDATOR_PATH
-    )
+    spec = importlib.util.spec_from_file_location("quant_operator_reference_validator_v1", REFERENCE_VALIDATOR_PATH)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"cannot load reference validator: {REFERENCE_VALIDATOR_PATH}")
     module = importlib.util.module_from_spec(spec)
@@ -53,21 +51,16 @@ def _valid_binding() -> dict:
 def _contract_surface_paths() -> dict[str, Path]:
     return {
         "quant_panel_schema": CONTRACT_DIR / "quant-panel-v1.schema.json",
-        "operator_manifest_schema": CONTRACT_DIR
-        / "operator-manifest-v1.schema.json",
+        "operator_manifest_schema": CONTRACT_DIR / "operator-manifest-v1.schema.json",
         "operator_binding_schema": CONTRACT_DIR / "operator-binding-v1.schema.json",
         "reference_validator": REFERENCE_VALIDATOR_PATH,
     }
 
 
 def _implementation_artifact(tmp_path: Path) -> Path:
-    wheel_base64_path = (
-        CONTRACT_DIR / "examples/valid/equant_ttr-1.0.0-py3-none-any.whl.b64"
-    )
+    wheel_base64_path = CONTRACT_DIR / "examples/valid/equant_ttr-1.0.0-py3-none-any.whl.b64"
     wheel_path = tmp_path / "equant_ttr-1.0.0-py3-none-any.whl"
-    wheel_path.write_bytes(
-        base64.b64decode(wheel_base64_path.read_bytes().strip(), validate=True)
-    )
+    wheel_path.write_bytes(base64.b64decode(wheel_base64_path.read_bytes().strip(), validate=True))
     return wheel_path
 
 
@@ -85,8 +78,7 @@ def _validate_binding_fixture(
     validator.validate_operator_binding(
         binding or _valid_binding(),
         manifest or _valid_manifest(),
-        manifest_path
-        or CONTRACT_DIR / "examples/valid/equant-ttr-sma.operator.json",
+        manifest_path or CONTRACT_DIR / "examples/valid/equant-ttr-sma.operator.json",
         source_root or CONTRACT_DIR,
         implementation_artifact_path or _implementation_artifact(tmp_path),
         contract_surface_paths or _contract_surface_paths(),
@@ -201,9 +193,7 @@ def test_quant_panel_accepts_declared_null_warmup_values() -> None:
         ("datetime", "2024-01-02"),
     ],
 )
-def test_quant_panel_rejects_values_outside_declared_dtype(
-    dtype: str, invalid_value: object
-) -> None:
+def test_quant_panel_rejects_values_outside_declared_dtype(dtype: str, invalid_value: object) -> None:
     panel = _load("examples/valid/daily-cn-panel.json")
     panel["columns"] = [{"name": "value", "dtype": dtype, "required": True}]
     for record in panel["records"]:
@@ -225,9 +215,7 @@ def test_quant_panel_rejects_values_outside_declared_dtype(
         ("datetime", "2024-01-02T15:00:00+08:00"),
     ],
 )
-def test_quant_panel_accepts_each_declared_dtype(
-    dtype: str, valid_value: object
-) -> None:
+def test_quant_panel_accepts_each_declared_dtype(dtype: str, valid_value: object) -> None:
     panel = _load("examples/valid/daily-cn-panel.json")
     panel["columns"] = [{"name": "value", "dtype": dtype, "required": True}]
     for record in panel["records"]:
@@ -268,9 +256,7 @@ def test_uppercase_distribution_is_rejected() -> None:
         (("implementation", "package_version"), "1.0.0-01"),
     ],
 )
-def test_manifest_rejects_numeric_prerelease_leading_zero(
-    location: tuple[str, ...], invalid_version: str
-) -> None:
+def test_manifest_rejects_numeric_prerelease_leading_zero(location: tuple[str, ...], invalid_version: str) -> None:
     manifest = _valid_manifest()
     target = manifest
     for key in location[:-1]:
@@ -289,9 +275,7 @@ def test_manifest_rejects_numeric_prerelease_leading_zero(
         (("implementation", "package_version"), "1.0.0\r\n"),
     ],
 )
-def test_manifest_rejects_terminal_line_endings_in_versions(
-    location: tuple[str, ...], invalid_version: str
-) -> None:
+def test_manifest_rejects_terminal_line_endings_in_versions(location: tuple[str, ...], invalid_version: str) -> None:
     manifest = _valid_manifest()
     target = manifest
     for key in location[:-1]:
@@ -326,9 +310,7 @@ def test_manifest_rejects_invalid_identity_syntax(field: str, invalid_value: str
         ("callable", "sma__fast"),
     ],
 )
-def test_manifest_rejects_non_strict_snake_identity_segments(
-    field: str, invalid_value: str
-) -> None:
+def test_manifest_rejects_non_strict_snake_identity_segments(field: str, invalid_value: str) -> None:
     manifest = _valid_manifest()
     manifest[field] = invalid_value
     with pytest.raises(ValidationError):
@@ -489,9 +471,7 @@ def test_manifest_rejects_explicit_fill_without_value_or_method() -> None:
 
 def test_manifest_requires_fill_value_for_constant_explicit_fill() -> None:
     manifest = _valid_manifest()
-    manifest["output"].update(
-        {"nan_policy": "explicit_fill", "fill_method": "constant"}
-    )
+    manifest["output"].update({"nan_policy": "explicit_fill", "fill_method": "constant"})
     with pytest.raises(ValidationError):
         _manifest_validator().validate(manifest)
 
@@ -499,9 +479,7 @@ def test_manifest_requires_fill_value_for_constant_explicit_fill() -> None:
 @pytest.mark.parametrize("fill_method", ["forward_fill", "backward_fill", "interpolate"])
 def test_manifest_allows_executable_nonconstant_fill_methods(fill_method: str) -> None:
     manifest = _valid_manifest()
-    manifest["output"].update(
-        {"nan_policy": "explicit_fill", "fill_method": fill_method}
-    )
+    manifest["output"].update({"nan_policy": "explicit_fill", "fill_method": fill_method})
     _manifest_validator().validate(manifest)
 
 
@@ -529,15 +507,22 @@ def test_manifest_rejects_parameter_default_with_wrong_declared_type() -> None:
         ("array", [1], {"min_items": 2}),
     ],
 )
-def test_reference_validator_rejects_default_that_violates_constraints(
-    parameter_type: str, default: object, constraints: dict
-) -> None:
+def test_reference_validator_rejects_default_that_violates_constraints(parameter_type: str, default: object, constraints: dict) -> None:
     manifest = _valid_manifest()
     definition = manifest["parameters"]["window"]
-    definition.update(
-        {"type": parameter_type, "default": default, "constraints": constraints}
-    )
+    definition.update({"type": parameter_type, "default": default, "constraints": constraints})
     with pytest.raises(ValueError, match="default for parameter 'window'"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize("field", ["absolute", "relative"])
+def test_reference_validator_rejects_nonfinite_determinism_tolerance(
+    field: str,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["determinism"]["tolerance"][field] = float("inf")
+
+    with pytest.raises(ValueError, match="determinism tolerance"):
         _reference_validator().validate_operator_manifest(manifest)
 
 
@@ -551,9 +536,7 @@ def test_reference_validator_rejects_default_that_violates_constraints(
         ("object", {"min_items": 1}),
     ],
 )
-def test_reference_validator_rejects_constraint_for_wrong_parameter_type(
-    parameter_type: str, constraint: dict
-) -> None:
+def test_reference_validator_rejects_constraint_for_wrong_parameter_type(parameter_type: str, constraint: dict) -> None:
     manifest = _valid_manifest()
     definition = manifest["parameters"]["window"]
     defaults = {
@@ -583,9 +566,7 @@ def test_reference_validator_rejects_constraint_for_wrong_parameter_type(
         ("array", {"min_items": 2, "max_items": 1}),
     ],
 )
-def test_reference_validator_rejects_conflicting_parameter_constraints(
-    parameter_type: str, constraints: dict
-) -> None:
+def test_reference_validator_rejects_conflicting_parameter_constraints(parameter_type: str, constraints: dict) -> None:
     manifest = _valid_manifest()
     definition = manifest["parameters"]["window"]
     defaults = {"integer": 1, "number": 1.0, "string": "x", "array": [1]}
@@ -603,26 +584,20 @@ def test_reference_validator_rejects_conflicting_parameter_constraints(
 def test_reference_validator_rejects_invalid_parameter_pattern() -> None:
     manifest = _valid_manifest()
     definition = manifest["parameters"]["window"]
-    definition.update(
-        {"type": "string", "default": "x", "constraints": {"pattern": "["}}
-    )
+    definition.update({"type": "string", "default": "x", "constraints": {"pattern": "["}})
     with pytest.raises(ValueError, match="invalid pattern"):
         _reference_validator().validate_operator_manifest(manifest)
 
 
 def test_operator_request_accepts_known_parameter_satisfying_constraints() -> None:
     manifest = _valid_manifest()
-    _reference_validator().validate_operator_request_parameters(
-        manifest, {"window": 10}
-    )
+    _reference_validator().validate_operator_request_parameters(manifest, {"window": 10})
 
 
 def test_operator_request_rejects_unknown_parameter() -> None:
     manifest = _valid_manifest()
     with pytest.raises(ValueError, match="unknown request parameter"):
-        _reference_validator().validate_operator_request_parameters(
-            manifest, {"window": 10, "mystery": True}
-        )
+        _reference_validator().validate_operator_request_parameters(manifest, {"window": 10, "mystery": True})
 
 
 def test_operator_request_rejects_missing_required_parameter() -> None:
@@ -643,18 +618,12 @@ def test_operator_request_rejects_missing_required_parameter() -> None:
         ("object", {"value": 1}, []),
     ],
 )
-def test_operator_request_rejects_value_with_wrong_declared_type(
-    parameter_type: str, default: object, invalid_value: object
-) -> None:
+def test_operator_request_rejects_value_with_wrong_declared_type(parameter_type: str, default: object, invalid_value: object) -> None:
     manifest = _valid_manifest()
     definition = manifest["parameters"]["window"]
-    definition.update(
-        {"type": parameter_type, "default": default, "constraints": {}}
-    )
+    definition.update({"type": parameter_type, "default": default, "constraints": {}})
     with pytest.raises(ValueError, match="invalid value for request parameter"):
-        _reference_validator().validate_operator_request_parameters(
-            manifest, {"window": invalid_value}
-        )
+        _reference_validator().validate_operator_request_parameters(manifest, {"window": invalid_value})
 
 
 @pytest.mark.parametrize(
@@ -684,9 +653,7 @@ def test_operator_request_rejects_value_that_violates_constraints(
         }
     )
     with pytest.raises(ValueError, match="request parameter 'window'"):
-        _reference_validator().validate_operator_request_parameters(
-            manifest, {"window": invalid_value}
-        )
+        _reference_validator().validate_operator_request_parameters(manifest, {"window": invalid_value})
 
 
 def test_manifest_accepts_required_seed_bound_to_integer_parameter() -> None:
@@ -702,9 +669,7 @@ def test_manifest_accepts_required_seed_bound_to_integer_parameter() -> None:
         "affects_causality": False,
         "affects_availability": False,
     }
-    manifest["determinism"].update(
-        {"random_seed_required": True, "seed_parameter": "seed"}
-    )
+    manifest["determinism"].update({"random_seed_required": True, "seed_parameter": "seed"})
     _manifest_validator().validate(manifest)
     _reference_validator().validate_operator_manifest(manifest)
 
@@ -719,18 +684,14 @@ def test_manifest_requires_seed_parameter_when_random_seed_is_required() -> None
 
 def test_manifest_forbids_seed_parameter_without_required_random_seed() -> None:
     manifest = _valid_manifest()
-    manifest["determinism"].update(
-        {"random_seed_required": False, "seed_parameter": "seed"}
-    )
+    manifest["determinism"].update({"random_seed_required": False, "seed_parameter": "seed"})
     with pytest.raises(ValidationError):
         _manifest_validator().validate(manifest)
 
 
 def test_reference_validator_rejects_unknown_seed_parameter() -> None:
     manifest = _valid_manifest()
-    manifest["determinism"].update(
-        {"random_seed_required": True, "seed_parameter": "seed"}
-    )
+    manifest["determinism"].update({"random_seed_required": True, "seed_parameter": "seed"})
     with pytest.raises(ValueError, match="unknown seed parameter"):
         _reference_validator().validate_operator_manifest(manifest)
 
@@ -748,9 +709,7 @@ def test_reference_validator_rejects_noninteger_seed_parameter() -> None:
         "affects_causality": False,
         "affects_availability": False,
     }
-    manifest["determinism"].update(
-        {"random_seed_required": True, "seed_parameter": "seed"}
-    )
+    manifest["determinism"].update({"random_seed_required": True, "seed_parameter": "seed"})
     with pytest.raises(ValueError, match="seed parameter must have type 'integer'"):
         _reference_validator().validate_operator_manifest(manifest)
 
@@ -758,9 +717,7 @@ def test_reference_validator_rejects_noninteger_seed_parameter() -> None:
 def test_manifest_keeps_manifest_digest_in_external_binding() -> None:
     manifest = _valid_manifest()
     manifest["implementation"].pop("manifest_digest", None)
-    manifest["implementation"].setdefault(
-        "source_files", ["examples/valid/provider-source/ettr.py"]
-    )
+    manifest["implementation"].setdefault("source_files", ["examples/valid/provider-source/ettr.py"])
     _manifest_validator().validate(manifest)
 
     manifest["implementation"]["manifest_digest"] = "sha256:" + "0" * 64
@@ -842,10 +799,7 @@ def test_manifest_rejects_short_unprefixed_or_nonlowercase_source_commit(
 def test_sha256_file_matches_known_raw_byte_vector(tmp_path: Path) -> None:
     target = tmp_path / "payload.bin"
     target.write_bytes(b"abc")
-    assert _reference_validator().sha256_file(target) == (
-        "sha256:ba7816bf8f01cfea414140de5dae2223"
-        "b00361a396177a9cb410ff61f20015ad"
-    )
+    assert _reference_validator().sha256_file(target) == ("sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 
 
 def test_source_tree_digest_matches_known_vector_and_sorts_paths(
@@ -854,17 +808,10 @@ def test_source_tree_digest_matches_known_vector_and_sorts_paths(
     (tmp_path / "src").mkdir()
     (tmp_path / "a.txt").write_bytes(b"alpha\n")
     (tmp_path / "src" / "b.py").write_bytes(b"beta\n")
-    expected = (
-        "sha256:76b8e9c973a22ecc7420b637c53c6b01"
-        "342d2852ab290217ba708e48efcc9658"
-    )
+    expected = "sha256:76b8e9c973a22ecc7420b637c53c6b01342d2852ab290217ba708e48efcc9658"
     validator = _reference_validator()
-    assert validator.sha256_source_tree(
-        tmp_path, ["src/b.py", "a.txt"]
-    ) == expected
-    assert validator.sha256_source_tree(
-        tmp_path, ["a.txt", "src/b.py"]
-    ) == expected
+    assert validator.sha256_source_tree(tmp_path, ["src/b.py", "a.txt"]) == expected
+    assert validator.sha256_source_tree(tmp_path, ["a.txt", "src/b.py"]) == expected
 
 
 def test_source_tree_digest_rejects_unsafe_or_duplicate_paths(tmp_path: Path) -> None:
@@ -881,9 +828,7 @@ def test_operator_binding_schema_is_valid_draft_2020_12() -> None:
 
 
 def test_operator_binding_fixture_satisfies_schema() -> None:
-    _binding_validator().validate(
-        _load("examples/valid/equant-ttr-sma.binding.json")
-    )
+    _binding_validator().validate(_load("examples/valid/equant-ttr-sma.binding.json"))
 
 
 def test_operator_binding_requires_reference_validator_pin() -> None:
@@ -898,8 +843,7 @@ def test_operator_binding_contract_surface_pins_exact_artifact_bytes() -> None:
     validator = _reference_validator()
     artifact_paths = {
         "quant_panel_schema": CONTRACT_DIR / "quant-panel-v1.schema.json",
-        "operator_manifest_schema": CONTRACT_DIR
-        / "operator-manifest-v1.schema.json",
+        "operator_manifest_schema": CONTRACT_DIR / "operator-manifest-v1.schema.json",
         "operator_binding_schema": CONTRACT_DIR / "operator-binding-v1.schema.json",
         "reference_validator": REFERENCE_VALIDATOR_PATH,
     }
@@ -934,10 +878,7 @@ def test_operator_binding_manifest_artifact_rejects_different_json_object(
 
     with pytest.raises(
         validator.ContractValidationError,
-        match=(
-            "operator binding mismatch: manifest artifact: "
-            "manifest object does not match manifest artifact"
-        ),
+        match=("operator binding mismatch: manifest artifact: manifest object does not match manifest artifact"),
     ):
         _validate_binding_fixture(
             validator,
@@ -972,10 +913,7 @@ def test_operator_binding_manifest_artifact_review_rejects_bool_number_collision
 
     with pytest.raises(
         validator.ContractValidationError,
-        match=(
-            "operator binding mismatch: manifest artifact: "
-            "manifest object does not match manifest artifact"
-        ),
+        match=("operator binding mismatch: manifest artifact: manifest object does not match manifest artifact"),
     ):
         _validate_binding_fixture(
             validator,
@@ -1008,9 +946,7 @@ def test_operator_binding_manifest_artifact_review_hashes_single_snapshot(
             return str(manifest_path)
 
     binding = _valid_binding()
-    binding["manifest_digest"] = (
-        f"sha256:{hashlib.sha256(second_snapshot).hexdigest()}"
-    )
+    binding["manifest_digest"] = f"sha256:{hashlib.sha256(second_snapshot).hexdigest()}"
     validator = _reference_validator()
     mutating_path = MutatingPath()
 
@@ -1348,9 +1284,7 @@ def test_operator_binding_semantics_reject_contract_surface_release_mismatch(
 def test_valid_digest_fixtures_bind_exact_artifact_bytes(tmp_path: Path) -> None:
     manifest_path = CONTRACT_DIR / "examples/valid/equant-ttr-sma.operator.json"
     schema_path = CONTRACT_DIR / "operator-manifest-v1.schema.json"
-    wheel_base64_path = (
-        CONTRACT_DIR / "examples/valid/equant_ttr-1.0.0-py3-none-any.whl.b64"
-    )
+    wheel_base64_path = CONTRACT_DIR / "examples/valid/equant_ttr-1.0.0-py3-none-any.whl.b64"
     binding = _load("examples/valid/equant-ttr-sma.binding.json")
     manifest = _valid_manifest()
     validator = _reference_validator()
@@ -1359,27 +1293,17 @@ def test_valid_digest_fixtures_bind_exact_artifact_bytes(tmp_path: Path) -> None
     assert binding["schema_digest"] == validator.sha256_file(schema_path)
     assert binding["manifest_digest"] == validator.sha256_file(manifest_path)
     assert manifest["implementation"]["source_tree_digest"] == (
-        validator.sha256_source_tree(
-            CONTRACT_DIR, manifest["implementation"]["source_files"]
-        )
+        validator.sha256_source_tree(CONTRACT_DIR, manifest["implementation"]["source_files"])
     )
 
-    wheel_bytes = base64.b64decode(
-        wheel_base64_path.read_bytes().strip(), validate=True
-    )
+    wheel_bytes = base64.b64decode(wheel_base64_path.read_bytes().strip(), validate=True)
     with zipfile.ZipFile(io.BytesIO(wheel_bytes)) as wheel:
         assert "equant_ttr-1.0.0.dist-info/WHEEL" in wheel.namelist()
     wheel_path = tmp_path / "equant_ttr-1.0.0-py3-none-any.whl"
     wheel_path.write_bytes(wheel_bytes)
-    assert manifest["implementation"]["implementation_digest"] == (
-        validator.sha256_file(wheel_path)
-    )
-    assert binding["source_tree_digest"] == manifest["implementation"][
-        "source_tree_digest"
-    ]
-    assert binding["implementation_digest"] == manifest["implementation"][
-        "implementation_digest"
-    ]
+    assert manifest["implementation"]["implementation_digest"] == (validator.sha256_file(wheel_path))
+    assert binding["source_tree_digest"] == manifest["implementation"]["source_tree_digest"]
+    assert binding["implementation_digest"] == manifest["implementation"]["implementation_digest"]
 
 
 def test_duplicate_panel_keys_are_rejected_by_reference_contract_check() -> None:

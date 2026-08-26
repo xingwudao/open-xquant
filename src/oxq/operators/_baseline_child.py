@@ -124,7 +124,8 @@ def _valid_float64_scalar(value: object) -> bool:
     if type(value) not in {int, float}:
         return False
     try:
-        return math.isfinite(float(cast(int | float, value)))
+        converted = float(cast(int | float, value))
+        return math.isfinite(converted) and (type(value) is float or int(converted) == value)
     except (OverflowError, TypeError, ValueError):
         return False
 
@@ -257,6 +258,18 @@ def _visible_modules(verified_roots: list[str]) -> Mapping[str, object]:
     }
 
 
+def _restrict_sys_path(verified_archives: list[str]) -> None:
+    runtime_paths = [
+        entry
+        for entry in sys.path
+        if entry
+        and not {"site-packages", "dist-packages"}.intersection(
+            Path(entry).parts,
+        )
+    ]
+    sys.path[:] = [*verified_archives, *runtime_paths]
+
+
 def _restricted_sys_module(verified_roots: list[str]) -> ModuleType:
     restricted = ModuleType("sys")
     restricted.__dict__.update(sys.__dict__)
@@ -310,6 +323,8 @@ class _ProviderImportGate:
         )
         try:
             imported = self._original_import(name, globals, locals, fromlist, level)
+        except ModuleNotFoundError:
+            raise
         except BaseException:
             if provider_call:
                 self.violation = True
@@ -346,6 +361,8 @@ class _ProviderImportGate:
                 raise ImportError("provider relative import is invalid") from error
         try:
             imported = self._original_import_module(name, package)
+        except ModuleNotFoundError:
+            raise
         except BaseException:
             if provider_call:
                 self.violation = True
@@ -542,7 +559,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
     sys.exec_prefix = install_prefix
     _hide_ambient_modules()
     modules_before_provider = set(sys.modules)
-    sys.path[:0] = verified_archives
+    _restrict_sys_path(verified_archives)
     import_gate = _ProviderImportGate(verified_archives)
     import_gate.install()
     try:
