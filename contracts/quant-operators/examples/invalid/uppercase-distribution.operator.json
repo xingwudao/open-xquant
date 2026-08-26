@@ -11,6 +11,8 @@
   "lifecycle": "stateless",
   "causality": "past_only",
   "availability": "close_t",
+  "mutates_input": false,
+  "availability_depends_on_input": false,
   "input": {
     "required_columns": ["close"],
     "optional_columns": [],
@@ -19,6 +21,9 @@
     "minimum_time_length": 1,
     "requires_complete_cross_section": false,
     "requires_benchmark": false,
+    "requires_industry_data": false,
+    "requires_market_cap_data": false,
+    "requires_fundamental_data": false,
     "required_context": ["timezone", "calendar", "frequency", "timestamp_semantics", "currency", "price_adjustment", "data_version", "source"]
   },
   "parameters": {
