@@ -108,6 +108,7 @@ def _valid_profile_instances() -> dict[str, dict[str, object]]:
             "release": "1.0.0",
             "cases": [
                 {
+                    "case_id": "sma-window-3",
                     "operator_id": "equant.ttr.sma",
                     "operator_version": "1.0.0",
                     "parameters": {"window": 3},
@@ -119,12 +120,23 @@ def _valid_profile_instances() -> dict[str, dict[str, object]]:
         },
         "certification_record": {
             "schema_version": 1,
-            "certifier": "open-xquant",
+            "certifier": "open-xquant-local",
             "certified_at": "2026-08-26T12:00:00Z",
             "provider": "equant-py",
             "release": "1.0.0",
+            "submission_commit": "git-sha1:" + "b" * 40,
             "source_commit": "git-sha1:" + "a" * 40,
             "state": "research-certified",
+            "artifacts": [
+                {
+                    "distribution": "equant-ttr",
+                    "version": "1.0.0",
+                    "filename": "equant_ttr-1.0.0-py3-none-any.whl",
+                    "role": "implementation",
+                    "build_identifier": "build-20260826-equant-ttr",
+                    "digest": digest,
+                }
+            ],
             "operators": [
                 {
                     "operator_id": "equant.ttr.sma",
@@ -231,11 +243,27 @@ def test_catalog_rejects_duplicate_operator_identity_json_keys() -> None:
         ),
         (
             "numerical_baseline",
+            lambda instance: instance["cases"][0].pop("case_id"),
+        ),
+        (
+            "numerical_baseline",
             lambda instance: instance["cases"][0]["expected"].update({"sma_3": [[10.0]]}),
         ),
         (
             "numerical_baseline",
             lambda instance: instance["cases"][0]["tolerance"].update({"absolute": -0.1}),
+        ),
+        (
+            "certification_record",
+            lambda instance: instance.update({"certifier": "another-certifier"}),
+        ),
+        (
+            "certification_record",
+            lambda instance: instance.pop("submission_commit"),
+        ),
+        (
+            "certification_record",
+            lambda instance: instance.update({"artifacts": []}),
         ),
         (
             "certification_record",

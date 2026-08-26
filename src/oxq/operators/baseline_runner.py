@@ -117,7 +117,7 @@ def run_research_baselines(
                 BaselineResult(
                     operator_id=case.operator_id,
                     operator_version=case.operator_version,
-                    case_id=output_field.replace("_", "-"),
+                    case_id=case.case_id,
                     status="passed",
                 )
             )

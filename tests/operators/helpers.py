@@ -185,6 +185,7 @@ def _baseline() -> dict[str, object]:
         "provider": "equant-py",
         "release": "1.0.0",
         "cases": [{
+            "case_id": "sma-window-3",
             "operator_id": "equant.ttr.sma",
             "operator_version": "1.0.0",
             "parameters": {"window": 3},

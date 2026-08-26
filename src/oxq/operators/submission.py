@@ -215,6 +215,7 @@ def _load_baselines(
     release: str,
 ) -> tuple[BaselineCase, ...]:
     cases: list[BaselineCase] = []
+    case_identities: set[tuple[str, str, str]] = set()
     for entry in operators:
         baseline = _read_json(entry.baseline_path, entry.operator_id)
         _validate_schema(baseline, schema, "baseline", entry.operator_id)
@@ -226,10 +227,29 @@ def _load_baselines(
             raise _error("submission_identity_mismatch", "baseline identity does not match catalog", "baseline", entry.operator_id)
         for raw_case in cast(list[object], baseline_data["cases"]):
             case = _mapping(raw_case, "baseline", entry.operator_id)
+            case_id = _string(case["case_id"], "baseline", entry.operator_id)
+            operator_id = _string(case["operator_id"], "baseline", entry.operator_id)
+            operator_version = _string(
+                case["operator_version"], "baseline", entry.operator_id
+            )
+            identity = (operator_id, operator_version, case_id)
+            if (
+                operator_id != entry.operator_id
+                or operator_version != entry.operator_version
+                or identity in case_identities
+            ):
+                raise _error(
+                    "submission_identity_mismatch",
+                    "baseline case identity does not match its catalog entry",
+                    "baseline",
+                    entry.operator_id,
+                )
+            case_identities.add(identity)
             cases.append(
                 BaselineCase(
-                    operator_id=_string(case["operator_id"], "baseline", entry.operator_id),
-                    operator_version=_string(case["operator_version"], "baseline", entry.operator_id),
+                    case_id=case_id,
+                    operator_id=operator_id,
+                    operator_version=operator_version,
                     parameters=_mapping(case["parameters"], "baseline", entry.operator_id),
                     input=_mapping(case["input"], "baseline", entry.operator_id),
                     expected=_mapping(case["expected"], "baseline", entry.operator_id),

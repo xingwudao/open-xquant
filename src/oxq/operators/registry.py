@@ -9,9 +9,7 @@ import re
 import shutil
 import stat
 import tempfile
-import threading
 from collections.abc import Iterator, Mapping, Sequence
-from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -27,14 +25,14 @@ from jsonschema import (  # type: ignore[import-untyped]
 
 from oxq.operators.certification import _snapshot_contract_surface
 from oxq.operators.errors import OperatorCertificationError
-from oxq.operators.models import ResearchCertification
+from oxq.operators.models import (
+    BaselineCase,
+    BaselineResult,
+    BuildArtifact,
+    ContractCandidate,
+    ResearchCertification,
+)
 from oxq.operators.resources import materialize_certification_profile
-
-try:
-    import fcntl
-except ImportError:  # pragma: no cover - supported release targets are POSIX
-    fcntl = None  # type: ignore[assignment]
-
 
 _PROVIDER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _SEMVER_PATTERN = re.compile(
@@ -47,7 +45,7 @@ _OPERATOR_ID_PATTERN = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
     r"(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"
 )
-_SHA1_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+_SHA1_PATTERN = re.compile(r"^git-sha1:[0-9a-f]{40}$")
 _DIGEST_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 _RESEARCH_STATES = {
     "research-certified",
@@ -79,8 +77,6 @@ _ENTRY_ARTIFACT_FIELDS = {
     "build_identifier",
     "digest",
 }
-_THREAD_LOCKS_GUARD = threading.Lock()
-_THREAD_LOCKS: dict[Path, threading.Lock] = {}
 
 
 @dataclass(frozen=True)
@@ -131,34 +127,51 @@ def publish_certification(
             "certification output directory is unavailable",
         ) from None
 
-    with _publication_lock(provider_dir):
-        if _lexists(release_dir):
-            return _existing_or_conflict(prepared, release_dir)
+    if _lexists(release_dir):
+        return _durable_existing_or_conflict(prepared, release_dir, provider_dir)
 
-        rendered = _render_publication(prepared, _utc_now())
-        staging_dir: Path | None = None
-        try:
-            staging_dir = Path(
-                tempfile.mkdtemp(
-                    prefix=f".{result.release}.staging-",
-                    dir=provider_dir,
-                )
+    rendered = _render_publication(prepared, _utc_now())
+    staging_dir: Path | None = None
+    try:
+        staging_dir = Path(
+            tempfile.mkdtemp(
+                prefix=f".{result.release}.staging-",
+                dir=provider_dir,
             )
-            _write_staging(staging_dir, rendered)
-            _fsync_directory(provider_dir)
+        )
+        _write_staging(staging_dir, rendered)
+        _fsync_directory(provider_dir)
+        try:
             os.replace(staging_dir, release_dir)
-            staging_dir = None
-            _fsync_directory(provider_dir)
         except OSError:
             if _lexists(release_dir):
-                return _existing_or_conflict(prepared, release_dir)
+                return _durable_existing_or_conflict(
+                    prepared,
+                    release_dir,
+                    provider_dir,
+                )
             raise _error(
                 "certification_publish_failed",
                 "certification publication failed before atomic commit",
             ) from None
-        finally:
-            if staging_dir is not None:
-                shutil.rmtree(staging_dir, ignore_errors=True)
+        staging_dir = None
+        try:
+            _fsync_directory(provider_dir)
+        except OSError:
+            raise _error(
+                "certification_publish_failed",
+                "certification was renamed but directory durability was not confirmed",
+            ) from None
+    except OperatorCertificationError:
+        raise
+    except OSError:
+        raise _error(
+            "certification_publish_failed",
+            "certification publication failed before atomic commit",
+        ) from None
+    finally:
+        if staging_dir is not None:
+            shutil.rmtree(staging_dir, ignore_errors=True)
 
     return _published_from_rendered(release_dir, rendered)
 
@@ -222,6 +235,18 @@ class CertificationRegistry:
 def _prepare_certification(result: ResearchCertification) -> _PreparedCertification:
     if not isinstance(result, ResearchCertification):
         raise _input_error("publisher requires a research certification result")
+    if (
+        not isinstance(result.provider, str)
+        or not isinstance(result.release, str)
+        or not isinstance(result.submission_commit, str)
+        or not isinstance(result.source_commit, str)
+        or not isinstance(result.source_root, Path)
+        or not isinstance(result.operators, tuple)
+        or not isinstance(result.artifacts, tuple)
+        or not isinstance(result.baseline_cases, tuple)
+        or not isinstance(result.baseline_results, tuple)
+    ):
+        raise _input_error("research certification field types are invalid")
     if not _valid_provider_release(result.provider, result.release):
         raise _input_error("provider or release identity is invalid")
     if not _SHA1_PATTERN.fullmatch(result.submission_commit) or not _SHA1_PATTERN.fullmatch(
@@ -230,6 +255,8 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         raise _input_error("certification commit identity is invalid")
     if not result.operators or not result.baseline_cases or not result.baseline_results:
         raise _input_error("research certification must not be empty")
+
+    entry_artifacts, implementation_artifacts = _prepare_artifacts(result.artifacts)
 
     try:
         binding_schema = _binding_schema()
@@ -247,9 +274,18 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         ) from None
 
     identities: set[tuple[str, str]] = set()
+    matched_implementation_artifacts: set[tuple[str, str, str]] = set()
     binding_bytes: dict[str, bytes] = {}
     binding_values: dict[tuple[str, str], Mapping[str, object]] = {}
     for candidate in result.operators:
+        if (
+            not isinstance(candidate, ContractCandidate)
+            or not isinstance(candidate.manifest, Mapping)
+            or not isinstance(candidate.binding, Mapping)
+            or not isinstance(candidate.manifest_path, Path)
+            or not isinstance(candidate.implementation_artifact, Path)
+        ):
+            raise _input_error("certified operator fields are invalid")
         binding = candidate.binding
         operator_id = binding.get("operator_id")
         operator_version = binding.get("operator_version")
@@ -265,8 +301,22 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
             or candidate.manifest.get("operator_version") != operator_version
         ):
             raise _input_error("manifest and binding identities do not match", operator_id)
-        if binding.get("source_commit") != f"git-sha1:{result.source_commit}":
+        if binding.get("source_commit") != result.source_commit:
             raise _input_error("binding source commit does not match certification", operator_id)
+        matching_artifacts = [
+            artifact
+            for artifact in implementation_artifacts
+            if _candidate_matches_artifact(result, candidate, artifact)
+        ]
+        if len(matching_artifacts) != 1:
+            raise _input_error(
+                "certified binding does not match exactly one implementation artifact",
+                operator_id,
+            )
+        matched = matching_artifacts[0]
+        matched_implementation_artifacts.add(
+            (matched.distribution, matched.version, matched.filename)
+        )
         _validate_schema(
             binding,
             binding_schema,
@@ -281,37 +331,63 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
             raise _input_error("certified binding filename collides", operator_id)
         binding_bytes[filename] = _json_bytes(binding)
 
+    expected_implementation_artifacts = {
+        (artifact.distribution, artifact.version, artifact.filename)
+        for artifact in implementation_artifacts
+    }
+    if matched_implementation_artifacts != expected_implementation_artifacts:
+        raise _input_error("certification contains an unrelated implementation artifact")
+
     case_counts = {identity: 0 for identity in identities}
+    declared_cases: set[tuple[str, str, str]] = set()
     for case in result.baseline_cases:
+        if (
+            not isinstance(case, BaselineCase)
+            or not isinstance(case.case_id, str)
+            or not case.case_id
+            or not isinstance(case.operator_id, str)
+            or not isinstance(case.operator_version, str)
+            or not isinstance(case.parameters, Mapping)
+            or not isinstance(case.input, Mapping)
+            or not isinstance(case.expected, Mapping)
+            or not isinstance(case.tolerance, Mapping)
+        ):
+            raise _input_error("declared numerical baseline is invalid")
         identity = (case.operator_id, case.operator_version)
-        if identity not in case_counts:
+        case_identity = (*identity, case.case_id)
+        if identity not in case_counts or case_identity in declared_cases:
             raise _input_error("baseline case does not identify a certified operator")
+        declared_cases.add(case_identity)
         case_counts[identity] += 1
 
-    result_counts = {identity: 0 for identity in identities}
     cases_by_identity: dict[tuple[str, str], list[dict[str, object]]] = {
         identity: [] for identity in identities
     }
-    result_keys: set[tuple[str, str, str]] = set()
+    passed_cases: set[tuple[str, str, str]] = set()
     for baseline in result.baseline_results:
+        if (
+            not isinstance(baseline, BaselineResult)
+            or not isinstance(baseline.operator_id, str)
+            or not isinstance(baseline.operator_version, str)
+            or not isinstance(baseline.case_id, str)
+            or not isinstance(baseline.status, str)
+        ):
+            raise _input_error("numerical baseline result fields are invalid")
         identity = (baseline.operator_id, baseline.operator_version)
         result_key = (*identity, baseline.case_id)
         if (
-            identity not in result_counts
+            identity not in identities
             or baseline.status != "passed"
             or not baseline.case_id
-            or result_key in result_keys
+            or result_key in passed_cases
         ):
             raise _input_error("numerical baseline results are incomplete or invalid")
-        result_keys.add(result_key)
-        result_counts[identity] += 1
+        passed_cases.add(result_key)
         cases_by_identity[identity].append(
             {"case_id": baseline.case_id, "status": "passed"}
         )
-    if len(result.baseline_results) != len(result.baseline_cases) or any(
-        case_counts[identity] == 0
-        or case_counts[identity] != result_counts[identity]
-        for identity in identities
+    if declared_cases != passed_cases or any(
+        case_counts[identity] == 0 for identity in identities
     ):
         raise _input_error("not every certified operator baseline passed")
 
@@ -339,8 +415,27 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
             }
         )
 
-    entry_artifacts: tuple[dict[str, object], ...] = tuple(
-        {
+    return _PreparedCertification(
+        result=result,
+        binding_bytes=MappingProxyType(binding_bytes),
+        record_operators=tuple(record_operators),
+        entry_artifacts=entry_artifacts,
+    )
+
+
+def _prepare_artifacts(
+    artifacts: tuple[BuildArtifact, ...],
+) -> tuple[tuple[dict[str, object], ...], tuple[BuildArtifact, ...]]:
+    if not artifacts or not all(isinstance(item, BuildArtifact) for item in artifacts):
+        raise _input_error("certification requires verified build artifacts")
+    identities: set[tuple[str, str, str]] = set()
+    filenames: set[str] = set()
+    digests: set[str] = set()
+    build_identifiers: set[str] = set()
+    records: list[dict[str, object]] = []
+    implementations: list[BuildArtifact] = []
+    for artifact in artifacts:
+        value: dict[str, object] = {
             "distribution": artifact.distribution,
             "version": artifact.version,
             "filename": artifact.filename,
@@ -348,19 +443,74 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
             "build_identifier": artifact.build_identifier,
             "digest": artifact.digest,
         }
-        for artifact in sorted(
-            result.artifacts,
-            key=lambda item: (item.role, item.distribution, item.version, item.filename),
-        )
+        identity = (artifact.distribution, artifact.version, artifact.role)
+        if (
+            not isinstance(artifact.wheel_path, Path)
+            or not _valid_entry_artifact(value)
+            or artifact.wheel_path.name != artifact.filename
+            or identity in identities
+            or artifact.filename in filenames
+            or artifact.digest in digests
+            or artifact.build_identifier in build_identifiers
+        ):
+            raise _input_error("certification artifact identity is invalid or duplicated")
+        try:
+            actual_digest = _sha256(_read_regular_file(artifact.wheel_path))
+        except OSError:
+            raise _input_error("certification artifact is unavailable") from None
+        if actual_digest != artifact.digest:
+            raise _input_error("certification artifact digest changed after validation")
+        identities.add(identity)
+        filenames.add(artifact.filename)
+        digests.add(artifact.digest)
+        build_identifiers.add(artifact.build_identifier)
+        records.append(value)
+        if artifact.role == "implementation":
+            implementations.append(artifact)
+    if not implementations:
+        raise _input_error("certification requires an implementation artifact")
+    return (
+        tuple(
+            sorted(
+                records,
+                key=lambda item: (
+                    cast(str, item["role"]),
+                    cast(str, item["distribution"]),
+                    cast(str, item["version"]),
+                    cast(str, item["filename"]),
+                ),
+            )
+        ),
+        tuple(implementations),
     )
-    if any(not _valid_entry_artifact(item) for item in entry_artifacts):
-        raise _input_error("certification artifact provenance is invalid")
 
-    return _PreparedCertification(
-        result=result,
-        binding_bytes=MappingProxyType(binding_bytes),
-        record_operators=tuple(record_operators),
-        entry_artifacts=entry_artifacts,
+
+def _candidate_matches_artifact(
+    result: ResearchCertification,
+    candidate: ContractCandidate,
+    artifact: BuildArtifact,
+) -> bool:
+    manifest = candidate.manifest
+    binding = candidate.binding
+    implementation = manifest.get("implementation")
+    if not isinstance(implementation, Mapping):
+        return False
+    try:
+        candidate_path = candidate.implementation_artifact.resolve(strict=True)
+        artifact_path = artifact.wheel_path.resolve(strict=True)
+    except OSError:
+        return False
+    return (
+        candidate_path == artifact_path
+        and manifest.get("distribution") == artifact.distribution
+        and binding.get("distribution") == artifact.distribution
+        and binding.get("distribution_version") == artifact.version
+        and binding.get("implementation_digest") == artifact.digest
+        and binding.get("source_commit") == result.source_commit
+        and implementation.get("package_version") == artifact.version
+        and implementation.get("implementation_digest") == artifact.digest
+        and implementation.get("build_identifier") == artifact.build_identifier
+        and implementation.get("source_commit") == result.source_commit
     )
 
 
@@ -375,8 +525,10 @@ def _render_publication(
         "certified_at": certified_at,
         "provider": result.provider,
         "release": result.release,
-        "source_commit": f"git-sha1:{result.source_commit}",
+        "submission_commit": result.submission_commit,
+        "source_commit": result.source_commit,
         "state": "research-certified",
+        "artifacts": list(prepared.entry_artifacts),
         "operators": list(prepared.record_operators),
     }
     try:
@@ -417,8 +569,8 @@ def _render_publication(
         "schema_version": 1,
         "provider": result.provider,
         "release": result.release,
-        "submission_commit": f"git-sha1:{result.submission_commit}",
-        "source_commit": f"git-sha1:{result.source_commit}",
+        "submission_commit": result.submission_commit,
+        "source_commit": result.source_commit,
         "certification_record": "certification-record.json",
         "certification_record_digest": _sha256(record_bytes),
         "artifacts": list(prepared.entry_artifacts),
@@ -477,6 +629,22 @@ def _existing_or_conflict(
     )
 
 
+def _durable_existing_or_conflict(
+    prepared: _PreparedCertification,
+    release_dir: Path,
+    provider_dir: Path,
+) -> PublishedCertification:
+    publication = _existing_or_conflict(prepared, release_dir)
+    try:
+        _fsync_directory(provider_dir)
+    except OSError:
+        raise _error(
+            "certification_publish_failed",
+            "existing certification directory durability was not confirmed",
+        ) from None
+    return publication
+
+
 def _read_publication(
     release_dir: Path,
     *,
@@ -511,10 +679,16 @@ def _read_publication(
             or entry["certification_record"] != "certification-record.json"
             or entry["provider"] != record["provider"]
             or entry["release"] != record["release"]
+            or entry["submission_commit"] != record["submission_commit"]
             or entry["source_commit"] != record["source_commit"]
+            or entry["artifacts"] != record["artifacts"]
+            or record["certifier"] != "open-xquant-local"
             or record["state"] != "research-certified"
         ):
             raise ValueError("registry entry and record do not match")
+
+        record_artifacts = cast(list[dict[str, object]], record["artifacts"])
+        implementation_artifacts = _validate_record_artifacts(record_artifacts)
 
         entry_operators = cast(list[dict[str, object]], entry["operators"])
         record_operators = cast(list[dict[str, object]], record["operators"])
@@ -528,6 +702,7 @@ def _read_publication(
         bindings: list[Mapping[str, object]] = []
         expected_files = {"certification-record.json", "registry-entry.json"}
         seen: set[tuple[str, str]] = set()
+        matched_implementation_artifacts: set[tuple[str, str, str]] = set()
         for operator in entry_operators:
             identity = _operator_identity(operator)
             if identity in seen:
@@ -554,6 +729,26 @@ def _read_publication(
                 "certification_state"
             ) not in _RESEARCH_STATES:
                 raise ValueError("binding is not research capable")
+            matching_artifacts = [
+                artifact
+                for artifact in implementation_artifacts
+                if artifact["distribution"] == binding.get("distribution")
+                and artifact["version"] == binding.get("distribution_version")
+                and artifact["digest"] == binding.get("implementation_digest")
+            ]
+            if (
+                binding.get("source_commit") != record["source_commit"]
+                or len(matching_artifacts) != 1
+            ):
+                raise ValueError("binding does not match certified implementation provenance")
+            matched = matching_artifacts[0]
+            matched_implementation_artifacts.add(
+                (
+                    cast(str, matched["distribution"]),
+                    cast(str, matched["version"]),
+                    cast(str, matched["filename"]),
+                )
+            )
             record_operator = record_by_identity.get(identity)
             if (
                 record_operator is None
@@ -565,7 +760,19 @@ def _read_publication(
             ):
                 raise ValueError("record and binding provenance do not match")
             bindings.append(_freeze_json_mapping(binding))
-        if seen != set(record_by_identity) or set(actual_files) != expected_files:
+        expected_implementation_artifacts = {
+            (
+                cast(str, artifact["distribution"]),
+                cast(str, artifact["version"]),
+                cast(str, artifact["filename"]),
+            )
+            for artifact in implementation_artifacts
+        }
+        if (
+            seen != set(record_by_identity)
+            or set(actual_files) != expected_files
+            or matched_implementation_artifacts != expected_implementation_artifacts
+        ):
             raise ValueError("publication layout is not exact")
         return PublishedCertification(
             release_dir=release_dir,
@@ -625,6 +832,45 @@ def _validate_registry_entry(
             raise ValueError("registry operator identity is invalid")
 
 
+def _validate_record_artifacts(
+    artifacts: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    if not artifacts:
+        raise ValueError("certification artifacts are empty")
+    identities: set[tuple[str, str, str]] = set()
+    filenames: set[str] = set()
+    digests: set[str] = set()
+    build_identifiers: set[str] = set()
+    implementations: list[dict[str, object]] = []
+    for artifact in artifacts:
+        if not _valid_entry_artifact(artifact):
+            raise ValueError("certification artifact is invalid")
+        identity = (
+            cast(str, artifact["distribution"]),
+            cast(str, artifact["version"]),
+            cast(str, artifact["role"]),
+        )
+        filename = cast(str, artifact["filename"])
+        digest = cast(str, artifact["digest"])
+        build_identifier = cast(str, artifact["build_identifier"])
+        if (
+            identity in identities
+            or filename in filenames
+            or digest in digests
+            or build_identifier in build_identifiers
+        ):
+            raise ValueError("certification artifact identity is duplicated")
+        identities.add(identity)
+        filenames.add(filename)
+        digests.add(digest)
+        build_identifiers.add(build_identifier)
+        if artifact["role"] == "implementation":
+            implementations.append(artifact)
+    if not implementations:
+        raise ValueError("certification implementation artifact is missing")
+    return implementations
+
+
 def _valid_entry_artifact(value: Mapping[str, object]) -> bool:
     if set(value) != _ENTRY_ARTIFACT_FIELDS:
         return False
@@ -651,9 +897,9 @@ def _publication_files(release_dir: Path) -> dict[str, bytes]:
             for binding in item.iterdir():
                 if not stat.S_ISREG(binding.lstat().st_mode):
                     raise ValueError("binding path is not a regular file")
-                files[f"bindings/{binding.name}"] = binding.read_bytes()
+                files[f"bindings/{binding.name}"] = _read_regular_file(binding)
         elif stat.S_ISREG(mode):
-            files[item.name] = item.read_bytes()
+            files[item.name] = _read_regular_file(item)
         else:
             raise ValueError("publication contains a link or unexpected directory")
     return files
@@ -668,37 +914,13 @@ def _iter_release_directories(output_root: Path) -> Iterator[Path]:
         ):
             raise ValueError("registry provider directory is invalid")
         for release_dir in sorted(provider_dir.iterdir(), key=lambda path: path.name):
-            if release_dir.name.startswith(".") or release_dir.name == ".publish.lock":
+            if release_dir.name.startswith("."):
                 continue
             if not _is_real_directory(release_dir) or not _SEMVER_PATTERN.fullmatch(
                 release_dir.name
             ):
                 raise ValueError("registry release directory is invalid")
             yield release_dir
-
-
-@contextmanager
-def _publication_lock(provider_dir: Path) -> Iterator[None]:
-    lock_path = provider_dir / ".publish.lock"
-    with _THREAD_LOCKS_GUARD:
-        thread_lock = _THREAD_LOCKS.setdefault(lock_path, threading.Lock())
-    with thread_lock:
-        try:
-            with lock_path.open("a+b") as stream:
-                if fcntl is not None:
-                    fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-                try:
-                    yield
-                finally:
-                    if fcntl is not None:
-                        fcntl.flock(stream.fileno(), fcntl.LOCK_UN)
-        except OperatorCertificationError:
-            raise
-        except OSError:
-            raise _error(
-                "certification_publish_failed",
-                "certification publication lock is unavailable",
-            ) from None
 
 
 def _binding_schema() -> Mapping[str, object]:
@@ -724,7 +946,7 @@ def _validate_schema(
         Draft202012Validator(
             schema,
             format_checker=FormatChecker(),
-        ).validate(value)
+        ).validate(_thaw_json_mapping(value))
     except (SchemaError, ValidationError, TypeError, ValueError, RecursionError):
         raise _error(code, message, operator_id) from None
 
@@ -836,16 +1058,20 @@ def _binding_filename(operator_id: str, operator_version: str) -> str:
     return f"{operator_id}@{operator_version}.binding.json"
 
 
-def _valid_provider_release(provider: str, release: str) -> bool:
+def _valid_provider_release(provider: object, release: object) -> bool:
     return bool(
-        _PROVIDER_PATTERN.fullmatch(provider)
+        isinstance(provider, str)
+        and isinstance(release, str)
+        and _PROVIDER_PATTERN.fullmatch(provider)
         and _SEMVER_PATTERN.fullmatch(release)
     )
 
 
-def _valid_operator_identity(operator_id: str, operator_version: str) -> bool:
+def _valid_operator_identity(operator_id: object, operator_version: object) -> bool:
     return bool(
-        _OPERATOR_ID_PATTERN.fullmatch(operator_id)
+        isinstance(operator_id, str)
+        and isinstance(operator_version, str)
+        and _OPERATOR_ID_PATTERN.fullmatch(operator_id)
         and _SEMVER_PATTERN.fullmatch(operator_version)
     )
 
@@ -873,6 +1099,20 @@ def _fsync_directory(path: Path) -> None:
     descriptor = os.open(path, flags)
     try:
         os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _read_regular_file(path: Path) -> bytes:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+            raise OSError("path is not a regular file")
+        chunks: list[bytes] = []
+        while chunk := os.read(descriptor, 1024 * 1024):
+            chunks.append(chunk)
+        return b"".join(chunks)
     finally:
         os.close(descriptor)
 

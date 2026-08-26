@@ -225,6 +225,7 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
 
 def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:
     return BaselineCase(
+        case_id=case.case_id,
         operator_id=case.operator_id,
         operator_version=case.operator_version,
         parameters=_freeze_json_mapping(case.parameters),

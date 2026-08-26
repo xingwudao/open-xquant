@@ -156,6 +156,40 @@ def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
     )
 
 
+def test_rejects_baseline_case_identity_that_differs_from_catalog(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    rewrite_json(
+        fixture.path / "numerical_baselines" / "technical-v1.json",
+        lambda value: value["cases"][0].update({"operator_id": "equant.ttr.ema"}),  # type: ignore[index]
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_identity_mismatch",
+    )
+
+
+def test_rejects_duplicate_global_baseline_case_identity(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+
+    def duplicate_case(value: dict[str, object]) -> None:
+        first = dict(value["cases"][0])  # type: ignore[index]
+        first["parameters"] = {"window": 4}
+        value["cases"].append(first)  # type: ignore[union-attr]
+
+    rewrite_json(
+        fixture.path / "numerical_baselines" / "technical-v1.json",
+        duplicate_case,
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_identity_mismatch",
+    )
+
+
 @pytest.mark.parametrize(
     "source_commit",
     ["git-sha1:" + "a" * 40, "git-sha1:deadbeef"],

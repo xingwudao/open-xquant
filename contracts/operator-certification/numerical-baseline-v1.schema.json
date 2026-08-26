@@ -16,8 +16,9 @@
       "items": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["operator_id", "operator_version", "parameters", "input", "expected", "tolerance"],
+        "required": ["case_id", "operator_id", "operator_version", "parameters", "input", "expected", "tolerance"],
         "properties": {
+          "case_id": {"type": "string", "minLength": 1},
           "operator_id": {"$ref": "#/$defs/operatorId"},
           "operator_version": {"$ref": "#/$defs/semanticVersion"},
           "parameters": {"type": "object", "additionalProperties": true},

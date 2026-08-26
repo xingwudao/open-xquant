@@ -244,6 +244,7 @@ def _contract(
         implementation_artifact=provider_path,
     )
     case = BaselineCase(
+        case_id="sma-3",
         operator_id="fixture.baseline.sma",
         operator_version="1.0.0",
         parameters={"window": 3} if parameters is None else parameters,
@@ -256,8 +257,8 @@ def _contract(
     return ContractCertification(
         provider="baseline-provider",
         release="1.0.0",
-        submission_commit="c" * 40,
-        source_commit="a" * 40,
+        submission_commit="git-sha1:" + "c" * 40,
+        source_commit="git-sha1:" + "a" * 40,
         source_root=tmp_path,
         operators=(candidate,),
         artifacts=(provider_artifact, dependency_artifact),
@@ -873,7 +874,7 @@ def test_certify_provider_promotes_only_revalidated_passing_bindings(
         "research-certified"
     ]
     assert [(item.case_id, item.status) for item in result.baseline_results] == [
-        ("sma-3", "passed")
+        ("sma-window-3", "passed")
     ]
 
     with pytest.raises(TypeError):

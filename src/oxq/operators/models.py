@@ -36,6 +36,7 @@ class BuildArtifact:
 class BaselineCase:
     """One baseline case retained as authoritative decoded input."""
 
+    case_id: str
     operator_id: str
     operator_version: str
     parameters: Mapping[str, object]

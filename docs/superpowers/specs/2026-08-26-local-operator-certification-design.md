@@ -73,9 +73,12 @@ The build record contains:
   and SHA-256;
 - the Python version and exact build command used by the provider.
 
-The baseline file contains one or more cases. Each case identifies the exact
-operator ID/version, invocation parameters, a QuantPanel-compatible literal
-input, literal expected output values, and absolute/relative tolerances.
+The baseline file contains one or more cases. Each case has a stable
+provider-declared `case_id` and identifies the exact operator ID/version,
+invocation parameters, a QuantPanel-compatible literal input, literal expected
+output values, and absolute/relative tolerances. The tuple
+`(operator_id, operator_version, case_id)` is globally unique within one
+provider release and is preserved unchanged in the execution result.
 
 The catalog, baseline, and build-record formats form an independently
 versioned local certification intake profile. Their schemas live under
@@ -159,17 +162,30 @@ Success atomically publishes a release directory containing:
 └── registry-entry.json
 ```
 
-Each binding remains valid frozen-contract JSON. The separate certification
-record stores the certifier identity (`open-xquant-local`), timestamp,
-provider submission commit, implementation source commit, artifact digests,
-baseline case results, and binding digests.
-The registry entry is an index over these immutable records; it does not copy
-provider source code and does not modify provider files.
+Each binding remains valid frozen-contract JSON. The authoritative
+certification record stores the fixed certifier identity
+(`open-xquant-local`), timestamp, provider submission commit, implementation
+source commit, every artifact identity and digest, baseline case results, and
+binding digests. The registry entry is an index over this immutable record;
+any repeated submission, source, artifact, operator, or digest field must
+match the record exactly. It does not copy provider source code and does not
+modify provider files.
 
-Publication uses a staging directory, file flush/fsync, and atomic rename.
-Failure before the final rename leaves no partial release. Re-certifying the
-same provider release is idempotent only when every input and generated digest
-matches; conflicting bytes are rejected rather than overwritten.
+Publication uses a same-filesystem staging directory, file flush/fsync, and
+one atomic directory `os.replace`. There is no persistent lock or mutable
+global index: concurrent publishers race at the final rename, after which the
+loser verifies the winning immutable release as idempotent or conflicting.
+Failure before the final rename leaves no partial release; a failure to fsync
+the provider directory after rename is reported as a publication failure even
+though the complete release remains available for an idempotent retry.
+Re-certifying the same provider release is idempotent only when every input
+and generated digest matches; conflicting bytes are rejected rather than
+overwritten.
+
+Published files are opened with no-follow semantics where the platform
+supports them and verified as regular files through the opened descriptor.
+The certification output directory remains a trusted local boundary; swapping
+ancestor directories concurrently is outside the v1 hostile-input model.
 
 `research-certified` permits research and offline analysis only. Strategy or
 live execution remains gated on `runtime-certified` plus `past_only`; this
