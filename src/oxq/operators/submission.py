@@ -435,6 +435,10 @@ def _verify_wheel_identity(
             for header in wheel_metadata.get_all("Tag", []):
                 wheel_tags.update(parse_tag(header))
             filename_distribution, filename_version, _, filename_tags = parse_wheel_filename(filename)
+            expected_dist_info_directory = (
+                f"{str(filename_distribution).replace('-', '_')}-{str(filename_version).replace('-', '_')}.dist-info"
+            )
+            dist_info_directory = PurePosixPath(wheel_files[0]).parent.name
             build_version = Version(version)
             compatible_tags = set(sys_tags())
             if not wheel_tags or not wheel_tags.intersection(compatible_tags) or not filename_tags.intersection(compatible_tags):
@@ -461,6 +465,7 @@ def _verify_wheel_identity(
         or metadata_version != version
         or _canonical_distribution(str(filename_distribution)) != _canonical_distribution(distribution)
         or filename_version != build_version
+        or dist_info_directory != expected_dist_info_directory
     ):
         raise _error(
             "artifact_identity_mismatch",

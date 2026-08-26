@@ -40,7 +40,7 @@ _FROZEN_SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:36c9fcdac28df718e58cb6ab8f16760400219e58c8c59aa6bc251158f65e85f7",
+    "reference_validator": "sha256:a882716d0527d3c9239d9824f9adec10672acef02ab8104f6415de1fd9191a20",
 }
 _SURFACE_FILENAMES = {
     "quant_panel_schema": "quant-panel-v1.schema.json",
@@ -172,40 +172,51 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
             surface_paths["reference_validator"],
         )
         for candidate in contract.operators:
-            binding = deepcopy(dict(candidate.binding))
-            binding["certification_state"] = "research-certified"
             operator_id = cast(str, candidate.manifest["operator_id"])
-            _validate_schema(
-                binding,
-                binding_schema,
-                code="binding_validation_failed",
-                message="operator binding validation failed",
-                stage="binding",
-                operator_id=operator_id,
-            )
-            entry = CatalogEntry(
-                operator_id=operator_id,
-                operator_version=cast(str, candidate.manifest["operator_version"]),
-                manifest_path=candidate.manifest_path,
-                baseline_path=candidate.manifest_path,
-            )
-            _validate_binding_semantics(
-                validator,
-                binding,
-                candidate.manifest,
-                entry,
-                contract.source_root,
-                candidate.implementation_artifact,
-                surface_paths,
-            )
-            promoted.append(
-                ContractCandidate(
-                    manifest=_freeze_json_mapping(candidate.manifest),
-                    binding=_freeze_json_mapping(binding),
-                    manifest_path=candidate.manifest_path,
-                    implementation_artifact=candidate.implementation_artifact,
+            try:
+                binding = deepcopy(dict(candidate.binding))
+                binding["certification_state"] = "research-certified"
+                _validate_schema(
+                    binding,
+                    binding_schema,
+                    code="binding_validation_failed",
+                    message="operator binding validation failed",
+                    stage="binding",
+                    operator_id=operator_id,
                 )
-            )
+                entry = CatalogEntry(
+                    operator_id=operator_id,
+                    operator_version=cast(
+                        str,
+                        candidate.manifest["operator_version"],
+                    ),
+                    manifest_path=candidate.manifest_path,
+                    baseline_path=candidate.manifest_path,
+                )
+                _validate_binding_semantics(
+                    validator,
+                    binding,
+                    candidate.manifest,
+                    entry,
+                    contract.source_root,
+                    candidate.implementation_artifact,
+                    surface_paths,
+                )
+                promoted.append(
+                    ContractCandidate(
+                        manifest=_freeze_json_mapping(candidate.manifest),
+                        binding=_freeze_json_mapping(binding),
+                        manifest_path=candidate.manifest_path,
+                        implementation_artifact=candidate.implementation_artifact,
+                    )
+                )
+            except RecursionError:
+                raise _error(
+                    "binding_validation_failed",
+                    "operator binding nesting exceeds the supported depth",
+                    "binding",
+                    operator_id,
+                ) from None
 
     return _issue_research_certification(
         ResearchCertification(

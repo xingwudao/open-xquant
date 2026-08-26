@@ -614,6 +614,44 @@ def test_accepts_normalized_prerelease_wheel_filename_version(
     )
 
 
+@pytest.mark.parametrize(
+    "dist_info_directory",
+    ["other_project-1.0.0.dist-info", "equant_ttr-9.0.0.dist-info"],
+)
+def test_rejects_dist_info_directory_that_differs_from_wheel_identity(
+    tmp_path: Path,
+    dist_info_directory: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("equant_ttr/__init__.py", "")
+        archive.writestr(
+            f"{dist_info_directory}/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            f"{dist_info_directory}/METADATA",
+            "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
+        )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(
+            fixture.path,
+            commit,
+            fixture.artifact_dir,
+        ),
+        "artifact_identity_mismatch",
+    )
+
+
 def test_intake_accepts_multi_output_expected_mapping(tmp_path: Path) -> None:
     def add_second_output(repository: Path) -> None:
         rewrite_json(

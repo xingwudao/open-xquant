@@ -10,6 +10,7 @@ import math
 import os
 import stat
 import sys
+import time
 import zipfile
 from collections.abc import Mapping
 from datetime import date, datetime
@@ -656,6 +657,14 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
 def main() -> int:
     if len(sys.argv) != 3:
         return 2
+    gate_path_value = os.environ.pop("OXQ_BASELINE_WINDOWS_JOB_GATE", None)
+    if gate_path_value is not None:
+        gate_path = Path(gate_path_value)
+        deadline = time.monotonic() + 30
+        while not gate_path.is_file():
+            if time.monotonic() >= deadline:
+                return 2
+            time.sleep(0.005)
     request_path = Path(sys.argv[1])
     response_path = Path(sys.argv[2])
     try:

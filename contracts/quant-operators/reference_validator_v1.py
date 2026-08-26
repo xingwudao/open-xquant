@@ -206,6 +206,15 @@ def _validate_constraint_applicability(parameter_type: str, constraints: Mapping
 
 
 def _validate_constraint_coherence(constraints: Mapping[str, Any]) -> None:
+    for name in sorted(_NUMERIC_CONSTRAINTS.intersection(constraints)):
+        value = constraints[name]
+        try:
+            finite = type(value) in {int, float} and math.isfinite(float(value))
+        except (OverflowError, TypeError, ValueError):
+            finite = False
+        if not finite:
+            raise ContractValidationError(f"numeric constraint {name!r} must be finite")
+
     if "min_length" in constraints and "max_length" in constraints and constraints["min_length"] > constraints["max_length"]:
         raise ContractValidationError("conflicting constraints: min_length > max_length")
     if "min_items" in constraints and "max_items" in constraints and constraints["min_items"] > constraints["max_items"]:

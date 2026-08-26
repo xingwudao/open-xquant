@@ -1459,6 +1459,52 @@ def test_discards_provider_stdout_and_stderr(
     assert observed["stderr"] == subprocess.DEVNULL
 
 
+def test_success_closes_windows_kill_on_close_job(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[tuple[str, int]] = []
+
+    class FakeProcess:
+        pid = 123
+        returncode = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            events.append(("wait", self.pid))
+            return self.returncode
+
+        def poll(self) -> int:
+            return self.returncode
+
+    process = FakeProcess()
+    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "nt")
+    monkeypatch.setattr(
+        baseline_runner.subprocess,
+        "Popen",
+        lambda *args, **kwargs: process,
+    )
+    monkeypatch.setattr(
+        baseline_runner,
+        "_open_windows_kill_on_close_job",
+        lambda child: events.append(("open", child.pid)) or 456,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        baseline_runner,
+        "_close_windows_job",
+        lambda handle: events.append(("close", handle)),
+        raising=False,
+    )
+
+    returncode = baseline_runner._run_child_process(
+        [sys.executable, "-c", "pass"],
+        5,
+    )
+
+    assert returncode == 0
+    assert events == [("open", 123), ("wait", 123), ("close", 456)]
+
+
 def test_timeout_reaps_the_direct_child(tmp_path: Path) -> None:
     pid_path = tmp_path / "child.pid"
     source = (
@@ -1523,6 +1569,37 @@ def test_success_reaps_detached_provider_descendant_processes(tmp_path: Path) ->
     descendant_pid = int(pid_path.read_text(encoding="utf-8"))
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object assertion")
+def test_windows_success_reaps_provider_descendant_processes(tmp_path: Path) -> None:
+    pid_path = tmp_path / "windows-descendant.pid"
+    source = (
+        "import subprocess, sys, time\n"
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        "    subprocess.Popen([sys.executable, '-c', "
+        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"], '
+        "creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))\n"
+        "    time.sleep(0.2)\n"
+        "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')\n"
+    )
+    candidate = _contract(tmp_path / "candidate", source)
+
+    run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+    completed = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {descendant_pid}", "/NH"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert str(descendant_pid) not in completed.stdout
 
 
 @pytest.mark.parametrize(
@@ -2063,3 +2140,34 @@ def test_certify_provider_never_returns_research_certified_after_any_failure(
             certify_provider(submission)
 
     assert caught.value.code == "baseline_mismatch"
+
+
+def test_certify_provider_normalizes_recursive_promotion_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fixture = _write_certifiable_provider(
+        tmp_path,
+        expected=[None, None, 2.0],
+    )
+
+    def fail_recursive_freeze(value: Mapping[str, object]) -> Mapping[str, object]:
+        del value
+        raise RecursionError("manifest nesting exceeds recursive freezer")
+
+    monkeypatch.setattr(
+        certification,
+        "_freeze_json_mapping",
+        fail_recursive_freeze,
+    )
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        with pytest.raises(OperatorCertificationError) as caught:
+            certify_provider(submission)
+
+    assert caught.value.code == "binding_validation_failed"
+    assert caught.value.stage == "binding"

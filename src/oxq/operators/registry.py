@@ -150,7 +150,7 @@ def publish_certification(
         _write_staging(staging_dir, rendered)
         _fsync_directory(provider_dir)
         try:
-            os.replace(staging_dir, release_dir)
+            _replace_directory(staging_dir, release_dir)
         except OSError:
             if _lexists(release_dir):
                 return _durable_existing_or_conflict(
@@ -675,8 +675,17 @@ def _source_tree_digest(root: Path, source_files: list[str]) -> str:
             raise ValueError("source path is not normalized")
         normalized_paths.append((relative, parts))
 
-    root_descriptor = _open_directory_no_follow(root)
     digest = hashlib.sha256()
+    if _is_windows():
+        for relative, parts in normalized_paths:
+            source_bytes = _read_relative_regular_file_windows(root, parts)
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(source_bytes).hexdigest().encode("ascii"))
+            digest.update(b"\n")
+        return f"sha256:{digest.hexdigest()}"
+
+    root_descriptor = _open_directory_no_follow(root)
     try:
         for relative, parts in normalized_paths:
             source_bytes = _read_relative_regular_file(root_descriptor, parts)
@@ -737,6 +746,230 @@ def _close_descriptors(descriptors: Sequence[int]) -> None:
                 first_error = error
     if first_error is not None:
         raise first_error
+
+
+def _read_relative_regular_file_windows(root: Path, parts: list[str]) -> bytes:
+    root = Path(os.path.abspath(root))
+    directory_handles = _pin_windows_directory_chain(root, parts[:-1])
+    leaf_handle: int | None = None
+    descriptor: int | None = None
+    try:
+        canonical_root = _windows_final_path(directory_handles[0])
+        current = root
+        _require_windows_real_directory(current)
+        for part in parts[:-1]:
+            current /= part
+            _require_windows_real_directory(current)
+        leaf = current / parts[-1]
+        _require_windows_regular_file(leaf)
+        leaf_handle = _open_windows_file_handle(leaf)
+        attributes = _windows_handle_attributes(leaf_handle)
+        if attributes & 0x00000400:
+            raise OSError(f"source file is a Windows reparse point: {leaf}")
+        if attributes & 0x00000010:
+            raise OSError(f"source path is not a regular file: {leaf}")
+        final_path = _windows_final_path(leaf_handle)
+        expected_path = canonical_root.joinpath(*parts)
+        if not _windows_paths_equal(final_path, expected_path):
+            raise OSError("source file handle escaped its certified path")
+
+        import msvcrt
+
+        descriptor = getattr(msvcrt, "open_osfhandle")(
+            leaf_handle,
+            os.O_RDONLY | getattr(os, "O_BINARY", 0),
+        )
+        leaf_handle = None
+        return _read_regular_descriptor(descriptor)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if leaf_handle is not None:
+            _close_windows_handle(leaf_handle)
+        while directory_handles:
+            _close_windows_handle(directory_handles.pop())
+
+
+def _require_windows_real_directory(path: Path) -> None:
+    status = path.lstat()
+    if _is_windows_reparse_point(status) or stat.S_ISLNK(status.st_mode):
+        raise OSError(f"directory is a Windows reparse point: {path}")
+    if not stat.S_ISDIR(status.st_mode):
+        raise OSError(f"source parent is not a real directory: {path}")
+
+
+def _require_windows_regular_file(path: Path) -> None:
+    status = path.lstat()
+    if _is_windows_reparse_point(status) or stat.S_ISLNK(status.st_mode):
+        raise OSError(f"source file is a Windows reparse point: {path}")
+    if not stat.S_ISREG(status.st_mode):
+        raise OSError(f"source path is not a regular file: {path}")
+
+
+def _pin_windows_directory_chain(root: Path, parts: list[str]) -> list[int]:
+    handles: list[int] = []
+    current = root
+    try:
+        handles.append(_open_windows_directory_handle(current))
+        for part in parts:
+            current /= part
+            handles.append(_open_windows_directory_handle(current))
+    except BaseException:
+        while handles:
+            _close_windows_handle(handles.pop())
+        raise
+    return handles
+
+
+def _open_windows_directory_handle(path: Path) -> int:
+    return _create_windows_file_handle(
+        path,
+        desired_access=0,
+        flags=0x02000000 | 0x00200000,
+    )
+
+
+def _open_windows_file_handle(path: Path) -> int:
+    return _create_windows_file_handle(
+        path,
+        desired_access=0x80000000,
+        flags=0x00200000,
+    )
+
+
+def _create_windows_file_handle(
+    path: Path,
+    *,
+    desired_access: int,
+    flags: int,
+) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    create_file = getattr(ctypes, "WinDLL")(
+        "kernel32",
+        use_last_error=True,
+    ).CreateFileW
+    create_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.HANDLE,
+    )
+    create_file.restype = wintypes.HANDLE
+    handle = create_file(
+        str(path),
+        desired_access,
+        0x00000001 | 0x00000002,
+        None,
+        3,
+        flags,
+        None,
+    )
+    invalid_handle = ctypes.c_void_p(-1).value
+    if handle == invalid_handle:
+        error = _windows_last_error()
+        raise OSError(error, os.strerror(error), str(path))
+    integer_handle = int(handle)
+    try:
+        attributes = _windows_handle_attributes(integer_handle)
+        if attributes & 0x00000400:
+            raise OSError(f"path is a Windows reparse point: {path}")
+    except BaseException:
+        _close_windows_handle(integer_handle)
+        raise
+    return integer_handle
+
+
+def _windows_handle_attributes(handle: int) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class FileAttributeTagInfo(ctypes.Structure):
+        _fields_ = [
+            ("file_attributes", wintypes.DWORD),
+            ("reparse_tag", wintypes.DWORD),
+        ]
+
+    get_info = getattr(ctypes, "WinDLL")(
+        "kernel32",
+        use_last_error=True,
+    ).GetFileInformationByHandleEx
+    get_info.argtypes = (
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    )
+    get_info.restype = wintypes.BOOL
+    info = FileAttributeTagInfo()
+    if not get_info(handle, 9, ctypes.byref(info), ctypes.sizeof(info)):
+        error = _windows_last_error()
+        raise OSError(error, os.strerror(error))
+    return int(info.file_attributes)
+
+
+def _windows_final_path(handle: int) -> Path:
+    import ctypes
+    from ctypes import wintypes
+
+    get_final_path = getattr(ctypes, "WinDLL")(
+        "kernel32",
+        use_last_error=True,
+    ).GetFinalPathNameByHandleW
+    get_final_path.argtypes = (
+        wintypes.HANDLE,
+        wintypes.LPWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+    )
+    get_final_path.restype = wintypes.DWORD
+    required = get_final_path(handle, None, 0, 0)
+    if required == 0:
+        error = _windows_last_error()
+        raise OSError(error, os.strerror(error))
+    buffer = ctypes.create_unicode_buffer(required + 1)
+    written = get_final_path(handle, buffer, len(buffer), 0)
+    if written == 0 or written >= len(buffer):
+        error = _windows_last_error()
+        raise OSError(error, os.strerror(error))
+    value = buffer.value
+    if value.startswith("\\\\?\\UNC\\"):
+        value = "\\\\" + value[8:]
+    elif value.startswith("\\\\?\\"):
+        value = value[4:]
+    return Path(value)
+
+
+def _windows_paths_equal(left: Path, right: Path) -> bool:
+    return os.path.normcase(os.path.abspath(left)) == os.path.normcase(os.path.abspath(right))
+
+
+def _close_windows_handle(handle: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    close_handle = getattr(ctypes, "WinDLL")(
+        "kernel32",
+        use_last_error=True,
+    ).CloseHandle
+    close_handle.argtypes = (wintypes.HANDLE,)
+    close_handle.restype = wintypes.BOOL
+    close_handle(handle)
+
+
+def _is_windows_reparse_point(status: os.stat_result) -> bool:
+    attributes = getattr(status, "st_file_attributes", 0)
+    return bool(attributes & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x00000400))
+
+
+def _windows_last_error() -> int:
+    import ctypes
+
+    return int(getattr(ctypes, "get_last_error")())
 
 
 def _render_publication(
@@ -1314,12 +1547,46 @@ def _lexists(path: Path) -> bool:
 
 
 def _fsync_directory(path: Path) -> None:
+    if _is_windows():
+        handle = _open_windows_directory_handle(path)
+        _close_windows_handle(handle)
+        return
     flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
     descriptor = os.open(path, flags)
     try:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _is_windows() -> bool:
+    return os.name == "nt"
+
+
+def _replace_directory(source: Path, target: Path) -> None:
+    if not _is_windows():
+        os.replace(source, target)
+        return
+    _move_file_write_through(source, target)
+
+
+def _move_file_write_through(source: Path, target: Path) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    move_file = getattr(ctypes, "WinDLL")(
+        "kernel32",
+        use_last_error=True,
+    ).MoveFileExW
+    move_file.argtypes = (
+        wintypes.LPCWSTR,
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+    )
+    move_file.restype = wintypes.BOOL
+    if not move_file(str(source), str(target), 0x00000001 | 0x00000008):
+        error = _windows_last_error()
+        raise OSError(error, os.strerror(error), str(target))
 
 
 def _read_regular_file(path: Path) -> bytes:

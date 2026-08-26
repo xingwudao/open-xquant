@@ -535,6 +535,26 @@ def test_reference_validator_rejects_nonfinite_determinism_tolerance(
 
 
 @pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("minimum", float("inf")),
+        ("maximum", float("-inf")),
+        ("exclusive_minimum", float("inf")),
+        ("exclusive_maximum", float("-inf")),
+    ],
+)
+def test_reference_validator_rejects_nonfinite_numeric_parameter_bounds(
+    field: str,
+    value: float,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["parameters"]["window"]["constraints"] = {field: value}
+
+    with pytest.raises(ValueError, match="numeric constraint"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize(
     ("parameter_type", "constraint"),
     [
         ("integer", {"pattern": "^[0-9]+$"}),

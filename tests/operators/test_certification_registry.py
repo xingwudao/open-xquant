@@ -38,7 +38,7 @@ _SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:36c9fcdac28df718e58cb6ab8f16760400219e58c8c59aa6bc251158f65e85f7",
+    "reference_validator": "sha256:a882716d0527d3c9239d9824f9adec10672acef02ab8104f6415de1fd9191a20",
 }
 
 
@@ -811,6 +811,154 @@ def test_descriptor_cleanup_attempts_every_close_after_one_failure(
         registry_module._close_descriptors([11, 22, 33])
 
     assert attempted == [11, 22, 33]
+
+
+def test_windows_source_digest_and_directory_sync_avoid_directory_descriptors(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    source_path = source_root / "src/equant_ttr/sma.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"provider source\n")
+
+    monkeypatch.setattr(registry_module, "_is_windows", lambda: True, raising=False)
+    monkeypatch.setattr(
+        registry_module,
+        "_read_relative_regular_file_windows",
+        lambda root, parts: root.joinpath(*parts).read_bytes(),
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_open_windows_directory_handle",
+        lambda path: 44,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_close_windows_handle",
+        lambda handle: None,
+    )
+
+    def reject_directory_open(*args: object, **kwargs: object) -> int:
+        raise AssertionError(f"Windows directory descriptor opened: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(registry_module.os, "open", reject_directory_open)
+
+    assert registry_module._source_tree_digest(
+        source_root,
+        ["src/equant_ttr/sma.py"],
+    ) == _source_tree_digest(source_root, ["src/equant_ttr/sma.py"])
+    registry_module._fsync_directory(source_root)
+
+
+def test_windows_directory_replace_uses_write_through_move(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source = tmp_path / "staging"
+    target = tmp_path / "release"
+    observed: list[tuple[Path, Path]] = []
+    monkeypatch.setattr(registry_module, "_is_windows", lambda: True, raising=False)
+    monkeypatch.setattr(
+        registry_module,
+        "_move_file_write_through",
+        lambda left, right: observed.append((left, right)),
+    )
+
+    registry_module._replace_directory(source, target)
+
+    assert observed == [(source, target)]
+
+
+def test_windows_source_digest_rejects_reparse_parent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sma.py").write_bytes(b"outside\n")
+    source_root.mkdir()
+    (source_root / "src").symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(registry_module, "_is_windows", lambda: True, raising=False)
+
+    def reject_reparse_chain(root: Path, parts: list[str]) -> list[int]:
+        current = root
+        for part in parts:
+            current /= part
+            if current.is_symlink():
+                raise OSError(f"directory is a Windows reparse point: {current}")
+        return []
+
+    monkeypatch.setattr(
+        registry_module,
+        "_pin_windows_directory_chain",
+        reject_reparse_chain,
+    )
+
+    with pytest.raises(OSError, match="reparse"):
+        registry_module._source_tree_digest(source_root, ["src/sma.py"])
+
+
+def test_windows_source_digest_rejects_reparse_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "sma.py").write_bytes(b"outside\n")
+    source_root = tmp_path / "source"
+    source_root.symlink_to(outside, target_is_directory=True)
+    monkeypatch.setattr(registry_module, "_is_windows", lambda: True, raising=False)
+    monkeypatch.setattr(
+        registry_module,
+        "_pin_windows_directory_chain",
+        lambda root, parts: (_ for _ in ()).throw(OSError(f"directory is a Windows reparse point: {root}")),
+    )
+
+    with pytest.raises(OSError, match="reparse"):
+        registry_module._source_tree_digest(source_root, ["sma.py"])
+
+
+def test_windows_source_digest_rejects_final_handle_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    source_path = source_root / "sma.py"
+    source_root.mkdir()
+    source_path.write_bytes(b"inside\n")
+    outside_path = tmp_path / "outside.py"
+    outside_path.write_bytes(b"outside\n")
+    monkeypatch.setattr(registry_module, "_is_windows", lambda: True, raising=False)
+    monkeypatch.setattr(
+        registry_module,
+        "_pin_windows_directory_chain",
+        lambda root, parts: [11],
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_open_windows_file_handle",
+        lambda path: 22,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_windows_handle_attributes",
+        lambda handle: 0,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_windows_final_path",
+        lambda handle: source_root if handle == 11 else outside_path,
+    )
+    monkeypatch.setattr(
+        registry_module,
+        "_close_windows_handle",
+        lambda handle: None,
+    )
+
+    with pytest.raises(OSError, match="escaped"):
+        registry_module._source_tree_digest(source_root, ["sma.py"])
 
 
 def test_allows_multiple_operators_bound_to_one_implementation_artifact(

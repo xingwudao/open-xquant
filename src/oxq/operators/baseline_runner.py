@@ -483,16 +483,28 @@ def _run_child(
 
 
 def _run_child_process(command: list[str], timeout_seconds: float) -> int:
-    if os.name == "nt":
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=cast(
-                int,
-                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
-            ),
-        )
+    platform_name = _platform_name()
+    windows_job: int | None = None
+    windows_gate_directory: TemporaryDirectory[str] | None = None
+    if platform_name == "nt":
+        windows_gate_directory = TemporaryDirectory(prefix="oxq-windows-job-")
+        gate_path = Path(windows_gate_directory.name) / "assigned"
+        child_environment = os.environ.copy()
+        child_environment["OXQ_BASELINE_WINDOWS_JOB_GATE"] = str(gate_path)
+        try:
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                creationflags=cast(
+                    int,
+                    getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+                ),
+                env=child_environment,
+            )
+        except BaseException:
+            windows_gate_directory.cleanup()
+            raise
     else:
         process = subprocess.Popen(
             command,
@@ -500,32 +512,48 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-    descendants: set[int] = set()
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        if os.name != "nt":
+    try:
+        if platform_name == "nt":
+            try:
+                windows_job = _open_windows_kill_on_close_job(process)
+                gate_path.write_bytes(b"assigned\n")
+            except OSError:
+                _kill_process_tree(process)
+                process.wait()
+                raise
+        descendants: set[int] = set()
+        deadline = time.monotonic() + timeout_seconds
+        while True:
+            if platform_name != "nt":
+                descendants.update(_posix_descendant_pids(process.pid))
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                _kill_process_tree(process, descendants)
+                process.wait()
+                raise subprocess.TimeoutExpired(command, timeout_seconds)
+            try:
+                process.wait(timeout=min(0.02, remaining))
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        if platform_name != "nt":
             descendants.update(_posix_descendant_pids(process.pid))
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            _kill_process_tree(process, descendants)
-            process.wait()
-            raise subprocess.TimeoutExpired(command, timeout_seconds)
+            _kill_posix_processes(descendants)
+        return int(process.returncode)
+    finally:
         try:
-            process.wait(timeout=min(0.02, remaining))
-            break
-        except subprocess.TimeoutExpired:
-            continue
-    if os.name != "nt":
-        descendants.update(_posix_descendant_pids(process.pid))
-        _kill_posix_processes(descendants)
-    return int(process.returncode)
+            if windows_job is not None:
+                _close_windows_job(windows_job)
+        finally:
+            if windows_gate_directory is not None:
+                windows_gate_directory.cleanup()
 
 
 def _kill_process_tree(
     process: subprocess.Popen[bytes],
     known_descendants: set[int] | None = None,
 ) -> None:
-    if os.name == "nt":
+    if _platform_name() == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
             check=False,
@@ -559,6 +587,122 @@ def _kill_posix_processes(process_ids: set[int]) -> None:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def _platform_name() -> str:
+    return os.name
+
+
+def _open_windows_kill_on_close_job(
+    process: subprocess.Popen[bytes],
+) -> int:
+    import ctypes
+    from ctypes import wintypes
+
+    class BasicLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("PerProcessUserTimeLimit", ctypes.c_longlong),
+            ("PerJobUserTimeLimit", ctypes.c_longlong),
+            ("LimitFlags", wintypes.DWORD),
+            ("MinimumWorkingSetSize", ctypes.c_size_t),
+            ("MaximumWorkingSetSize", ctypes.c_size_t),
+            ("ActiveProcessLimit", wintypes.DWORD),
+            ("Affinity", ctypes.c_size_t),
+            ("PriorityClass", wintypes.DWORD),
+            ("SchedulingClass", wintypes.DWORD),
+        ]
+
+    class IoCounters(ctypes.Structure):
+        _fields_ = [
+            ("ReadOperationCount", ctypes.c_ulonglong),
+            ("WriteOperationCount", ctypes.c_ulonglong),
+            ("OtherOperationCount", ctypes.c_ulonglong),
+            ("ReadTransferCount", ctypes.c_ulonglong),
+            ("WriteTransferCount", ctypes.c_ulonglong),
+            ("OtherTransferCount", ctypes.c_ulonglong),
+        ]
+
+    class ExtendedLimitInformation(ctypes.Structure):
+        _fields_ = [
+            ("BasicLimitInformation", BasicLimitInformation),
+            ("IoInfo", IoCounters),
+            ("ProcessMemoryLimit", ctypes.c_size_t),
+            ("JobMemoryLimit", ctypes.c_size_t),
+            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+            ("PeakJobMemoryUsed", ctypes.c_size_t),
+        ]
+
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    kernel32.CreateJobObjectW.argtypes = [wintypes.LPVOID, wintypes.LPCWSTR]
+    kernel32.CreateJobObjectW.restype = wintypes.HANDLE
+    kernel32.SetInformationJobObject.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_int,
+        wintypes.LPVOID,
+        wintypes.DWORD,
+    ]
+    kernel32.SetInformationJobObject.restype = wintypes.BOOL
+    kernel32.AssignProcessToJobObject.argtypes = [
+        wintypes.HANDLE,
+        wintypes.HANDLE,
+    ]
+    kernel32.AssignProcessToJobObject.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+
+    job = kernel32.CreateJobObjectW(None, None)
+    if not job:
+        raise _windows_error()
+    try:
+        information = ExtendedLimitInformation()
+        information.BasicLimitInformation.LimitFlags = 0x00002000
+        if not kernel32.SetInformationJobObject(
+            job,
+            9,
+            ctypes.byref(information),
+            ctypes.sizeof(information),
+        ):
+            raise _windows_error()
+        process_handle = getattr(process, "_handle", None)
+        if process_handle is None or not kernel32.AssignProcessToJobObject(
+            job,
+            wintypes.HANDLE(int(process_handle)),
+        ):
+            raise _windows_error()
+        return int(job)
+    except BaseException:
+        kernel32.CloseHandle(job)
+        raise
+
+
+def _close_windows_job(handle: int) -> None:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = getattr(ctypes, "WinDLL")("kernel32", use_last_error=True)
+    kernel32.TerminateJobObject.argtypes = [wintypes.HANDLE, wintypes.UINT]
+    kernel32.TerminateJobObject.restype = wintypes.BOOL
+    kernel32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.WaitForSingleObject.restype = wintypes.DWORD
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    job = wintypes.HANDLE(handle)
+    termination_error: OSError | None = None
+    if not kernel32.TerminateJobObject(job, 1):
+        termination_error = _windows_error()
+    elif kernel32.WaitForSingleObject(job, 5000) != 0:
+        termination_error = OSError("Windows provider job did not terminate")
+    if not kernel32.CloseHandle(job):
+        raise _windows_error()
+    if termination_error is not None:
+        raise termination_error
+
+
+def _windows_error() -> OSError:
+    import ctypes
+
+    error = int(getattr(ctypes, "get_last_error")())
+    return OSError(error, os.strerror(error))
 
 
 def _posix_descendant_pids(root_pid: int) -> set[int]:
