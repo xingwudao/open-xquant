@@ -38,7 +38,7 @@ def run_research_baselines(
 ) -> tuple[BaselineResult, ...]:
     """Run every declared baseline against only the verified provider wheels."""
     artifacts = tuple(runtime_artifacts)
-    wheel_paths = _verified_wheel_paths(candidate, artifacts)
+    verified_artifacts = _verified_artifacts(candidate, artifacts)
     operators = {
         (
             cast(str, item.manifest["operator_id"]),
@@ -100,7 +100,16 @@ def run_research_baselines(
                 manifest=operator.manifest,
                 case=case,
                 output_field=output_field,
-                wheel_paths=wheel_paths,
+                implementation_artifact=_implementation_artifact(
+                    operator.implementation_artifact,
+                    verified_artifacts,
+                    case.operator_id,
+                ),
+                dependency_artifacts=[
+                    str(path)
+                    for artifact, path in verified_artifacts
+                    if artifact.role == "runtime-dependency"
+                ],
                 timeout_seconds=timeout_seconds,
             )
             _assert_expected(case, actual)
@@ -123,37 +132,58 @@ def run_research_baselines(
     return tuple(results)
 
 
-def _verified_wheel_paths(
+def _verified_artifacts(
     candidate: ContractCertification,
     artifacts: tuple[BuildArtifact, ...],
-) -> list[str]:
+) -> list[tuple[BuildArtifact, Path]]:
     if artifacts != candidate.artifacts or not artifacts:
         raise _error(
             "provider_import_failed",
             "runtime artifacts do not match the verified contract artifacts",
         )
-    paths: list[str] = []
+    verified: list[tuple[BuildArtifact, Path]] = []
     try:
         for artifact in artifacts:
             path = artifact.wheel_path.resolve(strict=True)
             if not path.is_file() or _sha256_file(path) != artifact.digest:
                 raise OSError("runtime artifact digest mismatch")
-            paths.append(str(path))
+            verified.append((artifact, path))
     except OSError:
         raise _error(
             "provider_import_failed",
             "verified runtime artifact is unavailable",
         ) from None
-    implementation_paths = {
-        str(operator.implementation_artifact.resolve())
+    implementation_paths = {path for artifact, path in verified if artifact.role == "implementation"}
+    candidate_paths = {
+        operator.implementation_artifact.resolve()
         for operator in candidate.operators
     }
-    if not implementation_paths.issubset(paths):
+    if not candidate_paths.issubset(implementation_paths):
         raise _error(
             "provider_import_failed",
             "operator implementation artifact is not verified",
         )
-    return paths
+    return verified
+
+
+def _implementation_artifact(
+    implementation_artifact: Path,
+    verified_artifacts: list[tuple[BuildArtifact, Path]],
+    operator_id: str,
+) -> str:
+    resolved = implementation_artifact.resolve()
+    matches = [
+        path
+        for artifact, path in verified_artifacts
+        if artifact.role == "implementation" and path == resolved
+    ]
+    if len(matches) != 1:
+        raise _error(
+            "provider_import_failed",
+            "operator implementation artifact is not uniquely verified",
+            operator_id,
+        )
+    return str(matches[0])
 
 
 def _validate_case_input(
@@ -248,11 +278,13 @@ def _run_child(
     manifest: Mapping[str, object],
     case: BaselineCase,
     output_field: str,
-    wheel_paths: list[str],
+    implementation_artifact: str,
+    dependency_artifacts: list[str],
     timeout_seconds: float,
 ) -> list[object]:
     request = {
-        "wheel_paths": wheel_paths,
+        "implementation_artifact": implementation_artifact,
+        "dependency_artifacts": dependency_artifacts,
         "module": manifest["module"],
         "callable": manifest["callable"],
         "parameters": case.parameters,

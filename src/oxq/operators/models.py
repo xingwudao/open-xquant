@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -37,18 +38,18 @@ class BaselineCase:
 
     operator_id: str
     operator_version: str
-    parameters: dict[str, object]
-    input: dict[str, object]
-    expected: dict[str, object]
-    tolerance: dict[str, object]
+    parameters: Mapping[str, object]
+    input: Mapping[str, object]
+    expected: Mapping[str, object]
+    tolerance: Mapping[str, object]
 
 
 @dataclass(frozen=True)
 class ContractCandidate:
     """One schema-valid, provenance-bound operator candidate."""
 
-    manifest: dict[str, object]
-    binding: dict[str, object]
+    manifest: Mapping[str, object]
+    binding: Mapping[str, object]
     manifest_path: Path
     implementation_artifact: Path
 

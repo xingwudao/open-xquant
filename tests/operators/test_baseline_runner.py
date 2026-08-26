@@ -5,14 +5,18 @@ from __future__ import annotations
 import hashlib
 import io
 import json
+import os
 import sys
 import zipfile
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 import oxq.operators.baseline_runner as baseline_runner
+import oxq.operators.certification as certification
 from oxq.operators.baseline_runner import run_research_baselines
 from oxq.operators.certification import certify_provider
 from oxq.operators.errors import OperatorCertificationError
@@ -21,6 +25,7 @@ from oxq.operators.models import (
     BuildArtifact,
     ContractCandidate,
     ContractCertification,
+    ProviderSubmission,
 )
 from oxq.operators.submission import load_provider_submission
 from tests.operators.helpers import rewrite_json, write_provider_repository
@@ -300,6 +305,58 @@ def test_executes_exact_provider_and_dependency_wheels_without_parent_imports(
     )
 
 
+def test_rejects_shadow_dependency_instead_of_skipping_bound_implementation(
+    tmp_path: Path,
+) -> None:
+    wrong_implementation = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([0.0, 0.0, 0.0], index=frame.index, name=f"sma_{window}")
+"""
+    shadow_implementation = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(tmp_path, wrong_implementation)
+    implementation, dependency = candidate.artifacts
+    dependency.wheel_path.write_bytes(
+        _wheel_bytes(
+            "baseline-dependency",
+            "baseline_provider",
+            shadow_implementation,
+        )
+    )
+    shadow_dependency = replace(
+        dependency,
+        digest=_sha256(dependency.wheel_path.read_bytes()),
+    )
+    candidate = replace(
+        candidate,
+        artifacts=(shadow_dependency, implementation),
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+def test_rejects_undeclared_ambient_dependency(tmp_path: Path) -> None:
+    candidate = _contract(tmp_path, "import jsonschema\n" + SUCCESS_SOURCE)
+
+    _assert_failure(candidate, "provider_import_failed")
+
+
+def test_rejects_preimported_module_name_not_owned_by_implementation(
+    tmp_path: Path,
+) -> None:
+    candidate = _contract(
+        tmp_path,
+        "def sma(frame, *, window):\n    return None\n",
+        module="json",
+    )
+
+    _assert_failure(candidate, "provider_import_failed")
+
+
 @pytest.mark.parametrize(
     ("source", "code"),
     [
@@ -408,6 +465,24 @@ def test_normalizes_child_timeout(tmp_path: Path) -> None:
         "provider_execution_timeout",
         timeout_seconds=0.05,
     )
+
+
+def test_timeout_reaps_the_direct_child(tmp_path: Path) -> None:
+    pid_path = tmp_path / "child.pid"
+    source = (
+        "import os, pathlib, time\n"
+        "def sma(frame, *, window):\n"
+        f"    pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "    time.sleep(60)\n"
+    )
+    _assert_failure(
+        _contract(tmp_path / "candidate", source),
+        "provider_execution_timeout",
+        timeout_seconds=2,
+    )
+    child_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(child_pid, 0)
 
 
 @pytest.mark.parametrize(
@@ -537,6 +612,60 @@ def test_certify_provider_promotes_only_revalidated_passing_bindings(
     assert [(item.case_id, item.status) for item in result.baseline_results] == [
         ("sma-3", "passed")
     ]
+
+    with pytest.raises(TypeError):
+        result.operators[0].binding["certification_state"] = "contract-valid"  # type: ignore[index]
+    implementation = cast(
+        dict[str, object],
+        result.operators[0].manifest["implementation"],
+    )
+    with pytest.raises(TypeError):
+        implementation["package_version"] = "9.9.9"
+    with pytest.raises(TypeError):
+        result.baseline_cases[0].parameters["window"] = 99  # type: ignore[index]
+    expected = cast(dict[str, object], result.baseline_cases[0].expected)
+    with pytest.raises(TypeError):
+        expected["sma_3"] = [2.0]
+    expected_values = cast(tuple[object, ...], result.baseline_cases[0].expected["sma_3"])
+    with pytest.raises(TypeError):
+        expected_values[0] = 0.0  # type: ignore[index]
+    records = cast(
+        tuple[dict[str, object], ...],
+        result.baseline_cases[0].input["records"],
+    )
+    with pytest.raises(TypeError):
+        records[0]["close"] = 99.0
+
+
+def test_late_case_failure_does_not_mutate_contract_valid_candidates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions_path = tmp_path / "executions.txt"
+    source = SUCCESS_SOURCE.replace(
+        "def sma(frame, *, window):",
+        "import pathlib\n"
+        "def sma(frame, *, window):\n"
+        f"    with pathlib.Path({str(executions_path)!r}).open('a') as stream:\n"
+        "        stream.write('x')",
+    )
+    contract = _contract(tmp_path, source)
+    passing = contract.baseline_cases[0]
+    failing = replace(passing, expected={"sma_3": [None, None, 99.0]})
+    contract = replace(contract, baseline_cases=(passing, failing))
+    monkeypatch.setattr(
+        certification,
+        "validate_provider_contract",
+        lambda submission: contract,
+    )
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        certify_provider(cast(ProviderSubmission, object()))
+
+    assert caught.value.code == "baseline_mismatch"
+    assert executions_path.read_text(encoding="utf-8") == "xx"
+    assert contract.operators[0].binding["certification_state"] == "contract-valid"
+    assert contract.operators[0].manifest["operator_version"] == "1.0.0"
 
 
 def test_certify_provider_never_returns_research_certified_after_any_failure(

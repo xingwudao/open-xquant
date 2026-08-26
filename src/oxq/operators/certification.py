@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from types import ModuleType
+from types import MappingProxyType, ModuleType
 from typing import Protocol, cast
 
 from jsonschema import (  # type: ignore[import-untyped]
@@ -22,6 +22,7 @@ from jsonschema import (  # type: ignore[import-untyped]
 
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import (
+    BaselineCase,
     BuildArtifact,
     CatalogEntry,
     ContractCandidate,
@@ -172,7 +173,7 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
             surface_paths["reference_validator"],
         )
         for candidate in contract.operators:
-            binding = deepcopy(candidate.binding)
+            binding = deepcopy(dict(candidate.binding))
             binding["certification_state"] = "research-certified"
             operator_id = cast(str, candidate.manifest["operator_id"])
             _validate_schema(
@@ -200,8 +201,8 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
             )
             promoted.append(
                 ContractCandidate(
-                    manifest=candidate.manifest,
-                    binding=binding,
+                    manifest=_freeze_json_mapping(candidate.manifest),
+                    binding=_freeze_json_mapping(binding),
                     manifest_path=candidate.manifest_path,
                     implementation_artifact=candidate.implementation_artifact,
                 )
@@ -215,9 +216,40 @@ def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
         source_root=contract.source_root,
         operators=tuple(promoted),
         artifacts=contract.artifacts,
-        baseline_cases=contract.baseline_cases,
+        baseline_cases=tuple(
+            _freeze_baseline_case(case) for case in contract.baseline_cases
+        ),
         baseline_results=baseline_results,
     )
+
+
+def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:
+    return BaselineCase(
+        operator_id=case.operator_id,
+        operator_version=case.operator_version,
+        parameters=_freeze_json_mapping(case.parameters),
+        input=_freeze_json_mapping(case.input),
+        expected=_freeze_json_mapping(case.expected),
+        tolerance=_freeze_json_mapping(case.tolerance),
+    )
+
+
+def _freeze_json_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType(
+        {key: _freeze_json_value(item) for key, item in value.items()}
+    )
+
+
+def _freeze_json_value(value: object) -> object:
+    if isinstance(value, Mapping):
+        if not all(isinstance(key, str) for key in value):
+            raise TypeError("JSON object keys must be strings")
+        return _freeze_json_mapping(cast(Mapping[str, object], value))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_json_value(item) for item in value)
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    raise TypeError("certification JSON contains an unsupported value")
 
 
 def _read_manifest(entry: CatalogEntry) -> tuple[dict[str, object], bytes]:

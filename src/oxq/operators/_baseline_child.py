@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any
+
+_PLATFORM_RUNTIME_ROOTS = {"numpy", "pandas"}
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -32,7 +36,8 @@ def _read_request(path: Path) -> dict[str, object]:
     if not isinstance(value, dict):
         raise ValueError("request is not an object")
     if set(value) != {
-        "wheel_paths",
+        "implementation_artifact",
+        "dependency_artifacts",
         "module",
         "callable",
         "parameters",
@@ -105,17 +110,73 @@ def _extract_output(
     raise TypeError("provider output must be a Series or DataFrame")
 
 
+def _module_locations(module: ModuleType) -> tuple[str, ...]:
+    locations: list[str] = []
+    spec = getattr(module, "__spec__", None)
+    origin = getattr(spec, "origin", None)
+    if isinstance(origin, str) and origin not in {"built-in", "frozen"}:
+        locations.append(origin)
+    module_file = getattr(module, "__file__", None)
+    if isinstance(module_file, str):
+        locations.append(module_file)
+    search_locations = getattr(spec, "submodule_search_locations", None)
+    if search_locations is not None:
+        locations.extend(
+            location for location in search_locations if isinstance(location, str)
+        )
+    return tuple(dict.fromkeys(locations))
+
+
+def _location_is_in_archive(location: str, archive: str) -> bool:
+    normalized_location = os.path.normcase(os.path.abspath(location))
+    normalized_archive = os.path.normcase(os.path.abspath(archive))
+    return normalized_location.startswith(normalized_archive + os.sep)
+
+
+def _module_is_from_archives(
+    module: ModuleType,
+    archives: list[str],
+) -> bool:
+    locations = _module_locations(module)
+    return bool(locations) and any(
+        _location_is_in_archive(location, archive)
+        for location in locations
+        for archive in archives
+    )
+
+
+def _new_modules_are_allowed(
+    modules_before_provider: set[str],
+    verified_archives: list[str],
+) -> bool:
+    for name in set(sys.modules).difference(modules_before_provider):
+        module = sys.modules.get(name)
+        if not isinstance(module, ModuleType):
+            return False
+        root = name.partition(".")[0]
+        if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
+            continue
+        if not _module_is_from_archives(module, verified_archives):
+            return False
+    return True
+
+
 def _execute(request: dict[str, object], response_path: Path) -> int:
-    wheel_paths = request["wheel_paths"]
+    implementation_artifact = request["implementation_artifact"]
+    dependency_artifacts = request["dependency_artifacts"]
     module_name = request["module"]
     callable_name = request["callable"]
     parameters = request["parameters"]
     panel = request["input"]
     output_field = request["output_field"]
     if (
-        not isinstance(wheel_paths, list)
-        or not wheel_paths
-        or not all(isinstance(path, str) and Path(path).is_absolute() for path in wheel_paths)
+        not isinstance(implementation_artifact, str)
+        or not Path(implementation_artifact).is_absolute()
+        or not isinstance(dependency_artifacts, list)
+        or not all(
+            isinstance(path, str) and Path(path).is_absolute()
+            for path in dependency_artifacts
+        )
         or not isinstance(module_name, str)
         or not isinstance(callable_name, str)
         or not isinstance(parameters, dict)
@@ -123,18 +184,28 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         or not isinstance(output_field, str)
     ):
         return _error(response_path, "provider_execution_failed")
-    sys.path[:0] = wheel_paths
+    try:
+        import numpy as np  # noqa: F401
+        import pandas as pd
+    except BaseException:
+        return _error(response_path, "provider_execution_failed")
+
+    modules_before_provider = set(sys.modules)
+    verified_archives = [implementation_artifact, *dependency_artifacts]
+    sys.path[:0] = verified_archives
     try:
         module = importlib.import_module(module_name)
+        if not _module_is_from_archives(module, [implementation_artifact]):
+            raise ImportError("manifest module is not from implementation artifact")
         implementation = getattr(module, callable_name)
         if not callable(implementation):
             raise ImportError("manifest callable is not callable")
+        if not _new_modules_are_allowed(modules_before_provider, verified_archives):
+            raise ImportError("provider imported an undeclared ambient dependency")
     except BaseException:
         return _error(response_path, "provider_import_failed")
 
     try:
-        import pandas as pd
-
         records = panel["records"]
         if not isinstance(records, list):
             raise TypeError("panel records are not a list")
@@ -142,6 +213,8 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         frame.index = pd.MultiIndex.from_frame(frame[["date", "code"]])
         original = frame.copy(deep=True)
         result = implementation(frame, **parameters)
+        if not _new_modules_are_allowed(modules_before_provider, verified_archives):
+            return _error(response_path, "provider_import_failed")
         try:
             pd.testing.assert_frame_equal(
                 frame,
