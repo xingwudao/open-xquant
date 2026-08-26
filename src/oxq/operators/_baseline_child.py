@@ -19,6 +19,7 @@ import threading
 import time
 import zipfile
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from types import CodeType, ModuleType
@@ -45,6 +46,17 @@ _HIDDEN_PROVIDER_SYS_ATTRIBUTES = {
 
 class _OutputTypeError(TypeError):
     pass
+
+
+@dataclass(frozen=True)
+class _PandasValidationPrimitives:
+    series_type: type
+    dataframe_type: type
+    isna: Callable[[object], object]
+    numpy_scalar_type: type
+    numpy_scalar_item: Callable[[object], object]
+    series_tolist: Callable[[Any], list[object]]
+    dataframe_getitem: Callable[[Any, object], Any]
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -104,15 +116,16 @@ def _authenticated_response(
     return {**value, "auth": f"hmac-sha256:{digest}"}
 
 
-def _json_value(value: object, output_dtype: str) -> object:
-    import pandas as pd
-
-    missing = pd.isna(value)  # type: ignore[call-overload]
+def _json_value(
+    value: object,
+    output_dtype: str,
+    primitives: _PandasValidationPrimitives,
+) -> object:
+    missing = primitives.isna(value)
     if isinstance(missing, bool) and missing:
         return None
-    item = getattr(value, "item", None)
-    if callable(item):
-        value = item()
+    if issubclass(type(value), primitives.numpy_scalar_type):
+        value = primitives.numpy_scalar_item(value)
     if value is None:
         return value
     if output_dtype == "float64" and _valid_float64_scalar(value):
@@ -151,33 +164,50 @@ def _valid_int64_scalar(value: object) -> bool:
     return type(value) is int and _INT64_MIN <= value <= _INT64_MAX
 
 
+def _trusted_series_values(
+    series: Any,
+    primitives: _PandasValidationPrimitives,
+) -> list[object]:
+    trusted_values = primitives.series_tolist(series)
+    current_tolist = getattr(type(series), "tolist", None)
+    if current_tolist is primitives.series_tolist:
+        return trusted_values
+    observed_values = series.tolist()
+    if type(observed_values) is not list or observed_values != trusted_values:
+        raise TypeError("provider output scalar extraction is not trustworthy")
+    return trusted_values
+
+
 def _extract_output(
     result: object,
     frame: Any,
     output_field: str,
     output_dtype: str,
     output_alignment: str,
+    primitives: _PandasValidationPrimitives,
 ) -> list[object]:
-    import pandas as pd
-
     input_keys = _frame_keys(frame)
-    if isinstance(result, pd.Series):
-        if result.name != output_field:
+    result_type = type(result)
+    if issubclass(result_type, primitives.series_type):
+        series = cast(Any, result)
+        if series.name != output_field:
             raise KeyError("declared output field is missing")
-        output_keys = _index_keys(result.index)
-        values = [_json_value(value, output_dtype) for value in result.tolist()]
+        output_keys = _index_keys(series.index)
+        values = [_json_value(value, output_dtype, primitives) for value in _trusted_series_values(series, primitives)]
         return _align_output(values, output_keys, input_keys, output_alignment)
-    if isinstance(result, pd.DataFrame):
-        if output_field not in result.columns:
+    if issubclass(result_type, primitives.dataframe_type):
+        output_frame = cast(Any, result)
+        if output_field not in output_frame.columns:
             raise KeyError("declared output field is missing")
-        key_columns = {"date", "code"}.intersection(result.columns)
+        key_columns = {"date", "code"}.intersection(output_frame.columns)
         if key_columns and key_columns != {"date", "code"}:
             raise IndexError("partial key alignment cannot be proven")
         if key_columns:
-            output_keys = _frame_keys(result)
+            output_keys = _frame_keys(output_frame)
         else:
-            output_keys = _index_keys(result.index)
-        values = [_json_value(value, output_dtype) for value in result[output_field].tolist()]
+            output_keys = _index_keys(output_frame.index)
+        output_series = primitives.dataframe_getitem(output_frame, output_field)
+        values = [_json_value(value, output_dtype, primitives) for value in _trusted_series_values(output_series, primitives)]
         return _align_output(values, output_keys, input_keys, output_alignment)
     raise TypeError("provider output must be a Series or DataFrame")
 
@@ -187,6 +217,7 @@ def _extract_outputs(
     frame: Any,
     output_fields: list[tuple[str, str]],
     output_alignment: str,
+    primitives: _PandasValidationPrimitives,
 ) -> dict[str, list[object]]:
     return {
         output_field: _extract_output(
@@ -195,6 +226,7 @@ def _extract_outputs(
             output_field,
             output_dtype,
             output_alignment,
+            primitives,
         )
         for output_field, output_dtype in output_fields
     }
@@ -925,12 +957,21 @@ def _execute(
     ):
         return {"status": "error", "code": "provider_execution_failed"}
     try:
-        import numpy as np  # noqa: F401
+        import numpy as np
         import pandas as pd
     except BaseException:
         return {"status": "error", "code": "provider_execution_failed"}
     trusted_assert_frame_equal = pd.testing.assert_frame_equal
     trusted_frame_copy = pd.DataFrame.copy
+    trusted_pandas_primitives = _PandasValidationPrimitives(
+        series_type=pd.Series,
+        dataframe_type=pd.DataFrame,
+        isna=cast(Callable[[object], object], pd.isna),
+        numpy_scalar_type=np.generic,
+        numpy_scalar_item=cast(Callable[[object], object], np.generic.item),
+        series_tolist=pd.Series.tolist,
+        dataframe_getitem=pd.DataFrame.__getitem__,
+    )
 
     try:
         frame = _frame_from_quant_panel(pd, panel)
@@ -1020,6 +1061,7 @@ def _execute(
                         invocation_original,
                         output_fields,
                         output_alignment,
+                        trusted_pandas_primitives,
                     )
                 except (KeyError, _OutputTypeError):
                     return _provider_error(

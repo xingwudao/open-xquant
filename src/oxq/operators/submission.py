@@ -537,6 +537,7 @@ def _verify_wheel_identity(
         InvalidWheelFilename,
         InvalidVersion,
         KeyError,
+        NotImplementedError,
         OSError,
         UnicodeError,
         ValueError,
@@ -568,16 +569,33 @@ def _verify_artifact_closure(
     requirements_by_filename: Mapping[str, tuple[Requirement, ...]],
 ) -> None:
     available: dict[str, set[Version]] = {}
+    requirements_by_distribution: dict[str, list[Requirement]] = {}
     try:
         for artifact in artifacts:
-            available.setdefault(canonicalize_name(artifact.distribution), set()).add(Version(artifact.version))
-        for artifact in artifacts:
-            for requirement in requirements_by_filename[artifact.filename]:
-                if requirement.marker is not None and not requirement.marker.evaluate():
+            artifact_distribution = canonicalize_name(artifact.distribution)
+            available.setdefault(artifact_distribution, set()).add(Version(artifact.version))
+            requirements_by_distribution.setdefault(artifact_distribution, []).extend(
+                requirements_by_filename[artifact.filename]
+            )
+        if any(requirement.url is not None for requirements in requirements_by_distribution.values() for requirement in requirements):
+            raise ValueError("direct-reference wheel dependencies are forbidden")
+
+        pending_contexts = [(distribution, "") for distribution in available]
+        evaluated_contexts = set(pending_contexts)
+        while pending_contexts:
+            distribution, extra = pending_contexts.pop()
+            for requirement in requirements_by_distribution[distribution]:
+                if requirement.marker is not None and not requirement.marker.evaluate({"extra": extra}):
                     continue
-                versions = available.get(canonicalize_name(requirement.name), set())
+                dependency = canonicalize_name(requirement.name)
+                versions = available.get(dependency, set())
                 if not any(version in requirement.specifier for version in versions):
                     raise ValueError("wheel dependency is absent from artifact closure")
+                for requested_extra in requirement.extras:
+                    context = (dependency, canonicalize_name(requested_extra))
+                    if context not in evaluated_contexts:
+                        evaluated_contexts.add(context)
+                        pending_contexts.append(context)
     except (InvalidVersion, KeyError, ValueError) as exc:
         raise _error(
             "artifact_invalid",

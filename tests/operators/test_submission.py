@@ -904,6 +904,146 @@ def test_rejects_invalid_requires_dist_metadata(tmp_path: Path) -> None:
     )
 
 
+def test_rejects_direct_reference_even_when_distribution_is_in_artifact_closure(
+    tmp_path: Path,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    implementation_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        implementation_path,
+        "equant-ttr",
+        "1.0.0",
+        ["Requires-Dist: helper-pkg @ https://example.invalid/helper.whl"],
+    )
+    dependency_filename = "helper_pkg-2.1.0-py3-none-any.whl"
+    dependency_path = fixture.artifact_dir / dependency_filename
+    _write_wheel(dependency_path, "helper-pkg", "2.1.0")
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"].append(  # type: ignore[index,union-attr]
+            {
+                "distribution": "helper-pkg",
+                "version": "2.1.0",
+                "filename": dependency_filename,
+                "role": "runtime-dependency",
+                "build_identifier": "dependency-build",
+                "digest": sha256(dependency_path.read_bytes()),
+            }
+        ),
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(implementation_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+def test_propagates_requested_extras_through_transitive_artifact_closure(
+    tmp_path: Path,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    implementation_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        implementation_path,
+        "equant-ttr",
+        "1.0.0",
+        ["Requires-Dist: helper-pkg[feature]"],
+    )
+    helper_filename = "helper_pkg-2.1.0-py3-none-any.whl"
+    helper_path = fixture.artifact_dir / helper_filename
+    _write_wheel(
+        helper_path,
+        "helper-pkg",
+        "2.1.0",
+        ['Requires-Dist: middle-pkg[deep]; extra == "feature"'],
+    )
+    middle_filename = "middle_pkg-3.0.0-py3-none-any.whl"
+    middle_path = fixture.artifact_dir / middle_filename
+    _write_wheel(
+        middle_path,
+        "middle-pkg",
+        "3.0.0",
+        ['Requires-Dist: missing-leaf; extra == "deep"'],
+    )
+
+    def add_dependencies(value: dict[str, object]) -> None:
+        artifacts = value["artifacts"]  # type: ignore[assignment]
+        artifacts[0]["digest"] = sha256(implementation_path.read_bytes())
+        artifacts.extend(
+            [
+                {
+                    "distribution": "helper-pkg",
+                    "version": "2.1.0",
+                    "filename": helper_filename,
+                    "role": "runtime-dependency",
+                    "build_identifier": "helper-build",
+                    "digest": sha256(helper_path.read_bytes()),
+                },
+                {
+                    "distribution": "middle-pkg",
+                    "version": "3.0.0",
+                    "filename": middle_filename,
+                    "role": "runtime-dependency",
+                    "build_identifier": "middle-build",
+                    "digest": sha256(middle_path.read_bytes()),
+                },
+            ]
+        )
+
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        add_dependencies,
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+@pytest.mark.parametrize("metadata_filename", ["WHEEL", "METADATA"])
+def test_normalizes_unsupported_zip_compression_to_artifact_invalid(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    metadata_filename: str,
+) -> None:
+    filename = "equant_ttr-1.0.0-py3-none-any.whl"
+    wheel_path = tmp_path / filename
+    _write_wheel(wheel_path, "equant-ttr", "1.0.0")
+    read = zipfile.ZipFile.read
+
+    def reject_unsupported_compression(
+        archive: zipfile.ZipFile,
+        name: str | zipfile.ZipInfo,
+        *args: object,
+        **kwargs: object,
+    ) -> bytes:
+        entry_name = name.filename if isinstance(name, zipfile.ZipInfo) else name
+        if entry_name.endswith(f"/{metadata_filename}"):
+            raise NotImplementedError("unsupported compression method")
+        return read(archive, name, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(zipfile.ZipFile, "read", reject_unsupported_compression)
+
+    _assert_error(
+        lambda: submission_module._verify_wheel_identity(
+            wheel_path,
+            "equant-ttr",
+            "1.0.0",
+            filename,
+        ),
+        "artifact_invalid",
+    )
+
+
 @pytest.mark.parametrize(
     "dist_info_directory",
     ["other_project-1.0.0.dist-info", "equant_ttr-9.0.0.dist-info"],

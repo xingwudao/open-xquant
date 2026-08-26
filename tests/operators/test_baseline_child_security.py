@@ -298,6 +298,155 @@ def sma(frame, *, window):
     }
 
 
+@pytest.mark.parametrize("output_type", ["series", "dataframe"])
+def test_provider_cannot_replace_pandas_output_types(
+    tmp_path: Path,
+    output_type: str,
+) -> None:
+    if output_type == "series":
+        fake_output = """
+class FakeSeries:
+    def __init__(self, frame, window):
+        self.name = f"sma_{window}"
+        self.index = frame.index
+
+    def tolist(self):
+        return [None, None, 2.0]
+
+def sma(frame, *, window):
+    pd.Series = FakeSeries
+    return FakeSeries(frame, window)
+"""
+    else:
+        fake_output = """
+class FakeColumn:
+    def tolist(self):
+        return [None, None, 2.0]
+
+class FakeDataFrame:
+    def __init__(self, frame, window):
+        self.columns = [f"sma_{window}"]
+        self.index = frame.index
+
+    def __getitem__(self, name):
+        return FakeColumn()
+
+def sma(frame, *, window):
+    pd.DataFrame = FakeDataFrame
+    return FakeDataFrame(frame, window)
+"""
+    source = f"""
+import pandas as pd
+
+{fake_output}
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_alignment_failed",
+    }
+
+
+@pytest.mark.parametrize("output_type", ["series", "dataframe"])
+def test_provider_cannot_forge_pandas_type_through_class_property(
+    tmp_path: Path,
+    output_type: str,
+) -> None:
+    if output_type == "series":
+        fake_output = """
+TrustedSeries = pd.Series
+
+class FakeValues:
+    def tolist(self):
+        return [None, None, 2.0]
+
+class FakeSeries:
+    @property
+    def __class__(self):
+        return TrustedSeries
+
+    def __init__(self, frame, window):
+        self.name = f"sma_{window}"
+        self.index = frame.index
+        self._values = FakeValues()
+
+    def tolist(self):
+        return [None, None, 2.0]
+
+def sma(frame, *, window):
+    pd.Series = FakeSeries
+    return FakeSeries(frame, window)
+"""
+    else:
+        fake_output = """
+TrustedDataFrame = pd.DataFrame
+
+class FakeValues:
+    def tolist(self):
+        return [None, None, 2.0]
+
+class FakeColumn:
+    def __init__(self):
+        self._values = FakeValues()
+
+    def tolist(self):
+        return [None, None, 2.0]
+
+class FakeDataFrame:
+    @property
+    def __class__(self):
+        return TrustedDataFrame
+
+    def __init__(self, frame, window):
+        self.columns = pd.Index([f"sma_{window}"])
+        self.index = frame.index
+
+    def _get_item_cache(self, name):
+        return FakeColumn()
+
+def sma(frame, *, window):
+    pd.DataFrame = FakeDataFrame
+    return FakeDataFrame(frame, window)
+"""
+    source = f"""
+import pandas as pd
+
+{fake_output}
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_alignment_failed",
+    }
+
+
+def test_provider_cannot_replace_pandas_scalar_conversion_helpers(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+class FakeScalar:
+    def item(self):
+        return 2.0
+
+def sma(frame, *, window):
+    result = pd.Series(
+        [None, None, FakeScalar()],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="object",
+    )
+    pd.isna = lambda value: False
+    return result
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "baseline_mismatch",
+    }
+
+
 def _assert_provider_cannot_execute_ambient_source(
     tmp_path: Path,
     operation: str,
