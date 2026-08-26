@@ -54,6 +54,120 @@ def main():
     """oxq — Agentic Quant Research Kernel CLI."""
 
 
+@main.group(name="operator")
+def operator_group() -> None:
+    """Certify external operator providers."""
+
+
+@operator_group.command(name="certify-provider")
+@click.option(
+    "--provider-repo",
+    required=True,
+    type=click.Path(
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        path_type=Path,
+    ),
+    help="Existing local Git repository containing the provider submission.",
+)
+@click.option(
+    "--provider-commit",
+    required=True,
+    help="Exact lowercase 40-character provider submission commit.",
+)
+@click.option(
+    "--artifact-dir",
+    type=click.Path(
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+        path_type=Path,
+    ),
+    default=None,
+    help="Local wheel directory; defaults to PROVIDER_REPO/dist.",
+)
+@click.option(
+    "--output-dir",
+    type=click.Path(file_okay=False, dir_okay=True, path_type=Path),
+    default=None,
+    help="Certification root; defaults to .open-xquant/certifications in the current directory.",
+)
+@click.option(
+    "--trust-provider-code",
+    is_flag=True,
+    help="Acknowledge that provider wheels execute as trusted local code.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def certify_provider_command(
+    provider_repo: Path,
+    provider_commit: str,
+    artifact_dir: Path | None,
+    output_dir: Path | None,
+    trust_provider_code: bool,
+    as_json: bool,
+) -> None:
+    """Certify one exact local provider submission for research use."""
+    from oxq.operators.errors import OperatorCertificationError
+
+    try:
+        if not trust_provider_code:
+            raise OperatorCertificationError(
+                "provider_code_trust_required",
+                "--trust-provider-code is required to execute provider wheels",
+                stage="trust",
+            )
+
+        from oxq.operators.certification import certify_provider
+        from oxq.operators.registry import publish_certification
+        from oxq.operators.submission import load_provider_submission
+
+        resolved_artifact_dir = (
+            artifact_dir if artifact_dir is not None else provider_repo / "dist"
+        )
+        resolved_output_dir = (
+            output_dir
+            if output_dir is not None
+            else Path.cwd() / ".open-xquant" / "certifications"
+        )
+        with load_provider_submission(
+            provider_repo,
+            provider_commit,
+            resolved_artifact_dir,
+        ) as submission:
+            certified = certify_provider(submission)
+            published = publish_certification(certified, resolved_output_dir)
+    except OperatorCertificationError as error:
+        if as_json:
+            click.echo(json.dumps(error.as_dict(), sort_keys=True))
+        else:
+            click.echo(
+                "Certification failed: "
+                f"[{error.stage}/{error.code}] {error.message}"
+            )
+        raise click.exceptions.Exit(1) from None
+
+    payload = {
+        "status": "research-certified",
+        "provider": certified.provider,
+        "release": certified.release,
+        "submission_commit": certified.submission_commit,
+        "source_commit": certified.source_commit,
+        "operator_count": len(certified.operators),
+        "output": str(published.release_dir),
+    }
+    if as_json:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    click.echo("Status: research-certified")
+    click.echo(f"Provider: {certified.provider}")
+    click.echo(f"Release: {certified.release}")
+    click.echo(f"Operators: {len(certified.operators)}")
+    click.echo(f"Output: {published.release_dir}")
+
+
 @main.group()
 def spec():
     """Manage strategy specs."""

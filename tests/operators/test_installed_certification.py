@@ -1,0 +1,171 @@
+"""Installed-wheel smoke coverage for operator certification resources."""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import sysconfig
+from pathlib import Path
+
+from tests.operators.helpers import write_provider_repository
+
+_SMOKE_SCRIPT = r"""
+import hashlib
+import json
+import sys
+from pathlib import Path
+
+import oxq
+from oxq.operators.certification import validate_provider_contract
+from oxq.operators.resources import (
+    materialize_certification_profile,
+    materialize_contract_surface,
+)
+from oxq.operators.submission import load_provider_submission
+
+EXPECTED_DIGESTS = {
+    "quant_panel_schema": "fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
+    "operator_manifest_schema": "adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
+    "operator_binding_schema": "1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
+    "reference_validator": "48099f887ebfc9fd9857ba8cececaa8b52c1dd5a2020ccc5eca21c3120664d9a",
+    "provider_catalog": "701ff89a33dd71cb7c2f019904ce2ffcc203237734d1719a6188e386b920689c",
+    "candidate_build": "451263b139890885c85790d82a17ebd510d54aa8cc2429e02cdd6ef6762674bb",
+    "numerical_baseline": "c41652ad8e5ca65da80fdb8566f9c027c07f4560a67707f01daebeb4869afc94",
+    "certification_record": "9e25b4d1a11a77dd7fa7c4fe5757911b4b7c5db9614a04c899f32e404cf5fba9",
+}
+
+provider_repo = Path(sys.argv[1])
+provider_commit = sys.argv[2]
+artifact_dir = Path(sys.argv[3])
+installed_environment = Path(sys.argv[4]).resolve()
+checkout = Path(sys.argv[5]).resolve()
+module_path = Path(oxq.__file__).resolve()
+assert module_path.is_relative_to(installed_environment), module_path
+assert not module_path.is_relative_to(checkout), module_path
+
+with materialize_contract_surface() as surface:
+    with materialize_certification_profile() as profile:
+        paths = {**surface, **profile}
+        actual = {
+            name: hashlib.sha256(path.read_bytes()).hexdigest()
+            for name, path in paths.items()
+        }
+assert actual == EXPECTED_DIGESTS
+
+with load_provider_submission(provider_repo, provider_commit, artifact_dir) as submission:
+    certified = validate_provider_contract(submission)
+    result = {
+        "module": str(module_path),
+        "operator_count": len(certified.operators),
+        "provider": certified.provider,
+        "release": certified.release,
+        "resource_count": len(actual),
+        "state": certified.operators[0].binding["certification_state"],
+    }
+print(json.dumps(result, sort_keys=True))
+"""
+
+
+def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> None:
+    repository_root = Path(__file__).resolve().parents[2]
+    fixture = write_provider_repository(tmp_path / "provider-fixture")
+    wheel_directory = tmp_path / "open-xquant-wheel"
+    wheel_directory.mkdir()
+    subprocess.run(
+        [
+            "uv",
+            "build",
+            "--wheel",
+            "--out-dir",
+            str(wheel_directory),
+            "--offline",
+        ],
+        cwd=repository_root,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    wheel = next(wheel_directory.glob("open_xquant-*.whl"))
+
+    environment = tmp_path / "installed-environment"
+    subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "venv",
+            "--system-site-packages",
+            str(environment),
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    python = environment / "bin" / "python"
+    env = os.environ.copy()
+    env.update(
+        {
+            "PIP_DISABLE_PIP_VERSION_CHECK": "1",
+            "PIP_NO_INDEX": "1",
+            "PYTHONNOUSERSITE": "1",
+        }
+    )
+    subprocess.run(
+        [str(python), "-m", "pip", "install", "--no-deps", str(wheel)],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    # Nested venvs do not inherit their parent venv's packages through
+    # --system-site-packages, so expose only the already verified test runtime.
+    current_site_packages = Path(sysconfig.get_paths()["purelib"]).resolve()
+    installed_site_packages = subprocess.run(
+        [
+            str(python),
+            "-c",
+            "import sysconfig; print(sysconfig.get_paths()['purelib'])",
+        ],
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    ).stdout.strip()
+    (Path(installed_site_packages) / "verified-test-runtime.pth").write_text(
+        str(current_site_packages) + "\n",
+        encoding="utf-8",
+    )
+
+    outside_checkout = tmp_path / "outside-checkout"
+    outside_checkout.mkdir()
+    script = outside_checkout / "installed_smoke.py"
+    script.write_text(_SMOKE_SCRIPT, encoding="utf-8")
+    completed = subprocess.run(
+        [
+            str(python),
+            str(script),
+            str(fixture.path),
+            fixture.submission_commit,
+            str(fixture.artifact_dir),
+            str(environment),
+            str(repository_root),
+        ],
+        cwd=outside_checkout,
+        check=True,
+        text=True,
+        capture_output=True,
+        env=env,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "module": str(
+            (Path(installed_site_packages) / "oxq" / "__init__.py").resolve()
+        ),
+        "operator_count": 1,
+        "provider": "equant-py",
+        "release": "1.0.0",
+        "resource_count": 8,
+        "state": "contract-valid",
+    }
