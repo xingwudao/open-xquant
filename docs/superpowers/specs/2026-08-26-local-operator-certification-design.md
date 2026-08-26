@@ -31,8 +31,11 @@ Optional arguments are:
 - `--json`, for a stable machine-readable result.
 
 `--provider-repo` accepts only a local Git working-tree path in v1. A GitHub
-repository must be cloned manually first. `--provider-commit` must be a full
-commit object ID, not a branch, tag, abbreviated hash, or working-tree state.
+repository must be cloned manually first. `--provider-commit` is the provider
+release/submission commit and must be a full commit object ID, not a branch,
+tag, abbreviated hash, or working-tree state. The build record separately pins
+the earlier implementation source commit from which the wheels were built;
+that implementation commit must be an ancestor of the submission commit.
 `--trust-provider-code` is mandatory because research certification executes
 code from provider wheels. The child process is isolated for imports and
 failure containment, but it is not an operating-system security sandbox.
@@ -105,17 +108,19 @@ One CLI invocation runs two internal stages.
 
 ### Stage 1: Contract validation
 
-1. Resolve and archive the exact provider commit without using working-tree
-   contents.
+1. Resolve and archive the exact provider submission commit without using
+   working-tree contents.
 2. Validate the catalog, build record, and baseline against the certification
    intake profile.
-3. Load each standalone manifest from the archive as strict UTF-8 JSON.
-4. Validate each manifest against the frozen Draft 2020-12 schema and the
+3. Resolve the build record's exact implementation source commit, prove it is
+   an ancestor of the submission commit, and archive it as the source root.
+4. Load each standalone manifest from the submission archive as strict UTF-8 JSON.
+5. Validate each manifest against the frozen Draft 2020-12 schema and the
    frozen standalone semantic validator.
-5. Match manifest identity, package version, source commit, build identifier,
-   source-tree digest, and implementation digest to the archived source and
-   local wheel bytes.
-6. Construct an in-memory `contract-valid` binding and validate it against the
+6. Match manifest identity, package version, implementation source commit,
+   build identifier, source-tree digest, and implementation digest to the
+   implementation archive and local wheel bytes.
+7. Construct an in-memory `contract-valid` binding and validate it against the
    binding schema and `validate_operator_binding()` using all four frozen
    contract-surface artifacts.
 
@@ -155,7 +160,8 @@ Success atomically publishes a release directory containing:
 
 Each binding remains valid frozen-contract JSON. The separate certification
 record stores the certifier identity (`open-xquant-local`), timestamp,
-provider commit, artifact digests, baseline case results, and binding digests.
+provider submission commit, implementation source commit, artifact digests,
+baseline case results, and binding digests.
 The registry entry is an index over these immutable records; it does not copy
 provider source code and does not modify provider files.
 
