@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import warnings
 import zipfile
 from pathlib import Path
 
@@ -471,6 +472,7 @@ def test_rejects_wheel_metadata_that_differs_from_the_build_record(
             "equant_ttr-1.0.0.dist-info/METADATA",
             f"Metadata-Version: 2.1\nName: {metadata_name}\nVersion: {metadata_version}\n",
         )
+        archive.writestr("equant_ttr-1.0.0.dist-info/RECORD", "")
     rewrite_json(
         fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value["artifacts"][0].update(  # type: ignore[index]
@@ -509,6 +511,7 @@ def test_rejects_wheel_tags_incompatible_with_certifier_runtime(
                 "equant_ttr-1.0.0.dist-info/METADATA",
                 "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
             )
+            archive.writestr("equant_ttr-1.0.0.dist-info/RECORD", "")
     rewrite_json(
         fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value["artifacts"][0].update(  # type: ignore[index]
@@ -572,6 +575,7 @@ def test_rejects_unsupported_wheel_format_versions(
             "equant_ttr-1.0.0.dist-info/METADATA",
             "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
         )
+        archive.writestr("equant_ttr-1.0.0.dist-info/RECORD", "")
     rewrite_json(
         fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value["artifacts"][0].update(  # type: ignore[index]
@@ -605,6 +609,7 @@ def test_accepts_normalized_prerelease_wheel_filename_version(
             "equant_ttr-1.0.0rc1.dist-info/METADATA",
             "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0-rc.1\n",
         )
+        archive.writestr("equant_ttr-1.0.0rc1.dist-info/RECORD", "")
 
     submission_module._verify_wheel_identity(
         wheel_path,
@@ -634,6 +639,7 @@ def test_rejects_dist_info_directory_that_differs_from_wheel_identity(
             f"{dist_info_directory}/METADATA",
             "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
         )
+        archive.writestr(f"{dist_info_directory}/RECORD", "")
     rewrite_json(
         fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value["artifacts"][0].update(  # type: ignore[index]
@@ -649,6 +655,47 @@ def test_rejects_dist_info_directory_that_differs_from_wheel_identity(
             fixture.artifact_dir,
         ),
         "artifact_identity_mismatch",
+    )
+
+
+@pytest.mark.parametrize(
+    "record_directories",
+    [
+        (),
+        ("equant_ttr-1.0.0.dist-info", "equant_ttr-1.0.0.dist-info"),
+        ("other_project-1.0.0.dist-info",),
+    ],
+    ids=["missing", "duplicate", "different-directory"],
+)
+def test_rejects_wheel_without_exactly_one_record_in_its_dist_info_directory(
+    tmp_path: Path,
+    record_directories: tuple[str, ...],
+) -> None:
+    filename = "equant_ttr-1.0.0-py3-none-any.whl"
+    wheel_path = tmp_path / filename
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("equant_ttr/__init__.py", "")
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
+        )
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Duplicate name:.*", category=UserWarning)
+            for record_directory in record_directories:
+                archive.writestr(f"{record_directory}/RECORD", "")
+
+    _assert_error(
+        lambda: submission_module._verify_wheel_identity(
+            wheel_path,
+            "equant-ttr",
+            "1.0.0",
+            filename,
+        ),
+        "artifact_invalid",
     )
 
 
@@ -784,6 +831,34 @@ def test_reads_referenced_blobs_even_when_export_ignore_is_set(tmp_path: Path) -
         fixture.artifact_dir,
     ) as submission:
         assert submission.operators[0].manifest_path.is_file()
+
+
+def test_streams_committed_blobs_without_capturing_batch_output(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    large_blob = b"provider-data\n" * 200_000
+
+    def add_large_blob(repository: Path) -> None:
+        (repository / "committed-data.bin").write_bytes(large_blob)
+
+    fixture = write_provider_repository(tmp_path, mutate=add_large_blob)
+    run = subprocess.run
+
+    def reject_buffered_cat_file(*args: object, **kwargs: object) -> subprocess.CompletedProcess[object]:
+        command = args[0]
+        if isinstance(command, list) and "cat-file" in command and "--batch" in command and kwargs.get("capture_output") is True:
+            raise AssertionError("Git blob output must not be captured in memory")
+        return run(*args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+    monkeypatch.setattr(subprocess, "run", reject_buffered_cat_file)
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert (submission.archive_root / "committed-data.bin").read_bytes() == large_blob
 
 
 @pytest.mark.parametrize("source_path", ["/source.py", "../source.py", "dir\\source.py", "./source.py"])

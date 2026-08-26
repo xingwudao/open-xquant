@@ -27,7 +27,7 @@
     },
     "reference_validator": {
       "release": "1.0.0",
-      "digest": "sha256:a882716d0527d3c9239d9824f9adec10672acef02ab8104f6415de1fd9191a20"
+      "digest": "sha256:4758be90c907f636f6751174d6a9a7f0e1b9422e15ee873a77ba6d599d7cd7bc"
     }
   },
   "certification_state": "contract-valid"

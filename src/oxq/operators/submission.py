@@ -13,7 +13,7 @@ from email import policy
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
-from typing import cast
+from typing import IO, cast
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError  # type: ignore[import-untyped]
 from packaging.tags import Tag, parse_tag, sys_tags
@@ -131,19 +131,7 @@ def _materialize_commit(repository: Path, commit: str, destination: Path) -> Non
             continue
         entries.append((mode, object_id, relative_path))
 
-    blobs = _read_git_blobs(repository, [object_id for _, object_id, _ in entries])
-    try:
-        for (mode, _, relative_path), blob in zip(entries, blobs, strict=True):
-            path = destination.joinpath(*PurePosixPath(relative_path).parts)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(blob)
-            path.chmod(_REGULAR_GIT_MODES[mode])
-    except OSError as exc:
-        raise _error(
-            "submission_path_invalid",
-            "provider commit tree cannot be materialized safely",
-            "archive",
-        ) from exc
+    _stream_git_blobs(repository, entries, destination)
 
 
 def _safe_git_path(relative_path: str) -> bool:
@@ -153,45 +141,119 @@ def _safe_git_path(relative_path: str) -> bool:
     )
 
 
-def _read_git_blobs(repository: Path, object_ids: list[str]) -> list[bytes]:
-    if not object_ids:
-        return []
-    result = _git_bytes(
-        repository,
-        ["cat-file", "--batch"],
-        input_bytes=("\n".join(object_ids) + "\n").encode("ascii"),
-    )
-    if result.returncode != 0:
-        raise _error(
-            "provider_commit_invalid",
-            "cannot read provider commit blobs",
-            "repository",
-        )
-    blobs: list[bytes] = []
-    offset = 0
+def _stream_git_blobs(
+    repository: Path,
+    entries: list[tuple[str, str, str]],
+    destination: Path,
+) -> None:
+    if not entries:
+        return
     try:
-        for expected_id in object_ids:
-            header_end = result.stdout.index(b"\n", offset)
-            header = result.stdout[offset:header_end].decode("ascii")
-            object_id, object_type, raw_size = header.split(" ", 2)
-            if object_id != expected_id or object_type != "blob":
-                raise ValueError("unexpected Git object")
-            size = int(raw_size)
-            start = header_end + 1
-            end = start + size
-            if result.stdout[end : end + 1] != b"\n":
-                raise ValueError("truncated Git object")
-            blobs.append(result.stdout[start:end])
-            offset = end + 1
-        if offset != len(result.stdout):
-            raise ValueError("unexpected trailing Git output")
-    except (UnicodeError, ValueError):
-        raise _error(
-            "provider_commit_invalid",
-            "provider commit contains an unreadable blob",
-            "repository",
-        ) from None
-    return blobs
+        process = subprocess.Popen(
+            ["git", "--no-replace-objects", "-C", str(repository), "cat-file", "--batch"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        raise _unreadable_git_blob_error() from exc
+    if process.stdin is None or process.stdout is None:
+        _abort_git_batch(process)
+        raise _unreadable_git_blob_error()
+
+    try:
+        for mode, object_id, relative_path in entries:
+            _request_git_blob(process.stdin, object_id)
+            size = _read_git_blob_header(process.stdout, object_id)
+            path = destination.joinpath(*PurePosixPath(relative_path).parts)
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                with path.open("wb") as output:
+                    _copy_git_blob(process.stdout, output, size)
+                path.chmod(_REGULAR_GIT_MODES[mode])
+            except OSError as exc:
+                raise _error(
+                    "submission_path_invalid",
+                    "provider commit tree cannot be materialized safely",
+                    "archive",
+                ) from exc
+            _read_git_blob_terminator(process.stdout)
+        try:
+            process.stdin.close()
+        except OSError as exc:
+            raise _unreadable_git_blob_error() from exc
+        if process.wait() != 0:
+            raise _unreadable_git_blob_error()
+    finally:
+        _abort_git_batch(process)
+
+
+def _request_git_blob(stream: IO[bytes], object_id: str) -> None:
+    try:
+        stream.write(object_id.encode("ascii") + b"\n")
+        stream.flush()
+    except (OSError, UnicodeError) as exc:
+        raise _unreadable_git_blob_error() from exc
+
+
+def _read_git_blob_header(stream: IO[bytes], expected_id: str) -> int:
+    try:
+        header = stream.readline().decode("ascii").removesuffix("\n")
+        object_id, object_type, raw_size = header.split(" ", 2)
+        size = int(raw_size)
+        if object_id != expected_id or object_type != "blob" or size < 0:
+            raise ValueError("unexpected Git object")
+    except (OSError, UnicodeError, ValueError) as exc:
+        raise _unreadable_git_blob_error() from exc
+    return size
+
+
+def _copy_git_blob(stream: IO[bytes], output: IO[bytes], size: int) -> None:
+    remaining = size
+    while remaining:
+        try:
+            chunk = stream.read(min(1024 * 1024, remaining))
+        except OSError as exc:
+            raise _unreadable_git_blob_error() from exc
+        if not chunk:
+            raise _unreadable_git_blob_error()
+        output.write(chunk)
+        remaining -= len(chunk)
+
+
+def _read_git_blob_terminator(stream: IO[bytes]) -> None:
+    try:
+        terminator = stream.read(1)
+    except OSError as exc:
+        raise _unreadable_git_blob_error() from exc
+    if terminator != b"\n":
+        raise _unreadable_git_blob_error()
+
+
+def _abort_git_batch(process: subprocess.Popen[bytes]) -> None:
+    for stream in (process.stdin, process.stdout):
+        if stream is not None and not stream.closed:
+            try:
+                stream.close()
+            except OSError:
+                pass
+    if process.poll() is None:
+        try:
+            process.kill()
+        except OSError:
+            pass
+    try:
+        process.wait()
+    except OSError:
+        pass
+
+
+def _unreadable_git_blob_error() -> OperatorCertificationError:
+    return _error(
+        "provider_commit_invalid",
+        "provider commit contains an unreadable blob",
+        "repository",
+    )
 
 
 def _load_archive(
@@ -419,10 +481,13 @@ def _verify_wheel_identity(
         with zipfile.ZipFile(wheel_path) as wheel:
             wheel_files = [name for name in wheel.namelist() if _is_dist_info_file(name, "WHEEL")]
             metadata_files = [name for name in wheel.namelist() if _is_dist_info_file(name, "METADATA")]
+            record_files = [name for name in wheel.namelist() if _is_dist_info_file(name, "RECORD")]
             if (
                 len(wheel_files) != 1
                 or len(metadata_files) != 1
+                or len(record_files) != 1
                 or PurePosixPath(wheel_files[0]).parent != PurePosixPath(metadata_files[0]).parent
+                or PurePosixPath(wheel_files[0]).parent != PurePosixPath(record_files[0]).parent
             ):
                 raise zipfile.BadZipFile("wheel metadata files are invalid")
             wheel_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(wheel_files[0]))

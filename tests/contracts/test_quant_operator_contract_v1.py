@@ -555,6 +555,57 @@ def test_reference_validator_rejects_nonfinite_numeric_parameter_bounds(
 
 
 @pytest.mark.parametrize(
+    ("parameter_type", "value"),
+    [
+        ("array", [{"nested": float("inf")}]),
+        ("array", [[float("nan")]]),
+        ("object", {"nested": [float("-inf")]}),
+        ("object", {"nested": {"value": float("nan")}}),
+    ],
+)
+def test_reference_validator_rejects_nonfinite_nested_parameter_default(
+    parameter_type: str,
+    value: object,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["parameters"]["window"].update(
+        {
+            "type": parameter_type,
+            "default": value,
+            "constraints": {},
+        }
+    )
+
+    with pytest.raises(ValueError, match="strict JSON"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("parameter_type", "default", "invalid_enum_value"),
+    [
+        ("array", [1], [{"nested": float("inf")}]),
+        ("object", {"value": 1}, {"nested": [float("nan")]}),
+    ],
+)
+def test_reference_validator_rejects_nonfinite_nested_parameter_enum(
+    parameter_type: str,
+    default: object,
+    invalid_enum_value: object,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["parameters"]["window"].update(
+        {
+            "type": parameter_type,
+            "default": default,
+            "constraints": {"enum": [default, invalid_enum_value]},
+        }
+    )
+
+    with pytest.raises(ValueError, match="strict JSON"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize(
     ("parameter_type", "constraint"),
     [
         ("integer", {"pattern": "^[0-9]+$"}),

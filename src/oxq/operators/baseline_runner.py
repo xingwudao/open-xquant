@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -43,6 +44,93 @@ _AUXILIARY_REQUIREMENTS = {
 }
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
+_DARWIN_SANDBOX_PROFILE = "(version 1) (allow default) (deny process-fork)"
+_LINUX_SUBREAPER_SCRIPT = r"""
+import ctypes
+import os
+import signal
+import subprocess
+import sys
+
+
+def request_termination(signum, frame):
+    global termination_requested
+    del signum, frame
+    termination_requested = True
+
+
+def child_pids():
+    path = f"/proc/{os.getpid()}/task/{os.getpid()}/children"
+    value = open(path, encoding="ascii").read().strip()
+    return [int(pid) for pid in value.split()]
+
+
+def terminate_adopted_children():
+    while True:
+        children = child_pids()
+        if not children:
+            return
+        for pid in children:
+            try:
+                os.kill(pid, signal.SIGSTOP)
+            except ProcessLookupError:
+                pass
+        for pid in children:
+            try:
+                os.waitpid(pid, os.WUNTRACED)
+            except ChildProcessError:
+                pass
+        for pid in children:
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        for pid in children:
+            try:
+                os.waitpid(pid, 0)
+            except ChildProcessError:
+                pass
+
+
+libc = ctypes.CDLL(None, use_errno=True)
+if libc.prctl(36, 1, 0, 0, 0) != 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error))
+termination_requested = False
+signal.signal(signal.SIGTERM, request_termination)
+target = None
+returncode = 1
+try:
+    target = subprocess.Popen(sys.argv[1:])
+    while True:
+        if termination_requested:
+            target.kill()
+            target.wait()
+            returncode = 124
+            break
+        try:
+            returncode = target.wait(timeout=0.05)
+            break
+        except subprocess.TimeoutExpired:
+            continue
+finally:
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    if target is not None and target.poll() is None:
+        target.kill()
+        target.wait()
+    terminate_adopted_children()
+if returncode < 0:
+    signal.signal(-returncode, signal.SIG_DFL)
+    os.kill(os.getpid(), -returncode)
+raise SystemExit(returncode)
+"""
+
+
+@dataclass(frozen=True)
+class _VerifiedArtifact:
+    artifact: BuildArtifact
+    source_path: Path
+    content: bytes
 
 
 def run_research_baselines(
@@ -61,20 +149,20 @@ def run_research_baselines(
     }
     if not operators or len(operators) != len(candidate.operators):
         raise _error("baseline_input_invalid", "baseline operator identity is invalid")
+    timeout_seconds = _validated_timeout(
+        timeout_seconds,
+        next(iter(operators))[0],
+    )
 
     cases_by_operator = {identity: 0 for identity in operators}
     results: list[BaselineResult] = []
-    with (
-        TemporaryDirectory(prefix="oxq-verified-artifacts-") as artifact_directory,
-        _snapshot_contract_surface() as (
-            surface_bytes,
-            surface_paths,
-        ),
+    with _snapshot_contract_surface() as (
+        surface_bytes,
+        surface_paths,
     ):
         verified_artifacts = _verified_artifacts(
             candidate,
             artifacts,
-            Path(artifact_directory),
         )
         quant_panel_schema = _load_schema(
             surface_bytes["quant_panel_schema"],
@@ -139,9 +227,7 @@ def run_research_baselines(
                         verified_artifacts,
                         case.operator_id,
                     ),
-                    dependency_artifacts=[
-                        str(snapshot) for artifact, _, snapshot in verified_artifacts if artifact.role == "runtime-dependency"
-                    ],
+                    dependency_artifacts=[verified for verified in verified_artifacts if verified.artifact.role == "runtime-dependency"],
                     timeout_seconds=timeout_seconds,
                 )
                 _assert_expected(case, output_field, actual, output_dtype)
@@ -156,9 +242,7 @@ def run_research_baselines(
                         verified_artifacts,
                         case.operator_id,
                     ),
-                    dependency_artifacts=[
-                        str(snapshot) for artifact, _, snapshot in verified_artifacts if artifact.role == "runtime-dependency"
-                    ],
+                    dependency_artifacts=[verified for verified in verified_artifacts if verified.artifact.role == "runtime-dependency"],
                     timeout_seconds=timeout_seconds,
                 )
                 _assert_deterministic(
@@ -190,32 +274,32 @@ def run_research_baselines(
 def _verified_artifacts(
     candidate: ContractCertification,
     artifacts: tuple[BuildArtifact, ...],
-    snapshot_root: Path,
-) -> list[tuple[BuildArtifact, Path, Path]]:
+) -> list[_VerifiedArtifact]:
     if artifacts != candidate.artifacts or not artifacts:
         raise _error(
             "provider_import_failed",
             "runtime artifacts do not match the verified contract artifacts",
         )
-    verified: list[tuple[BuildArtifact, Path, Path]] = []
+    verified: list[_VerifiedArtifact] = []
     try:
-        for index, artifact in enumerate(artifacts):
+        for artifact in artifacts:
             path = artifact.wheel_path.resolve(strict=True)
             raw = path.read_bytes()
             if not path.is_file() or f"sha256:{hashlib.sha256(raw).hexdigest()}" != artifact.digest:
                 raise OSError("runtime artifact digest mismatch")
-            destination_root = snapshot_root / str(index)
-            destination_root.mkdir()
-            snapshot = destination_root / artifact.filename
-            snapshot.write_bytes(raw)
-            snapshot.chmod(0o444)
-            verified.append((artifact, path, snapshot))
+            verified.append(
+                _VerifiedArtifact(
+                    artifact=artifact,
+                    source_path=path,
+                    content=raw,
+                )
+            )
     except OSError:
         raise _error(
             "provider_import_failed",
             "verified runtime artifact is unavailable",
         ) from None
-    implementation_paths = {path for artifact, path, _ in verified if artifact.role == "implementation"}
+    implementation_paths = {item.source_path for item in verified if item.artifact.role == "implementation"}
     candidate_paths = {operator.implementation_artifact.resolve() for operator in candidate.operators}
     if not candidate_paths.issubset(implementation_paths):
         raise _error(
@@ -227,18 +311,18 @@ def _verified_artifacts(
 
 def _implementation_artifact(
     implementation_artifact: Path,
-    verified_artifacts: list[tuple[BuildArtifact, Path, Path]],
+    verified_artifacts: list[_VerifiedArtifact],
     operator_id: str,
-) -> str:
+) -> _VerifiedArtifact:
     resolved = implementation_artifact.resolve()
-    matches = [snapshot for artifact, path, snapshot in verified_artifacts if artifact.role == "implementation" and path == resolved]
+    matches = [item for item in verified_artifacts if item.artifact.role == "implementation" and item.source_path == resolved]
     if len(matches) != 1:
         raise _error(
             "provider_import_failed",
             "operator implementation artifact is not uniquely verified",
             operator_id,
         )
-    return str(matches[0])
+    return matches[0]
 
 
 def _validate_case_input(
@@ -402,43 +486,49 @@ def _run_child(
     parameters: Mapping[str, object],
     output_field: str,
     output_dtype: str,
-    implementation_artifact: str,
-    dependency_artifacts: list[str],
+    implementation_artifact: _VerifiedArtifact,
+    dependency_artifacts: list[_VerifiedArtifact],
     timeout_seconds: float,
 ) -> list[object]:
-    request = {
-        "implementation_artifact": implementation_artifact,
-        "dependency_artifacts": dependency_artifacts,
-        "module": manifest["module"],
-        "callable": manifest["callable"],
-        "parameters": parameters,
-        "input": case.input,
-        "output_field": output_field,
-        "output_dtype": output_dtype,
-        "output_alignment": cast(Mapping[str, object], manifest["output"])["alignment"],
-    }
-    try:
-        request_bytes = json.dumps(
-            request,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    except (TypeError, ValueError, RecursionError):
-        raise _error(
-            "baseline_input_invalid",
-            "baseline request is not strict JSON",
-            case.operator_id,
-        ) from None
-
-    if timeout_seconds <= 0:
-        raise _error(
-            "provider_execution_timeout",
-            "provider baseline execution timed out",
-            case.operator_id,
-        )
+    timeout_seconds = _validated_timeout(timeout_seconds, case.operator_id)
     with TemporaryDirectory(prefix="oxq-baseline-") as directory:
         root = Path(directory)
+        try:
+            implementation_path, dependency_paths = _materialize_artifacts(
+                root / "artifacts",
+                implementation_artifact,
+                dependency_artifacts,
+            )
+        except OSError:
+            raise _error(
+                "provider_import_failed",
+                "verified runtime artifact is unavailable",
+                case.operator_id,
+            ) from None
+        request = {
+            "implementation_artifact": implementation_path,
+            "dependency_artifacts": dependency_paths,
+            "module": manifest["module"],
+            "callable": manifest["callable"],
+            "parameters": parameters,
+            "input": case.input,
+            "output_field": output_field,
+            "output_dtype": output_dtype,
+            "output_alignment": cast(Mapping[str, object], manifest["output"])["alignment"],
+        }
+        try:
+            request_bytes = json.dumps(
+                request,
+                allow_nan=False,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+        except (TypeError, ValueError, RecursionError):
+            raise _error(
+                "baseline_input_invalid",
+                "baseline request is not strict JSON",
+                case.operator_id,
+            ) from None
         request_path = root / "request.json"
         response_path = root / "response.json"
         request_path.write_bytes(request_bytes)
@@ -482,8 +572,44 @@ def _run_child(
     return output
 
 
+def _validated_timeout(timeout_seconds: float, operator_id: str) -> float:
+    try:
+        if type(timeout_seconds) not in {int, float}:
+            raise TypeError("timeout is not numeric")
+        normalized = float(timeout_seconds)
+    except (OverflowError, TypeError, ValueError):
+        normalized = math.nan
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise _error(
+            "provider_execution_timeout",
+            "provider baseline execution timed out",
+            operator_id,
+        )
+    return normalized
+
+
+def _materialize_artifacts(
+    root: Path,
+    implementation: _VerifiedArtifact,
+    dependencies: list[_VerifiedArtifact],
+) -> tuple[str, list[str]]:
+    paths: list[Path] = []
+    root.mkdir()
+    for index, verified in enumerate((implementation, *dependencies)):
+        destination_root = root / str(index)
+        destination_root.mkdir()
+        destination = destination_root / verified.artifact.filename
+        destination.write_bytes(verified.content)
+        if f"sha256:{hashlib.sha256(destination.read_bytes()).hexdigest()}" != verified.artifact.digest:
+            raise OSError("runtime artifact snapshot digest mismatch")
+        destination.chmod(0o444)
+        paths.append(destination)
+    return str(paths[0]), [str(path) for path in paths[1:]]
+
+
 def _run_child_process(command: list[str], timeout_seconds: float) -> int:
     platform_name = _platform_name()
+    provider_command = command
     windows_job: int | None = None
     windows_gate_directory: TemporaryDirectory[str] | None = None
     if platform_name == "nt":
@@ -506,6 +632,7 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
             windows_gate_directory.cleanup()
             raise
     else:
+        command = _contained_posix_command(command)
         process = subprocess.Popen(
             command,
             stdout=subprocess.DEVNULL,
@@ -528,17 +655,20 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
                 descendants.update(_posix_descendant_pids(process.pid))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                _kill_process_tree(process, descendants)
+                if _posix_platform() == "linux":
+                    _terminate_linux_supervisor(process, descendants)
+                else:
+                    _kill_process_tree(process, descendants)
                 process.wait()
-                raise subprocess.TimeoutExpired(command, timeout_seconds)
+                raise subprocess.TimeoutExpired(
+                    provider_command,
+                    timeout_seconds,
+                )
             try:
                 process.wait(timeout=min(0.02, remaining))
                 break
             except subprocess.TimeoutExpired:
                 continue
-        if platform_name != "nt":
-            descendants.update(_posix_descendant_pids(process.pid))
-            _kill_posix_processes(descendants)
         return int(process.returncode)
     finally:
         try:
@@ -591,6 +721,61 @@ def _kill_posix_processes(process_ids: set[int]) -> None:
 
 def _platform_name() -> str:
     return os.name
+
+
+def _posix_platform() -> str:
+    return sys.platform
+
+
+def _contained_posix_command(command: list[str]) -> list[str]:
+    platform = _posix_platform()
+    if platform == "linux":
+        return [
+            sys.executable,
+            "-I",
+            "-c",
+            _LINUX_SUBREAPER_SCRIPT,
+            *command,
+        ]
+    if platform == "darwin":
+        sandbox = Path("/usr/bin/sandbox-exec")
+        if not sandbox.is_file():
+            raise OSError("macOS process sandbox is unavailable")
+        probe = subprocess.run(
+            [
+                str(sandbox),
+                "-p",
+                _DARWIN_SANDBOX_PROFILE,
+                "/usr/bin/true",
+            ],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+        if probe.returncode != 0:
+            raise OSError("macOS process sandbox is unavailable")
+        return [
+            str(sandbox),
+            "-p",
+            _DARWIN_SANDBOX_PROFILE,
+            *command,
+        ]
+    raise OSError(f"unsupported POSIX process-containment platform: {platform}")
+
+
+def _terminate_linux_supervisor(
+    process: subprocess.Popen[bytes],
+    known_descendants: set[int],
+) -> None:
+    try:
+        process.terminate()
+    except ProcessLookupError:
+        return
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(process, known_descendants)
 
 
 def _open_windows_kill_on_close_job(

@@ -191,6 +191,18 @@ def _is_parameter_type(value: object, parameter_type: str) -> bool:
     return False
 
 
+def _validate_finite_strict_json(value: object, *, label: str) -> None:
+    try:
+        json.dumps(
+            value,
+            allow_nan=False,
+            separators=(",", ":"),
+            sort_keys=True,
+        )
+    except (OverflowError, RecursionError, TypeError, ValueError):
+        raise ContractValidationError(f"{label} must be finite strict JSON") from None
+
+
 def _validate_constraint_applicability(parameter_type: str, constraints: Mapping[str, Any]) -> None:
     applicable = {"enum"}
     if parameter_type in {"integer", "number"}:
@@ -247,6 +259,10 @@ def _validate_parameter_value(
     parameter_type = definition["type"]
     if not _is_parameter_type(value, parameter_type):
         raise ContractValidationError(f"invalid value for {source} parameter {name!r}: expected {parameter_type}")
+    _validate_finite_strict_json(
+        value,
+        label=f"{source} parameter {name!r}",
+    )
 
     constraints = definition["constraints"]
     label = f"{source} parameter {name!r}"
@@ -281,6 +297,10 @@ def _validate_parameter_definitions(parameters: Mapping[str, Any]) -> None:
             for enum_value in constraints["enum"]:
                 if not _is_parameter_type(enum_value, parameter_type):
                     raise ContractValidationError(f"enum value for parameter {name!r} does not match parameter type {parameter_type!r}")
+                _validate_finite_strict_json(
+                    enum_value,
+                    label=f"enum value for parameter {name!r}",
+                )
         _validate_constraint_coherence(constraints)
         _validate_parameter_value(name, definition["default"], definition, source="default for")
 

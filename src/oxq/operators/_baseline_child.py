@@ -274,6 +274,7 @@ def _restrict_sys_path(verified_archives: list[str]) -> None:
 def _restricted_sys_module(verified_roots: list[str]) -> ModuleType:
     restricted = ModuleType("sys")
     restricted.__dict__.update(sys.__dict__)
+    restricted.path = list(sys.path)  # type: ignore[attr-defined]
     restricted.modules = _visible_modules(verified_roots)  # type: ignore[attr-defined]
     return restricted
 
@@ -548,6 +549,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         import pandas as pd
     except BaseException:
         return _error(response_path, "provider_execution_failed")
+    trusted_assert_frame_equal = pd.testing.assert_frame_equal
 
     try:
         verified_archives, install_prefix = _materialize_wheels(
@@ -596,7 +598,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
             original = frame.copy(deep=True)
             result = implementation(frame, **parameters)
             try:
-                pd.testing.assert_frame_equal(
+                trusted_assert_frame_equal(
                     frame,
                     original,
                     check_exact=True,

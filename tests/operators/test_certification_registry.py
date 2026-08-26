@@ -38,7 +38,7 @@ _SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:a882716d0527d3c9239d9824f9adec10672acef02ab8104f6415de1fd9191a20",
+    "reference_validator": "sha256:4758be90c907f636f6751174d6a9a7f0e1b9422e15ee873a77ba6d599d7cd7bc",
 }
 
 

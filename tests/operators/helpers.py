@@ -126,6 +126,7 @@ def _wheel_bytes() -> bytes:
             "equant_ttr-1.0.0.dist-info/METADATA",
             "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
         )
+        archive.writestr("equant_ttr-1.0.0.dist-info/RECORD", "")
     return buffer.getvalue()
 
 
