@@ -18,7 +18,7 @@ import pytest
 import oxq.operators.baseline_runner as baseline_runner
 import oxq.operators.certification as certification
 from oxq.operators.baseline_runner import run_research_baselines
-from oxq.operators.certification import certify_provider
+from oxq.operators.certification import certify_provider, validate_provider_contract
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import (
     BaselineCase,
@@ -345,6 +345,54 @@ def test_rejects_undeclared_ambient_dependency(tmp_path: Path) -> None:
     _assert_failure(candidate, "provider_import_failed")
 
 
+def test_rejects_ambient_dependency_imported_during_output_extraction(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+from baseline_dependency import rolling_mean
+
+class LazyImportSeries(pd.Series):
+    def tolist(self):
+        import jsonschema
+        return super().tolist()
+
+def sma(frame, *, window):
+    return LazyImportSeries(
+        rolling_mean(frame["close"].tolist(), window),
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+
+
+@pytest.mark.parametrize("dependency", ["dateutil", "pytz"])
+def test_rejects_provider_direct_import_of_preloaded_environment_dependency(
+    tmp_path: Path,
+    dependency: str,
+) -> None:
+    candidate = _contract(tmp_path, f"import {dependency}\n" + SUCCESS_SOURCE)
+
+    _assert_failure(candidate, "provider_import_failed")
+
+
+def test_allows_pandas_runtime_to_use_its_platform_dependencies(
+    tmp_path: Path,
+) -> None:
+    source = SUCCESS_SOURCE.replace(
+        "def sma(frame, *, window):",
+        "def sma(frame, *, window):\n    pandas_dates = pd.to_datetime(frame['date'])\n    assert len(pandas_dates) == len(frame)",
+    )
+    candidate = _contract(tmp_path, source)
+
+    results = run_research_baselines(candidate, candidate.artifacts, timeout_seconds=5)
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
 def test_rejects_preimported_module_name_not_owned_by_implementation(
     tmp_path: Path,
 ) -> None:
@@ -595,6 +643,130 @@ def _write_certifiable_provider(
     return fixture
 
 
+def _write_two_operator_provider(tmp_path: Path, executions_path: Path) -> object:
+    provider_source = f"""
+import pathlib
+import pandas as pd
+from baseline_dependency import rolling_mean
+
+def _record(value):
+    with pathlib.Path({str(executions_path)!r}).open("a") as stream:
+        stream.write(value)
+
+def sma(frame, *, window):
+    _record("S")
+    return pd.Series(
+        rolling_mean(frame["close"].tolist(), window),
+        index=frame.index,
+        name=f"sma_{{window}}",
+        dtype="float64",
+    )
+
+def zzz(frame, *, window):
+    _record("Z")
+    return pd.Series(
+        [0.0, 0.0, 0.0],
+        index=frame.index,
+        name=f"zzz_{{window}}",
+        dtype="float64",
+    )
+"""
+    provider_bytes = _wheel_bytes("equant-ttr", "equant_ttr", provider_source)
+    dependency_bytes = _wheel_bytes(
+        "baseline-dependency",
+        "baseline_dependency",
+        DEPENDENCY_SOURCE,
+    )
+    provider_digest = _sha256(provider_bytes)
+    dependency_digest = _sha256(dependency_bytes)
+    dependency_name = "baseline_dependency-1.0.0-py3-none-any.whl"
+
+    def mutate(repository: Path) -> None:
+        rewrite_json(
+            repository / "candidate-build-v1.json",
+            lambda build: (
+                build["artifacts"][0].update({"digest": provider_digest}),  # type: ignore[index,union-attr]
+                build["artifacts"].append(  # type: ignore[union-attr]
+                    {
+                        "distribution": "baseline-dependency",
+                        "version": "1.0.0",
+                        "filename": dependency_name,
+                        "role": "runtime-dependency",
+                        "build_identifier": "baseline-dependency-build-1",
+                        "digest": dependency_digest,
+                    }
+                ),
+            ),
+        )
+        sma_manifest_path = (
+            repository / "manifests" / "equant.ttr.sma.operator.json"
+        )
+        rewrite_json(
+            sma_manifest_path,
+            lambda manifest: manifest["implementation"].update(  # type: ignore[union-attr]
+                {"implementation_digest": provider_digest}
+            ),
+        )
+        sma_manifest = json.loads(sma_manifest_path.read_text(encoding="utf-8"))
+        zzz_manifest = json.loads(json.dumps(sma_manifest))
+        zzz_manifest.update(
+            {
+                "operator_id": "equant.ttr.zzz",
+                "semantic_name": "ZZZ",
+                "callable": "zzz",
+            }
+        )
+        zzz_manifest["output"]["fields"][0]["name_template"] = "zzz_{window}"
+        zzz_manifest_path = (
+            repository / "manifests" / "equant.ttr.zzz.operator.json"
+        )
+        zzz_manifest_path.write_text(
+            json.dumps(zzz_manifest, sort_keys=True),
+            encoding="utf-8",
+        )
+
+        def replace_sma_case(baseline: dict[str, object]) -> None:
+            case = baseline["cases"][0]  # type: ignore[index]
+            case["input"] = _panel()
+            case["expected"] = {"sma_3": [None, None, 2.0]}
+
+        sma_baseline_path = (
+            repository / "numerical_baselines" / "technical-v1.json"
+        )
+        rewrite_json(sma_baseline_path, replace_sma_case)
+        zzz_baseline = json.loads(sma_baseline_path.read_text(encoding="utf-8"))
+        zzz_case = zzz_baseline["cases"][0]
+        zzz_case.update(
+            {
+                "operator_id": "equant.ttr.zzz",
+                "expected": {"zzz_3": [None, None, 2.0]},
+            }
+        )
+        zzz_baseline_path = (
+            repository / "numerical_baselines" / "technical-zzz-v1.json"
+        )
+        zzz_baseline_path.write_text(
+            json.dumps(zzz_baseline, sort_keys=True),
+            encoding="utf-8",
+        )
+        rewrite_json(
+            repository / "provider-catalog-v1.json",
+            lambda catalog: catalog["operators"].update(  # type: ignore[union-attr]
+                {
+                    "equant.ttr.zzz@1.0.0": {
+                        "manifest": "manifests/equant.ttr.zzz.operator.json",
+                        "baseline": "numerical_baselines/technical-zzz-v1.json",
+                    }
+                }
+            ),
+        )
+
+    fixture = write_provider_repository(tmp_path, mutate=mutate)
+    (fixture.artifact_dir / fixture.wheel_name).write_bytes(provider_bytes)
+    (fixture.artifact_dir / dependency_name).write_bytes(dependency_bytes)
+    return fixture
+
+
 def test_certify_provider_promotes_only_revalidated_passing_bindings(
     tmp_path: Path,
 ) -> None:
@@ -666,6 +838,39 @@ def test_late_case_failure_does_not_mutate_contract_valid_candidates(
     assert executions_path.read_text(encoding="utf-8") == "xx"
     assert contract.operators[0].binding["certification_state"] == "contract-valid"
     assert contract.operators[0].manifest["operator_version"] == "1.0.0"
+
+
+def test_second_operator_failure_in_one_submission_preserves_all_bindings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    executions_path = tmp_path / "operator-executions.txt"
+    fixture = _write_two_operator_provider(tmp_path, executions_path)
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        contract = validate_provider_contract(submission)
+        assert [item.manifest["operator_id"] for item in contract.operators] == [
+            "equant.ttr.sma",
+            "equant.ttr.zzz",
+        ]
+        monkeypatch.setattr(
+            certification,
+            "validate_provider_contract",
+            lambda loaded: contract,
+        )
+
+        with pytest.raises(OperatorCertificationError) as caught:
+            certify_provider(submission)
+
+    assert caught.value.code == "baseline_mismatch"
+    assert executions_path.read_text(encoding="utf-8") == "SZ"
+    assert [item.binding["certification_state"] for item in contract.operators] == [
+        "contract-valid",
+        "contract-valid",
+    ]
 
 
 def test_certify_provider_never_returns_research_certified_after_any_failure(

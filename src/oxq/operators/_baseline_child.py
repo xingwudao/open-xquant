@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import builtins
 import importlib
+import importlib.util
 import json
 import os
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Any
@@ -49,14 +52,16 @@ def _read_request(path: Path) -> dict[str, object]:
 
 
 def _write_response(path: Path, value: dict[str, object]) -> None:
-    path.write_bytes(
-        json.dumps(
-            value,
-            allow_nan=False,
-            separators=(",", ":"),
-            sort_keys=True,
-        ).encode("utf-8")
-    )
+    path.write_bytes(_encode_response(value))
+
+
+def _encode_response(value: dict[str, object]) -> bytes:
+    return json.dumps(
+        value,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
 
 
 def _error(path: Path, code: str) -> int:
@@ -161,6 +166,85 @@ def _new_modules_are_allowed(
     return True
 
 
+def _globals_are_from_archives(
+    globals_value: Mapping[str, object] | None,
+    archives: list[str],
+) -> bool:
+    if globals_value is None:
+        return False
+    locations: list[str] = []
+    spec = globals_value.get("__spec__")
+    origin = getattr(spec, "origin", None)
+    if isinstance(origin, str) and origin not in {"built-in", "frozen"}:
+        locations.append(origin)
+    module_file = globals_value.get("__file__")
+    if isinstance(module_file, str):
+        locations.append(module_file)
+    return any(
+        _location_is_in_archive(location, archive)
+        for location in locations
+        for archive in archives
+    )
+
+
+class _ProviderImportGate:
+    def __init__(self, verified_archives: list[str]) -> None:
+        self._verified_archives = verified_archives
+        self._original_import = builtins.__import__
+        self.violation = False
+
+    def install(self) -> None:
+        setattr(builtins, "__import__", self._guarded_import)
+
+    def restore(self) -> None:
+        setattr(builtins, "__import__", self._original_import)
+
+    def _guarded_import(
+        self,
+        name: str,
+        globals: Mapping[str, object] | None = None,
+        locals: Mapping[str, object] | None = None,
+        fromlist: tuple[str, ...] = (),
+        level: int = 0,
+    ) -> object:
+        imported = self._original_import(name, globals, locals, fromlist, level)
+        if not _globals_are_from_archives(globals, self._verified_archives):
+            return imported
+        absolute_name = self._absolute_name(name, globals, level)
+        if not self._provider_import_is_allowed(absolute_name):
+            self.violation = True
+            raise ImportError(
+                f"provider import is outside the verified closure: {absolute_name}"
+            )
+        return imported
+
+    def _absolute_name(
+        self,
+        name: str,
+        globals_value: Mapping[str, object] | None,
+        level: int,
+    ) -> str:
+        if level == 0:
+            return name
+        package = None if globals_value is None else globals_value.get("__package__")
+        if not isinstance(package, str) or not package:
+            self.violation = True
+            raise ImportError("provider relative import has no package")
+        return importlib.util.resolve_name("." * level + name, package)
+
+    def _provider_import_is_allowed(self, absolute_name: str) -> bool:
+        root = absolute_name.partition(".")[0]
+        if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
+            return True
+        module = sys.modules.get(absolute_name)
+        if not isinstance(module, ModuleType):
+            module = sys.modules.get(root)
+        return isinstance(module, ModuleType) and _module_is_from_archives(
+            module,
+            self._verified_archives,
+        )
+
+
 def _execute(request: dict[str, object], response_path: Path) -> int:
     implementation_artifact = request["implementation_artifact"]
     dependency_artifacts = request["dependency_artifacts"]
@@ -193,46 +277,63 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
     modules_before_provider = set(sys.modules)
     verified_archives = [implementation_artifact, *dependency_artifacts]
     sys.path[:0] = verified_archives
+    import_gate = _ProviderImportGate(verified_archives)
+    import_gate.install()
     try:
-        module = importlib.import_module(module_name)
-        if not _module_is_from_archives(module, [implementation_artifact]):
-            raise ImportError("manifest module is not from implementation artifact")
-        implementation = getattr(module, callable_name)
-        if not callable(implementation):
-            raise ImportError("manifest callable is not callable")
-        if not _new_modules_are_allowed(modules_before_provider, verified_archives):
-            raise ImportError("provider imported an undeclared ambient dependency")
-    except BaseException:
-        return _error(response_path, "provider_import_failed")
-
-    try:
-        records = panel["records"]
-        if not isinstance(records, list):
-            raise TypeError("panel records are not a list")
-        frame = pd.DataFrame.from_records(records)
-        frame.index = pd.MultiIndex.from_frame(frame[["date", "code"]])
-        original = frame.copy(deep=True)
-        result = implementation(frame, **parameters)
-        if not _new_modules_are_allowed(modules_before_provider, verified_archives):
+        try:
+            module = importlib.import_module(module_name)
+            if not _module_is_from_archives(module, [implementation_artifact]):
+                raise ImportError("manifest module is not from implementation artifact")
+            implementation = getattr(module, callable_name)
+            if not callable(implementation):
+                raise ImportError("manifest callable is not callable")
+            if import_gate.violation or not _new_modules_are_allowed(
+                modules_before_provider,
+                verified_archives,
+            ):
+                raise ImportError("provider imported an undeclared ambient dependency")
+        except BaseException:
             return _error(response_path, "provider_import_failed")
+
         try:
-            pd.testing.assert_frame_equal(
-                frame,
-                original,
-                check_exact=True,
-                check_like=False,
+            records = panel["records"]
+            if not isinstance(records, list):
+                raise TypeError("panel records are not a list")
+            frame = pd.DataFrame.from_records(records)
+            frame.index = pd.MultiIndex.from_frame(frame[["date", "code"]])
+            original = frame.copy(deep=True)
+            result = implementation(frame, **parameters)
+            try:
+                pd.testing.assert_frame_equal(
+                    frame,
+                    original,
+                    check_exact=True,
+                    check_like=False,
+                )
+            except AssertionError:
+                return _error(response_path, "provider_mutated_input")
+            try:
+                output = _extract_output(result, original, output_field)
+            except KeyError:
+                return _error(response_path, "baseline_mismatch")
+            except (IndexError, TypeError, ValueError):
+                return _error(response_path, "provider_alignment_failed")
+            response_bytes = _encode_response({"status": "ok", "output": output})
+            if import_gate.violation or not _new_modules_are_allowed(
+                modules_before_provider,
+                verified_archives,
+            ):
+                return _error(response_path, "provider_import_failed")
+        except BaseException:
+            code = (
+                "provider_import_failed"
+                if import_gate.violation
+                else "provider_execution_failed"
             )
-        except AssertionError:
-            return _error(response_path, "provider_mutated_input")
-        try:
-            output = _extract_output(result, original, output_field)
-        except KeyError:
-            return _error(response_path, "baseline_mismatch")
-        except (IndexError, TypeError, ValueError):
-            return _error(response_path, "provider_alignment_failed")
-    except BaseException:
-        return _error(response_path, "provider_execution_failed")
-    _write_response(response_path, {"status": "ok", "output": output})
+            return _error(response_path, code)
+    finally:
+        import_gate.restore()
+    response_path.write_bytes(response_bytes)
     return 0
 
 
