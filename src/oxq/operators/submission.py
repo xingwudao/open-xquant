@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import re
 import stat
 import subprocess
@@ -16,8 +17,10 @@ from tempfile import TemporaryDirectory
 from typing import IO, cast
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError  # type: ignore[import-untyped]
+from packaging.metadata import Metadata
+from packaging.requirements import Requirement
 from packaging.tags import Tag, parse_tag, sys_tags
-from packaging.utils import InvalidWheelFilename, parse_wheel_filename
+from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 from packaging.version import InvalidVersion, Version
 
 from oxq.operators.errors import OperatorCertificationError
@@ -436,6 +439,7 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
     raw_artifacts = cast(list[object], build["artifacts"])
     filenames: set[str] = set()
     artifacts: list[BuildArtifact] = []
+    requirements_by_filename: dict[str, tuple[Requirement, ...]] = {}
     for raw_artifact in raw_artifacts:
         artifact = _mapping(raw_artifact, "artifact")
         filename = _string(artifact["filename"], "artifact")
@@ -454,7 +458,12 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
             raise _error("artifact_digest_mismatch", f"artifact digest differs: {filename}", "artifact")
         distribution = _string(artifact["distribution"], "artifact")
         version = _string(artifact["version"], "artifact")
-        _verify_wheel_identity(wheel_path, distribution, version, filename)
+        requirements_by_filename[filename] = _verify_wheel_identity(
+            wheel_path,
+            distribution,
+            version,
+            filename,
+        )
         artifacts.append(
             BuildArtifact(
                 distribution=distribution,
@@ -466,6 +475,7 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
                 wheel_path=wheel_path,
             )
         )
+    _verify_artifact_closure(artifacts, requirements_by_filename)
     return tuple(artifacts)
 
 
@@ -474,7 +484,7 @@ def _verify_wheel_identity(
     distribution: str,
     version: str,
     filename: str,
-) -> None:
+) -> tuple[Requirement, ...]:
     try:
         if wheel_path.suffix != ".whl":
             raise zipfile.BadZipFile("artifact filename is not a wheel")
@@ -491,7 +501,10 @@ def _verify_wheel_identity(
             ):
                 raise zipfile.BadZipFile("wheel metadata files are invalid")
             wheel_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(wheel_files[0]))
-            package_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(metadata_files[0]))
+            package_metadata = Metadata.from_email(
+                wheel.read(metadata_files[0]),
+                validate=True,
+            )
             wheel_version = wheel_metadata.get("Wheel-Version")
             wheel_version_match = re.fullmatch(r"([0-9]+)\.([0-9]+)", wheel_version) if isinstance(wheel_version, str) else None
             if wheel_version_match is None or int(wheel_version_match.group(1)) != 1:
@@ -505,6 +518,9 @@ def _verify_wheel_identity(
             )
             dist_info_directory = PurePosixPath(wheel_files[0]).parent.name
             build_version = Version(version)
+            current_python = Version(platform.python_version())
+            if package_metadata.requires_python is not None and current_python not in package_metadata.requires_python:
+                raise ValueError("wheel requires a different Python runtime")
             compatible_tags = set(sys_tags())
             if (
                 not wheel_tags
@@ -513,9 +529,11 @@ def _verify_wheel_identity(
                 or not filename_tags.intersection(compatible_tags)
             ):
                 raise zipfile.BadZipFile("wheel tags are incompatible")
-            metadata_name = package_metadata.get("Name")
-            metadata_version = package_metadata.get("Version")
+            metadata_name = package_metadata.name
+            metadata_version = package_metadata.version
+            requirements = tuple(package_metadata.requires_dist or ())
     except (
+        ExceptionGroup,
         InvalidWheelFilename,
         InvalidVersion,
         KeyError,
@@ -531,9 +549,9 @@ def _verify_wheel_identity(
         ) from exc
     if (
         not isinstance(metadata_name, str)
-        or _canonical_distribution(metadata_name) != _canonical_distribution(distribution)
-        or metadata_version != version
-        or _canonical_distribution(str(filename_distribution)) != _canonical_distribution(distribution)
+        or canonicalize_name(metadata_name) != canonicalize_name(distribution)
+        or metadata_version != build_version
+        or canonicalize_name(str(filename_distribution)) != canonicalize_name(distribution)
         or filename_version != build_version
         or dist_info_directory != expected_dist_info_directory
     ):
@@ -542,15 +560,35 @@ def _verify_wheel_identity(
             f"wheel metadata differs from build record: {filename}",
             "artifact",
         )
+    return requirements
+
+
+def _verify_artifact_closure(
+    artifacts: list[BuildArtifact],
+    requirements_by_filename: Mapping[str, tuple[Requirement, ...]],
+) -> None:
+    available: dict[str, set[Version]] = {}
+    try:
+        for artifact in artifacts:
+            available.setdefault(canonicalize_name(artifact.distribution), set()).add(Version(artifact.version))
+        for artifact in artifacts:
+            for requirement in requirements_by_filename[artifact.filename]:
+                if requirement.marker is not None and not requirement.marker.evaluate():
+                    continue
+                versions = available.get(canonicalize_name(requirement.name), set())
+                if not any(version in requirement.specifier for version in versions):
+                    raise ValueError("wheel dependency is absent from artifact closure")
+    except (InvalidVersion, KeyError, ValueError) as exc:
+        raise _error(
+            "artifact_invalid",
+            "artifact dependency is not satisfied by verified wheels",
+            "artifact",
+        ) from exc
 
 
 def _is_dist_info_file(name: str, filename: str) -> bool:
     parts = PurePosixPath(name).parts
     return len(parts) == 2 and parts[0].endswith(".dist-info") and parts[1] == filename
-
-
-def _canonical_distribution(value: str) -> str:
-    return re.sub(r"[-_.]+", "-", value).lower()
 
 
 def _contained_file(root: Path, relative_path: str, stage: str, operator_id: str | None = None) -> Path:

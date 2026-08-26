@@ -671,6 +671,240 @@ def test_accepts_equivalent_compressed_filename_and_multi_header_wheel_tags(
 
 
 @pytest.mark.parametrize(
+    "requires_python",
+    ["not-a-specifier", "<1"],
+    ids=["invalid", "incompatible"],
+)
+def test_rejects_invalid_or_incompatible_requires_python(
+    tmp_path: Path,
+    requires_python: str,
+) -> None:
+    filename = "equant_ttr-1.0.0-py3-none-any.whl"
+    wheel_path = tmp_path / filename
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        [f"Requires-Python: {requires_python}"],
+    )
+
+    _assert_error(
+        lambda: submission_module._verify_wheel_identity(
+            wheel_path,
+            "equant-ttr",
+            "1.0.0",
+            filename,
+        ),
+        "artifact_invalid",
+    )
+
+
+def test_accepts_compatible_requires_python(tmp_path: Path) -> None:
+    filename = "equant_ttr-1.0.0-py3-none-any.whl"
+    wheel_path = tmp_path / filename
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        ["Requires-Python: >=3"],
+    )
+
+    submission_module._verify_wheel_identity(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        filename,
+    )
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "missing-project>=1",
+        'missing-project>=1; python_version >= "3"',
+    ],
+    ids=["unconditional", "active-marker"],
+)
+def test_rejects_active_external_dependency_missing_from_artifact_closure(
+    tmp_path: Path,
+    requirement: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        [f"Requires-Dist: {requirement}"],
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        'missing-project>=1; python_version < "2"',
+        'missing-project>=1; extra == "optional"',
+        "equant_ttr>=1",
+    ],
+    ids=["inactive-environment", "inactive-extra", "satisfied-self"],
+)
+def test_accepts_inactive_or_satisfied_wheel_dependencies(
+    tmp_path: Path,
+    requirement: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        [f"Requires-Dist: {requirement}"],
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    with load_provider_submission(
+        fixture.path,
+        commit,
+        fixture.artifact_dir,
+    ) as loaded:
+        assert loaded.provider == "equant-py"
+
+
+def test_accepts_normalized_dependency_from_verified_artifact_closure(
+    tmp_path: Path,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    implementation_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        implementation_path,
+        "equant-ttr",
+        "1.0.0",
+        ["Requires-Dist: Helper_Pkg>=2,<3"],
+    )
+    dependency_filename = "helper_pkg-2.1.0-py3-none-any.whl"
+    dependency_path = fixture.artifact_dir / dependency_filename
+    _write_wheel(dependency_path, "helper.pkg", "2.1.0")
+
+    def add_dependency(value: dict[str, object]) -> None:
+        artifacts = value["artifacts"]  # type: ignore[assignment]
+        artifacts[0]["digest"] = sha256(implementation_path.read_bytes())
+        artifacts.append(
+            {
+                "distribution": "helper-pkg",
+                "version": "2.1.0",
+                "filename": dependency_filename,
+                "role": "runtime-dependency",
+                "build_identifier": "dependency-build",
+                "digest": sha256(dependency_path.read_bytes()),
+            }
+        )
+
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        add_dependency,
+    )
+    commit = commit_mutation(fixture.path)
+
+    with load_provider_submission(
+        fixture.path,
+        commit,
+        fixture.artifact_dir,
+    ) as loaded:
+        assert {artifact.distribution for artifact in loaded.artifacts} == {
+            "equant-ttr",
+            "helper-pkg",
+        }
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    ["equant-ttr>=2", "helper-pkg>=3"],
+    ids=["self-version", "external-version"],
+)
+def test_rejects_dependency_version_unsatisfied_by_artifact_closure(
+    tmp_path: Path,
+    requirement: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    implementation_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        implementation_path,
+        "equant-ttr",
+        "1.0.0",
+        [f"Requires-Dist: {requirement}"],
+    )
+    dependency_filename = "helper_pkg-2.1.0-py3-none-any.whl"
+    dependency_path = fixture.artifact_dir / dependency_filename
+    _write_wheel(dependency_path, "helper-pkg", "2.1.0")
+
+    def add_dependency(value: dict[str, object]) -> None:
+        artifacts = value["artifacts"]  # type: ignore[assignment]
+        artifacts[0]["digest"] = sha256(implementation_path.read_bytes())
+        artifacts.append(
+            {
+                "distribution": "helper-pkg",
+                "version": "2.1.0",
+                "filename": dependency_filename,
+                "role": "runtime-dependency",
+                "build_identifier": "dependency-build",
+                "digest": sha256(dependency_path.read_bytes()),
+            }
+        )
+
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        add_dependency,
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+def test_rejects_invalid_requires_dist_metadata(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        ["Requires-Dist: missing-project ["],
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+@pytest.mark.parametrize(
     "dist_info_directory",
     ["other_project-1.0.0.dist-info", "equant_ttr-9.0.0.dist-info"],
 )
@@ -961,6 +1195,36 @@ def test_normalizes_deeply_nested_json_to_an_intake_error(tmp_path: Path) -> Non
         lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
         "submission_json_invalid",
     )
+
+
+def _write_wheel(
+    path: Path,
+    distribution: str,
+    version: str,
+    metadata_headers: list[str] | None = None,
+) -> None:
+    dist_info_distribution = distribution.replace("-", "_").replace(".", "_")
+    metadata = [
+        "Metadata-Version: 2.1",
+        f"Name: {distribution}",
+        f"Version: {version}",
+        *(metadata_headers or []),
+        "",
+    ]
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr(f"{dist_info_distribution}/__init__.py", "")
+        archive.writestr(
+            f"{dist_info_distribution}-{version}.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            f"{dist_info_distribution}-{version}.dist-info/METADATA",
+            "\n".join(metadata),
+        )
+        archive.writestr(
+            f"{dist_info_distribution}-{version}.dist-info/RECORD",
+            "",
+        )
 
 
 def _assert_error(action: object, code: str) -> None:

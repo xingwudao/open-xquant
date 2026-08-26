@@ -11,7 +11,9 @@ import importlib.util
 import json
 import math
 import os
+import platform
 import stat
+import subprocess
 import sys
 import threading
 import time
@@ -32,6 +34,7 @@ _OUTPUT_ALIGNMENTS = {
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_PROVIDER_POLICY_VIOLATION_EXIT_CODE = 86
 _HIDDEN_PROVIDER_SYS_ATTRIBUTES = {
     "_current_frames",
     "_getframe",
@@ -375,6 +378,8 @@ class _ProviderImportGate:
         self._original_getframe = sys._getframe
         self._original_thread_start = threading.Thread.start
         self._original_start_new_thread = _thread.start_new_thread
+        self._trusted_code_objects: dict[int, CodeType] = {}
+        self._process_entry_points = self._capture_process_entry_points()
         self._hidden_sys_attributes: dict[str, object] = {}
         self.violation = False
 
@@ -386,6 +391,8 @@ class _ProviderImportGate:
         setattr(importlib, "import_module", self._guarded_import_module)
         setattr(threading.Thread, "start", self._guarded_thread_start)
         setattr(_thread, "start_new_thread", self._guarded_start_new_thread)
+        for owner, name, original in self._process_entry_points:
+            setattr(owner, name, self._process_guard(name, original))
         for name in _HIDDEN_PROVIDER_SYS_ATTRIBUTES:
             if name in sys.__dict__:
                 self._hidden_sys_attributes[name] = sys.__dict__.pop(name)
@@ -398,12 +405,17 @@ class _ProviderImportGate:
         setattr(importlib, "import_module", self._original_import_module)
         setattr(threading.Thread, "start", self._original_thread_start)
         setattr(_thread, "start_new_thread", self._original_start_new_thread)
+        for owner, name, original in self._process_entry_points:
+            setattr(owner, name, original)
         sys.__dict__.update(self._hidden_sys_attributes)
 
     def _guarded_compile(self, *args: object, **kwargs: object) -> object:
         if not self._compile_matches_verified_source(args):
             self._reject_provider_dynamic_code("compile")
-        return self._original_compile(*args, **kwargs)
+        compiled = self._original_compile(*args, **kwargs)
+        if isinstance(compiled, CodeType) and self._compile_matches_verified_source(args):
+            self._trust_code_graph(compiled)
+        return compiled
 
     def _guarded_exec(self, *args: object, **kwargs: object) -> None:
         if not self._code_is_from_verified_source(args):
@@ -477,7 +489,83 @@ class _ProviderImportGate:
         return expected == f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
 
     def _code_is_from_verified_source(self, args: tuple[object, ...]) -> bool:
-        return bool(args and isinstance(args[0], CodeType) and self._verified_source_digest(args[0].co_filename) is not None)
+        if not args or not isinstance(args[0], CodeType):
+            return False
+        code = args[0]
+        return self._trusted_code_objects.get(id(code)) is code
+
+    def _trust_code_graph(self, code: CodeType) -> None:
+        self._trusted_code_objects[id(code)] = code
+        for constant in code.co_consts:
+            if isinstance(constant, CodeType):
+                self._trust_code_graph(constant)
+
+    def _capture_process_entry_points(
+        self,
+    ) -> list[tuple[object, str, Callable[..., object]]]:
+        names_by_owner: list[tuple[object, tuple[str, ...]]] = [
+            (
+                subprocess,
+                (
+                    "Popen",
+                    "run",
+                    "call",
+                    "check_call",
+                    "check_output",
+                    "getoutput",
+                    "getstatusoutput",
+                    "_fork_exec",
+                ),
+            ),
+            (
+                os,
+                (
+                    "system",
+                    "popen",
+                    "fork",
+                    "forkpty",
+                    "posix_spawn",
+                    "posix_spawnp",
+                    "spawnl",
+                    "spawnle",
+                    "spawnlp",
+                    "spawnlpe",
+                    "spawnv",
+                    "spawnve",
+                    "spawnvp",
+                    "spawnvpe",
+                    "execl",
+                    "execle",
+                    "execlp",
+                    "execlpe",
+                    "execv",
+                    "execve",
+                    "execvp",
+                    "execvpe",
+                ),
+            ),
+        ]
+        entry_points: list[tuple[object, str, Callable[..., object]]] = []
+        for owner, names in names_by_owner:
+            for name in names:
+                value = getattr(owner, name, None)
+                if callable(value):
+                    entry_points.append((owner, name, value))
+        return entry_points
+
+    def _process_guard(
+        self,
+        operation: str,
+        original: Callable[..., object],
+    ) -> Callable[..., object]:
+        def guarded(*args: object, **kwargs: object) -> object:
+            if self._provider_call_in_stack():
+                self.violation = True
+                os._exit(_PROVIDER_POLICY_VIOLATION_EXIT_CODE)
+            return original(*args, **kwargs)
+
+        guarded.__name__ = f"blocked_provider_{operation}"
+        return guarded
 
     def _verified_source_digest(self, filename: str) -> str | None:
         location = os.path.abspath(filename)
@@ -731,6 +819,70 @@ def _frame_from_quant_panel(pd: Any, panel: dict[str, object]) -> Any:
     return frame
 
 
+def _install_linux_process_creation_filter() -> None:
+    if sys.platform != "linux":
+        return
+    import ctypes
+    import errno
+
+    syscall_numbers = {
+        "x86_64": (56, (57, 58, 59, 322), 435),
+        "amd64": (56, (57, 58, 59, 322), 435),
+        "aarch64": (220, (221, 281), 435),
+        "arm64": (220, (221, 281), 435),
+    }.get(platform.machine().lower())
+    if syscall_numbers is None:
+        raise OSError("unsupported Linux process-filter architecture")
+
+    class SockFilter(ctypes.Structure):
+        _fields_ = [
+            ("code", ctypes.c_ushort),
+            ("jt", ctypes.c_ubyte),
+            ("jf", ctypes.c_ubyte),
+            ("k", ctypes.c_uint32),
+        ]
+
+    class SockFprog(ctypes.Structure):
+        _fields_ = [
+            ("len", ctypes.c_ushort),
+            ("filter", ctypes.POINTER(SockFilter)),
+        ]
+
+    clone_number, blocked_numbers, clone3_number = syscall_numbers
+    deny = 0x00050000 | errno.EPERM
+    instructions = [
+        SockFilter(0x20, 0, 0, 0),
+        SockFilter(0x15, 0, 3, clone_number),
+        SockFilter(0x20, 0, 0, 16),
+        SockFilter(0x45, 1, 0, 0x00010000),
+        SockFilter(0x06, 0, 0, deny),
+        SockFilter(0x20, 0, 0, 0),
+    ]
+    for number in blocked_numbers:
+        instructions.extend(
+            (
+                SockFilter(0x15, 0, 1, number),
+                SockFilter(0x06, 0, 0, deny),
+            )
+        )
+    instructions.extend(
+        (
+            SockFilter(0x15, 0, 1, clone3_number),
+            SockFilter(0x06, 0, 0, 0x00050000 | errno.ENOSYS),
+        )
+    )
+    instructions.append(SockFilter(0x06, 0, 0, 0x7FFF0000))
+    filter_array = (SockFilter * len(instructions))(*instructions)
+    program = SockFprog(len(instructions), filter_array)
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(38, 1, 0, 0, 0) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+    if libc.prctl(22, 2, ctypes.byref(program)) != 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error))
+
+
 def _execute(
     request: dict[str, object],
     execution_root: Path,
@@ -817,6 +969,10 @@ def _execute(
         verified_archives,
         verified_root_snapshot,
     )
+    try:
+        _install_linux_process_creation_filter()
+    except BaseException:
+        return {"status": "error", "code": "provider_import_failed"}
     import_gate.install()
     try:
         try:
@@ -905,6 +1061,29 @@ def _execute(
     }
 
 
+def _execute_outside_verifier_stack(
+    request: dict[str, object],
+    execution_root: Path,
+) -> dict[str, object]:
+    responses: list[dict[str, object]] = []
+
+    def run_provider_verification() -> None:
+        try:
+            responses.append(_execute(request, execution_root))
+        except BaseException:
+            responses.append({"status": "error", "code": "provider_execution_failed"})
+
+    execution_thread = threading.Thread(
+        target=run_provider_verification,
+        name="oxq-provider-verification",
+    )
+    execution_thread.start()
+    execution_thread.join()
+    if len(responses) != 1:
+        return {"status": "error", "code": "provider_execution_failed"}
+    return responses[0]
+
+
 def main() -> int:
     if len(sys.argv) != 3:
         return 2
@@ -938,7 +1117,10 @@ def main() -> int:
             _authenticated_response(response, response_secret),
         )
         return 0
-    response = _execute(request, request_path.parent / "wheel-layout")
+    response = _execute_outside_verifier_stack(
+        request,
+        request_path.parent / "wheel-layout",
+    )
     _write_response(
         response_path,
         _authenticated_response(response, response_secret),

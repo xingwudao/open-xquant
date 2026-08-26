@@ -49,6 +49,7 @@ _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _ARTIFACT_COPY_CHUNK_BYTES = 1024 * 1024
 _MAX_CHILD_RESPONSE_BYTES = 1024 * 1024
+_PROVIDER_POLICY_VIOLATION_EXIT_CODE = 86
 _DARWIN_SANDBOX_PROFILE = "(version 1) (allow default) (deny process-fork)"
 _LINUX_LAUNCHER_SCRIPT = r"""
 import os
@@ -930,7 +931,8 @@ def _open_windows_kill_on_close_job(
         raise _windows_error()
     try:
         information = ExtendedLimitInformation()
-        information.BasicLimitInformation.LimitFlags = 0x00002000
+        information.BasicLimitInformation.LimitFlags = 0x00002000 | 0x00000008
+        information.BasicLimitInformation.ActiveProcessLimit = 1
         if not kernel32.SetInformationJobObject(
             job,
             9,
@@ -1019,6 +1021,12 @@ def _read_response(
     operator_id: str,
     response_secret: bytes,
 ) -> dict[str, object]:
+    if returncode == _PROVIDER_POLICY_VIOLATION_EXIT_CODE:
+        raise _error(
+            "provider_import_failed",
+            "provider attempted process creation outside the verified closure",
+            operator_id,
+        )
     try:
         with response_path.open("rb") as stream:
             raw = stream.read(_MAX_CHILD_RESPONSE_BYTES + 1)

@@ -1035,6 +1035,31 @@ def test_rejects_provider_dynamic_import_of_preloaded_environment_dependency(
     _assert_failure(candidate, "provider_execution_failed")
 
 
+def test_normalizes_provider_process_creation_as_import_failure(
+    tmp_path: Path,
+) -> None:
+    source = """
+import subprocess
+import sys
+import pandas as pd
+
+def sma(frame, *, window):
+    completed = subprocess.run(
+        [sys.executable, "-c", "print(2.0)"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return pd.Series(
+        [None, None, float(completed.stdout)],
+        index=frame.index,
+        name=f"sma_{window}",
+    )
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+
+
 @pytest.mark.parametrize(
     "violation_statement",
     ["import jsonschema", "importlib.import_module('dateutil')"],

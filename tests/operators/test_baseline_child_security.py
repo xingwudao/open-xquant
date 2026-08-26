@@ -6,6 +6,8 @@ import builtins
 import hashlib
 import hmac
 import json
+import marshal
+import os
 import subprocess
 import sys
 import zipfile
@@ -113,6 +115,12 @@ def _run_child(
         timeout=10,
     )
 
+    if completed.returncode == getattr(
+        _baseline_child,
+        "_PROVIDER_POLICY_VIOLATION_EXIT_CODE",
+        -999,
+    ):
+        return {"status": "error", "code": "provider_import_failed"}
     assert completed.returncode == 0, completed.stderr
     response = cast(
         dict[str, object],
@@ -454,6 +462,196 @@ def sma(frame, *, window):
     assert _run_child(tmp_path, source) == {
         "status": "error",
         "code": "provider_execution_failed",
+    }
+
+
+def test_provider_traceback_cannot_reach_verifier_response_state(
+    tmp_path: Path,
+) -> None:
+    source = """
+import hashlib
+import hmac
+import json
+import os
+import pathlib
+
+def sma(frame, *, window):
+    try:
+        raise RuntimeError("capture provider traceback")
+    except RuntimeError as error:
+        current = error.__traceback__.tb_frame
+    response_path = None
+    response_secret = None
+    while current is not None:
+        candidate_path = current.f_locals.get("response_path")
+        candidate_secret = current.f_locals.get("response_secret")
+        if isinstance(candidate_path, pathlib.Path):
+            response_path = candidate_path
+        if isinstance(candidate_secret, bytes) and len(candidate_secret) == 32:
+            response_secret = candidate_secret
+        current = current.f_back
+    if response_path is None or response_secret is None:
+        raise RuntimeError("verifier response state was not visible")
+    forged = {
+        "status": "ok",
+        "outputs": {f"sma_{window}": [None, None, 2.0]},
+        "repeated_outputs": {f"sma_{window}": [None, None, 2.0]},
+    }
+    payload = json.dumps(
+        forged,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    forged["auth"] = "hmac-sha256:" + hmac.new(
+        response_secret,
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    response_path.write_text(json.dumps(forged), encoding="utf-8")
+    os._exit(0)
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_execution_failed",
+    }
+
+
+@pytest.mark.parametrize(
+    "operation",
+    [
+        "subprocess-run",
+        "subprocess-popen",
+        "os-system",
+        "os-popen",
+        "os-fork",
+        "os-posix-spawn",
+        "os-spawnv",
+    ],
+)
+def test_provider_cannot_create_processes(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    required_os_function = {
+        "os-fork": "fork",
+        "os-posix-spawn": "posix_spawn",
+        "os-spawnv": "spawnv",
+    }.get(operation)
+    if required_os_function is not None and not hasattr(os, required_os_function):
+        pytest.skip(f"os.{required_os_function} is unavailable")
+    if operation == "subprocess-run":
+        process_creation = (
+            "value = float(subprocess.run([sys.executable, '-c', 'print(2.0)'], check=True, capture_output=True, text=True).stdout)"
+        )
+    elif operation == "subprocess-popen":
+        process_creation = (
+            "value = float(subprocess.Popen([sys.executable, '-c', 'print(2.0)'], stdout=subprocess.PIPE, text=True).communicate()[0])"
+        )
+    elif operation == "os-system":
+        process_creation = "value = 2.0 if os.system(sys.executable + \" -c 'raise SystemExit(0)'\") == 0 else 99.0"
+    elif operation == "os-popen":
+        process_creation = "value = float(os.popen(sys.executable + \" -c 'print(2.0)'\").read())"
+    elif operation == "os-fork":
+        process_creation = "pid = os.fork()\n    if pid == 0:\n        os._exit(0)\n    os.waitpid(pid, 0)\n    value = 2.0"
+    elif operation == "os-posix-spawn":
+        process_creation = (
+            "pid = os.posix_spawn(sys.executable, [sys.executable, '-c', 'pass'], os.environ)\n    os.waitpid(pid, 0)\n    value = 2.0"
+        )
+    else:
+        process_creation = (
+            "pid = os.spawnv(os.P_NOWAIT, sys.executable, [sys.executable, '-c', 'pass'])\n    os.waitpid(pid, 0)\n    value = 2.0"
+        )
+    source = f"""
+import os
+import subprocess
+import sys
+import pandas as pd
+
+def sma(frame, *, window):
+    {process_creation}
+    return pd.Series(
+        [None, None, value],
+        index=frame.index,
+        name=f"sma_{{window}}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_import_failed",
+    }
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux seccomp assertion")
+def test_linux_filter_blocks_native_fork_during_provider_import(
+    tmp_path: Path,
+) -> None:
+    source = """
+import ctypes
+import os
+import pandas as pd
+
+libc = ctypes.CDLL(None, use_errno=True)
+pid = libc.fork()
+if pid < 0:
+    error = ctypes.get_errno()
+    raise OSError(error, os.strerror(error))
+if pid == 0:
+    os._exit(0)
+os.waitpid(pid, 0)
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_import_failed",
+    }
+
+
+def test_provider_cannot_launder_ambient_code_filename(
+    tmp_path: Path,
+) -> None:
+    ambient_code_path = tmp_path / "ambient-code.bin"
+    ambient_code_path.write_bytes(
+        marshal.dumps(
+            compile(
+                "VALUE = 2.0\n",
+                str(tmp_path / "ambient.py"),
+                "exec",
+            )
+        )
+    )
+    source = f"""
+import marshal
+import pathlib
+import pandas as pd
+
+def sma(frame, *, window):
+    ambient_code = marshal.loads(pathlib.Path({str(ambient_code_path)!r}).read_bytes())
+    laundered_code = ambient_code.replace(co_filename=__file__)
+    namespace = {{}}
+    exec(laundered_code, namespace)
+    return pd.Series(
+        [None, None, namespace["VALUE"]],
+        index=frame.index,
+        name=f"sma_{{window}}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_import_failed",
     }
 
 
