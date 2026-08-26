@@ -9,11 +9,16 @@
     "schema_version": { "const": 1 },
     "contract_version": { "const": 1 },
     "operator_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$" },
-    "operator_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+    "operator_version": {
+      "allOf": [
+        { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+        { "not": { "pattern": "[\\r\\n]" } }
+      ]
+    },
     "semantic_name": { "type": "string", "minLength": 1 },
     "distribution": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
-    "module": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$" },
-    "callable": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+    "module": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*)*$" },
+    "callable": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$" },
     "execution_scope": { "enum": ["time_series", "cross_section", "panel", "research_only"] },
     "lifecycle": { "enum": ["stateless", "fit_transform", "evaluation", "data_access", "visualization"] },
     "causality": { "enum": ["past_only", "label_dependent", "future_using"] },
@@ -111,6 +116,16 @@
         {
           "if": { "properties": { "nan_policy": { "const": "explicit_fill" } }, "required": ["nan_policy"] },
           "then": { "anyOf": [{ "required": ["fill_value"] }, { "required": ["fill_method"] }] }
+        },
+        {
+          "if": {
+            "properties": {
+              "nan_policy": { "const": "explicit_fill" },
+              "fill_method": { "const": "constant" }
+            },
+            "required": ["nan_policy", "fill_method"]
+          },
+          "then": { "required": ["fill_value"] }
         }
       ]
     },
@@ -138,7 +153,12 @@
       "additionalProperties": false,
       "required": ["package_version", "source_commit", "source_tree_digest", "manifest_digest", "implementation_digest", "build_identifier"],
       "properties": {
-        "package_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+        "package_version": {
+          "allOf": [
+            { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+            { "not": { "pattern": "[\\r\\n]" } }
+          ]
+        },
         "source_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
         "source_tree_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },

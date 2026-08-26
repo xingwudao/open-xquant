@@ -89,6 +89,27 @@ def test_manifest_rejects_numeric_prerelease_leading_zero(
 
 
 @pytest.mark.parametrize(
+    ("location", "invalid_version"),
+    [
+        (("operator_version",), "1.0.0\n"),
+        (("operator_version",), "1.0.0\r\n"),
+        (("implementation", "package_version"), "1.0.0\n"),
+        (("implementation", "package_version"), "1.0.0\r\n"),
+    ],
+)
+def test_manifest_rejects_terminal_line_endings_in_versions(
+    location: tuple[str, ...], invalid_version: str
+) -> None:
+    manifest = _valid_manifest()
+    target = manifest
+    for key in location[:-1]:
+        target = target[key]
+    target[location[-1]] = invalid_version
+    with pytest.raises(ValidationError):
+        _manifest_validator().validate(manifest)
+
+
+@pytest.mark.parametrize(
     ("field", "invalid_value"),
     [
         ("operator_id", "equant.ttr_sma"),
@@ -98,6 +119,24 @@ def test_manifest_rejects_numeric_prerelease_leading_zero(
     ],
 )
 def test_manifest_rejects_invalid_identity_syntax(field: str, invalid_value: str) -> None:
+    manifest = _valid_manifest()
+    manifest[field] = invalid_value
+    with pytest.raises(ValidationError):
+        _manifest_validator().validate(manifest)
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("module", "ettr_"),
+        ("module", "ettr__core"),
+        ("callable", "sma_"),
+        ("callable", "sma__fast"),
+    ],
+)
+def test_manifest_rejects_non_strict_snake_identity_segments(
+    field: str, invalid_value: str
+) -> None:
     manifest = _valid_manifest()
     manifest[field] = invalid_value
     with pytest.raises(ValidationError):
@@ -143,6 +182,24 @@ def test_manifest_rejects_explicit_fill_without_value_or_method() -> None:
     manifest["output"]["nan_policy"] = "explicit_fill"
     with pytest.raises(ValidationError):
         _manifest_validator().validate(manifest)
+
+
+def test_manifest_requires_fill_value_for_constant_explicit_fill() -> None:
+    manifest = _valid_manifest()
+    manifest["output"].update(
+        {"nan_policy": "explicit_fill", "fill_method": "constant"}
+    )
+    with pytest.raises(ValidationError):
+        _manifest_validator().validate(manifest)
+
+
+@pytest.mark.parametrize("fill_method", ["forward_fill", "backward_fill", "interpolate"])
+def test_manifest_allows_executable_nonconstant_fill_methods(fill_method: str) -> None:
+    manifest = _valid_manifest()
+    manifest["output"].update(
+        {"nan_policy": "explicit_fill", "fill_method": fill_method}
+    )
+    _manifest_validator().validate(manifest)
 
 
 def test_manifest_rejects_unknown_parameter_constraint() -> None:
