@@ -37,6 +37,8 @@ def load_provider_submission(
     repository = Path(provider_repo)
     if not repository.is_dir():
         raise _error("provider_repo_invalid", "provider repository does not exist", "repository")
+    if not _is_git_repository(repository):
+        raise _error("provider_repo_invalid", "provider repository is not a Git repository", "repository")
     if _FULL_SHA1.fullmatch(provider_commit) is None:
         raise _error("provider_commit_invalid", "provider commit must be a full lowercase SHA-1", "repository")
     resolved_commit = _resolve_commit(repository, provider_commit)
@@ -70,6 +72,10 @@ def _resolve_commit(repository: Path, provider_commit: str) -> str:
     if result.returncode != 0:
         raise _error("provider_commit_invalid", "provider commit is not a local commit", "repository")
     return result.stdout.strip()
+
+
+def _is_git_repository(repository: Path) -> bool:
+    return _git(repository, ["rev-parse", "--git-dir"]).returncode == 0
 
 
 def _archive_commit(repository: Path, provider_commit: str, tar_path: Path) -> None:
@@ -268,10 +274,14 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
             raise _error("submission_schema_invalid", "artifact filenames must be unique basenames", "artifact")
         filenames.add(filename)
         wheel_path = artifact_dir / filename
-        if wheel_path.is_symlink() or not wheel_path.exists() or not _is_regular_file(wheel_path):
-            raise _error("artifact_missing", f"artifact is missing: {filename}", "artifact")
+        try:
+            if wheel_path.is_symlink() or not wheel_path.exists() or not _is_regular_file(wheel_path):
+                raise _error("artifact_missing", f"artifact is missing: {filename}", "artifact")
+            actual_digest = _sha256_file(wheel_path)
+        except OSError as exc:
+            raise _error("artifact_missing", f"artifact is missing: {filename}", "artifact") from exc
         digest = _string(artifact["digest"], "artifact")
-        if _sha256_file(wheel_path) != digest:
+        if actual_digest != digest:
             raise _error("artifact_digest_mismatch", f"artifact digest differs: {filename}", "artifact")
         artifacts.append(
             BuildArtifact(

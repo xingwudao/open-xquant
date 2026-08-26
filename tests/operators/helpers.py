@@ -26,6 +26,7 @@ class ProviderRepository:
 def write_provider_repository(
     root: Path,
     mutate: Callable[[Path], None] | None = None,
+    implementation_mutate: Callable[[Path], None] | None = None,
 ) -> ProviderRepository:
     """Create a committed provider source tree and ignored wheel artifact."""
     repository = root / "provider"
@@ -37,6 +38,9 @@ def write_provider_repository(
     source.parent.mkdir(parents=True, exist_ok=True)
     source.write_text("def sma():\n    return 10.0\n", encoding="utf-8")
     (repository / ".gitignore").write_text("dist/\n", encoding="utf-8")
+    if implementation_mutate is not None:
+        implementation_mutate(repository)
+    source_tree_digest = _source_tree_digest(repository, ["src/equant_ttr/sma.py"])
     _git(repository, "add", ".")
     _git(repository, "commit", "-m", "implementation source")
     implementation_commit = _git(repository, "rev-parse", "HEAD").stdout.strip()
@@ -46,7 +50,10 @@ def write_provider_repository(
     _write_json(repository / "provider-catalog-v1.json", _catalog())
     _write_json(repository / "candidate-build-v1.json", _build(implementation_commit, wheel_name, wheel_digest))
     _write_json(repository / "numerical_baselines" / "technical-v1.json", _baseline())
-    _write_json(repository / "manifests" / "equant.ttr.sma.operator.json", _manifest())
+    _write_json(
+        repository / "manifests" / "equant.ttr.sma.operator.json",
+        _manifest(implementation_commit, source_tree_digest, wheel_digest),
+    )
     if mutate is not None:
         mutate(repository)
     _git(repository, "add", ".")
@@ -90,6 +97,10 @@ def _wheel_bytes() -> bytes:
     buffer = BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
         archive.writestr("equant_ttr/__init__.py", "")
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
     return buffer.getvalue()
 
 
@@ -163,9 +174,89 @@ def _baseline() -> dict[str, object]:
     }
 
 
-def _manifest() -> dict[str, object]:
+def _source_tree_digest(root: Path, source_files: list[str]) -> str:
+    digest = hashlib.sha256()
+    for relative_path in sorted(source_files):
+        digest.update(relative_path.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(hashlib.sha256((root / relative_path).read_bytes()).hexdigest().encode("ascii"))
+        digest.update(b"\n")
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _manifest(
+    source_commit: str, source_tree_digest: str, implementation_digest: str
+) -> dict[str, object]:
     return {
+        "schema_version": 1,
+        "contract_version": 1,
         "operator_id": "equant.ttr.sma",
         "operator_version": "1.0.0",
-        "implementation": {"source_files": ["src/equant_ttr/sma.py"]},
+        "semantic_name": "SMA",
+        "distribution": "equant-ttr",
+        "module": "equant_ttr",
+        "callable": "sma",
+        "execution_scope": "time_series",
+        "lifecycle": "stateless",
+        "causality": "past_only",
+        "availability": "close_t",
+        "mutates_input": False,
+        "availability_depends_on_input": False,
+        "input": {
+            "required_columns": ["close"],
+            "optional_columns": [],
+            "supported_dtypes": ["float64"],
+            "minimum_assets": 1,
+            "minimum_time_length": 1,
+            "requires_complete_cross_section": False,
+            "requires_benchmark": False,
+            "requires_industry_data": False,
+            "requires_market_cap_data": False,
+            "requires_fundamental_data": False,
+            "requires_sorted_input": False,
+            "required_context": [
+                "timezone",
+                "calendar",
+                "frequency",
+                "timestamp_semantics",
+                "currency",
+                "price_adjustment",
+                "data_version",
+                "source",
+            ],
+        },
+        "parameters": {
+            "window": {
+                "type": "integer",
+                "default": 3,
+                "required": False,
+                "constraints": {"minimum": 1},
+                "unit": "sessions",
+                "affects_warmup": True,
+                "affects_output_fields": True,
+                "affects_causality": False,
+                "affects_availability": False,
+            }
+        },
+        "output": {
+            "fields": [{"name_template": "sma_{window}", "dtype": "float64", "value_range": "finite_or_nan"}],
+            "alignment": "canonical_order",
+            "warmup": "window - 1",
+            "nan_policy": "propagate",
+            "multiple_outputs": False,
+        },
+        "determinism": {
+            "bitwise_deterministic": True,
+            "random_seed_required": False,
+            "tolerance": {"absolute": 0, "relative": 0},
+            "tested_platforms": ["test-python3.12"],
+        },
+        "implementation": {
+            "package_version": "1.0.0",
+            "source_commit": f"git-sha1:{source_commit}",
+            "source_files": ["src/equant_ttr/sma.py"],
+            "source_tree_digest": source_tree_digest,
+            "implementation_digest": implementation_digest,
+            "build_identifier": "equant-ttr-1.0.0",
+        },
     }

@@ -1,5 +1,6 @@
 """Integration tests for exact local provider submission loading."""
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -64,6 +65,16 @@ def test_rejects_a_missing_git_repository(tmp_path: Path) -> None:
     )
 
 
+def test_rejects_an_existing_directory_that_is_not_a_git_repository(tmp_path: Path) -> None:
+    directory = tmp_path / "not-a-repository"
+    directory.mkdir()
+
+    _assert_error(
+        lambda: load_provider_submission(directory, "0" * 40, tmp_path),
+        "provider_repo_invalid",
+    )
+
+
 @pytest.mark.parametrize(
     "path_value",
     ["/candidate-build-v1.json", "../candidate-build-v1.json", "dir\\build.json", "./build.json"],
@@ -101,6 +112,23 @@ def test_rejects_duplicate_json_keys_and_nonstandard_constants(tmp_path: Path) -
         "submission_json_invalid",
     )
 
+
+def test_rejects_duplicate_keyed_catalog_operator_identity(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    catalog_path = fixture.path / "provider-catalog-v1.json"
+    catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
+    operator_key = "equant.ttr.sma@1.0.0"
+    entry = json.dumps(catalog.pop("operators")[operator_key], sort_keys=True)
+    catalog_path.write_text(
+        f"{json.dumps(catalog, sort_keys=True)[:-1]}, \"operators\": {{\"{operator_key}\": {entry}, \"{operator_key}\": {entry}}}}}",
+        encoding="utf-8",
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_json_invalid",
+    )
 
 def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
@@ -217,6 +245,27 @@ def test_rejects_invalid_artifact_files_and_digests(tmp_path: Path) -> None:
     )
 
 
+def test_normalizes_an_artifact_read_race_to_artifact_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    path_open = Path.open
+
+    def lose_artifact_race(path: Path, *args: object, **kwargs: object) -> object:
+        if path == wheel_path:
+            wheel_path.unlink()
+            raise FileNotFoundError("artifact replaced during verification")
+        return path_open(path, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(Path, "open", lose_artifact_race)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, fixture.submission_commit, fixture.artifact_dir),
+        "artifact_missing",
+    )
+
+
 def test_rejects_referenced_symlinks_from_the_committed_archive(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     manifest = fixture.path / "manifests" / "equant.ttr.sma.operator.json"
@@ -226,6 +275,38 @@ def test_rejects_referenced_symlinks_from_the_committed_archive(tmp_path: Path) 
 
     _assert_error(
         lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_path_invalid",
+    )
+
+
+@pytest.mark.parametrize("source_path", ["/source.py", "../source.py", "dir\\source.py", "./source.py"])
+def test_rejects_unsafe_manifest_source_paths(tmp_path: Path, source_path: str) -> None:
+    fixture = write_provider_repository(tmp_path)
+    manifest_path = fixture.path / "manifests" / "equant.ttr.sma.operator.json"
+    rewrite_json(
+        manifest_path,
+        lambda value: value["implementation"].update({"source_files": [source_path]}),  # type: ignore[index,union-attr]
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_path_invalid",
+    )
+
+
+def test_rejects_a_symlinked_implementation_source_file(tmp_path: Path) -> None:
+    def make_source_symlink(repository: Path) -> None:
+        source = repository / "src" / "equant_ttr" / "sma.py"
+        target = source.with_name("shared.py")
+        target.write_text("def sma():\n    return 10.0\n", encoding="utf-8")
+        source.unlink()
+        source.symlink_to(target.name)
+
+    fixture = write_provider_repository(tmp_path, implementation_mutate=make_source_symlink)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, fixture.submission_commit, fixture.artifact_dir),
         "submission_path_invalid",
     )
 
