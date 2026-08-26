@@ -78,6 +78,9 @@ OperatorBinding 在通过 `operator-binding-v1.schema.json` 后，还 `MUST` 调
 发布的 `validate_operator_binding()`，把重复 identity/provenance 字段与真实
 manifest、provider source、正式 implementation artifact 和四项 contract
 surface 文件逐 byte 绑定；只通过 binding JSON Schema 不能启用 binding。
+`manifest_path` 指向的准确文件 bytes 是 manifest 的权威工件；这些 bytes
+`MUST` 作为严格 UTF-8 JSON 解码，解码后的对象 `MUST` 与接受 JSON Schema
+和语义验证的 manifest 对象相同，不能分别验证一个对象并散列另一个文件。
 
 ## 4. 非目标
 
@@ -836,7 +839,8 @@ binding fixture 还 `MUST` 在 binding JSON Schema 之后调用发布的
 open-xquant certification `MUST` 对收到的 QuantPanel 与 OperatorManifest
 执行同一 JSON Schema 结构层和 reference validator 语义层，不得用一层
 替代另一层。对每个待启用 binding，还 `MUST` 使用认证输入的真实路径调用
-`validate_operator_binding()`，不得仅信任 binding JSON 中已有的摘要字符串。
+`validate_operator_binding()`，不得仅信任 binding JSON 中已有的摘要字符串，
+也不得向 Schema/语义层提供与该路径严格解码结果不同的 manifest 对象。
 
 open-xquant 的认证额外检查：
 

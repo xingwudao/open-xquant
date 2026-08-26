@@ -398,6 +398,37 @@ def _binding_file_digest(
         raise _binding_mismatch(field) from error
 
 
+class _StrictManifestJsonError(ValueError):
+    """Raised when manifest JSON uses values outside the strict profile."""
+
+
+def _strict_manifest_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise _StrictManifestJsonError(f"duplicate object key: {key!r}")
+        result[key] = value
+    return result
+
+
+def _reject_manifest_constant(value: str) -> None:
+    raise _StrictManifestJsonError(f"non-standard numeric constant: {value}")
+
+
+def _decode_manifest_artifact(
+    manifest_path: str | os.PathLike[str],
+) -> object:
+    try:
+        manifest_bytes = Path(manifest_path).read_bytes()
+        return json.loads(
+            manifest_bytes.decode("utf-8"),
+            object_pairs_hook=_strict_manifest_object,
+            parse_constant=_reject_manifest_constant,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, _StrictManifestJsonError) as error:
+        raise _binding_mismatch(f"manifest artifact: {error}") from error
+
+
 def validate_operator_binding(
     binding: Mapping[str, Any],
     manifest: Mapping[str, Any],
@@ -407,6 +438,12 @@ def validate_operator_binding(
     contract_surface_paths: Mapping[str, str | os.PathLike[str]],
 ) -> None:
     """Validate one binding against exact manifest, source, and artifact bytes."""
+
+    manifest_artifact = _decode_manifest_artifact(manifest_path)
+    if manifest_artifact != manifest:
+        raise _binding_mismatch(
+            "manifest artifact: manifest object does not match manifest artifact"
+        )
 
     validate_operator_manifest(manifest)
 

@@ -35,7 +35,10 @@ consumer MUST NOT silently choose one of conflicting provenance fields.
 The manifest digest is SHA-256 of the exact UTF-8 manifest file bytes and
 MUST be stored in the external binding/certification record. It MUST NOT be
 stored in the manifest body. All digest scopes and encodings are normative in
-`hash-profile-v1.md`.
+`hash-profile-v1.md`. The `manifest_path` bytes are the authoritative manifest
+artifact: they MUST decode as strict UTF-8 JSON without duplicate object keys
+or non-standard numeric constants, and the decoded value MUST be identical to
+the manifest object used by the Schema and semantic validation layers.
 
 ## 3. Certification states
 

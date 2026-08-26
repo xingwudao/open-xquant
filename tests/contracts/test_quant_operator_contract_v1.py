@@ -917,10 +917,82 @@ def test_operator_binding_semantics_accept_valid_exact_artifacts(
     _validate_binding_fixture(_reference_validator(), tmp_path)
 
 
-def test_operator_binding_semantics_validate_manifest_first(tmp_path: Path) -> None:
+def test_operator_binding_manifest_artifact_rejects_different_json_object(
+    tmp_path: Path,
+) -> None:
+    manifest = _valid_manifest()
+    different_manifest = _valid_manifest()
+    different_manifest["semantic_name"] = "DIFFERENT_SMA"
+    _manifest_validator().validate(different_manifest)
+    manifest_path = tmp_path / "different-operator.json"
+    manifest_path.write_text(json.dumps(different_manifest), encoding="utf-8")
+    validator = _reference_validator()
+    binding = _valid_binding()
+    binding["manifest_digest"] = validator.sha256_file(manifest_path)
+
+    with pytest.raises(
+        validator.ContractValidationError,
+        match=(
+            "operator binding mismatch: manifest artifact: "
+            "manifest object does not match manifest artifact"
+        ),
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "manifest_bytes",
+    [
+        pytest.param(b"\xff", id="invalid-utf8"),
+        pytest.param(b'{"schema_version":', id="malformed-json"),
+        pytest.param(
+            b'{"schema_version": 1, "schema_version": 1}',
+            id="duplicate-object-keys",
+        ),
+        pytest.param(b'{"value": NaN}', id="nan"),
+        pytest.param(b'{"value": Infinity}', id="infinity"),
+        pytest.param(b'{"value": -Infinity}', id="negative-infinity"),
+    ],
+)
+def test_operator_binding_manifest_artifact_rejects_non_strict_json(
+    manifest_bytes: bytes,
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "invalid-operator.json"
+    manifest_path.write_bytes(manifest_bytes)
+    validator = _reference_validator()
+    binding = _valid_binding()
+    binding["manifest_digest"] = validator.sha256_file(manifest_path)
+
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: manifest artifact",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+            manifest=_valid_manifest(),
+            manifest_path=manifest_path,
+        )
+
+
+def test_operator_binding_semantics_validate_matching_manifest_before_provenance(
+    tmp_path: Path,
+) -> None:
     manifest = _valid_manifest()
     manifest["input"]["optional_columns"] = ["close"]
+    manifest_path = tmp_path / "invalid-semantic-operator.json"
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     validator = _reference_validator()
+    binding = _valid_binding()
+    binding["manifest_digest"] = validator.sha256_file(manifest_path)
     with pytest.raises(
         validator.ContractValidationError,
         match="required and optional input columns overlap",
@@ -928,7 +1000,9 @@ def test_operator_binding_semantics_validate_manifest_first(tmp_path: Path) -> N
         _validate_binding_fixture(
             validator,
             tmp_path,
+            binding=binding,
             manifest=manifest,
+            manifest_path=manifest_path,
         )
 
 
@@ -1000,7 +1074,7 @@ def test_operator_binding_semantics_reject_manifest_exact_bytes(
     tmp_path: Path,
 ) -> None:
     manifest_path = tmp_path / "operator.json"
-    manifest_path.write_bytes(b"{}\n")
+    manifest_path.write_text(json.dumps(_valid_manifest()), encoding="utf-8")
     validator = _reference_validator()
     with pytest.raises(
         validator.ContractValidationError,
