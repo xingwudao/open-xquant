@@ -8,6 +8,7 @@ import stat
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
+from dataclasses import fields, is_dataclass
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import MappingProxyType, ModuleType
@@ -39,7 +40,7 @@ _FROZEN_SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:b863570a443f5dd1e8f26ab94b2b5421dd3a52331d1b8c60bbfeb88d40653524",
+    "reference_validator": "sha256:36c9fcdac28df718e58cb6ab8f16760400219e58c8c59aa6bc251158f65e85f7",
 }
 _SURFACE_FILENAMES = {
     "quant_panel_schema": "quant-panel-v1.schema.json",
@@ -49,7 +50,7 @@ _SURFACE_FILENAMES = {
 }
 _ISSUED_RESEARCH_CERTIFICATIONS: dict[
     int,
-    ReferenceType[ResearchCertification],
+    tuple[ReferenceType[ResearchCertification], str],
 ] = {}
 
 
@@ -227,16 +228,54 @@ def _issue_research_certification(
     identifier = id(result)
 
     def remove_issued(reference: ReferenceType[ResearchCertification]) -> None:
-        if _ISSUED_RESEARCH_CERTIFICATIONS.get(identifier) is reference:
+        issued = _ISSUED_RESEARCH_CERTIFICATIONS.get(identifier)
+        if issued is not None and issued[0] is reference:
             _ISSUED_RESEARCH_CERTIFICATIONS.pop(identifier, None)
 
-    _ISSUED_RESEARCH_CERTIFICATIONS[identifier] = ref(result, remove_issued)
+    _ISSUED_RESEARCH_CERTIFICATIONS[identifier] = (
+        ref(result, remove_issued),
+        _certification_capability_fingerprint(result),
+    )
     return result
 
 
 def _is_issued_research_certification(result: ResearchCertification) -> bool:
-    reference = _ISSUED_RESEARCH_CERTIFICATIONS.get(id(result))
-    return reference is not None and reference() is result
+    issued = _ISSUED_RESEARCH_CERTIFICATIONS.get(id(result))
+    if issued is None or issued[0]() is not result:
+        return False
+    try:
+        return issued[1] == _certification_capability_fingerprint(result)
+    except (TypeError, ValueError):
+        return False
+
+
+def _certification_capability_fingerprint(result: ResearchCertification) -> str:
+    payload = json.dumps(
+        _capability_value(result),
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _capability_value(value: object) -> object:
+    if value is None or type(value) in {bool, int, float, str}:
+        return value
+    if isinstance(value, Path):
+        return {"path": str(value)}
+    if isinstance(value, Mapping):
+        if any(type(key) is not str for key in value):
+            raise TypeError("certification mapping keys must be strings")
+        return {cast(str, key): _capability_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_capability_value(item) for item in value]
+    if is_dataclass(value) and not isinstance(value, type):
+        return {
+            "dataclass": f"{type(value).__module__}.{type(value).__qualname__}",
+            "fields": {item.name: _capability_value(getattr(value, item.name)) for item in fields(value)},
+        }
+    raise TypeError("certification contains an unsupported capability value")
 
 
 def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:

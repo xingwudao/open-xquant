@@ -9,6 +9,7 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date, datetime
 from pathlib import Path
@@ -51,7 +52,6 @@ def run_research_baselines(
 ) -> tuple[BaselineResult, ...]:
     """Run every declared baseline against only the verified provider wheels."""
     artifacts = tuple(runtime_artifacts)
-    verified_artifacts = _verified_artifacts(candidate, artifacts)
     operators = {
         (
             cast(str, item.manifest["operator_id"]),
@@ -64,7 +64,18 @@ def run_research_baselines(
 
     cases_by_operator = {identity: 0 for identity in operators}
     results: list[BaselineResult] = []
-    with _snapshot_contract_surface() as (surface_bytes, surface_paths):
+    with (
+        TemporaryDirectory(prefix="oxq-verified-artifacts-") as artifact_directory,
+        _snapshot_contract_surface() as (
+            surface_bytes,
+            surface_paths,
+        ),
+    ):
+        verified_artifacts = _verified_artifacts(
+            candidate,
+            artifacts,
+            Path(artifact_directory),
+        )
         quant_panel_schema = _load_schema(
             surface_bytes["quant_panel_schema"],
             "baseline_input_invalid",
@@ -128,10 +139,35 @@ def run_research_baselines(
                         verified_artifacts,
                         case.operator_id,
                     ),
-                    dependency_artifacts=[str(path) for artifact, path in verified_artifacts if artifact.role == "runtime-dependency"],
+                    dependency_artifacts=[
+                        str(snapshot) for artifact, _, snapshot in verified_artifacts if artifact.role == "runtime-dependency"
+                    ],
                     timeout_seconds=timeout_seconds,
                 )
                 _assert_expected(case, output_field, actual, output_dtype)
+                repeated = _run_child(
+                    manifest=operator.manifest,
+                    case=case,
+                    parameters=resolved_parameters,
+                    output_field=output_field,
+                    output_dtype=output_dtype,
+                    implementation_artifact=_implementation_artifact(
+                        operator.implementation_artifact,
+                        verified_artifacts,
+                        case.operator_id,
+                    ),
+                    dependency_artifacts=[
+                        str(snapshot) for artifact, _, snapshot in verified_artifacts if artifact.role == "runtime-dependency"
+                    ],
+                    timeout_seconds=timeout_seconds,
+                )
+                _assert_deterministic(
+                    case,
+                    operator.manifest,
+                    output_dtype,
+                    actual,
+                    repeated,
+                )
             results.append(
                 BaselineResult(
                     operator_id=case.operator_id,
@@ -154,25 +190,32 @@ def run_research_baselines(
 def _verified_artifacts(
     candidate: ContractCertification,
     artifacts: tuple[BuildArtifact, ...],
-) -> list[tuple[BuildArtifact, Path]]:
+    snapshot_root: Path,
+) -> list[tuple[BuildArtifact, Path, Path]]:
     if artifacts != candidate.artifacts or not artifacts:
         raise _error(
             "provider_import_failed",
             "runtime artifacts do not match the verified contract artifacts",
         )
-    verified: list[tuple[BuildArtifact, Path]] = []
+    verified: list[tuple[BuildArtifact, Path, Path]] = []
     try:
-        for artifact in artifacts:
+        for index, artifact in enumerate(artifacts):
             path = artifact.wheel_path.resolve(strict=True)
-            if not path.is_file() or _sha256_file(path) != artifact.digest:
+            raw = path.read_bytes()
+            if not path.is_file() or f"sha256:{hashlib.sha256(raw).hexdigest()}" != artifact.digest:
                 raise OSError("runtime artifact digest mismatch")
-            verified.append((artifact, path))
+            destination_root = snapshot_root / str(index)
+            destination_root.mkdir()
+            snapshot = destination_root / artifact.filename
+            snapshot.write_bytes(raw)
+            snapshot.chmod(0o444)
+            verified.append((artifact, path, snapshot))
     except OSError:
         raise _error(
             "provider_import_failed",
             "verified runtime artifact is unavailable",
         ) from None
-    implementation_paths = {path for artifact, path in verified if artifact.role == "implementation"}
+    implementation_paths = {path for artifact, path, _ in verified if artifact.role == "implementation"}
     candidate_paths = {operator.implementation_artifact.resolve() for operator in candidate.operators}
     if not candidate_paths.issubset(implementation_paths):
         raise _error(
@@ -184,11 +227,11 @@ def _verified_artifacts(
 
 def _implementation_artifact(
     implementation_artifact: Path,
-    verified_artifacts: list[tuple[BuildArtifact, Path]],
+    verified_artifacts: list[tuple[BuildArtifact, Path, Path]],
     operator_id: str,
 ) -> str:
     resolved = implementation_artifact.resolve()
-    matches = [path for artifact, path in verified_artifacts if artifact.role == "implementation" and path == resolved]
+    matches = [snapshot for artifact, path, snapshot in verified_artifacts if artifact.role == "implementation" and path == resolved]
     if len(matches) != 1:
         raise _error(
             "provider_import_failed",
@@ -240,6 +283,8 @@ def _validate_manifest_input(
         raise ValueError("baseline does not supply required input columns and dtypes")
     if not set(declared_dtypes).issubset({*required_columns, *optional_columns}):
         raise ValueError("baseline supplies columns not declared by the manifest")
+    if any(dtype not in supported_dtypes for dtype in declared_dtypes.values()):
+        raise ValueError("baseline supplies a column with an unsupported dtype")
     if any(cast(bool, input_contract[name]) for name in _AUXILIARY_REQUIREMENTS):
         raise ValueError("baseline runner does not support auxiliary input requirements")
 
@@ -455,16 +500,31 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
-    try:
-        process.communicate(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        _kill_process_tree(process)
-        process.communicate()
-        raise
+    descendants: set[int] = set()
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        if os.name != "nt":
+            descendants.update(_posix_descendant_pids(process.pid))
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _kill_process_tree(process, descendants)
+            process.wait()
+            raise subprocess.TimeoutExpired(command, timeout_seconds)
+        try:
+            process.wait(timeout=min(0.02, remaining))
+            break
+        except subprocess.TimeoutExpired:
+            continue
+    if os.name != "nt":
+        descendants.update(_posix_descendant_pids(process.pid))
+        _kill_posix_processes(descendants)
     return int(process.returncode)
 
 
-def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+def _kill_process_tree(
+    process: subprocess.Popen[bytes],
+    known_descendants: set[int] | None = None,
+) -> None:
     if os.name == "nt":
         subprocess.run(
             ["taskkill", "/PID", str(process.pid), "/T", "/F"],
@@ -472,7 +532,8 @@ def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
             capture_output=True,
         )
     else:
-        descendants = _posix_descendant_pids(process.pid)
+        descendants = set(known_descendants or ())
+        descendants.update(_posix_descendant_pids(process.pid))
         try:
             os.killpg(process.pid, signal.SIGSTOP)
         except ProcessLookupError:
@@ -487,13 +548,17 @@ def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
-        for pid in descendants:
-            try:
-                os.kill(pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+        _kill_posix_processes(descendants)
     if process.poll() is None:
         process.kill()
+
+
+def _kill_posix_processes(process_ids: set[int]) -> None:
+    for pid in process_ids:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
 
 
 def _posix_descendant_pids(root_pid: int) -> set[int]:
@@ -589,6 +654,52 @@ def _assert_expected(
         raise _error(
             "baseline_mismatch",
             "provider output does not match the numerical baseline",
+            case.operator_id,
+        ) from None
+
+
+def _assert_deterministic(
+    case: BaselineCase,
+    manifest: Mapping[str, object],
+    output_dtype: str,
+    actual: list[object],
+    repeated: list[object],
+) -> None:
+    determinism = cast(Mapping[str, object], manifest["determinism"])
+    try:
+        if (
+            len(actual) != len(repeated)
+            or [value is None for value in actual] != [value is None for value in repeated]
+            or not all(_valid_scalar(value, output_dtype) for value in (*actual, *repeated))
+        ):
+            raise AssertionError("repeated output shape or values are invalid")
+        if output_dtype == "float64" and not cast(
+            bool,
+            determinism["bitwise_deterministic"],
+        ):
+            tolerance = cast(Mapping[str, object], determinism["tolerance"])
+            np.testing.assert_allclose(
+                np.asarray(
+                    [value for value in actual if value is not None],
+                    dtype=float,
+                ),
+                np.asarray(
+                    [value for value in repeated if value is not None],
+                    dtype=float,
+                ),
+                rtol=float(cast(float, tolerance["relative"])),
+                atol=float(cast(float, tolerance["absolute"])),
+            )
+        elif json.dumps(actual, allow_nan=False, separators=(",", ":")) != json.dumps(
+            repeated,
+            allow_nan=False,
+            separators=(",", ":"),
+        ):
+            raise AssertionError("repeated output differs")
+    except (AssertionError, KeyError, OverflowError, TypeError, ValueError):
+        raise _error(
+            "baseline_mismatch",
+            "provider output is not deterministic",
             case.operator_id,
         ) from None
 

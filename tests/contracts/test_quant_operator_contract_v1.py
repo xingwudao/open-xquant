@@ -225,6 +225,14 @@ def test_quant_panel_accepts_each_declared_dtype(dtype: str, valid_value: object
     _reference_validator().validate_quant_panel(panel)
 
 
+def test_quant_panel_rejects_lossy_integer_literal_for_float64() -> None:
+    panel = _load("examples/valid/daily-cn-panel.json")
+    panel["records"][0]["close"] = 9007199254740993
+
+    with pytest.raises(ValueError, match="invalid QuantPanel value"):
+        _reference_validator().validate_quant_panel(panel)
+
+
 def test_quant_panel_rejects_int64_overflow() -> None:
     panel = _load("examples/valid/daily-cn-panel.json")
     panel["columns"] = [{"name": "value", "dtype": "int64", "required": True}]

@@ -30,10 +30,10 @@ EXPECTED_DIGESTS = {
     "quant_panel_schema": "fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "b863570a443f5dd1e8f26ab94b2b5421dd3a52331d1b8c60bbfeb88d40653524",
+    "reference_validator": "36c9fcdac28df718e58cb6ab8f16760400219e58c8c59aa6bc251158f65e85f7",
     "provider_catalog": "701ff89a33dd71cb7c2f019904ce2ffcc203237734d1719a6188e386b920689c",
     "candidate_build": "451263b139890885c85790d82a17ebd510d54aa8cc2429e02cdd6ef6762674bb",
-    "numerical_baseline": "c41652ad8e5ca65da80fdb8566f9c027c07f4560a67707f01daebeb4869afc94",
+    "numerical_baseline": "36b524b5d9df67b7bfa78882f6606815778d0edeb1a12b6778fd9fd9f4c11219",
     "certification_record": "9e25b4d1a11a77dd7fa7c4fe5757911b4b7c5db9614a04c899f32e404cf5fba9",
 }
 

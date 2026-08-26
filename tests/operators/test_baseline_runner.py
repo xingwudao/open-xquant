@@ -1443,7 +1443,8 @@ def test_discards_provider_stdout_and_stderr(
     popen = subprocess.Popen
 
     def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        observed.update(kwargs)
+        observed.setdefault("stdout", kwargs.get("stdout"))
+        observed.setdefault("stderr", kwargs.get("stderr"))
         return popen(*args, **kwargs)  # type: ignore[arg-type,return-value]
 
     monkeypatch.setattr(baseline_runner.subprocess, "Popen", recording_popen)
@@ -1492,6 +1493,33 @@ def test_timeout_reaps_provider_descendant_processes(tmp_path: Path) -> None:
         "provider_execution_timeout",
         timeout_seconds=2,
     )
+    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(descendant_pid, 0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX descendant assertion")
+def test_success_reaps_detached_provider_descendant_processes(tmp_path: Path) -> None:
+    pid_path = tmp_path / "successful-descendant.pid"
+    source = (
+        "import subprocess, sys, time\n"
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        "    subprocess.Popen([sys.executable, '-c', "
+        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"], '
+        "start_new_session=True)\n"
+        "    time.sleep(0.2)\n"
+        "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')\n"
+    )
+    candidate = _contract(tmp_path / "candidate", source)
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
     descendant_pid = int(pid_path.read_text(encoding="utf-8"))
     with pytest.raises(ProcessLookupError):
         os.kill(descendant_pid, 0)
@@ -1590,6 +1618,78 @@ def sma(frame, *, window):
         _contract(tmp_path, source, input_panel=panel),
         "baseline_input_invalid",
     )
+
+
+def test_rejects_optional_column_with_unsupported_dtype(tmp_path: Path) -> None:
+    panel = _panel()
+    columns = cast(list[dict[str, object]], panel["columns"])
+    columns.append({"name": "label", "dtype": "string", "required": False})
+    records = cast(list[dict[str, object]], panel["records"])
+    for record in records:
+        record["label"] = "observed"
+    candidate = _contract(tmp_path, input_panel=panel)
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["input"]["optional_columns"] = ["label"]
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+    )
+
+    _assert_failure(candidate, "baseline_input_invalid")
+
+
+def test_executes_verified_immutable_artifact_snapshots(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = _contract(tmp_path / "candidate")
+    second_case = replace(candidate.baseline_cases[0], case_id="sma-3-repeat")
+    candidate = replace(
+        candidate,
+        baseline_cases=(*candidate.baseline_cases, second_case),
+    )
+    provider_path = candidate.artifacts[0].wheel_path
+    original_bytes = provider_path.read_bytes()
+    real_run_child = baseline_runner._run_child
+    calls = 0
+
+    def mutate_original_after_first_call(**kwargs: object) -> list[object]:
+        nonlocal calls
+        output = real_run_child(**kwargs)  # type: ignore[arg-type]
+        calls += 1
+        if calls == 1:
+            provider_path.write_bytes(b"mutated after verification")
+        return output
+
+    monkeypatch.setattr(baseline_runner, "_run_child", mutate_original_after_first_call)
+    try:
+        results = run_research_baselines(
+            candidate,
+            candidate.artifacts,
+            timeout_seconds=5,
+        )
+    finally:
+        provider_path.write_bytes(original_bytes)
+
+    assert [item.case_id for item in results] == ["sma-3", "sma-3-repeat"]
+
+
+def test_rejects_nondeterministic_provider_output(tmp_path: Path) -> None:
+    counter_path = tmp_path / "executions.txt"
+    source = f"""
+import pathlib
+import pandas as pd
+
+def sma(frame, *, window):
+    path = pathlib.Path({str(counter_path)!r})
+    count = int(path.read_text()) if path.exists() else 0
+    path.write_text(str(count + 1))
+    value = 2.0 if count == 0 else 3.0
+    return pd.Series([None, None, value], index=frame.index, name=f"sma_{{window}}")
+"""
+
+    _assert_failure(_contract(tmp_path / "candidate", source), "baseline_mismatch")
 
 
 @pytest.mark.parametrize(
@@ -1912,7 +2012,7 @@ def test_late_case_failure_does_not_mutate_contract_valid_candidates(
         certify_provider(cast(ProviderSubmission, object()))
 
     assert caught.value.code == "baseline_mismatch"
-    assert executions_path.read_text(encoding="utf-8") == "xx"
+    assert executions_path.read_text(encoding="utf-8") == "xxx"
     assert contract.operators[0].binding["certification_state"] == "contract-valid"
     assert contract.operators[0].manifest["operator_version"] == "1.0.0"
 
@@ -1943,7 +2043,7 @@ def test_second_operator_failure_in_one_submission_preserves_all_bindings(
             certify_provider(submission)
 
     assert caught.value.code == "baseline_mismatch"
-    assert executions_path.read_text(encoding="utf-8") == "SZ"
+    assert executions_path.read_text(encoding="utf-8") == "SSZ"
     assert [item.binding["certification_state"] for item in contract.operators] == [
         "contract-valid",
         "contract-valid",

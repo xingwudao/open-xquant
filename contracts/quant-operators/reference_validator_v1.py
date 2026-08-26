@@ -75,7 +75,8 @@ def _is_declared_dtype(value: object, dtype: str) -> bool:
             return math.isfinite(value)
         if isinstance(value, int) and not isinstance(value, bool):
             try:
-                return math.isfinite(value)
+                converted = float(value)
+                return math.isfinite(converted) and int(converted) == value
             except OverflowError:
                 return False
         return False

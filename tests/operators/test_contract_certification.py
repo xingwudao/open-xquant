@@ -25,7 +25,7 @@ EXPECTED_SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
     "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:b863570a443f5dd1e8f26ab94b2b5421dd3a52331d1b8c60bbfeb88d40653524",
+    "reference_validator": "sha256:36c9fcdac28df718e58cb6ab8f16760400219e58c8c59aa6bc251158f65e85f7",
 }
 EXPECTED_BINDING_FIELDS = {
     "binding_version",

@@ -555,6 +555,84 @@ def test_rejects_wheel_filename_identity_that_differs_from_metadata(
     )
 
 
+@pytest.mark.parametrize("wheel_version", ["invalid", "99.0"])
+def test_rejects_unsupported_wheel_format_versions(
+    tmp_path: Path,
+    wheel_version: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("equant_ttr/__init__.py", "")
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/WHEEL",
+            f"Wheel-Version: {wheel_version}\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
+        )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(
+            fixture.path,
+            commit,
+            fixture.artifact_dir,
+        ),
+        "artifact_invalid",
+    )
+
+
+def test_accepts_normalized_prerelease_wheel_filename_version(
+    tmp_path: Path,
+) -> None:
+    filename = "equant_ttr-1.0.0rc1-py3-none-any.whl"
+    wheel_path = tmp_path / filename
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("equant_ttr/__init__.py", "")
+        archive.writestr(
+            "equant_ttr-1.0.0rc1.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "equant_ttr-1.0.0rc1.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0-rc.1\n",
+        )
+
+    submission_module._verify_wheel_identity(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0-rc.1",
+        filename,
+    )
+
+
+def test_intake_accepts_multi_output_expected_mapping(tmp_path: Path) -> None:
+    def add_second_output(repository: Path) -> None:
+        rewrite_json(
+            repository / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json",
+            lambda value: value["cases"][0]["expected"].update(  # type: ignore[index]
+                {"ema_3": [None, 10.0]}
+            ),
+        )
+
+    fixture = write_provider_repository(tmp_path, mutate=add_second_output)
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert set(submission.baseline_cases[0].expected) == {"sma_3", "ema_3"}
+
+
 def test_ignores_local_git_replacement_objects(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(

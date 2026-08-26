@@ -16,8 +16,9 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError  # type: ignore[import-untyped]
-from packaging.tags import parse_tag, sys_tags
+from packaging.tags import Tag, parse_tag, sys_tags
 from packaging.utils import InvalidWheelFilename, parse_wheel_filename
+from packaging.version import InvalidVersion, Version
 
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import (
@@ -426,12 +427,15 @@ def _verify_wheel_identity(
                 raise zipfile.BadZipFile("wheel metadata files are invalid")
             wheel_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(wheel_files[0]))
             package_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(metadata_files[0]))
-            if not wheel_metadata.get("Wheel-Version"):
-                raise zipfile.BadZipFile("wheel version header is missing")
-            wheel_tags = set()
+            wheel_version = wheel_metadata.get("Wheel-Version")
+            wheel_version_match = re.fullmatch(r"([0-9]+)\.([0-9]+)", wheel_version) if isinstance(wheel_version, str) else None
+            if wheel_version_match is None or int(wheel_version_match.group(1)) != 1:
+                raise zipfile.BadZipFile("wheel version header is unsupported")
+            wheel_tags: set[Tag] = set()
             for header in wheel_metadata.get_all("Tag", []):
                 wheel_tags.update(parse_tag(header))
             filename_distribution, filename_version, _, filename_tags = parse_wheel_filename(filename)
+            build_version = Version(version)
             compatible_tags = set(sys_tags())
             if not wheel_tags or not wheel_tags.intersection(compatible_tags) or not filename_tags.intersection(compatible_tags):
                 raise zipfile.BadZipFile("wheel tags are incompatible")
@@ -439,6 +443,7 @@ def _verify_wheel_identity(
             metadata_version = package_metadata.get("Version")
     except (
         InvalidWheelFilename,
+        InvalidVersion,
         KeyError,
         OSError,
         UnicodeError,
@@ -455,7 +460,7 @@ def _verify_wheel_identity(
         or _canonical_distribution(metadata_name) != _canonical_distribution(distribution)
         or metadata_version != version
         or _canonical_distribution(str(filename_distribution)) != _canonical_distribution(distribution)
-        or str(filename_version) != version
+        or filename_version != build_version
     ):
         raise _error(
             "artifact_identity_mismatch",
