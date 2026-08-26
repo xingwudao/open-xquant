@@ -8,6 +8,7 @@ import importlib
 import io
 import json
 import os
+import subprocess
 import sys
 import zipfile
 from collections.abc import Callable, Mapping
@@ -1159,6 +1160,17 @@ def sma(frame, *, window):
     assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
 
 
+def test_rejects_provider_mutation_of_quant_panel_context(tmp_path: Path) -> None:
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    frame.attrs["open_xquant_context"]["timezone"] = "UTC"
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_mutated_input")
+
+
 def test_blocks_provider_access_to_preloaded_ambient_modules(tmp_path: Path) -> None:
     source = """
 import sys
@@ -1331,6 +1343,28 @@ def test_normalizes_child_timeout(tmp_path: Path) -> None:
     )
 
 
+def test_discards_provider_stdout_and_stderr(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+    popen = subprocess.Popen
+
+    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        observed.update(kwargs)
+        return popen(*args, **kwargs)  # type: ignore[arg-type,return-value]
+
+    monkeypatch.setattr(baseline_runner.subprocess, "Popen", recording_popen)
+
+    returncode = baseline_runner._run_child_process(
+        [sys.executable, "-c", "print('provider output')"],
+        5,
+    )
+
+    assert returncode == 0
+    assert observed["stdout"] == subprocess.DEVNULL
+    assert observed["stderr"] == subprocess.DEVNULL
+
+
 def test_timeout_reaps_the_direct_child(tmp_path: Path) -> None:
     pid_path = tmp_path / "child.pid"
     source = (
@@ -1440,6 +1474,52 @@ def test_rejects_baseline_that_does_not_meet_manifest_input_requirements(
         raise AssertionError(f"child executed: {args!r} {kwargs!r}")
 
     monkeypatch.setattr(baseline_runner.subprocess, "run", child_must_not_run)
+    _assert_failure(candidate, "baseline_input_invalid")
+
+
+def test_rejects_baseline_columns_not_declared_by_manifest(tmp_path: Path) -> None:
+    panel = _panel()
+    columns = cast(list[dict[str, object]], panel["columns"])
+    columns.append({"name": "answer", "dtype": "float64", "required": True})
+    records = cast(list[dict[str, object]], panel["records"])
+    for record, answer in zip(records, [None, None, 2.0], strict=True):
+        record["answer"] = answer
+    source = """
+import pandas as pd
+def sma(frame, *, window):
+    result = frame["answer"].copy()
+    result.name = f"sma_{window}"
+    return result
+"""
+
+    _assert_failure(
+        _contract(tmp_path, source, input_panel=panel),
+        "baseline_input_invalid",
+    )
+
+
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "requires_benchmark",
+        "requires_industry_data",
+        "requires_market_cap_data",
+        "requires_fundamental_data",
+    ],
+)
+def test_rejects_unsupported_auxiliary_input_requirements(
+    tmp_path: Path,
+    requirement: str,
+) -> None:
+    candidate = _contract(tmp_path)
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["input"][requirement] = True
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+    )
+
     _assert_failure(candidate, "baseline_input_invalid")
 
 

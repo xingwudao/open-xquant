@@ -16,6 +16,8 @@ from tempfile import TemporaryDirectory
 from typing import cast
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError  # type: ignore[import-untyped]
+from packaging.tags import parse_tag, sys_tags
+from packaging.utils import InvalidWheelFilename, parse_wheel_filename
 
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import (
@@ -426,9 +428,23 @@ def _verify_wheel_identity(
             package_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(metadata_files[0]))
             if not wheel_metadata.get("Wheel-Version"):
                 raise zipfile.BadZipFile("wheel version header is missing")
+            wheel_tags = set()
+            for header in wheel_metadata.get_all("Tag", []):
+                wheel_tags.update(parse_tag(header))
+            _, _, _, filename_tags = parse_wheel_filename(filename)
+            compatible_tags = set(sys_tags())
+            if not wheel_tags or not wheel_tags.intersection(compatible_tags) or not filename_tags.intersection(compatible_tags):
+                raise zipfile.BadZipFile("wheel tags are incompatible")
             metadata_name = package_metadata.get("Name")
             metadata_version = package_metadata.get("Version")
-    except (KeyError, OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
+    except (
+        InvalidWheelFilename,
+        KeyError,
+        OSError,
+        UnicodeError,
+        ValueError,
+        zipfile.BadZipFile,
+    ) as exc:
         raise _error(
             "artifact_invalid",
             f"artifact is not a valid wheel: {filename}",

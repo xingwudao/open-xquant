@@ -485,6 +485,51 @@ def test_rejects_wheel_metadata_that_differs_from_the_build_record(
     )
 
 
+@pytest.mark.parametrize("location", ["filename", "wheel-header"])
+def test_rejects_wheel_tags_incompatible_with_certifier_runtime(
+    tmp_path: Path,
+    location: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    filename = fixture.wheel_name
+    if location == "filename":
+        filename = filename.replace("py3-none-any", "cp999-cp999-any")
+        incompatible_path = wheel_path.with_name(filename)
+        wheel_path.rename(incompatible_path)
+        wheel_path = incompatible_path
+    else:
+        with zipfile.ZipFile(wheel_path, "w") as archive:
+            archive.writestr("equant_ttr/__init__.py", "")
+            archive.writestr(
+                "equant_ttr-1.0.0.dist-info/WHEEL",
+                "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: cp999-cp999-any\n",
+            )
+            archive.writestr(
+                "equant_ttr-1.0.0.dist-info/METADATA",
+                "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
+            )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {
+                "filename": filename,
+                "digest": sha256(wheel_path.read_bytes()),
+            }
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(
+            fixture.path,
+            commit,
+            fixture.artifact_dir,
+        ),
+        "artifact_invalid",
+    )
+
+
 def test_normalizes_an_artifact_read_race_to_artifact_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fixture = write_provider_repository(tmp_path)
     wheel_path = fixture.artifact_dir / fixture.wheel_name

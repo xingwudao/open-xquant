@@ -34,6 +34,12 @@ _CHILD_FAILURE_CODES = {
     "baseline_mismatch",
 }
 _OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
+_AUXILIARY_REQUIREMENTS = {
+    "requires_benchmark",
+    "requires_industry_data",
+    "requires_market_cap_data",
+    "requires_fundamental_data",
+}
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
@@ -237,9 +243,14 @@ def _validate_manifest_input(
     declared_dtypes = {cast(str, column["name"]): cast(str, column["dtype"]) for column in columns}
     required_panel_columns = {cast(str, column["name"]) for column in columns if cast(bool, column["required"])}
     required_columns = cast(list[str], input_contract["required_columns"])
+    optional_columns = cast(list[str], input_contract["optional_columns"])
     supported_dtypes = set(cast(list[str], input_contract["supported_dtypes"]))
     if any(name not in required_panel_columns or declared_dtypes[name] not in supported_dtypes for name in required_columns):
         raise ValueError("baseline does not supply required input columns and dtypes")
+    if not set(declared_dtypes).issubset({*required_columns, *optional_columns}):
+        raise ValueError("baseline supplies columns not declared by the manifest")
+    if any(cast(bool, input_contract[name]) for name in _AUXILIARY_REQUIREMENTS):
+        raise ValueError("baseline runner does not support auxiliary input requirements")
 
     context = cast(Mapping[str, object], panel["context"])
     required_context = cast(list[str], input_contract["required_context"])
@@ -440,8 +451,8 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
     if os.name == "nt":
         process = subprocess.Popen(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             creationflags=cast(
                 int,
                 getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
@@ -450,8 +461,8 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
     else:
         process = subprocess.Popen(
             command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
     try:

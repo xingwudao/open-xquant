@@ -584,7 +584,9 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                     check_exact=True,
                     check_like=False,
                 )
-            except AssertionError:
+                if frame.attrs != original.attrs:
+                    raise AssertionError("provider mutated frame metadata")
+            except (AssertionError, TypeError, ValueError):
                 return _provider_error(
                     response_path,
                     import_gate,
