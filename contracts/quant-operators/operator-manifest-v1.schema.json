@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json",
+  "title": "OperatorManifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_version", "operator_id", "operator_version", "semantic_name", "distribution", "module", "callable", "execution_scope", "lifecycle", "causality", "availability", "input", "parameters", "output", "determinism", "implementation"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "contract_version": { "const": 1 },
+    "operator_id": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)+$" },
+    "operator_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+    "semantic_name": { "type": "string", "minLength": 1 },
+    "distribution": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+    "module": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$" },
+    "callable": { "type": "string", "pattern": "^[a-z][a-z0-9_]*(?:\\.[a-z][a-z0-9_]*)*$" },
+    "execution_scope": { "enum": ["time_series", "cross_section", "panel", "research_only"] },
+    "lifecycle": { "enum": ["stateless", "fit_transform", "evaluation", "data_access", "visualization"] },
+    "causality": { "enum": ["past_only", "label_dependent", "future_using"] },
+    "availability": { "enum": ["pre_open_t", "open_t", "intraday_t", "close_t", "after_close_t", "publication_time"] },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_columns", "optional_columns", "supported_dtypes", "minimum_assets", "minimum_time_length", "requires_complete_cross_section", "requires_benchmark", "required_context"],
+      "properties": {
+        "required_columns": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" } },
+        "optional_columns": { "type": "array", "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" } },
+        "supported_dtypes": { "type": "array", "minItems": 1, "items": { "enum": ["boolean", "int64", "float64", "string", "date", "datetime"] } },
+        "minimum_assets": { "type": "integer", "minimum": 1 },
+        "minimum_time_length": { "type": "integer", "minimum": 1 },
+        "requires_complete_cross_section": { "type": "boolean" },
+        "requires_benchmark": { "type": "boolean" },
+        "required_context": { "type": "array", "items": { "enum": ["timezone", "calendar", "frequency", "timestamp_semantics", "currency", "price_adjustment", "data_version", "source"] } }
+      }
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "default", "required", "constraints", "unit", "affects_warmup", "affects_output_fields", "affects_causality", "affects_availability"],
+        "properties": {
+          "type": { "enum": ["integer", "number", "boolean", "string", "array", "object"] },
+          "default": {},
+          "required": { "type": "boolean" },
+          "constraints": { "type": "object" },
+          "unit": { "type": "string" },
+          "affects_warmup": { "type": "boolean" },
+          "affects_output_fields": { "type": "boolean" },
+          "affects_causality": { "type": "boolean" },
+          "affects_availability": { "type": "boolean" }
+        }
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields", "alignment", "warmup", "nan_policy", "multiple_outputs"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name_template", "dtype", "value_range"],
+            "properties": {
+              "name_template": { "type": "string", "minLength": 1 },
+              "dtype": { "enum": ["boolean", "int64", "float64", "string", "date", "datetime"] },
+              "value_range": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "alignment": { "enum": ["preserve_input_order", "canonical_order", "explicit_keyed_output"] },
+        "warmup": { "type": "string", "minLength": 1 },
+        "nan_policy": { "enum": ["propagate", "skip_window", "require_complete", "explicit_fill"] },
+        "multiple_outputs": { "type": "boolean" }
+      }
+    },
+    "determinism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bitwise_deterministic", "random_seed_required", "tolerance", "tested_platforms"],
+      "properties": {
+        "bitwise_deterministic": { "type": "boolean" },
+        "random_seed_required": { "type": "boolean" },
+        "tolerance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["absolute", "relative"],
+          "properties": {
+            "absolute": { "type": "number", "minimum": 0 },
+            "relative": { "type": "number", "minimum": 0 }
+          }
+        },
+        "tested_platforms": { "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 } }
+      }
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package_version", "source_commit", "source_tree_digest", "manifest_digest", "implementation_digest", "build_identifier"],
+      "properties": {
+        "package_version": { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+        "source_commit": { "type": "string", "pattern": "^[0-9a-f]{7,64}$" },
+        "source_tree_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "manifest_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "implementation_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "build_identifier": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

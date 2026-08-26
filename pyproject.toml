@@ -70,6 +70,7 @@ agent = [
 ]
 dev = [
     "pytest>=8.0",
+    "jsonschema>=4.23",
     "pytest-asyncio",
     "pytest-cov",
     "ruff",

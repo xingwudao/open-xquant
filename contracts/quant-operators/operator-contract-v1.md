@@ -1,6 +1,9 @@
 # Quant Operator Contract v1 设计规范
 
-> 状态：设计提案
+状态：已冻结（Frozen）
+契约版本：1.0.0
+冻结日期：2026-08-26
+
 >
 > 适用对象：向 open-xquant 提供指标、因子、数据处理、研究评价、
 > 机器学习特征或其他量化计算能力的独立算子仓库。
@@ -817,7 +820,7 @@ contracts/quant-operators/
   operator-contract-v1.md
   operator-manifest-v1.schema.json
   quant-panel-v1.schema.json
-  compatibility-policy.md
+  compatibility-policy-v1.md
 ```
 
 ### 20.2 算子仓库

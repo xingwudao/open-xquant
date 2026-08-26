@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "contract_version": 1,
+  "operator_id": "equant.ttr.sma",
+  "operator_version": "1.0.0",
+  "semantic_name": "SMA",
+  "distribution": "eQuant-TTR",
+  "module": "ettr",
+  "callable": "sma",
+  "execution_scope": "time_series",
+  "lifecycle": "stateless",
+  "causality": "past_only",
+  "availability": "close_t",
+  "input": {
+    "required_columns": ["close"],
+    "optional_columns": [],
+    "supported_dtypes": ["float64"],
+    "minimum_assets": 1,
+    "minimum_time_length": 1,
+    "requires_complete_cross_section": false,
+    "requires_benchmark": false,
+    "required_context": ["timezone", "calendar", "frequency", "timestamp_semantics", "currency", "price_adjustment", "data_version", "source"]
+  },
+  "parameters": {
+    "window": {
+      "type": "integer",
+      "default": 20,
+      "required": false,
+      "constraints": { "minimum": 1 },
+      "unit": "sessions",
+      "affects_warmup": true,
+      "affects_output_fields": true,
+      "affects_causality": false,
+      "affects_availability": false
+    }
+  },
+  "output": {
+    "fields": [
+      { "name_template": "sma_{window}", "dtype": "float64", "value_range": "finite_or_nan" }
+    ],
+    "alignment": "canonical_order",
+    "warmup": "window - 1",
+    "nan_policy": "propagate",
+    "multiple_outputs": false
+  },
+  "determinism": {
+    "bitwise_deterministic": true,
+    "random_seed_required": false,
+    "tolerance": { "absolute": 0, "relative": 0 },
+    "tested_platforms": ["macos-arm64-python3.12"]
+  },
+  "implementation": {
+    "package_version": "1.0.0",
+    "source_commit": "0123456789abcdef0123456789abcdef01234567",
+    "source_tree_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "manifest_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "implementation_digest": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+    "build_identifier": "equant-ttr-1.0.0"
+  }
+}

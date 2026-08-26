@@ -989,10 +989,8 @@ oxq experiment add <phase_paths.09_backtests>/<run_id>/
 
 ## 18. eQuant-Py 官方量化计算层整合
 
-> 状态：方案 B 已由用户确认
->
-> 前提：eQuant-Py 已完整满足
-> [Quant Operator Contract v1](../contracts/quant-operators/operator-contract-v1.md)。
+> [Quant Operator Contract v1](../contracts/quant-operators/operator-contract-v1.md)
+> 已于 2026-08-26 冻结。
 >
 > 目标：在两个仓库继续独立演进的前提下，将 eQuant-Py 作为
 > open-xquant 的官方量化计算层，同时保持 open-xquant 对研究语义、
