@@ -38,7 +38,10 @@ stored in the manifest body. All digest scopes and encodings are normative in
 `hash-profile-v1.md`. The `manifest_path` bytes are the authoritative manifest
 artifact: they MUST decode as strict UTF-8 JSON without duplicate object keys
 or non-standard numeric constants, and the decoded value MUST be identical to
-the manifest object used by the Schema and semantic validation layers.
+the manifest object used by the Schema and semantic validation layers under
+recursive JSON type semantics. One binding validation MUST read the manifest
+path once and use that single in-memory byte snapshot for strict decoding,
+object comparison, and manifest-digest calculation.
 
 ## 3. Certification states
 

@@ -80,7 +80,9 @@ manifest、provider source、正式 implementation artifact 和四项 contract
 surface 文件逐 byte 绑定；只通过 binding JSON Schema 不能启用 binding。
 `manifest_path` 指向的准确文件 bytes 是 manifest 的权威工件；这些 bytes
 `MUST` 作为严格 UTF-8 JSON 解码，解码后的对象 `MUST` 与接受 JSON Schema
-和语义验证的 manifest 对象相同，不能分别验证一个对象并散列另一个文件。
+和语义验证的 manifest 对象按 JSON 类型递归相同。一次 binding 验证 `MUST`
+只读取该路径一次，并用同一份内存 byte 快照完成解码、对象比较和 manifest
+digest 计算；不能分别验证一个对象并散列另一个文件或文件快照。
 
 ## 4. 非目标
 

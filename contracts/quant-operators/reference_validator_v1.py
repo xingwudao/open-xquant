@@ -415,18 +415,64 @@ def _reject_manifest_constant(value: str) -> None:
     raise _StrictManifestJsonError(f"non-standard numeric constant: {value}")
 
 
-def _decode_manifest_artifact(
+def _read_manifest_artifact(
     manifest_path: str | os.PathLike[str],
-) -> object:
+) -> tuple[bytes, object]:
     try:
         manifest_bytes = Path(manifest_path).read_bytes()
-        return json.loads(
+    except OSError as error:
+        raise _binding_mismatch(f"manifest artifact: {error}") from error
+
+    try:
+        manifest_object = json.loads(
             manifest_bytes.decode("utf-8"),
             object_pairs_hook=_strict_manifest_object,
             parse_constant=_reject_manifest_constant,
         )
     except (UnicodeDecodeError, json.JSONDecodeError, _StrictManifestJsonError) as error:
         raise _binding_mismatch(f"manifest artifact: {error}") from error
+    return manifest_bytes, manifest_object
+
+
+def _json_values_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is right
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is bool and type(right) is bool and left is right
+
+    number_types = (int, float)
+    if isinstance(left, number_types) or isinstance(right, number_types):
+        return (
+            isinstance(left, number_types)
+            and not isinstance(left, bool)
+            and isinstance(right, number_types)
+            and not isinstance(right, bool)
+            and left == right
+        )
+
+    if isinstance(left, str) or isinstance(right, str):
+        return isinstance(left, str) and isinstance(right, str) and left == right
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(
+                _json_values_equal(left_item, right_item)
+                for left_item, right_item in zip(left, right, strict=True)
+            )
+        )
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        return (
+            isinstance(left, Mapping)
+            and isinstance(right, Mapping)
+            and left.keys() == right.keys()
+            and all(
+                _json_values_equal(left[key], right[key])
+                for key in left
+            )
+        )
+    return False
 
 
 def validate_operator_binding(
@@ -439,8 +485,8 @@ def validate_operator_binding(
 ) -> None:
     """Validate one binding against exact manifest, source, and artifact bytes."""
 
-    manifest_artifact = _decode_manifest_artifact(manifest_path)
-    if manifest_artifact != manifest:
+    manifest_bytes, manifest_artifact = _read_manifest_artifact(manifest_path)
+    if not _json_values_equal(manifest_artifact, manifest):
         raise _binding_mismatch(
             "manifest artifact: manifest object does not match manifest artifact"
         )
@@ -470,10 +516,8 @@ def validate_operator_binding(
     ):
         raise _binding_mismatch("legacy operator manifest schema pin")
 
-    if binding["manifest_digest"] != _binding_file_digest(
-        manifest_path,
-        field="manifest_digest",
-    ):
+    manifest_digest = f"sha256:{hashlib.sha256(manifest_bytes).hexdigest()}"
+    if binding["manifest_digest"] != manifest_digest:
         raise _binding_mismatch("manifest_digest")
 
     try:

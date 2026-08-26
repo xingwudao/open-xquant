@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import importlib.util
 import io
 import json
@@ -943,6 +944,99 @@ def test_operator_binding_manifest_artifact_rejects_different_json_object(
             binding=binding,
             manifest=manifest,
             manifest_path=manifest_path,
+        )
+
+
+@pytest.mark.parametrize(
+    ("manifest_value", "artifact_value"),
+    [
+        pytest.param(False, 0, id="false-versus-zero"),
+        pytest.param(True, 1, id="true-versus-one"),
+    ],
+)
+def test_operator_binding_manifest_artifact_review_rejects_bool_number_collision(
+    manifest_value: bool,
+    artifact_value: int,
+    tmp_path: Path,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["mutates_input"] = manifest_value
+    artifact_manifest = _valid_manifest()
+    artifact_manifest["mutates_input"] = artifact_value
+    manifest_path = tmp_path / "wrong-json-type-operator.json"
+    manifest_path.write_text(json.dumps(artifact_manifest), encoding="utf-8")
+    validator = _reference_validator()
+    binding = _valid_binding()
+    binding["manifest_digest"] = validator.sha256_file(manifest_path)
+
+    with pytest.raises(
+        validator.ContractValidationError,
+        match=(
+            "operator binding mismatch: manifest artifact: "
+            "manifest object does not match manifest artifact"
+        ),
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+            manifest=manifest,
+            manifest_path=manifest_path,
+        )
+
+
+def test_operator_binding_manifest_artifact_review_hashes_single_snapshot(
+    tmp_path: Path,
+) -> None:
+    manifest = _valid_manifest()
+    first_snapshot = json.dumps(manifest).encode("utf-8")
+    replacement_manifest = _valid_manifest()
+    replacement_manifest["semantic_name"] = "DIFFERENT_SMA"
+    second_snapshot = json.dumps(replacement_manifest).encode("utf-8")
+    manifest_path = tmp_path / "mutable-operator.json"
+    manifest_path.write_bytes(first_snapshot)
+
+    class MutatingPath:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def __fspath__(self) -> str:
+            self.calls += 1
+            if self.calls == 2:
+                manifest_path.write_bytes(second_snapshot)
+            return str(manifest_path)
+
+    binding = _valid_binding()
+    binding["manifest_digest"] = (
+        f"sha256:{hashlib.sha256(second_snapshot).hexdigest()}"
+    )
+    validator = _reference_validator()
+
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: manifest_digest",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+            manifest=manifest,
+            manifest_path=MutatingPath(),
+        )
+
+
+def test_operator_binding_manifest_artifact_review_normalizes_read_oserror(
+    tmp_path: Path,
+) -> None:
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: manifest artifact",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            manifest_path=tmp_path / "missing-operator.json",
         )
 
 

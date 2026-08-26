@@ -20,8 +20,10 @@ manifest body `MUST NOT` 包含自己的 `manifest_digest`。该 digest `MUST` �
 `manifest_path` 的准确 bytes 是权威 manifest 工件。这些 bytes `MUST` 严格按
 UTF-8 解码，再按 JSON 解码；重复对象键以及 `NaN`、`Infinity`、`-Infinity`
 等非标准数值常量 `MUST` 被拒绝。解码后的 JSON 值 `MUST` 与提交给 JSON
-Schema 和语义 validator 的 manifest 对象相同。实现 `MUST NOT` 分别验证一个
-内存对象并散列另一个未与该对象绑定的文件。
+Schema 和语义 validator 的 manifest 对象按 JSON 类型递归相同，布尔值与数值
+不得因宿主语言相等规则而等同。每次 binding 验证 `MUST` 只读取路径一次，
+并用同一份内存 byte 快照完成严格解码、对象比较和 manifest digest 计算。
+实现 `MUST NOT` 分别验证一个内存对象并散列另一个文件或文件快照。
 
 ## 2. Source-tree digest
 
@@ -75,9 +77,10 @@ digest、distribution version 和完整 source commit。
 - `sha256_source_tree(root, source_files)`：执行第 2 节 source-tree profile。
 - `validate_operator_binding(binding, manifest, manifest_path, source_root,
   implementation_artifact_path, contract_surface_paths)`：先严格解码权威
-  `manifest_path` bytes，确认结果与 `manifest` 对象相同，再验证 manifest 语义，
-  并以真实路径复算 manifest、source tree、正式 implementation artifact 和四项
-  contract surface 摘要，拒绝所有重复 identity/provenance 字段不一致。
+  `manifest_path` 的单次读取快照，按 JSON 类型确认结果与 `manifest` 对象相同，
+  并用该快照计算 manifest digest；再验证 manifest 语义，并以真实路径复算
+  source tree、正式 implementation artifact 和四项 contract surface 摘要，
+  拒绝所有重复 identity/provenance 字段不一致。
 
 enabled binding `MUST` 先通过 binding JSON Schema，再调用
 `validate_operator_binding()`；不能把结构校验或 binding 中已有的摘要文本当成
