@@ -29,6 +29,7 @@ dependencies = [
     "pyyaml>=6.0",
     "click>=8.0",
     "exchange-calendars>=4.5",
+    "jsonschema>=4.23",
 ]
 
 [project.scripts]
@@ -70,7 +71,6 @@ agent = [
 ]
 dev = [
     "pytest>=8.0",
-    "jsonschema>=4.23",
     "pytest-asyncio",
     "pytest-cov",
     "ruff",
@@ -96,6 +96,14 @@ packages = ["src/oxq"]
 [tool.hatch.build.targets.wheel.force-include]
 "agent/skills" = "agent/skills"
 "agent/roles" = "agent/roles"
+"contracts/quant-operators/quant-panel-v1.schema.json" = "oxq/operators/contracts/v1/quant-panel-v1.schema.json"
+"contracts/quant-operators/operator-manifest-v1.schema.json" = "oxq/operators/contracts/v1/operator-manifest-v1.schema.json"
+"contracts/quant-operators/operator-binding-v1.schema.json" = "oxq/operators/contracts/v1/operator-binding-v1.schema.json"
+"contracts/quant-operators/reference_validator_v1.py" = "oxq/operators/contracts/v1/reference_validator_v1.py"
+"contracts/operator-certification/provider-catalog-v1.schema.json" = "oxq/operators/certification_profile/v1/provider-catalog-v1.schema.json"
+"contracts/operator-certification/candidate-build-v1.schema.json" = "oxq/operators/certification_profile/v1/candidate-build-v1.schema.json"
+"contracts/operator-certification/numerical-baseline-v1.schema.json" = "oxq/operators/certification_profile/v1/numerical-baseline-v1.schema.json"
+"contracts/operator-certification/certification-record-v1.schema.json" = "oxq/operators/certification_profile/v1/certification-record-v1.schema.json"
 
 [tool.ruff]
 target-version = "py312"

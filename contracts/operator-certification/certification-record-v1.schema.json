@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-xquant.dev/contracts/operator-certification/certification-record-v1.schema.json",
+  "title": "Operator certification record v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "certifier", "certified_at", "provider", "release", "source_commit", "state", "operators"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "certifier": {"type": "string", "minLength": 1},
+    "certified_at": {"type": "string", "format": "date-time", "pattern": "Z$"},
+    "provider": {"$ref": "#/$defs/provider"},
+    "release": {"$ref": "#/$defs/semanticVersion"},
+    "source_commit": {"type": "string", "pattern": "^git-sha1:[0-9a-f]{40}$"},
+    "state": {"const": "research-certified"},
+    "operators": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["operator_id", "operator_version", "manifest_digest", "implementation_digest", "binding_digest", "baseline_cases"],
+        "properties": {
+          "operator_id": {"$ref": "#/$defs/operatorId"},
+          "operator_version": {"$ref": "#/$defs/semanticVersion"},
+          "manifest_digest": {"$ref": "#/$defs/sha256Digest"},
+          "implementation_digest": {"$ref": "#/$defs/sha256Digest"},
+          "binding_digest": {"$ref": "#/$defs/sha256Digest"},
+          "baseline_cases": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["case_id", "status"],
+              "properties": {"case_id": {"type": "string", "minLength": 1}, "status": {"const": "passed"}}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "provider": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
+    "semanticVersion": {"allOf": [{"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"}, {"not": {"pattern": "[\\r\\n]"}}]},
+    "operatorId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"},
+    "sha256Digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}
