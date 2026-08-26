@@ -253,10 +253,7 @@ def _visible_modules(verified_roots: list[str]) -> Mapping[str, object]:
         for name, module in sys.modules.items()
         if name.partition(".")[0] in sys.stdlib_module_names
         or name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS
-        or (
-            isinstance(module, ModuleType)
-            and _module_is_from_archives(module, verified_roots)
-        )
+        or (isinstance(module, ModuleType) and _module_is_from_archives(module, verified_roots))
     }
 
 
@@ -396,24 +393,38 @@ def _provider_error(
     return _error(path, code)
 
 
-def _materialize_wheels(wheel_paths: list[str], root: Path) -> list[str]:
+def _materialize_wheels(
+    wheel_paths: list[str],
+    root: Path,
+) -> tuple[list[str], str]:
     root.mkdir()
+    libraries_root = root / "site-packages"
+    libraries_root.mkdir()
+    prefix = root / "prefix"
+    prefix.mkdir()
     roots: list[str] = []
-    for index, wheel_path in enumerate(wheel_paths):
-        destination = root / str(index)
-        destination.mkdir()
-        _extract_wheel(Path(wheel_path), destination)
-        roots.append(str(destination))
-    return roots
-
-
-def _extract_wheel(wheel_path: Path, destination: Path) -> None:
     written: set[Path] = set()
+    for index, wheel_path in enumerate(wheel_paths):
+        destination = libraries_root / str(index)
+        destination.mkdir()
+        _extract_wheel(Path(wheel_path), destination, prefix, written)
+        roots.append(str(destination))
+    return roots, str(prefix)
+
+
+def _extract_wheel(
+    wheel_path: Path,
+    library_destination: Path,
+    prefix_destination: Path,
+    written: set[Path],
+) -> None:
     with zipfile.ZipFile(wheel_path) as wheel:
         for member in wheel.infolist():
-            relative = _wheel_member_destination(member)
-            if relative is None:
+            mapped = _wheel_member_destination(member)
+            if mapped is None:
                 continue
+            scheme, relative = mapped
+            destination = library_destination if scheme == "library" else prefix_destination
             target = destination.joinpath(*relative.parts)
             if target in written:
                 raise ValueError("wheel members map to the same destination")
@@ -424,17 +435,13 @@ def _extract_wheel(wheel_path: Path, destination: Path) -> None:
             target.chmod(mode or 0o644)
 
 
-def _wheel_member_destination(member: zipfile.ZipInfo) -> PurePosixPath | None:
+def _wheel_member_destination(
+    member: zipfile.ZipInfo,
+) -> tuple[str, PurePosixPath] | None:
     raw_name = member.filename
     path = PurePosixPath(raw_name)
     mode = member.external_attr >> 16
-    if (
-        not raw_name
-        or "\\" in raw_name
-        or path.is_absolute()
-        or any(part in {"", ".", ".."} for part in path.parts)
-        or stat.S_ISLNK(mode)
-    ):
+    if not raw_name or "\\" in raw_name or path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts) or stat.S_ISLNK(mode):
         raise ValueError("wheel member path is unsafe")
     if member.is_dir():
         return None
@@ -443,13 +450,53 @@ def _wheel_member_destination(member: zipfile.ZipInfo) -> PurePosixPath | None:
         if len(parts) < 3:
             raise ValueError("wheel data member is invalid")
         scheme = parts[1]
-        if scheme in {"purelib", "platlib", "data"}:
-            parts = parts[2:]
-        elif scheme in {"headers", "scripts"}:
-            return None
-        else:
-            raise ValueError("wheel data scheme is invalid")
-    return PurePosixPath(*parts)
+        relative = parts[2:]
+        if scheme in {"purelib", "platlib"}:
+            return "library", PurePosixPath(*relative)
+        if scheme == "data":
+            return "prefix", PurePosixPath(*relative)
+        if scheme == "scripts":
+            return "prefix", PurePosixPath("bin", *relative)
+        if scheme == "headers":
+            return "prefix", PurePosixPath("include", *relative)
+        raise ValueError("wheel data scheme is invalid")
+    return "library", PurePosixPath(*parts)
+
+
+def _hide_ambient_modules() -> None:
+    for name, module in tuple(sys.modules.items()):
+        root = name.partition(".")[0]
+        origin = getattr(getattr(module, "__spec__", None), "origin", None)
+        if name == "__main__" or root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS or origin in {"built-in", "frozen"}:
+            continue
+        sys.modules.pop(name, None)
+
+
+def _frame_from_quant_panel(pd: Any, panel: dict[str, object]) -> Any:
+    records = panel["records"]
+    columns = panel["columns"]
+    if not isinstance(records, list) or not isinstance(columns, list):
+        raise TypeError("panel records or columns are invalid")
+    frame = pd.DataFrame.from_records(records)
+    nullable_dtypes = {
+        "boolean": "boolean",
+        "int64": "Int64",
+        "float64": "Float64",
+        "string": "string",
+    }
+    for descriptor in columns:
+        if not isinstance(descriptor, dict):
+            raise TypeError("panel column descriptor is invalid")
+        name = descriptor.get("name")
+        dtype = descriptor.get("dtype")
+        if not isinstance(name, str) or not isinstance(dtype, str):
+            raise TypeError("panel column descriptor is invalid")
+        if name not in frame:
+            frame[name] = pd.Series([None] * len(frame))
+        if dtype in nullable_dtypes:
+            raw_values = [record.get(name) if isinstance(record, dict) else None for record in records]
+            frame[name] = pd.array(raw_values, dtype=nullable_dtypes[dtype])
+    return frame
 
 
 def _execute(request: dict[str, object], response_path: Path) -> int:
@@ -485,12 +532,15 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         return _error(response_path, "provider_execution_failed")
 
     try:
-        verified_archives = _materialize_wheels(
+        verified_archives, install_prefix = _materialize_wheels(
             [implementation_artifact, *dependency_artifacts],
             response_path.parent / "wheel-layout",
         )
     except BaseException:
         return _error(response_path, "provider_import_failed")
+    sys.prefix = install_prefix
+    sys.exec_prefix = install_prefix
+    _hide_ambient_modules()
     modules_before_provider = set(sys.modules)
     sys.path[:0] = verified_archives
     import_gate = _ProviderImportGate(verified_archives)
@@ -516,10 +566,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
             )
 
         try:
-            records = panel["records"]
-            if not isinstance(records, list):
-                raise TypeError("panel records are not a list")
-            frame = pd.DataFrame.from_records(records)
+            frame = _frame_from_quant_panel(pd, panel)
             context = panel.get("context")
             if not isinstance(context, dict):
                 raise TypeError("panel context is not an object")

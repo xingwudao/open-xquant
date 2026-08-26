@@ -10,7 +10,7 @@ import json
 import os
 import sys
 import zipfile
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -49,6 +49,7 @@ def _wheel_bytes(
     source: str,
     *,
     purelib_data: bool = False,
+    prefix_data: Mapping[str, str] | None = None,
 ) -> bytes:
     buffer = io.BytesIO()
     dist_info = distribution.replace("-", "_")
@@ -65,6 +66,11 @@ def _wheel_bytes(
             f"{dist_info}-1.0.0.dist-info/METADATA",
             f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 1.0.0\n",
         )
+        for relative_path, value in (prefix_data or {}).items():
+            archive.writestr(
+                f"{dist_info}-1.0.0.data/data/{relative_path}",
+                value,
+            )
     return buffer.getvalue()
 
 
@@ -1165,6 +1171,18 @@ def sma(frame, *, window):
     _assert_failure(_contract(tmp_path, source), "provider_import_failed")
 
 
+def test_blocks_indirect_access_to_preloaded_ambient_modules(tmp_path: Path) -> None:
+    source = """
+import os
+AMBIENT_PARSER = os.sys.modules["dateutil.parser"]
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+
+
 def test_executes_module_from_wheel_purelib_data_layout(tmp_path: Path) -> None:
     candidate = _contract(tmp_path)
     operator = candidate.operators[0]
@@ -1183,6 +1201,86 @@ def test_executes_module_from_wheel_purelib_data_layout(tmp_path: Path) -> None:
         candidate,
         operators=(replace(operator, manifest=manifest),),
         artifacts=(implementation, dependency),
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_installs_wheel_data_scheme_under_isolated_prefix(tmp_path: Path) -> None:
+    source = """
+from pathlib import Path
+import sys
+import pandas as pd
+def sma(frame, *, window):
+    marker = Path(sys.prefix, "share", "baseline-marker.txt").read_text()
+    value = 2.0 if marker == "verified-data" else 0.0
+    return pd.Series([None, None, value], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(tmp_path, source)
+    operator = candidate.operators[0]
+    implementation, dependency = candidate.artifacts
+    wheel_bytes = _wheel_bytes(
+        "baseline-provider",
+        "baseline_provider",
+        source,
+        prefix_data={"share/baseline-marker.txt": "verified-data"},
+    )
+    implementation.wheel_path.write_bytes(wheel_bytes)
+    implementation = replace(implementation, digest=_sha256(wheel_bytes))
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["implementation"]["implementation_digest"] = implementation.digest
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+        artifacts=(implementation, dependency),
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_preserves_declared_nullable_int64_input_dtype(tmp_path: Path) -> None:
+    panel = _panel()
+    panel["columns"] = [{"name": "close", "dtype": "int64", "required": True}]
+    panel["records"] = [
+        {"date": "2026-08-24", "code": "000001.SZ", "close": 9007199254740993},
+        {"date": "2026-08-25", "code": "000001.SZ", "close": None},
+        {"date": "2026-08-26", "code": "000001.SZ", "close": 3},
+    ]
+    source = """
+def sma(frame, *, window):
+    if str(frame["close"].dtype) != "Int64":
+        raise TypeError("declared nullable int64 dtype was not preserved")
+    result = frame["close"].copy()
+    result.name = f"sma_{window}"
+    return result
+"""
+    candidate = _with_output_dtype(
+        _contract(
+            tmp_path,
+            source,
+            input_panel=panel,
+            expected={"sma_3": [9007199254740993, None, 3]},
+        ),
+        "int64",
+    )
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["input"]["supported_dtypes"] = ["int64"]
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
     )
 
     results = run_research_baselines(
@@ -1251,6 +1349,26 @@ def test_timeout_reaps_the_direct_child(tmp_path: Path) -> None:
         os.kill(child_pid, 0)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX process-group assertion")
+def test_timeout_reaps_provider_descendant_processes(tmp_path: Path) -> None:
+    pid_path = tmp_path / "descendant.pid"
+    source = (
+        "import subprocess, sys, time\n"
+        "def sma(frame, *, window):\n"
+        "    subprocess.Popen([sys.executable, '-c', "
+        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"])\n'
+        "    time.sleep(60)\n"
+    )
+    _assert_failure(
+        _contract(tmp_path / "candidate", source),
+        "provider_execution_timeout",
+        timeout_seconds=2,
+    )
+    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(descendant_pid, 0)
+
+
 @pytest.mark.parametrize(
     "mutate",
     [
@@ -1279,6 +1397,7 @@ def test_rejects_invalid_frozen_quant_panel_before_child_execution(
     "requirement",
     [
         "required-column",
+        "required-flag",
         "supported-dtype",
         "minimum-assets",
         "minimum-time-length",
@@ -1297,6 +1416,10 @@ def test_rejects_baseline_that_does_not_meet_manifest_input_requirements(
     input_contract = manifest["input"]
     if requirement == "required-column":
         input_contract["required_columns"] = ["volume"]
+    elif requirement == "required-flag":
+        panel["columns"][0]["required"] = False
+        for record in panel["records"]:
+            record.pop("close")
     elif requirement == "supported-dtype":
         input_contract["supported_dtypes"] = ["int64"]
     elif requirement == "minimum-assets":

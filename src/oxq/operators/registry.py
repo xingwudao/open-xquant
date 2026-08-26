@@ -221,14 +221,18 @@ class CertificationRegistry:
                     record_schema=record_schema,
                 )
                 for binding in publication.bindings:
-                    if (
-                        binding["operator_id"] == operator_id
-                        and binding["operator_version"] == operator_version
-                    ):
+                    if binding["operator_id"] == operator_id and binding["operator_version"] == operator_version:
                         matches.append(binding)
         except OperatorCertificationError:
             raise
-        except (OSError, ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+        except (
+            OSError,
+            ValueError,
+            TypeError,
+            UnicodeError,
+            json.JSONDecodeError,
+            RecursionError,
+        ):
             raise _error("registry_invalid", "certification registry is invalid") from None
 
         if len(matches) > 1:
@@ -259,9 +263,7 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         raise _input_error("research certification field types are invalid")
     if not _valid_provider_release(result.provider, result.release):
         raise _input_error("provider or release identity is invalid")
-    if not _SHA1_PATTERN.fullmatch(result.submission_commit) or not _SHA1_PATTERN.fullmatch(
-        result.source_commit
-    ):
+    if not _SHA1_PATTERN.fullmatch(result.submission_commit) or not _SHA1_PATTERN.fullmatch(result.source_commit):
         raise _input_error("certification commit identity is invalid")
     if not result.operators or not result.baseline_cases or not result.baseline_results:
         raise _input_error("research certification must not be empty")
@@ -295,9 +297,7 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         declared_cases.add(case_identity)
         case_counts[identity] += 1
 
-    cases_by_identity: dict[tuple[str, str], list[dict[str, object]]] = {
-        identity: [] for identity in identities
-    }
+    cases_by_identity: dict[tuple[str, str], list[dict[str, object]]] = {identity: [] for identity in identities}
     passed_cases: set[tuple[str, str, str]] = set()
     for baseline in result.baseline_results:
         if (
@@ -310,20 +310,11 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
             raise _input_error("numerical baseline result fields are invalid")
         identity = (baseline.operator_id, baseline.operator_version)
         result_key = (*identity, baseline.case_id)
-        if (
-            identity not in identities
-            or baseline.status != "passed"
-            or not baseline.case_id
-            or result_key in passed_cases
-        ):
+        if identity not in identities or baseline.status != "passed" or not baseline.case_id or result_key in passed_cases:
             raise _input_error("numerical baseline results are incomplete or invalid")
         passed_cases.add(result_key)
-        cases_by_identity[identity].append(
-            {"case_id": baseline.case_id, "status": "passed"}
-        )
-    if declared_cases != passed_cases or any(
-        case_counts[identity] == 0 for identity in identities
-    ):
+        cases_by_identity[identity].append({"case_id": baseline.case_id, "status": "passed"})
+    if declared_cases != passed_cases or any(case_counts[identity] == 0 for identity in identities):
         raise _input_error("not every certified operator baseline passed")
 
     record_operators: list[dict[str, object]] = []
@@ -332,9 +323,7 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         filename = _binding_filename(*identity)
         manifest_digest = binding.get("manifest_digest")
         implementation_digest = binding.get("implementation_digest")
-        if not isinstance(manifest_digest, str) or not isinstance(
-            implementation_digest, str
-        ):
+        if not isinstance(manifest_digest, str) or not isinstance(implementation_digest, str):
             raise _input_error("binding provenance digest is invalid", identity[0])
         record_operators.append(
             {
@@ -398,9 +387,7 @@ def _prepare_candidates(
                 binding = candidate.binding
                 operator_id = binding.get("operator_id")
                 operator_version = binding.get("operator_version")
-                if not isinstance(operator_id, str) or not isinstance(
-                    operator_version, str
-                ):
+                if not isinstance(operator_id, str) or not isinstance(operator_version, str):
                     raise _input_error("certified binding identity is invalid")
                 identity = (operator_id, operator_version)
                 if identity in identities or not _valid_operator_identity(*identity):
@@ -448,9 +435,7 @@ def _prepare_candidates(
                         stage="binding",
                         operator_id=operator_id,
                     )
-                    with tempfile.TemporaryDirectory(
-                        prefix="oxq-certified-manifest-"
-                    ) as directory:
+                    with tempfile.TemporaryDirectory(prefix="oxq-certified-manifest-") as directory:
                         manifest_snapshot = Path(directory) / "operator.json"
                         manifest_snapshot.write_bytes(manifest_bytes)
                         entry = CatalogEntry(
@@ -480,9 +465,7 @@ def _prepare_candidates(
                     operator_id,
                     operator_version,
                 )
-                matched_implementation_artifacts.add(
-                    (matched.distribution, matched.version, matched.filename)
-                )
+                matched_implementation_artifacts.add((matched.distribution, matched.version, matched.filename))
                 identities.add(identity)
                 binding_values[identity] = binding
                 filename = _binding_filename(*identity)
@@ -506,8 +489,7 @@ def _prepare_candidates(
         ) from None
 
     expected_implementation_artifacts = {
-        (artifact.distribution, artifact.version, artifact.filename)
-        for artifact in implementation_artifacts
+        (artifact.distribution, artifact.version, artifact.filename) for artifact in implementation_artifacts
     }
     if matched_implementation_artifacts != expected_implementation_artifacts:
         raise _input_error("certification contains an unrelated implementation artifact")
@@ -622,9 +604,7 @@ def _verify_candidate_provenance(
     )
     binding = candidate.binding
     implementation = manifest.get("implementation")
-    if (
-        not isinstance(implementation, Mapping)
-    ):
+    if not isinstance(implementation, Mapping):
         raise _input_error(
             "manifest bytes do not match certified binding provenance",
             operator_id,
@@ -651,8 +631,7 @@ def _verify_candidate_provenance(
         implementation.get("source_commit") != result.source_commit
         or implementation.get("source_commit") != binding.get("source_commit")
         or implementation.get("source_tree_digest") != actual_source_tree_digest
-        or implementation.get("source_tree_digest")
-        != binding.get("source_tree_digest")
+        or implementation.get("source_tree_digest") != binding.get("source_tree_digest")
     ):
         raise _input_error(
             "manifest source provenance does not match certified source tree",
@@ -692,12 +671,7 @@ def _source_tree_digest(root: Path, source_files: list[str]) -> str:
     for relative in sorted(source_files):
         path = PurePosixPath(relative)
         parts = relative.split("/")
-        if (
-            not relative
-            or path.is_absolute()
-            or "\\" in relative
-            or any(part in {"", ".", ".."} for part in parts)
-        ):
+        if not relative or path.is_absolute() or "\\" in relative or any(part in {"", ".", ".."} for part in parts):
             raise ValueError("source path is not normalized")
         normalized_paths.append((relative, parts))
 
@@ -716,11 +690,7 @@ def _source_tree_digest(root: Path, source_files: list[str]) -> str:
 
 
 def _open_directory_no_follow(path: Path) -> int:
-    flags = (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
     try:
         if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
@@ -732,11 +702,7 @@ def _open_directory_no_follow(path: Path) -> int:
 
 
 def _read_relative_regular_file(root_descriptor: int, parts: list[str]) -> bytes:
-    directory_flags = (
-        os.O_RDONLY
-        | getattr(os, "O_DIRECTORY", 0)
-        | getattr(os, "O_NOFOLLOW", 0)
-    )
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
     opened_directories: list[int] = []
     current_descriptor = root_descriptor
     leaf_descriptor: int | None = None
@@ -757,9 +723,7 @@ def _read_relative_regular_file(root_descriptor: int, parts: list[str]) -> bytes
         )
         return _read_regular_descriptor(leaf_descriptor)
     finally:
-        descriptors = (
-            [leaf_descriptor] if leaf_descriptor is not None else []
-        ) + list(reversed(opened_directories))
+        descriptors = ([leaf_descriptor] if leaf_descriptor is not None else []) + list(reversed(opened_directories))
         _close_descriptors(descriptors)
 
 
@@ -840,10 +804,7 @@ def _render_publication(
     files = {
         "certification-record.json": record_bytes,
         "registry-entry.json": _json_bytes(entry),
-        **{
-            f"bindings/{filename}": value
-            for filename, value in prepared.binding_bytes.items()
-        },
+        **{f"bindings/{filename}": value for filename, value in prepared.binding_bytes.items()},
     }
     return _RenderedPublication(record=record, entry=entry, files=files)
 
@@ -882,7 +843,14 @@ def _existing_or_conflict(
         expected = _render_publication(prepared, certified_at)
         if _publication_files(release_dir) == dict(expected.files):
             return existing
-    except (OperatorCertificationError, OSError, ValueError, TypeError, UnicodeError):
+    except (
+        OperatorCertificationError,
+        OSError,
+        ValueError,
+        TypeError,
+        UnicodeError,
+        RecursionError,
+    ):
         pass
     raise _error(
         "certification_conflict",
@@ -999,10 +967,7 @@ def _read_publication(
                 and artifact["version"] == binding.get("distribution_version")
                 and artifact["digest"] == binding.get("implementation_digest")
             ]
-            if (
-                binding.get("source_commit") != record["source_commit"]
-                or len(matching_artifacts) != 1
-            ):
+            if binding.get("source_commit") != record["source_commit"] or len(matching_artifacts) != 1:
                 raise ValueError("binding does not match certified implementation provenance")
             matched = matching_artifacts[0]
             matched_implementation_artifacts.add(
@@ -1016,10 +981,8 @@ def _read_publication(
             if (
                 record_operator is None
                 or record_operator.get("binding_digest") != operator["binding_digest"]
-                or record_operator.get("manifest_digest")
-                != binding.get("manifest_digest")
-                or record_operator.get("implementation_digest")
-                != binding.get("implementation_digest")
+                or record_operator.get("manifest_digest") != binding.get("manifest_digest")
+                or record_operator.get("implementation_digest") != binding.get("implementation_digest")
             ):
                 raise ValueError("record and binding provenance do not match")
             bindings.append(_freeze_json_mapping(binding))
@@ -1045,7 +1008,14 @@ def _read_publication(
         )
     except OperatorCertificationError:
         raise
-    except (OSError, ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        UnicodeError,
+        json.JSONDecodeError,
+        RecursionError,
+    ):
         raise _error("registry_invalid", "certification registry entry is invalid") from None
 
 
@@ -1114,11 +1084,7 @@ def _validate_record_artifacts(
         )
         filename = cast(str, artifact["filename"])
         digest = cast(str, artifact["digest"])
-        if (
-            identity in identities
-            or filename in filenames
-            or digest in digests
-        ):
+        if identity in identities or filename in filenames or digest in digests:
             raise ValueError("certification artifact identity is duplicated")
         identities.add(identity)
         filenames.add(filename)
@@ -1168,16 +1134,12 @@ def _iter_release_directories(output_root: Path) -> Iterator[Path]:
     for provider_dir in sorted(output_root.iterdir(), key=lambda path: path.name):
         if provider_dir.name.startswith("."):
             continue
-        if not _is_real_directory(provider_dir) or not _PROVIDER_PATTERN.fullmatch(
-            provider_dir.name
-        ):
+        if not _is_real_directory(provider_dir) or not _PROVIDER_PATTERN.fullmatch(provider_dir.name):
             raise ValueError("registry provider directory is invalid")
         for release_dir in sorted(provider_dir.iterdir(), key=lambda path: path.name):
             if release_dir.name.startswith("."):
                 continue
-            if not _is_real_directory(release_dir) or not _SEMVER_PATTERN.fullmatch(
-                release_dir.name
-            ):
+            if not _is_real_directory(release_dir) or not _SEMVER_PATTERN.fullmatch(release_dir.name):
                 raise ValueError("registry release directory is invalid")
             yield release_dir
 
@@ -1267,9 +1229,7 @@ def _thaw_json_value(value: object) -> object:
 
 
 def _freeze_json_mapping(value: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType(
-        {key: _freeze_json_value(item) for key, item in value.items()}
-    )
+    return MappingProxyType({key: _freeze_json_value(item) for key, item in value.items()})
 
 
 def _freeze_json_value(value: object) -> object:

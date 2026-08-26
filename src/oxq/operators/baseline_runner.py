@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import signal
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -55,12 +57,8 @@ def run_research_baselines(
         raise _error("baseline_input_invalid", "baseline operator identity is invalid")
 
     cases_by_operator = {identity: 0 for identity in operators}
-    declared_outputs_by_operator: dict[tuple[str, str], set[str]] = {
-        identity: set() for identity in operators
-    }
-    covered_outputs_by_operator: dict[tuple[str, str], set[str]] = {
-        identity: set() for identity in operators
-    }
+    declared_outputs_by_operator: dict[tuple[str, str], set[str]] = {identity: set() for identity in operators}
+    covered_outputs_by_operator: dict[tuple[str, str], set[str]] = {identity: set() for identity in operators}
     results: list[BaselineResult] = []
     with _snapshot_contract_surface() as (surface_bytes, surface_paths):
         quant_panel_schema = _load_schema(
@@ -145,10 +143,7 @@ def run_research_baselines(
             missing[0][0],
         )
     missing_output_coverage = [
-        identity
-        for identity in operators
-        if declared_outputs_by_operator[identity]
-        != covered_outputs_by_operator[identity]
+        identity for identity in operators if declared_outputs_by_operator[identity] != covered_outputs_by_operator[identity]
     ]
     if missing_output_coverage:
         raise _error(
@@ -240,9 +235,10 @@ def _validate_manifest_input(
     input_contract = cast(Mapping[str, object], manifest["input"])
     columns = cast(list[Mapping[str, object]], panel["columns"])
     declared_dtypes = {cast(str, column["name"]): cast(str, column["dtype"]) for column in columns}
+    required_panel_columns = {cast(str, column["name"]) for column in columns if cast(bool, column["required"])}
     required_columns = cast(list[str], input_contract["required_columns"])
     supported_dtypes = set(cast(list[str], input_contract["supported_dtypes"]))
-    if any(name not in declared_dtypes or declared_dtypes[name] not in supported_dtypes for name in required_columns):
+    if any(name not in required_panel_columns or declared_dtypes[name] not in supported_dtypes for name in required_columns):
         raise ValueError("baseline does not supply required input columns and dtypes")
 
     context = cast(Mapping[str, object], panel["context"])
@@ -401,7 +397,7 @@ def _run_child(
         response_path = root / "response.json"
         request_path.write_bytes(request_bytes)
         try:
-            result = subprocess.run(
+            returncode = _run_child_process(
                 [
                     sys.executable,
                     "-I",
@@ -409,9 +405,7 @@ def _run_child(
                     str(request_path),
                     str(response_path),
                 ],
-                check=False,
-                capture_output=True,
-                timeout=timeout_seconds,
+                timeout_seconds,
             )
         except subprocess.TimeoutExpired:
             raise _error(
@@ -425,7 +419,7 @@ def _run_child(
                 "provider baseline child process failed",
                 case.operator_id,
             ) from None
-        response = _read_response(response_path, result.returncode, case.operator_id)
+        response = _read_response(response_path, returncode, case.operator_id)
 
     if response["status"] == "error":
         code = response.get("code")
@@ -440,6 +434,49 @@ def _run_child(
             case.operator_id,
         )
     return output
+
+
+def _run_child_process(command: list[str], timeout_seconds: float) -> int:
+    if os.name == "nt":
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            creationflags=cast(
+                int,
+                getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+            ),
+        )
+    else:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    try:
+        process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired:
+        _kill_process_tree(process)
+        process.communicate()
+        raise
+    return int(process.returncode)
+
+
+def _kill_process_tree(process: subprocess.Popen[bytes]) -> None:
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            check=False,
+            capture_output=True,
+        )
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if process.poll() is None:
+        process.kill()
 
 
 def _read_response(

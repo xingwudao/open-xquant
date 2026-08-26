@@ -51,9 +51,7 @@ def _source_tree_digest(root: Path, source_files: list[str]) -> str:
     for relative_path in sorted(source_files):
         digest.update(relative_path.encode())
         digest.update(b"\0")
-        digest.update(
-            hashlib.sha256((root / relative_path).read_bytes()).hexdigest().encode()
-        )
+        digest.update(hashlib.sha256((root / relative_path).read_bytes()).hexdigest().encode())
         digest.update(b"\n")
     return f"sha256:{digest.hexdigest()}"
 
@@ -72,19 +70,13 @@ def _binding(
         "distribution_version": "1.0.0",
         "source_commit": "git-sha1:" + "a" * 40,
         "source_tree_digest": "sha256:" + "b" * 64,
-        "schema_id": (
-            "https://open-xquant.dev/contracts/quant-operators/"
-            "operator-manifest-v1.schema.json"
-        ),
+        "schema_id": ("https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json"),
         "schema_release": "1.0.0",
         "schema_digest": _SURFACE_DIGESTS["operator_manifest_schema"],
         "manifest_digest": "sha256:" + "d" * 64,
         "implementation_digest": "sha256:" + "e" * 64,
         "surface_release": "1.0.0",
-        "contract_surface": {
-            name: {"release": "1.0.0", "digest": digest}
-            for name, digest in _SURFACE_DIGESTS.items()
-        },
+        "contract_surface": {name: {"release": "1.0.0", "digest": digest} for name, digest in _SURFACE_DIGESTS.items()},
         "certification_state": state,
     }
 
@@ -180,11 +172,7 @@ def _assert_canonical_json(path: Path) -> dict[str, object]:
 
 
 def _tree_bytes(root: Path) -> dict[str, bytes]:
-    return {
-        path.relative_to(root).as_posix(): path.read_bytes()
-        for path in sorted(root.rglob("*"))
-        if path.is_file()
-    }
+    return {path.relative_to(root).as_posix(): path.read_bytes() for path in sorted(root.rglob("*")) if path.is_file()}
 
 
 def _write_canonical_json(path: Path, value: object) -> None:
@@ -233,10 +221,7 @@ def test_publishes_exact_canonical_layout_and_looks_up_binding(
 
     release_dir = output / "equant-py" / "1.0.0"
     assert published.release_dir == release_dir
-    assert sorted(
-        path.relative_to(release_dir).as_posix()
-        for path in release_dir.rglob("*")
-    ) == [
+    assert sorted(path.relative_to(release_dir).as_posix() for path in release_dir.rglob("*")) == [
         "bindings",
         "bindings/equant.ttr.sma@1.0.0.binding.json",
         "certification-record.json",
@@ -252,30 +237,32 @@ def test_publishes_exact_canonical_layout_and_looks_up_binding(
     assert record["certifier"] == "open-xquant-local"
     assert record["submission_commit"] == "git-sha1:" + "f" * 40
     assert record["source_commit"] == "git-sha1:" + "a" * 40
-    assert record["artifacts"] == [{
-        "build_identifier": "registry-test-build",
-        "digest": result.artifacts[0].digest,
-        "distribution": "equant-ttr",
-        "filename": result.artifacts[0].filename,
-        "role": "implementation",
-        "version": "1.0.0",
-    }]
-    assert record["operators"] == [{
-        "baseline_cases": [{"case_id": "sma-window-3", "status": "passed"}],
-        "binding_digest": _sha256(binding_path.read_bytes()),
-        "implementation_digest": result.artifacts[0].digest,
-        "manifest_digest": result.operators[0].binding["manifest_digest"],
-        "operator_id": "equant.ttr.sma",
-        "operator_version": "1.0.0",
-    }]
+    assert record["artifacts"] == [
+        {
+            "build_identifier": "registry-test-build",
+            "digest": result.artifacts[0].digest,
+            "distribution": "equant-ttr",
+            "filename": result.artifacts[0].filename,
+            "role": "implementation",
+            "version": "1.0.0",
+        }
+    ]
+    assert record["operators"] == [
+        {
+            "baseline_cases": [{"case_id": "sma-window-3", "status": "passed"}],
+            "binding_digest": _sha256(binding_path.read_bytes()),
+            "implementation_digest": result.artifacts[0].digest,
+            "manifest_digest": result.operators[0].binding["manifest_digest"],
+            "operator_id": "equant.ttr.sma",
+            "operator_version": "1.0.0",
+        }
+    ]
     with materialize_certification_profile() as paths:
         schema = json.loads(paths["certification_record"].read_text())
     Draft202012Validator(schema, format_checker=FormatChecker()).validate(record)
     assert entry["submission_commit"] == result.submission_commit
     assert CertificationRegistry(output).get("equant.ttr.sma", "1.0.0") == binding
-    assert b"SECRET_PROVIDER_SOURCE" not in b"".join(
-        _tree_bytes(release_dir).values()
-    )
+    assert b"SECRET_PROVIDER_SOURCE" not in b"".join(_tree_bytes(release_dir).values())
 
 
 def test_real_submission_certification_publishes_and_resolves(tmp_path: Path) -> None:
@@ -561,9 +548,7 @@ def test_allows_release_artifacts_to_share_one_build_invocation_identifier(
     output = tmp_path / "certifications"
 
     publication = publish_certification(
-        _issue_research_certification(
-            replace(result, artifacts=(*result.artifacts, dependency))
-        ),
+        _issue_research_certification(replace(result, artifacts=(*result.artifacts, dependency))),
         output,
     )
 
@@ -650,9 +635,7 @@ def test_rejects_manifest_and_source_tree_provenance_tampering(
         retained["semantic_name"] = "forged-retained-value"
         result = replace(result, operators=(replace(candidate, manifest=retained),))
     elif tamper == "source-tree-bytes":
-        (result.source_root / "src/equant_ttr/sma.py").write_text(
-            "SECRET_PROVIDER_SOURCE = False\n"
-        )
+        (result.source_root / "src/equant_ttr/sma.py").write_text("SECRET_PROVIDER_SOURCE = False\n")
     elif tamper == "non-normalized-source-path":
         manifest = dict(candidate.manifest)
         implementation = dict(manifest["implementation"])  # type: ignore[arg-type]
@@ -826,9 +809,7 @@ def test_allows_multiple_operators_bound_to_one_implementation_artifact(
     second_manifest = dict(first.manifest)
     second_manifest["operator_id"] = "equant.ttr.ema"
     second_manifest_path = result.source_root / "ema.operator.json"
-    second_manifest_bytes = (
-        json.dumps(second_manifest, sort_keys=True) + "\n"
-    ).encode()
+    second_manifest_bytes = (json.dumps(second_manifest, sort_keys=True) + "\n").encode()
     second_manifest_path.write_bytes(second_manifest_bytes)
     second_binding = dict(first.binding)
     second_binding["operator_id"] = "equant.ttr.ema"
@@ -905,6 +886,30 @@ def test_registry_rejects_corrupt_entry_and_path_escape(tmp_path: Path) -> None:
 
     assert caught.value.code == "registry_invalid"
     assert caught.value.stage == "registry"
+
+
+@pytest.mark.parametrize("operation", ["lookup", "republish"])
+def test_normalizes_deeply_nested_registry_json(
+    tmp_path: Path,
+    operation: str,
+) -> None:
+    output = tmp_path / "certifications"
+    result = _result(tmp_path)
+    release = publish_certification(result, output).release_dir
+    nested = "[" * 10000 + "0" + "]" * 10000
+    (release / "registry-entry.json").write_text(
+        f'{{"nested":{nested}}}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        if operation == "lookup":
+            CertificationRegistry(output).get("equant.ttr.sma", "1.0.0")
+        else:
+            publish_certification(result, output)
+
+    expected = "registry_invalid" if operation == "lookup" else "certification_conflict"
+    assert caught.value.code == expected
 
 
 @pytest.mark.parametrize("field", ["submission_commit", "artifacts"])
@@ -1076,9 +1081,7 @@ def test_concurrent_identical_publications_converge_on_one_release(
     assert len(published) == 2
     assert len(list(output.rglob("certification-record.json"))) == 1
     assert not list(output.rglob("*.staging-*"))
-    assert sorted(path.name for path in (output / "equant-py").iterdir()) == [
-        "1.0.0"
-    ]
+    assert sorted(path.name for path in (output / "equant-py").iterdir()) == ["1.0.0"]
 
 
 def test_concurrent_conflicting_publications_have_one_winner_and_no_residue(
@@ -1110,9 +1113,7 @@ def test_concurrent_conflicting_publications_have_one_winner_and_no_residue(
 
     assert len(successes) == 1
     assert [error.code for error in failures] == ["certification_conflict"]
-    assert sorted(path.name for path in (output / "equant-py").iterdir()) == [
-        "1.0.0"
-    ]
+    assert sorted(path.name for path in (output / "equant-py").iterdir()) == ["1.0.0"]
 
 
 def test_git_ignores_local_certification_output() -> None:
