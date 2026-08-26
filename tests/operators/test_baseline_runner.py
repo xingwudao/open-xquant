@@ -554,8 +554,12 @@ def test_parent_rejects_out_of_range_int64_child_response(
     )
     child = tmp_path / "out_of_range_int_child.py"
     child.write_text(
-        "import json, pathlib, sys\n"
-        f"value = {{'status': 'ok', 'outputs': {{'sma_3': [{value}, None, {value}]}}}}\n"
+        "import hashlib, hmac, json, pathlib, sys\n"
+        "secret = bytes.fromhex(sys.stdin.readline().strip())\n"
+        f"values = {{'sma_3': [{value}, None, {value}]}}\n"
+        "value = {'status': 'ok', 'outputs': values, 'repeated_outputs': values}\n"
+        "payload = json.dumps(value, separators=(',', ':'), sort_keys=True).encode()\n"
+        "value['auth'] = 'hmac-sha256:' + hmac.new(secret, payload, hashlib.sha256).hexdigest()\n"
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
@@ -617,8 +621,12 @@ def test_parent_rejects_unconvertible_float64_child_response(
     )
     child = tmp_path / "unconvertible_float_child.py"
     child.write_text(
-        "import json, pathlib, sys\n"
-        f"value = {{'status': 'ok', 'outputs': {{'sma_3': [{value}, None, {value}]}}}}\n"
+        "import hashlib, hmac, json, pathlib, sys\n"
+        "secret = bytes.fromhex(sys.stdin.readline().strip())\n"
+        f"values = {{'sma_3': [{value}, None, {value}]}}\n"
+        "value = {'status': 'ok', 'outputs': values, 'repeated_outputs': values}\n"
+        "payload = json.dumps(value, separators=(',', ':'), sort_keys=True).encode()\n"
+        "value['auth'] = 'hmac-sha256:' + hmac.new(secret, payload, hashlib.sha256).hexdigest()\n"
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
@@ -816,11 +824,11 @@ def test_rejects_provider_that_fabricates_one_requested_output_per_invocation(
     source = """
 import json
 import pathlib
-import sys
 import pandas as pd
 
 def sma(frame, *, window):
-    request = json.loads(pathlib.Path(sys.argv[1]).read_text(encoding="utf-8"))
+    request_path = pathlib.Path(__file__).parents[4] / "request.json"
+    request = json.loads(request_path.read_text(encoding="utf-8"))
     requested = request.get("output_fields")
     field = request["output_field"] if requested is None else requested[0]["name"]
     return pd.DataFrame({field: [None, None, 2.0]}, index=frame.index)
@@ -925,8 +933,12 @@ def test_rejects_non_iso_date_child_output_even_when_expected_matches(
     )
     child = tmp_path / "invalid_date_child.py"
     child.write_text(
-        "import json, pathlib, sys\n"
-        f"value = {{'status': 'ok', 'outputs': {{'sma_3': {invalid_dates!r}}}}}\n"
+        "import hashlib, hmac, json, pathlib, sys\n"
+        "secret = bytes.fromhex(sys.stdin.readline().strip())\n"
+        f"values = {{'sma_3': {invalid_dates!r}}}\n"
+        "value = {'status': 'ok', 'outputs': values, 'repeated_outputs': values}\n"
+        "payload = json.dumps(value, separators=(',', ':'), sort_keys=True).encode()\n"
+        "value['auth'] = 'hmac-sha256:' + hmac.new(secret, payload, hashlib.sha256).hexdigest()\n"
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
@@ -1456,20 +1468,76 @@ def test_rejects_malformed_child_json(
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
 
 
+def test_rejects_oversized_child_response_without_unbounded_read(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response_path = tmp_path / "oversized-response.json"
+    response_path.write_bytes(b"x" * (1024 * 1024 + 1))
+
+    def unbounded_read_must_not_run(path: Path) -> bytes:
+        del path
+        pytest.fail("child response used an unbounded read")
+
+    monkeypatch.setattr(Path, "read_bytes", unbounded_read_must_not_run)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        baseline_runner._read_response(
+            response_path,
+            0,
+            "org.open-xquant.indicator.sma",
+            b"x" * 32,
+        )
+
+    assert caught.value.code == "provider_execution_failed"
+
+
 def test_rejects_child_json_with_undeclared_response_fields(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     child = tmp_path / "extra_field_child.py"
     child.write_text(
-        "import json, pathlib, sys\n"
-        "pathlib.Path(sys.argv[2]).write_text("
-        "json.dumps({'status': 'ok', 'outputs': {'sma_3': [None, None, 2.0]}, 'extra': 1}))\n",
+        "import hashlib, hmac, json, pathlib, sys\n"
+        "secret = bytes.fromhex(sys.stdin.readline().strip())\n"
+        "value = {'status': 'ok', 'outputs': {'sma_3': [None, None, 2.0]}, "
+        "'repeated_outputs': {'sma_3': [None, None, 2.0]}, 'extra': 1}\n"
+        "payload = json.dumps(value, separators=(',', ':'), sort_keys=True).encode()\n"
+        "value['auth'] = 'hmac-sha256:' + hmac.new(secret, payload, hashlib.sha256).hexdigest()\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
     monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
 
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
+
+
+def test_provider_cannot_forge_discovered_verifier_response_file(
+    tmp_path: Path,
+) -> None:
+    source = """
+import json
+import os
+import pathlib
+import tempfile
+
+def sma(frame, *, window):
+    values = {f"sma_{window}": [None, None, 2.0]}
+    forged = {
+        "status": "ok",
+        "outputs": values,
+        "repeated_outputs": values,
+    }
+    roots = pathlib.Path(tempfile.gettempdir()).glob("oxq-baseline-response-*")
+    for root in roots:
+        (root / "response.json").write_text(json.dumps(forged))
+    os._exit(0)
+"""
+
+    _assert_failure(
+        _contract(tmp_path / "candidate", source),
+        "provider_execution_failed",
+    )
 
 
 def test_normalizes_child_timeout(tmp_path: Path) -> None:
@@ -1623,6 +1691,92 @@ def test_successful_linux_supervisor_is_not_signalled_after_it_is_reaped(
         )
         == 0
     )
+
+
+def test_unexpected_linux_guardian_exit_kills_collected_descendants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 123
+        returncode = -signal.SIGKILL
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return self.returncode
+
+        def poll(self) -> int:
+            return self.returncode
+
+    killed: list[tuple[int, set[int]]] = []
+    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "posix")
+    monkeypatch.setattr(baseline_runner, "_posix_platform", lambda: "linux")
+    monkeypatch.setattr(
+        baseline_runner,
+        "_contained_posix_command",
+        lambda command: command,
+    )
+    monkeypatch.setattr(
+        baseline_runner.subprocess,
+        "Popen",
+        lambda *args, **kwargs: FakeProcess(),
+    )
+    monkeypatch.setattr(
+        baseline_runner,
+        "_posix_descendant_pids",
+        lambda root_pid: {200},
+    )
+    monkeypatch.setattr(
+        baseline_runner,
+        "_kill_process_tree",
+        lambda process, descendants: killed.append(
+            (process.pid, set(descendants)),
+        ),
+    )
+
+    returncode = baseline_runner._run_child_process(
+        [sys.executable, "-c", "pass"],
+        5,
+    )
+
+    assert returncode == -signal.SIGKILL
+    assert killed == [(123, {200})]
+
+
+def test_process_tree_cleanup_expands_collected_descendant_subtrees(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeProcess:
+        pid = 123
+
+        def poll(self) -> int:
+            return -signal.SIGKILL
+
+        def kill(self) -> None:
+            raise AssertionError("reaped guardian must not be killed again")
+
+    children = {
+        123: set(),
+        200: {300},
+        300: set(),
+    }
+    killed: list[set[int]] = []
+    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "posix")
+    monkeypatch.setattr(
+        baseline_runner,
+        "_posix_descendant_pids",
+        lambda root_pid: children[root_pid],
+    )
+    monkeypatch.setattr(baseline_runner.os, "killpg", lambda *args: None)
+    monkeypatch.setattr(baseline_runner.os, "kill", lambda *args: None)
+    monkeypatch.setattr(
+        baseline_runner,
+        "_kill_posix_processes",
+        lambda process_ids: killed.append(set(process_ids)),
+    )
+
+    baseline_runner._kill_process_tree(FakeProcess(), {200})  # type: ignore[arg-type]
+
+    assert killed == [{200, 300}]
 
 
 def test_success_closes_windows_kill_on_close_job(
@@ -1962,7 +2116,9 @@ def test_executes_verified_immutable_artifact_snapshots(
     real_run_child = baseline_runner._run_child
     calls = 0
 
-    def mutate_original_after_first_call(**kwargs: object) -> list[object]:
+    def mutate_original_after_first_call(
+        **kwargs: object,
+    ) -> tuple[dict[str, list[object]], dict[str, list[object]]]:
         nonlocal calls
         output = real_run_child(**kwargs)  # type: ignore[arg-type]
         calls += 1
@@ -2002,11 +2158,11 @@ def sma(frame, *, window):
 import base64
 import json
 import pathlib
-import sys
 import pandas as pd
 
 def sma(frame, *, window):
-    request = json.loads(pathlib.Path(sys.argv[1]).read_text())
+    request_path = pathlib.Path(__file__).parents[4] / "request.json"
+    request = json.loads(request_path.read_text())
     artifact = pathlib.Path(request["implementation_artifact"])
     artifact.chmod(0o600)
     artifact.write_bytes(base64.b64decode({encoded_replacement!r}))
@@ -2101,6 +2257,29 @@ def sma(frame, *, window):
     path.write_text(str(count + 1))
     value = 2.0 if count == 0 else 3.0
     return pd.Series([None, None, value], index=frame.index, name=f"sma_{{window}}")
+"""
+
+    _assert_failure(_contract(tmp_path / "candidate", source), "baseline_mismatch")
+
+
+def test_rejects_nondeterministic_callable_state_within_one_provider_process(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+calls = 0
+
+def sma(frame, *, window):
+    global calls
+    calls += 1
+    value = 2.0 if calls == 1 else 3.0
+    return pd.Series(
+        [None, None, value],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
 """
 
     _assert_failure(_contract(tmp_path / "candidate", source), "baseline_mismatch")
@@ -2426,7 +2605,7 @@ def test_late_case_failure_does_not_mutate_contract_valid_candidates(
         certify_provider(cast(ProviderSubmission, object()))
 
     assert caught.value.code == "baseline_mismatch"
-    assert executions_path.read_text(encoding="utf-8") == "xxx"
+    assert executions_path.read_text(encoding="utf-8") == "xxxx"
     assert contract.operators[0].binding["certification_state"] == "contract-valid"
     assert contract.operators[0].manifest["operator_version"] == "1.0.0"
 
@@ -2457,7 +2636,7 @@ def test_second_operator_failure_in_one_submission_preserves_all_bindings(
             certify_provider(submission)
 
     assert caught.value.code == "baseline_mismatch"
-    assert executions_path.read_text(encoding="utf-8") == "SSZ"
+    assert executions_path.read_text(encoding="utf-8") == "SSZZ"
     assert [item.binding["certification_state"] for item in contract.operators] == [
         "contract-valid",
         "contract-valid",

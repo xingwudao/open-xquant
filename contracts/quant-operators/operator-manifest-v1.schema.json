@@ -129,7 +129,7 @@
         "alignment": { "enum": ["preserve_input_order", "canonical_order", "explicit_keyed_output"] },
         "warmup": { "type": "string", "minLength": 1 },
         "nan_policy": { "enum": ["propagate", "skip_window", "require_complete", "explicit_fill"] },
-        "fill_value": {},
+        "fill_value": { "$ref": "#/$defs/strictJsonValue" },
         "fill_method": { "enum": ["constant", "forward_fill", "backward_fill", "interpolate"] },
         "multiple_outputs": { "type": "boolean" }
       },
@@ -206,6 +206,18 @@
         "implementation_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
         "build_identifier": { "type": "string", "minLength": 1 }
       }
+    }
+  },
+  "$defs": {
+    "strictJsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/strictJsonValue" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/strictJsonValue" } }
+      ]
     }
   },
   "allOf": [

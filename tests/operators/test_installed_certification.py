@@ -28,9 +28,9 @@ from oxq.operators.resources import (
 
 EXPECTED_DIGESTS = {
     "quant_panel_schema": "fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
-    "operator_manifest_schema": "adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
+    "operator_manifest_schema": "b50b15c446d8940a358ff32c31e191407a7841ab57a30f2fcbafb9a15b9f8793",
     "operator_binding_schema": "1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "4758be90c907f636f6751174d6a9a7f0e1b9422e15ee873a77ba6d599d7cd7bc",
+    "reference_validator": "33528a97f6405809ead8a9f542c1c2dae9d89cb6c966943def6ca80097e8f67a",
     "provider_catalog": "701ff89a33dd71cb7c2f019904ce2ffcc203237734d1719a6188e386b920689c",
     "candidate_build": "451263b139890885c85790d82a17ebd510d54aa8cc2429e02cdd6ef6762674bb",
     "numerical_baseline": "36b524b5d9df67b7bfa78882f6606815778d0edeb1a12b6778fd9fd9f4c11219",

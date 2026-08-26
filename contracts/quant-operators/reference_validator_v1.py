@@ -11,10 +11,10 @@ import json
 import math
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sized
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, cast
 
 
 class ContractValidationError(ValueError):
@@ -192,7 +192,27 @@ def _is_parameter_type(value: object, parameter_type: str) -> bool:
 
 
 def _validate_finite_strict_json(value: object, *, label: str) -> None:
+    def validate(current: object) -> None:
+        if current is None or type(current) in {bool, int, str}:
+            return
+        if type(current) is float:
+            if not math.isfinite(current):
+                raise ValueError("non-finite number")
+            return
+        if type(current) is list:
+            for item in cast(list[object], current):
+                validate(item)
+            return
+        if type(current) is dict:
+            for key, item in cast(dict[object, object], current).items():
+                if type(key) is not str:
+                    raise TypeError("JSON object key is not a string")
+                validate(item)
+            return
+        raise TypeError("value is outside the JSON data model")
+
     try:
+        validate(value)
         json.dumps(
             value,
             allow_nan=False,
@@ -201,6 +221,41 @@ def _validate_finite_strict_json(value: object, *, label: str) -> None:
         )
     except (OverflowError, RecursionError, TypeError, ValueError):
         raise ContractValidationError(f"{label} must be finite strict JSON") from None
+
+
+def _json_values_equal(left: object, right: object) -> bool:
+    if left is None or right is None:
+        return left is right
+    if isinstance(left, bool) or isinstance(right, bool):
+        return type(left) is bool and type(right) is bool and left is right
+
+    number_types = (int, float)
+    if isinstance(left, number_types) or isinstance(right, number_types):
+        return (
+            isinstance(left, number_types)
+            and not isinstance(left, bool)
+            and isinstance(right, number_types)
+            and not isinstance(right, bool)
+            and left == right
+        )
+
+    if isinstance(left, str) or isinstance(right, str):
+        return isinstance(left, str) and isinstance(right, str) and left == right
+    if isinstance(left, list) or isinstance(right, list):
+        return (
+            isinstance(left, list)
+            and isinstance(right, list)
+            and len(left) == len(right)
+            and all(_json_values_equal(left_item, right_item) for left_item, right_item in zip(left, right, strict=True))
+        )
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        return (
+            isinstance(left, Mapping)
+            and isinstance(right, Mapping)
+            and left.keys() == right.keys()
+            and all(_json_values_equal(left[key], right[key]) for key in left)
+        )
+    return False
 
 
 def _validate_constraint_applicability(parameter_type: str, constraints: Mapping[str, Any]) -> None:
@@ -266,7 +321,7 @@ def _validate_parameter_value(
 
     constraints = definition["constraints"]
     label = f"{source} parameter {name!r}"
-    if "enum" in constraints and value not in constraints["enum"]:
+    if "enum" in constraints and not any(_json_values_equal(value, enum_value) for enum_value in constraints["enum"]):
         raise ContractValidationError(f"{label} violates enum")
     if "minimum" in constraints and value < constraints["minimum"]:
         raise ContractValidationError(f"{label} violates minimum")
@@ -276,15 +331,15 @@ def _validate_parameter_value(
         raise ContractValidationError(f"{label} violates exclusive_minimum")
     if "exclusive_maximum" in constraints and value >= constraints["exclusive_maximum"]:
         raise ContractValidationError(f"{label} violates exclusive_maximum")
-    if "min_length" in constraints and len(value) < constraints["min_length"]:
+    if "min_length" in constraints and len(cast(Sized, value)) < constraints["min_length"]:
         raise ContractValidationError(f"{label} violates min_length")
-    if "max_length" in constraints and len(value) > constraints["max_length"]:
+    if "max_length" in constraints and len(cast(Sized, value)) > constraints["max_length"]:
         raise ContractValidationError(f"{label} violates max_length")
-    if "pattern" in constraints and re.search(constraints["pattern"], value) is None:
+    if "pattern" in constraints and re.search(constraints["pattern"], cast(str, value)) is None:
         raise ContractValidationError(f"{label} violates pattern")
-    if "min_items" in constraints and len(value) < constraints["min_items"]:
+    if "min_items" in constraints and len(cast(Sized, value)) < constraints["min_items"]:
         raise ContractValidationError(f"{label} violates min_items")
-    if "max_items" in constraints and len(value) > constraints["max_items"]:
+    if "max_items" in constraints and len(cast(Sized, value)) > constraints["max_items"]:
         raise ContractValidationError(f"{label} violates max_items")
 
 
@@ -340,6 +395,11 @@ def validate_operator_manifest(manifest: Mapping[str, Any]) -> None:
     _validate_parameter_definitions(manifest["parameters"])
     _validate_seed_parameter(manifest)
     _validate_determinism_tolerance(manifest)
+    if "fill_value" in manifest["output"]:
+        _validate_finite_strict_json(
+            manifest["output"]["fill_value"],
+            label="output fill_value",
+        )
 
 
 _CONTRACT_SURFACE_ARTIFACTS = {
@@ -399,41 +459,6 @@ def _read_manifest_artifact(
     except (ValueError, RecursionError) as error:
         raise _binding_mismatch(f"manifest artifact: {error}") from error
     return manifest_bytes, manifest_object
-
-
-def _json_values_equal(left: object, right: object) -> bool:
-    if left is None or right is None:
-        return left is right
-    if isinstance(left, bool) or isinstance(right, bool):
-        return type(left) is bool and type(right) is bool and left is right
-
-    number_types = (int, float)
-    if isinstance(left, number_types) or isinstance(right, number_types):
-        return (
-            isinstance(left, number_types)
-            and not isinstance(left, bool)
-            and isinstance(right, number_types)
-            and not isinstance(right, bool)
-            and left == right
-        )
-
-    if isinstance(left, str) or isinstance(right, str):
-        return isinstance(left, str) and isinstance(right, str) and left == right
-    if isinstance(left, list) or isinstance(right, list):
-        return (
-            isinstance(left, list)
-            and isinstance(right, list)
-            and len(left) == len(right)
-            and all(_json_values_equal(left_item, right_item) for left_item, right_item in zip(left, right, strict=True))
-        )
-    if isinstance(left, Mapping) or isinstance(right, Mapping):
-        return (
-            isinstance(left, Mapping)
-            and isinstance(right, Mapping)
-            and left.keys() == right.keys()
-            and all(_json_values_equal(left[key], right[key]) for key in left)
-        )
-    return False
 
 
 def validate_operator_binding(

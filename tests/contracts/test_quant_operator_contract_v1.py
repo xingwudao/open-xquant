@@ -484,6 +484,28 @@ def test_manifest_requires_fill_value_for_constant_explicit_fill() -> None:
         _manifest_validator().validate(manifest)
 
 
+def test_reference_validator_rejects_nonfinite_output_fill_value() -> None:
+    manifest = _valid_manifest()
+    manifest["output"].update(
+        {
+            "nan_policy": "explicit_fill",
+            "fill_method": "constant",
+            "fill_value": json.loads("1e999"),
+        }
+    )
+
+    with pytest.raises(ValueError, match="output fill_value must be finite strict JSON"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+def test_manifest_schema_restricts_fill_value_to_json_values() -> None:
+    manifest = _valid_manifest()
+    manifest["output"]["fill_value"] = object()
+
+    with pytest.raises(ValidationError):
+        _manifest_validator().validate(manifest)
+
+
 @pytest.mark.parametrize("fill_method", ["forward_fill", "backward_fill", "interpolate"])
 def test_manifest_allows_executable_nonconstant_fill_methods(fill_method: str) -> None:
     manifest = _valid_manifest()
@@ -581,6 +603,31 @@ def test_reference_validator_rejects_nonfinite_nested_parameter_default(
 
 
 @pytest.mark.parametrize(
+    ("parameter_type", "value"),
+    [
+        ("array", [(1, 2)]),
+        ("object", {1: "numeric key"}),
+        ("object", {"nested": {False: "boolean key"}}),
+    ],
+)
+def test_reference_validator_rejects_values_json_would_coerce(
+    parameter_type: str,
+    value: object,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["parameters"]["window"].update(
+        {
+            "type": parameter_type,
+            "default": value,
+            "constraints": {},
+        }
+    )
+
+    with pytest.raises(ValueError, match="strict JSON"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize(
     ("parameter_type", "default", "invalid_enum_value"),
     [
         ("array", [1], [{"nested": float("inf")}]),
@@ -603,6 +650,59 @@ def test_reference_validator_rejects_nonfinite_nested_parameter_enum(
 
     with pytest.raises(ValueError, match="strict JSON"):
         _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("parameter_type", "default", "enum_value"),
+    [
+        ("array", [1], [True]),
+        ("object", {"value": 1}, {"value": True}),
+    ],
+)
+def test_reference_validator_uses_type_sensitive_recursive_enum_equality(
+    parameter_type: str,
+    default: object,
+    enum_value: object,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["parameters"]["window"].update(
+        {
+            "type": parameter_type,
+            "default": default,
+            "constraints": {"enum": [enum_value]},
+        }
+    )
+
+    with pytest.raises(ValueError, match="default for parameter 'window' violates enum"):
+        _reference_validator().validate_operator_manifest(manifest)
+
+
+@pytest.mark.parametrize(
+    ("parameter_type", "default", "request_value"),
+    [
+        ("array", [True], [1]),
+        ("object", {"value": True}, {"value": 1}),
+    ],
+)
+def test_operator_request_uses_type_sensitive_recursive_enum_equality(
+    parameter_type: str,
+    default: object,
+    request_value: object,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["parameters"]["window"].update(
+        {
+            "type": parameter_type,
+            "default": default,
+            "constraints": {"enum": [default]},
+        }
+    )
+
+    with pytest.raises(ValueError, match="request parameter 'window' violates enum"):
+        _reference_validator().validate_operator_request_parameters(
+            manifest,
+            {"window": request_value},
+        )
 
 
 @pytest.mark.parametrize(

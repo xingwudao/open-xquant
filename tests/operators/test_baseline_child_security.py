@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import builtins
+import hashlib
+import hmac
 import json
 import subprocess
 import sys
@@ -28,16 +30,38 @@ def _write_provider_wheel(path: Path, source: str) -> None:
         )
 
 
-def _run_child(tmp_path: Path, provider_source: str) -> dict[str, object]:
+def _write_dependency_wheel(path: Path) -> None:
+    with zipfile.ZipFile(path, "w") as archive:
+        archive.writestr("baseline_dependency/__init__.py", "")
+        archive.writestr("baseline_dependency/late.py", "VALUE = 1.0\n")
+        archive.writestr(
+            "baseline_dependency-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "baseline_dependency-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: baseline-dependency\nVersion: 1.0.0\n",
+        )
+
+
+def _run_child(
+    tmp_path: Path,
+    provider_source: str,
+    *,
+    with_dependency: bool = False,
+) -> dict[str, object]:
     wheel_path = tmp_path / "baseline_provider-1.0.0-py3-none-any.whl"
+    dependency_path = tmp_path / "baseline_dependency-1.0.0-py3-none-any.whl"
     request_path = tmp_path / "request.json"
     response_path = tmp_path / "response.json"
     _write_provider_wheel(wheel_path, provider_source)
+    if with_dependency:
+        _write_dependency_wheel(dependency_path)
     request_path.write_text(
         json.dumps(
             {
                 "implementation_artifact": str(wheel_path),
-                "dependency_artifacts": [],
+                "dependency_artifacts": ([str(dependency_path)] if with_dependency else []),
                 "module": "baseline_provider",
                 "callable": "sma",
                 "parameters": {"window": 3},
@@ -72,6 +96,7 @@ def _run_child(tmp_path: Path, provider_source: str) -> dict[str, object]:
         encoding="utf-8",
     )
     child_path = Path(_baseline_child.__file__).resolve()
+    response_secret = b"baseline-child-security-test-key"
 
     completed = subprocess.run(
         [
@@ -83,12 +108,33 @@ def _run_child(tmp_path: Path, provider_source: str) -> dict[str, object]:
         ],
         check=False,
         capture_output=True,
+        input=response_secret.hex() + "\n",
         text=True,
         timeout=10,
     )
 
     assert completed.returncode == 0, completed.stderr
-    return cast(dict[str, object], json.loads(response_path.read_text(encoding="utf-8")))
+    response = cast(
+        dict[str, object],
+        json.loads(response_path.read_text(encoding="utf-8")),
+    )
+    auth = response.pop("auth")
+    payload = json.dumps(
+        response,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    expected_auth = (
+        "hmac-sha256:"
+        + hmac.new(
+            response_secret,
+            payload,
+            hashlib.sha256,
+        ).hexdigest()
+    )
+    assert hmac.compare_digest(cast(str, auth), expected_auth)
+    return response
 
 
 def test_dynamic_code_gate_allows_trusted_callers_and_restores_builtins() -> None:
@@ -130,6 +176,7 @@ def sma(frame, *, window):
     assert _run_child(tmp_path, source) == {
         "status": "ok",
         "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
     }
 
 
@@ -147,6 +194,55 @@ def test_restricted_sys_path_does_not_alias_real_sys_path(
     assert sys.path == original_path
 
 
+def test_restricted_sys_hides_process_arguments_and_frame_introspection() -> None:
+    restricted = _baseline_child._restricted_sys_module([])
+
+    assert not hasattr(restricted, "argv")
+    assert not hasattr(restricted, "orig_argv")
+    assert not hasattr(restricted, "_getframe")
+    assert not hasattr(restricted, "_current_frames")
+
+
+def test_verified_root_snapshot_streams_large_files_with_bounded_reads(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "verified"
+    root.mkdir()
+    target = root / "large.bin"
+    target.write_bytes(b"x" * (2 * 1024 * 1024))
+    real_open = Path.open
+    read_sizes: list[int] = []
+
+    class BoundedReader:
+        def __init__(self, file: object) -> None:
+            self._file = file
+
+        def __enter__(self) -> BoundedReader:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            self._file.close()  # type: ignore[attr-defined]
+
+        def read(self, size: int = -1) -> bytes:
+            read_sizes.append(size)
+            assert 0 < size <= 1024 * 1024
+            return cast(bytes, self._file.read(size))  # type: ignore[attr-defined]
+
+    def bounded_open(path: Path, *args: object, **kwargs: object) -> object:
+        file = real_open(path, *args, **kwargs)  # type: ignore[arg-type]
+        if path == target:
+            return BoundedReader(file)
+        return file
+
+    monkeypatch.setattr(Path, "open", bounded_open)
+
+    snapshot = _baseline_child._snapshot_verified_roots([str(root)])
+
+    assert snapshot[f"0/{target.name}"].startswith("sha256:")
+    assert read_sizes
+
+
 def test_provider_cannot_bypass_input_mutation_check_by_replacing_pandas_assertion(
     tmp_path: Path,
 ) -> None:
@@ -155,6 +251,30 @@ import pandas as pd
 
 def sma(frame, *, window):
     pd.testing.assert_frame_equal = lambda *args, **kwargs: None
+    frame.loc[frame.index[0], "close"] = 99.0
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_mutated_input",
+    }
+
+
+def test_provider_cannot_bypass_input_snapshot_by_replacing_dataframe_copy(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+pd.DataFrame.copy = lambda self, deep=True: self
+
+def sma(frame, *, window):
     frame.loc[frame.index[0], "close"] = 99.0
     return pd.Series(
         [None, None, 2.0],
@@ -221,3 +341,143 @@ def test_provider_cannot_exec_ambient_site_packages_source(tmp_path: Path) -> No
 
 def test_provider_cannot_eval_ambient_site_packages_source(tmp_path: Path) -> None:
     _assert_provider_cannot_execute_ambient_source(tmp_path, "eval")
+
+
+def test_provider_cannot_execute_ambient_source_through_runpy(
+    tmp_path: Path,
+) -> None:
+    ambient_root = tmp_path / "ambient" / "site-packages"
+    ambient_root.mkdir(parents=True)
+    ambient_source = ambient_root / "ambient_payload.py"
+    ambient_source.write_text("VALUE = 2.0\n", encoding="utf-8")
+    source = f"""
+import runpy
+import pandas as pd
+
+def sma(frame, *, window):
+    value = runpy.run_path({str(ambient_source)!r})["VALUE"]
+    return pd.Series(
+        [None, None, value],
+        index=frame.index,
+        name=f"sma_{{window}}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_import_failed",
+    }
+
+
+def test_provider_cannot_execute_ambient_source_in_threaded_runpy(
+    tmp_path: Path,
+) -> None:
+    ambient_root = tmp_path / "ambient" / "site-packages"
+    ambient_root.mkdir(parents=True)
+    ambient_source = ambient_root / "ambient_payload.py"
+    ambient_source.write_text("VALUE = 2.0\n", encoding="utf-8")
+    source = f"""
+import runpy
+import threading
+import pandas as pd
+
+def sma(frame, *, window):
+    values = {{}}
+    worker = threading.Thread(
+        target=lambda: values.update(runpy.run_path({str(ambient_source)!r})),
+    )
+    worker.start()
+    worker.join()
+    return pd.Series(
+        [None, None, values["VALUE"]],
+        index=frame.index,
+        name=f"sma_{{window}}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_import_failed",
+    }
+
+
+def test_provider_cannot_forge_verifier_response_through_sys_argv(
+    tmp_path: Path,
+) -> None:
+    source = """
+import json
+import os
+import pathlib
+import sys
+
+def sma(frame, *, window):
+    forged = {
+        "status": "ok",
+        "outputs": {f"sma_{window}": [None, None, 2.0]},
+    }
+    pathlib.Path(sys.argv[2]).write_text(json.dumps(forged))
+    os._exit(0)
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_execution_failed",
+    }
+
+
+def test_provider_cannot_find_verifier_response_through_frame_locals(
+    tmp_path: Path,
+) -> None:
+    source = """
+import inspect
+import json
+import os
+import pathlib
+
+def sma(frame, *, window):
+    current = inspect.currentframe()
+    while current is not None:
+        response_path = current.f_locals.get("response_path")
+        if isinstance(response_path, pathlib.Path):
+            forged = {
+                "status": "ok",
+                "outputs": {f"sma_{window}": [None, None, 2.0]},
+            }
+            response_path.write_text(json.dumps(forged))
+            os._exit(0)
+        current = current.f_back
+    raise RuntimeError("response path was not visible")
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "error",
+        "code": "provider_execution_failed",
+    }
+
+
+def test_provider_cannot_modify_unimported_verified_dependency_module(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pathlib
+import pandas as pd
+import baseline_dependency
+
+def sma(frame, *, window):
+    dependency_root = pathlib.Path(baseline_dependency.__file__).parent
+    (dependency_root / "late.py").write_text("VALUE = 2.0\\n")
+    from baseline_dependency.late import VALUE
+    return pd.Series(
+        [None, None, VALUE],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source, with_dependency=True) == {
+        "status": "error",
+        "code": "provider_import_failed",
+    }

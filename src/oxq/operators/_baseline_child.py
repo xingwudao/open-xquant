@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import _thread
 import builtins
+import hashlib
+import hmac
 import importlib
 import importlib.util
 import json
@@ -10,12 +13,13 @@ import math
 import os
 import stat
 import sys
+import threading
 import time
 import zipfile
 from collections.abc import Callable, Mapping
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
-from types import ModuleType
+from types import CodeType, ModuleType
 from typing import Any, cast
 
 _PLATFORM_RUNTIME_ROOTS = {"numpy", "pandas"}
@@ -27,6 +31,13 @@ _OUTPUT_ALIGNMENTS = {
 }
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
+_FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_HIDDEN_PROVIDER_SYS_ATTRIBUTES = {
+    "_current_frames",
+    "_getframe",
+    "argv",
+    "orig_argv",
+}
 
 
 class _OutputTypeError(TypeError):
@@ -82,9 +93,12 @@ def _encode_response(value: dict[str, object]) -> bytes:
     ).encode("utf-8")
 
 
-def _error(path: Path, code: str) -> int:
-    _write_response(path, {"status": "error", "code": code})
-    return 0
+def _authenticated_response(
+    value: dict[str, object],
+    secret: bytes,
+) -> dict[str, object]:
+    digest = hmac.new(secret, _encode_response(value), hashlib.sha256).hexdigest()
+    return {**value, "auth": f"hmac-sha256:{digest}"}
 
 
 def _json_value(value: object, output_dtype: str) -> object:
@@ -290,7 +304,7 @@ def _restrict_sys_path(verified_archives: list[str]) -> None:
 
 def _restricted_sys_module(verified_roots: list[str]) -> ModuleType:
     restricted = ModuleType("sys")
-    restricted.__dict__.update(sys.__dict__)
+    restricted.__dict__.update({name: value for name, value in sys.__dict__.items() if name not in _HIDDEN_PROVIDER_SYS_ATTRIBUTES})
     restricted.path = list(sys.path)  # type: ignore[attr-defined]
     restricted.modules = _visible_modules(verified_roots)  # type: ignore[attr-defined]
     return restricted
@@ -313,14 +327,55 @@ def _globals_are_from_archives(
     return any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
 
 
+def _snapshot_verified_roots(verified_roots: list[str]) -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for root_index, root_value in enumerate(verified_roots):
+        root = Path(root_value)
+        for path in sorted(root.rglob("*")):
+            relative = path.relative_to(root).as_posix()
+            key = f"{root_index}/{relative}"
+            if path.is_symlink():
+                raise OSError("verified root contains a symbolic link")
+            if path.is_dir():
+                snapshot[key] = "directory"
+            elif path.is_file():
+                digest = hashlib.sha256()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(_FILE_HASH_CHUNK_BYTES):
+                        digest.update(chunk)
+                snapshot[key] = f"sha256:{digest.hexdigest()}"
+            else:
+                raise OSError("verified root contains an unsupported entry")
+    return snapshot
+
+
+def _verified_roots_are_unchanged(
+    verified_roots: list[str],
+    expected: Mapping[str, str],
+) -> bool:
+    try:
+        return _snapshot_verified_roots(verified_roots) == expected
+    except OSError:
+        return False
+
+
 class _ProviderImportGate:
-    def __init__(self, verified_archives: list[str]) -> None:
+    def __init__(
+        self,
+        verified_archives: list[str],
+        verified_root_snapshot: Mapping[str, str] | None = None,
+    ) -> None:
         self._verified_archives = verified_archives
+        self._verified_root_snapshot = dict(verified_root_snapshot or {})
         self._original_import = builtins.__import__
         self._original_import_module = importlib.import_module
         self._original_compile: Callable[..., object] = builtins.compile
         self._original_exec: Callable[..., None] = builtins.exec
         self._original_eval: Callable[..., object] = builtins.eval
+        self._original_getframe = sys._getframe
+        self._original_thread_start = threading.Thread.start
+        self._original_start_new_thread = _thread.start_new_thread
+        self._hidden_sys_attributes: dict[str, object] = {}
         self.violation = False
 
     def install(self) -> None:
@@ -329,6 +384,11 @@ class _ProviderImportGate:
         setattr(builtins, "exec", self._guarded_exec)
         setattr(builtins, "eval", self._guarded_eval)
         setattr(importlib, "import_module", self._guarded_import_module)
+        setattr(threading.Thread, "start", self._guarded_thread_start)
+        setattr(_thread, "start_new_thread", self._guarded_start_new_thread)
+        for name in _HIDDEN_PROVIDER_SYS_ATTRIBUTES:
+            if name in sys.__dict__:
+                self._hidden_sys_attributes[name] = sys.__dict__.pop(name)
 
     def restore(self) -> None:
         setattr(builtins, "__import__", self._original_import)
@@ -336,37 +396,134 @@ class _ProviderImportGate:
         setattr(builtins, "exec", self._original_exec)
         setattr(builtins, "eval", self._original_eval)
         setattr(importlib, "import_module", self._original_import_module)
+        setattr(threading.Thread, "start", self._original_thread_start)
+        setattr(_thread, "start_new_thread", self._original_start_new_thread)
+        sys.__dict__.update(self._hidden_sys_attributes)
 
     def _guarded_compile(self, *args: object, **kwargs: object) -> object:
-        self._reject_provider_dynamic_code("compile")
+        if not self._compile_matches_verified_source(args):
+            self._reject_provider_dynamic_code("compile")
         return self._original_compile(*args, **kwargs)
 
     def _guarded_exec(self, *args: object, **kwargs: object) -> None:
-        self._reject_provider_dynamic_code("exec")
+        if not self._code_is_from_verified_source(args):
+            self._reject_provider_dynamic_code("exec")
         self._original_exec(*args, **kwargs)
 
     def _guarded_eval(self, *args: object, **kwargs: object) -> object:
         self._reject_provider_dynamic_code("eval")
         return self._original_eval(*args, **kwargs)
 
+    def _guarded_thread_start(
+        self,
+        thread: threading.Thread,
+        *args: object,
+        **kwargs: object,
+    ) -> object:
+        self._reject_provider_dynamic_code("thread")
+        return self._original_thread_start(thread, *args, **kwargs)
+
+    def _guarded_start_new_thread(
+        self,
+        function: Callable[..., object],
+        args: tuple[object, ...],
+        kwargs: Mapping[str, object] | None = None,
+    ) -> int:
+        self._reject_provider_dynamic_code("thread")
+        return self._original_start_new_thread(
+            function,
+            args,
+            {} if kwargs is None else dict(kwargs),
+        )
+
     def _reject_provider_dynamic_code(self, operation: str) -> None:
-        caller = sys._getframe(2)
+        caller = self._original_getframe(2)
         try:
-            provider_call = any(
-                _location_is_in_archive(
-                    caller.f_code.co_filename,
-                    archive,
-                )
-                for archive in self._verified_archives
-            ) or _globals_are_from_archives(
-                caller.f_globals,
-                self._verified_archives,
-            )
+            provider_call = False
+            while True:
+                if any(
+                    _location_is_in_archive(
+                        caller.f_code.co_filename,
+                        archive,
+                    )
+                    for archive in self._verified_archives
+                ) or _globals_are_from_archives(
+                    caller.f_globals,
+                    self._verified_archives,
+                ):
+                    provider_call = True
+                    break
+                parent = caller.f_back
+                if parent is None:
+                    break
+                caller = parent
         finally:
             del caller
         if provider_call:
             self.violation = True
             raise ImportError(f"provider dynamic code execution is outside the verified closure: {operation}")
+
+    def _compile_matches_verified_source(self, args: tuple[object, ...]) -> bool:
+        if len(args) < 2 or not isinstance(args[1], str):
+            return False
+        source = args[0]
+        if isinstance(source, str):
+            source_bytes = source.encode("utf-8")
+        elif isinstance(source, (bytes, bytearray)):
+            source_bytes = bytes(source)
+        else:
+            return False
+        expected = self._verified_source_digest(args[1])
+        return expected == f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
+
+    def _code_is_from_verified_source(self, args: tuple[object, ...]) -> bool:
+        return bool(args and isinstance(args[0], CodeType) and self._verified_source_digest(args[0].co_filename) is not None)
+
+    def _verified_source_digest(self, filename: str) -> str | None:
+        location = os.path.abspath(filename)
+        for root_index, root_value in enumerate(self._verified_archives):
+            root = os.path.abspath(root_value)
+            if not _location_is_in_archive(location, root):
+                continue
+            relative = Path(location).relative_to(root).as_posix()
+            value = self._verified_root_snapshot.get(f"{root_index}/{relative}")
+            if isinstance(value, str) and value.startswith("sha256:"):
+                return value
+        return None
+
+    def _verified_roots_are_unchanged(self) -> bool:
+        return _verified_roots_are_unchanged(
+            self._verified_archives,
+            self._verified_root_snapshot,
+        )
+
+    def _reject_modified_verified_roots(self) -> None:
+        if not self._verified_roots_are_unchanged():
+            self.violation = True
+            raise ImportError("provider modified the verified import closure")
+
+    def _provider_call_in_stack(self) -> bool:
+        caller = self._original_getframe(2)
+        try:
+            while True:
+                if _globals_are_from_archives(
+                    caller.f_globals,
+                    self._verified_archives,
+                ) or any(
+                    _location_is_in_archive(
+                        caller.f_code.co_filename,
+                        archive,
+                    )
+                    for archive in self._verified_archives
+                ):
+                    return True
+                parent = caller.f_back
+                if parent is None:
+                    break
+                caller = parent
+        finally:
+            del caller
+        return False
 
     def _guarded_import(
         self,
@@ -376,10 +533,9 @@ class _ProviderImportGate:
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        provider_call = globals is None or _globals_are_from_archives(
-            globals,
-            self._verified_archives,
-        )
+        provider_call = globals is None or _globals_are_from_archives(globals, self._verified_archives) or self._provider_call_in_stack()
+        if provider_call:
+            self._reject_modified_verified_roots()
         try:
             imported = self._original_import(name, globals, locals, fromlist, level)
         except ModuleNotFoundError:
@@ -390,6 +546,7 @@ class _ProviderImportGate:
             raise
         if not provider_call:
             return imported
+        self._reject_modified_verified_roots()
         absolute_name = self._absolute_name(name, globals, level)
         if not self._provider_import_is_allowed(absolute_name):
             self.violation = True
@@ -403,11 +560,7 @@ class _ProviderImportGate:
         name: str,
         package: str | None = None,
     ) -> ModuleType:
-        caller_globals = sys._getframe(1).f_globals
-        provider_call = _globals_are_from_archives(
-            caller_globals,
-            self._verified_archives,
-        )
+        provider_call = self._provider_call_in_stack()
         absolute_name = name
         if provider_call and name.startswith("."):
             if not isinstance(package, str) or not package:
@@ -418,6 +571,8 @@ class _ProviderImportGate:
             except (ImportError, ValueError) as error:
                 self.violation = True
                 raise ImportError("provider relative import is invalid") from error
+        if provider_call:
+            self._reject_modified_verified_roots()
         try:
             imported = self._original_import_module(name, package)
         except ModuleNotFoundError:
@@ -426,6 +581,8 @@ class _ProviderImportGate:
             if provider_call:
                 self.violation = True
             raise
+        if provider_call:
+            self._reject_modified_verified_roots()
         if provider_call and not self._provider_import_is_allowed(absolute_name):
             self.violation = True
             raise ImportError(f"provider import is outside the verified closure: {absolute_name}")
@@ -461,12 +618,11 @@ class _ProviderImportGate:
 
 
 def _provider_error(
-    path: Path,
     import_gate: _ProviderImportGate,
     fallback_code: str,
-) -> int:
+) -> dict[str, object]:
     code = "provider_import_failed" if import_gate.violation else fallback_code
-    return _error(path, code)
+    return {"status": "error", "code": code}
 
 
 def _materialize_wheels(
@@ -575,7 +731,10 @@ def _frame_from_quant_panel(pd: Any, panel: dict[str, object]) -> Any:
     return frame
 
 
-def _execute(request: dict[str, object], response_path: Path) -> int:
+def _execute(
+    request: dict[str, object],
+    execution_root: Path,
+) -> dict[str, object]:
     implementation_artifact = request["implementation_artifact"]
     dependency_artifacts = request["dependency_artifacts"]
     module_name = request["module"]
@@ -599,7 +758,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         if len(output_fields) != len(output_descriptors) or len({name for name, _ in output_fields}) != len(output_fields):
             raise TypeError("output fields are invalid")
     except (KeyError, TypeError):
-        return _error(response_path, "provider_execution_failed")
+        return {"status": "error", "code": "provider_execution_failed"}
     if (
         not isinstance(implementation_artifact, str)
         or not Path(implementation_artifact).is_absolute()
@@ -612,27 +771,52 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         or not isinstance(output_alignment, str)
         or output_alignment not in _OUTPUT_ALIGNMENTS
     ):
-        return _error(response_path, "provider_execution_failed")
+        return {"status": "error", "code": "provider_execution_failed"}
     try:
         import numpy as np  # noqa: F401
         import pandas as pd
     except BaseException:
-        return _error(response_path, "provider_execution_failed")
+        return {"status": "error", "code": "provider_execution_failed"}
     trusted_assert_frame_equal = pd.testing.assert_frame_equal
+    trusted_frame_copy = pd.DataFrame.copy
+
+    try:
+        frame = _frame_from_quant_panel(pd, panel)
+        context = panel.get("context")
+        if not isinstance(context, dict):
+            raise TypeError("panel context is not an object")
+        frame.attrs["open_xquant_context"] = dict(context)
+        frame.index = pd.MultiIndex.from_frame(
+            frame[["date", "code"]],
+            names=["__oxq_date", "__oxq_code"],
+        )
+        original = trusted_frame_copy(frame, deep=True)
+        repeated_frame = trusted_frame_copy(original, deep=True)
+        repeated_original = trusted_frame_copy(original, deep=True)
+    except BaseException:
+        return {"status": "error", "code": "provider_execution_failed"}
 
     try:
         verified_archives, install_prefix = _materialize_wheels(
             [implementation_artifact, *dependency_artifacts],
-            response_path.parent / "wheel-layout",
+            execution_root,
         )
     except BaseException:
-        return _error(response_path, "provider_import_failed")
+        return {"status": "error", "code": "provider_import_failed"}
     sys.prefix = install_prefix
     sys.exec_prefix = install_prefix
+    sys.dont_write_bytecode = True
     _hide_ambient_modules()
     modules_before_provider = set(sys.modules)
     _restrict_sys_path(verified_archives)
-    import_gate = _ProviderImportGate(verified_archives)
+    try:
+        verified_root_snapshot = _snapshot_verified_roots(verified_archives)
+    except OSError:
+        return {"status": "error", "code": "provider_import_failed"}
+    import_gate = _ProviderImportGate(
+        verified_archives,
+        verified_root_snapshot,
+    )
     import_gate.install()
     try:
         try:
@@ -649,83 +833,87 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                 raise ImportError("provider imported an undeclared ambient dependency")
         except BaseException:
             return _provider_error(
-                response_path,
                 import_gate,
                 "provider_import_failed",
             )
 
         try:
-            frame = _frame_from_quant_panel(pd, panel)
-            context = panel.get("context")
-            if not isinstance(context, dict):
-                raise TypeError("panel context is not an object")
-            frame.attrs["open_xquant_context"] = dict(context)
-            frame.index = pd.MultiIndex.from_frame(
-                frame[["date", "code"]],
-                names=["__oxq_date", "__oxq_code"],
-            )
-            original = frame.copy(deep=True)
-            result = implementation(frame, **parameters)
-            try:
-                trusted_assert_frame_equal(
-                    frame,
-                    original,
-                    check_exact=True,
-                    check_like=False,
-                )
-                if frame.attrs != original.attrs:
-                    raise AssertionError("provider mutated frame metadata")
-            except (AssertionError, TypeError, ValueError):
-                return _provider_error(
-                    response_path,
-                    import_gate,
-                    "provider_mutated_input",
-                )
-            try:
-                outputs = _extract_outputs(
-                    result,
-                    original,
-                    output_fields,
-                    output_alignment,
-                )
-            except KeyError:
-                return _provider_error(
-                    response_path,
-                    import_gate,
-                    "baseline_mismatch",
-                )
-            except _OutputTypeError:
-                return _provider_error(
-                    response_path,
-                    import_gate,
-                    "baseline_mismatch",
-                )
-            except (IndexError, TypeError, ValueError):
-                return _provider_error(
-                    response_path,
-                    import_gate,
-                    "provider_alignment_failed",
-                )
-            response_bytes = _encode_response({"status": "ok", "outputs": outputs})
-            if import_gate.violation or not _new_modules_are_allowed(
-                modules_before_provider,
-                verified_archives,
+            output_runs: list[dict[str, list[object]]] = []
+            for invocation_frame, invocation_original in (
+                (frame, original),
+                (repeated_frame, repeated_original),
             ):
-                return _error(response_path, "provider_import_failed")
+                result = implementation(invocation_frame, **parameters)
+                try:
+                    trusted_assert_frame_equal(
+                        invocation_frame,
+                        invocation_original,
+                        check_exact=True,
+                        check_like=False,
+                    )
+                    if invocation_frame.attrs != invocation_original.attrs:
+                        raise AssertionError("provider mutated frame metadata")
+                except (AssertionError, TypeError, ValueError):
+                    return _provider_error(
+                        import_gate,
+                        "provider_mutated_input",
+                    )
+                try:
+                    outputs = _extract_outputs(
+                        result,
+                        invocation_original,
+                        output_fields,
+                        output_alignment,
+                    )
+                except (KeyError, _OutputTypeError):
+                    return _provider_error(
+                        import_gate,
+                        "baseline_mismatch",
+                    )
+                except (IndexError, TypeError, ValueError):
+                    return _provider_error(
+                        import_gate,
+                        "provider_alignment_failed",
+                    )
+                if not import_gate._verified_roots_are_unchanged():
+                    import_gate.violation = True
+                    return _provider_error(
+                        import_gate,
+                        "provider_import_failed",
+                    )
+                output_runs.append(outputs)
+            if (
+                import_gate.violation
+                or not _new_modules_are_allowed(
+                    modules_before_provider,
+                    verified_archives,
+                )
+                or not import_gate._verified_roots_are_unchanged()
+            ):
+                return {"status": "error", "code": "provider_import_failed"}
         except BaseException:
             return _provider_error(
-                response_path,
                 import_gate,
                 "provider_execution_failed",
             )
     finally:
         import_gate.restore()
-    response_path.write_bytes(response_bytes)
-    return 0
+    return {
+        "status": "ok",
+        "outputs": output_runs[0],
+        "repeated_outputs": output_runs[1],
+    }
 
 
 def main() -> int:
     if len(sys.argv) != 3:
+        return 2
+    try:
+        secret_value = sys.stdin.buffer.readline(65).strip()
+        if len(secret_value) != 64:
+            raise ValueError("response authentication secret is invalid")
+        response_secret = bytes.fromhex(secret_value.decode("ascii"))
+    except (AttributeError, UnicodeError, ValueError):
         return 2
     gate_path_value = os.environ.pop("OXQ_BASELINE_WINDOWS_JOB_GATE", None)
     if gate_path_value is not None:
@@ -737,11 +925,25 @@ def main() -> int:
             time.sleep(0.005)
     request_path = Path(sys.argv[1])
     response_path = Path(sys.argv[2])
+    sys.argv[:] = [sys.argv[0]]
+    if hasattr(sys, "orig_argv"):
+        sys.orig_argv = [sys.orig_argv[0]]
+    response: dict[str, object]
     try:
         request = _read_request(request_path)
     except (OSError, UnicodeError, json.JSONDecodeError, ValueError, RecursionError):
-        return _error(response_path, "provider_execution_failed")
-    return _execute(request, response_path)
+        response = {"status": "error", "code": "provider_execution_failed"}
+        _write_response(
+            response_path,
+            _authenticated_response(response, response_secret),
+        )
+        return 0
+    response = _execute(request, request_path.parent / "wheel-layout")
+    _write_response(
+        response_path,
+        _authenticated_response(response, response_secret),
+    )
+    return 0
 
 
 if __name__ == "__main__":

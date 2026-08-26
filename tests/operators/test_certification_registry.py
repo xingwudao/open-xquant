@@ -36,9 +36,9 @@ from tests.operators.test_baseline_runner import _write_certifiable_provider
 
 _SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
-    "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
+    "operator_manifest_schema": "sha256:b50b15c446d8940a358ff32c31e191407a7841ab57a30f2fcbafb9a15b9f8793",
     "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
-    "reference_validator": "sha256:4758be90c907f636f6751174d6a9a7f0e1b9422e15ee873a77ba6d599d7cd7bc",
+    "reference_validator": "sha256:33528a97f6405809ead8a9f542c1c2dae9d89cb6c966943def6ca80097e8f67a",
 }
 
 

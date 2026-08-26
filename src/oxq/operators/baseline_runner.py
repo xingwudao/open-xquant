@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import json
 import math
 import os
+import secrets
 import signal
 import subprocess
 import sys
@@ -46,6 +48,7 @@ _AUXILIARY_REQUIREMENTS = {
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _ARTIFACT_COPY_CHUNK_BYTES = 1024 * 1024
+_MAX_CHILD_RESPONSE_BYTES = 1024 * 1024
 _DARWIN_SANDBOX_PROFILE = "(version 1) (allow default) (deny process-fork)"
 _LINUX_LAUNCHER_SCRIPT = r"""
 import os
@@ -241,7 +244,7 @@ def run_research_baselines(
                 case.operator_id,
             )
             dependency_artifacts = [verified for verified in verified_artifacts if verified.artifact.role == "runtime-dependency"]
-            actual = _run_child(
+            actual, repeated = _run_child(
                 manifest=operator.manifest,
                 case=case,
                 parameters=resolved_parameters,
@@ -257,15 +260,6 @@ def run_research_baselines(
                     actual[output_field],
                     output_dtype,
                 )
-            repeated = _run_child(
-                manifest=operator.manifest,
-                case=case,
-                parameters=resolved_parameters,
-                output_fields=output_fields,
-                implementation_artifact=implementation_artifact,
-                dependency_artifacts=dependency_artifacts,
-                timeout_seconds=timeout_seconds,
-            )
             for output_field, output_dtype in output_fields:
                 _assert_deterministic(
                     case,
@@ -524,9 +518,12 @@ def _run_child(
     implementation_artifact: _VerifiedArtifact,
     dependency_artifacts: list[_VerifiedArtifact],
     timeout_seconds: float,
-) -> dict[str, list[object]]:
+) -> tuple[dict[str, list[object]], dict[str, list[object]]]:
     timeout_seconds = _validated_timeout(timeout_seconds, case.operator_id)
-    with TemporaryDirectory(prefix="oxq-baseline-") as directory:
+    with (
+        TemporaryDirectory(prefix="oxq-baseline-") as directory,
+        TemporaryDirectory(prefix="oxq-baseline-response-") as response_directory,
+    ):
         root = Path(directory)
         try:
             implementation_path, dependency_paths = _materialize_artifacts(
@@ -564,8 +561,9 @@ def _run_child(
                 case.operator_id,
             ) from None
         request_path = root / "request.json"
-        response_path = root / "response.json"
+        response_path = Path(response_directory) / "response.json"
         request_path.write_bytes(request_bytes)
+        response_secret = secrets.token_bytes(32)
         try:
             returncode = _run_child_process(
                 [
@@ -576,6 +574,7 @@ def _run_child(
                     str(response_path),
                 ],
                 timeout_seconds,
+                response_secret=response_secret,
             )
         except subprocess.TimeoutExpired:
             raise _error(
@@ -589,7 +588,12 @@ def _run_child(
                 "provider baseline child process failed",
                 case.operator_id,
             ) from None
-        response = _read_response(response_path, returncode, case.operator_id)
+        response = _read_response(
+            response_path,
+            returncode,
+            case.operator_id,
+            response_secret,
+        )
 
     if response["status"] == "error":
         code = response.get("code")
@@ -597,19 +601,26 @@ def _run_child(
             code = "provider_execution_failed"
         raise _error(code, "provider baseline execution failed", case.operator_id)
     outputs = response.get("outputs")
+    repeated_outputs = response.get("repeated_outputs")
     expected_names = {name for name, _ in output_fields}
     if (
         response["status"] != "ok"
         or not isinstance(outputs, dict)
+        or not isinstance(repeated_outputs, dict)
         or set(outputs) != expected_names
+        or set(repeated_outputs) != expected_names
         or not all(isinstance(value, list) for value in outputs.values())
+        or not all(isinstance(value, list) for value in repeated_outputs.values())
     ):
         raise _error(
             "provider_execution_failed",
             "provider baseline child response is invalid",
             case.operator_id,
         )
-    return cast(dict[str, list[object]], outputs)
+    return (
+        cast(dict[str, list[object]], outputs),
+        cast(dict[str, list[object]], repeated_outputs),
+    )
 
 
 def _validated_timeout(timeout_seconds: float, operator_id: str) -> float:
@@ -653,7 +664,12 @@ def _materialize_artifacts(
     return str(paths[0]), [str(path) for path in paths[1:]]
 
 
-def _run_child_process(command: list[str], timeout_seconds: float) -> int:
+def _run_child_process(
+    command: list[str],
+    timeout_seconds: float,
+    *,
+    response_secret: bytes | None = None,
+) -> int:
     platform_name = _platform_name()
     provider_command = command
     windows_job: int | None = None
@@ -666,6 +682,7 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
         try:
             process = subprocess.Popen(
                 command,
+                stdin=(subprocess.PIPE if response_secret is not None else subprocess.DEVNULL),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 creationflags=cast(
@@ -681,11 +698,20 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
         command = _contained_posix_command(command)
         process = subprocess.Popen(
             command,
+            stdin=(subprocess.PIPE if response_secret is not None else subprocess.DEVNULL),
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             start_new_session=True,
         )
     try:
+        if response_secret is not None:
+            if process.stdin is None:
+                raise OSError("provider response authentication pipe is unavailable")
+            try:
+                process.stdin.write(response_secret.hex().encode("ascii") + b"\n")
+                process.stdin.flush()
+            finally:
+                process.stdin.close()
         if platform_name == "nt":
             try:
                 windows_job = _open_windows_kill_on_close_job(process)
@@ -715,6 +741,8 @@ def _run_child_process(command: list[str], timeout_seconds: float) -> int:
                 break
             except subprocess.TimeoutExpired:
                 continue
+        if platform_name != "nt" and _posix_platform() == "linux" and process.returncode != 0:
+            _kill_process_tree(process, descendants)
         return int(process.returncode)
     finally:
         try:
@@ -738,6 +766,7 @@ def _kill_process_tree(
     else:
         descendants = set(known_descendants or ())
         descendants.update(_posix_descendant_pids(process.pid))
+        descendants = _expand_posix_descendants(descendants)
         try:
             os.killpg(process.pid, signal.SIGSTOP)
         except ProcessLookupError:
@@ -748,6 +777,7 @@ def _kill_process_tree(
             except ProcessLookupError:
                 pass
         descendants.update(_posix_descendant_pids(process.pid))
+        descendants = _expand_posix_descendants(descendants)
         try:
             os.killpg(process.pid, signal.SIGKILL)
         except ProcessLookupError:
@@ -763,6 +793,16 @@ def _kill_posix_processes(process_ids: set[int]) -> None:
             os.kill(pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def _expand_posix_descendants(process_ids: set[int]) -> set[int]:
+    descendants = set(process_ids)
+    pending = list(process_ids)
+    while pending:
+        children = _posix_descendant_pids(pending.pop()).difference(descendants)
+        descendants.update(children)
+        pending.extend(children)
+    return descendants
 
 
 def _platform_name() -> str:
@@ -977,9 +1017,13 @@ def _read_response(
     response_path: Path,
     returncode: int,
     operator_id: str,
+    response_secret: bytes,
 ) -> dict[str, object]:
     try:
-        raw = response_path.read_bytes()
+        with response_path.open("rb") as stream:
+            raw = stream.read(_MAX_CHILD_RESPONSE_BYTES + 1)
+        if len(raw) > _MAX_CHILD_RESPONSE_BYTES:
+            raise ValueError("child response is too large")
         value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_reject_duplicate_keys,
@@ -987,8 +1031,30 @@ def _read_response(
         )
         if returncode != 0 or not isinstance(value, dict):
             raise ValueError("invalid child response")
+        auth = value.pop("auth", None)
+        if not isinstance(auth, str):
+            raise ValueError("missing child response authentication")
+        expected_auth = (
+            "hmac-sha256:"
+            + hmac.new(
+                response_secret,
+                json.dumps(
+                    value,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                ).encode("utf-8"),
+                hashlib.sha256,
+            ).hexdigest()
+        )
+        if not hmac.compare_digest(auth, expected_auth):
+            raise ValueError("invalid child response authentication")
         status = value.get("status")
-        valid_ok = status == "ok" and set(value) == {"status", "outputs"}
+        valid_ok = status == "ok" and set(value) == {
+            "status",
+            "outputs",
+            "repeated_outputs",
+        }
         valid_error = status == "error" and set(value) == {"status", "code"}
         if not valid_ok and not valid_error:
             raise ValueError("invalid child response fields")
