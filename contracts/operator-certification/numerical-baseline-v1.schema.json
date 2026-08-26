@@ -22,7 +22,7 @@
           "operator_version": {"$ref": "#/$defs/semanticVersion"},
           "parameters": {"type": "object", "additionalProperties": true},
           "input": {"$ref": "#/$defs/quantPanel"},
-          "expected": {"type": "object", "minProperties": 1, "maxProperties": 1, "additionalProperties": {"type": "array", "items": {}}},
+          "expected": {"type": "object", "minProperties": 1, "maxProperties": 1, "additionalProperties": {"type": "array", "items": {"type": ["null", "boolean", "number", "string"]}}},
           "tolerance": {
             "type": "object",
             "additionalProperties": false,
