@@ -6,16 +6,19 @@ import builtins
 import importlib
 import importlib.util
 import json
+import math
 import os
 import sys
 from collections.abc import Mapping
 from datetime import date, datetime
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 _PLATFORM_RUNTIME_ROOTS = {"numpy", "pandas"}
 _OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
 
 
 class _OutputTypeError(TypeError):
@@ -87,9 +90,9 @@ def _json_value(value: object, output_dtype: str) -> object:
         value = item()
     if value is None:
         return value
-    if output_dtype == "float64" and type(value) in {int, float}:
+    if output_dtype == "float64" and _valid_float64_scalar(value):
         return value
-    if output_dtype == "int64" and type(value) is int:
+    if output_dtype == "int64" and _valid_int64_scalar(value):
         return value
     if output_dtype == "boolean" and type(value) is bool:
         return value
@@ -103,6 +106,19 @@ def _json_value(value: object, output_dtype: str) -> object:
     if output_dtype == "datetime" and isinstance(value, datetime):
         return value.isoformat()
     raise _OutputTypeError("provider output scalar does not match manifest dtype")
+
+
+def _valid_float64_scalar(value: object) -> bool:
+    if type(value) not in {int, float}:
+        return False
+    try:
+        return math.isfinite(float(cast(int | float, value)))
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _valid_int64_scalar(value: object) -> bool:
+    return type(value) is int and _INT64_MIN <= value <= _INT64_MAX
 
 
 def _extract_output(

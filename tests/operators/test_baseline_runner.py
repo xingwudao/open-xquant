@@ -483,6 +483,130 @@ def test_accepts_manifest_typed_exact_outputs(
 
 
 @pytest.mark.parametrize(
+    ("value", "passes"),
+    [
+        (-(2**63), True),
+        (2**63 - 1, True),
+        (-(2**63) - 1, False),
+        (2**63, False),
+    ],
+    ids=["minimum", "maximum", "below-minimum", "above-maximum"],
+)
+def test_enforces_signed_int64_scalar_bounds(
+    tmp_path: Path,
+    value: int,
+    passes: bool,
+) -> None:
+    source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    return pd.Series([{value}, None, {value}], "
+        "index=frame.index, name=f'sma_{window}', dtype='object')\n"
+    )
+    candidate = _with_output_dtype(
+        _contract(tmp_path, source, expected={"sma_3": [value, None, value]}),
+        "int64",
+    )
+
+    if passes:
+        results = run_research_baselines(
+            candidate,
+            candidate.artifacts,
+            timeout_seconds=5,
+        )
+        assert [(item.case_id, item.status) for item in results] == [
+            ("sma-3", "passed")
+        ]
+    else:
+        _assert_failure(candidate, "baseline_mismatch")
+
+
+@pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
+def test_parent_rejects_out_of_range_int64_child_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: int,
+) -> None:
+    candidate = _with_output_dtype(
+        _contract(tmp_path / "candidate", expected={"sma_3": [value, None, value]}),
+        "int64",
+    )
+    child = tmp_path / "out_of_range_int_child.py"
+    child.write_text(
+        "import json, pathlib, sys\n"
+        f"value = {{'status': 'ok', 'output': [{value}, None, {value}]}}\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_rejects_float64_integer_that_cannot_convert_to_finite_ieee_value(
+    tmp_path: Path,
+    value: int,
+) -> None:
+    source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    return pd.Series([{value}, None, {value}], "
+        "index=frame.index, name=f'sma_{window}', dtype='object')\n"
+    )
+    candidate = _contract(
+        tmp_path,
+        source,
+        expected={"sma_3": [value, None, value]},
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+@pytest.mark.parametrize("value", [10**400, -(10**400)])
+def test_parent_rejects_unconvertible_float64_child_response(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    value: int,
+) -> None:
+    candidate = _contract(
+        tmp_path / "candidate",
+        expected={"sma_3": [value, None, value]},
+    )
+    child = tmp_path / "unconvertible_float_child.py"
+    child.write_text(
+        "import json, pathlib, sys\n"
+        f"value = {{'status': 'ok', 'output': [{value}, None, {value}]}}\n"
+        "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+@pytest.mark.parametrize("expression", ["float('inf')", "float('-inf')"])
+def test_rejects_non_finite_float64_actual_value(
+    tmp_path: Path,
+    expression: str,
+) -> None:
+    source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    value = {expression}\n"
+        "    return pd.Series([value, None, value], "
+        "index=frame.index, name=f'sma_{window}', dtype='object')\n"
+    )
+    candidate = _contract(
+        tmp_path,
+        source,
+        expected={"sma_3": [1.0, None, 1.0]},
+    )
+
+    _assert_failure(candidate, "baseline_mismatch")
+
+
+@pytest.mark.parametrize(
     ("dtype", "source_values", "expected"),
     [
         ("float64", "[0.0, 0.0, 1.0]", [False, False, True]),
@@ -983,9 +1107,11 @@ def test_rejects_undeclared_expected_output_before_child_execution(
 def _write_certifiable_provider(
     tmp_path: Path,
     *,
-    expected: list[float | None],
+    expected: list[object],
+    provider_source: str = SUCCESS_SOURCE,
+    output_dtype: str = "float64",
 ) -> object:
-    provider_bytes = _wheel_bytes("equant-ttr", "equant_ttr", SUCCESS_SOURCE)
+    provider_bytes = _wheel_bytes("equant-ttr", "equant_ttr", provider_source)
     dependency_bytes = _wheel_bytes(
         "baseline-dependency",
         "baseline_dependency",
@@ -1012,14 +1138,18 @@ def _write_certifiable_provider(
                 ),
             ),
         )
+        def update_manifest(manifest: dict[str, object]) -> None:
+            manifest["implementation"].update(  # type: ignore[union-attr]
+                {"implementation_digest": provider_digest}
+            )
+            manifest["output"]["fields"][0]["dtype"] = output_dtype  # type: ignore[index]
+
         rewrite_json(
             repository
             / COMPATIBILITY_ROOT
             / "manifests"
             / "equant.ttr.sma.operator.json",
-            lambda manifest: manifest["implementation"].update(  # type: ignore[union-attr]
-                {"implementation_digest": provider_digest}
-            ),
+            update_manifest,
         )
 
         def replace_case(baseline: dict[str, object]) -> None:

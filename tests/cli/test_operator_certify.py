@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
 from click.testing import CliRunner
 from tests.operators.helpers import (
     CATALOG_NAME,
@@ -305,6 +306,40 @@ def test_baseline_failure_json_includes_loaded_identity_and_is_atomic(
         "stage": "baseline",
         "status": "fail",
     }
+    assert not output.exists() or not list(output.rglob("registry-entry.json"))
+
+
+@pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
+def test_out_of_range_int64_baseline_cannot_publish_through_cli(
+    tmp_path: Path,
+    value: int,
+) -> None:
+    provider_source = (
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        f"    return pd.Series([{value}, None, {value}], "
+        "index=frame.index, name=f'sma_{window}', dtype='object')\n"
+    )
+    fixture = _write_certifiable_provider(
+        tmp_path / "fixture",
+        expected=[value, None, value],
+        provider_source=provider_source,
+        output_dtype="int64",
+    )
+    output = tmp_path / "certifications"
+
+    result = CliRunner().invoke(
+        main,
+        _explicit_args(
+            fixture.path,
+            fixture.submission_commit,
+            fixture.artifact_dir,
+            output,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output)["code"] == "baseline_mismatch"
     assert not output.exists() or not list(output.rglob("registry-entry.json"))
 
 

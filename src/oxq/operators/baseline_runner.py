@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -31,6 +32,8 @@ _CHILD_FAILURE_CODES = {
     "baseline_mismatch",
 }
 _OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
+_INT64_MIN = -(2**63)
+_INT64_MAX = 2**63 - 1
 
 
 def run_research_baselines(
@@ -423,7 +426,7 @@ def _assert_expected(
                 raise TypeError("exact output contains an invalid scalar")
             if actual != expected:
                 raise AssertionError("exact output differs")
-    except (AssertionError, KeyError, TypeError, ValueError):
+    except (AssertionError, KeyError, OverflowError, TypeError, ValueError):
         raise _error(
             "baseline_mismatch",
             "provider output does not match the numerical baseline",
@@ -435,9 +438,9 @@ def _valid_scalar(value: object, output_dtype: str) -> bool:
     if value is None:
         return True
     if output_dtype == "float64":
-        return type(value) in {int, float}
+        return _valid_float64_scalar(value)
     if output_dtype == "int64":
-        return type(value) is int
+        return _valid_int64_scalar(value)
     if output_dtype == "boolean":
         return type(value) is bool
     if output_dtype == "string":
@@ -447,6 +450,19 @@ def _valid_scalar(value: object, output_dtype: str) -> bool:
     if output_dtype == "datetime":
         return isinstance(value, str) and _valid_iso_datetime(value)
     return False
+
+
+def _valid_float64_scalar(value: object) -> bool:
+    if type(value) not in {int, float}:
+        return False
+    try:
+        return math.isfinite(float(cast(int | float, value)))
+    except (OverflowError, TypeError, ValueError):
+        return False
+
+
+def _valid_int64_scalar(value: object) -> bool:
+    return type(value) is int and _INT64_MIN <= value <= _INT64_MAX
 
 
 def _valid_iso_date(value: str) -> bool:
