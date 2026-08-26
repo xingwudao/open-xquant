@@ -112,6 +112,7 @@ def certify_provider_command(
     """Certify one exact local provider submission for research use."""
     from oxq.operators.errors import OperatorCertificationError
 
+    known_identity: tuple[str, str] | None = None
     try:
         if not trust_provider_code:
             raise OperatorCertificationError(
@@ -137,14 +138,23 @@ def certify_provider_command(
             provider_commit,
             resolved_artifact_dir,
         ) as submission:
+            known_identity = (submission.provider, submission.release)
             certified = certify_provider(submission)
             published = publish_certification(certified, resolved_output_dir)
     except OperatorCertificationError as error:
         if as_json:
-            click.echo(json.dumps(error.as_dict(), sort_keys=True))
+            payload = error.as_dict()
+            if known_identity is not None:
+                payload["provider"], payload["release"] = known_identity
+            click.echo(json.dumps(payload, sort_keys=True))
         else:
+            identity = (
+                ""
+                if known_identity is None
+                else f" for {known_identity[0]} {known_identity[1]}"
+            )
             click.echo(
-                "Certification failed: "
+                f"Certification failed{identity}: "
                 f"[{error.stage}/{error.code}] {error.message}"
             )
         raise click.exceptions.Exit(1) from None

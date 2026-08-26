@@ -9,8 +9,10 @@ declared numerical baselines, issues `research-certified` bindings.
 
 This first version is manually triggered from a local `open-xquant` checkout.
 It accepts a local provider Git repository and an exact 40-character commit.
-It does not clone remote repositories, contact GitHub, run a backtest, or make
-an operator eligible for formal/live execution.
+Certifier-owned code does not clone, fetch, download, install, build, or
+proactively retrieve artifacts from the network. It does not run a backtest or
+make an operator eligible for formal/live execution. Trusted provider code is
+not network-sandboxed and may itself access local files or the network.
 
 ## User Interface
 
@@ -54,6 +56,12 @@ compat/open_xquant/
 └── numerical_baselines/
     └── technical-v1.json
 ```
+
+`compat/open_xquant/operator_catalog.json` is the only submission entry point.
+Its `build_record` and every operator `manifest` and `baseline` path are
+normalized paths relative to `compat/open_xquant/` and cannot escape or resolve
+through links. Manifest `implementation.source_files` remain relative to the
+implementation source commit's repository root.
 
 The local artifact directory contains the immutable wheels named by the build
 record, including the primary implementation wheel and any provider runtime
@@ -150,8 +158,9 @@ Any failure rejects the entire provider release.
 
 The subprocess executes the exact wheel artifacts, not provider source files
 or an installed development checkout. It inherits the supported pandas/numpy
-runtime from `open-xquant`; provider wheels are loaded without network access
-or dependency installation.
+runtime from `open-xquant`; certifier-owned code loads local provider wheels
+directly and does not download or install dependencies. The subprocess is not
+a network sandbox, so trusted provider code may itself access the network.
 
 ## Results and Registry
 

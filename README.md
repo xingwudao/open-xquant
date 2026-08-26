@@ -122,15 +122,18 @@ oxq operator certify-provider \
 
 `--provider-commit` 是包含 catalog、manifest、baseline 和 build record 的
 提交，不是实现源码提交。build record 中的 `source_commit` 指向更早的实现
-源码提交，并且该提交必须是 submission commit 的祖先。默认从
+源码提交，并且该提交必须是 submission commit 的祖先。固定入口是
+`compat/open_xquant/operator_catalog.json`；catalog 引用的 build record、
+manifest 和 baseline 路径都相对 `compat/open_xquant/`。默认从
 `<provider-repo>/dist` 读取已构建 wheel，默认输出到当前目录的
 `.open-xquant/certifications/<provider>/<release>/`。可分别用
 `--artifact-dir` 和 `--output-dir` 覆盖。
 
 当前命令只接受已存在的本地 Git 目录和完整的 40 位小写 SHA；不接受 GitHub
-URL，不 clone 仓库，不联网，不构建或安装 provider。执行过程会运行 provider
-wheel，因此必须显式提供 `--trust-provider-code`。隔离子进程用于限制导入污染、
-失败和超时，不是针对恶意代码的操作系统安全沙箱。
+URL。certifier 自身不会 clone、fetch、download、install 或 build，也不会主动
+从网络取件。执行过程会运行 provider wheel，因此必须显式提供
+`--trust-provider-code`。隔离子进程用于限制导入污染、失败和超时，不是针对
+恶意代码的操作系统或网络安全沙箱；受信 provider code 仍可访问本机文件和网络。
 
 成功状态 `research-certified` 只允许研究和离线分析。策略运行或实盘接入仍然
 要求 `runtime-certified` 且算子的因果性为 `past_only`。provider 文件布局、
@@ -435,17 +438,21 @@ oxq operator certify-provider \
 
 `--provider-commit` selects the later submission commit containing the catalog,
 manifests, baselines, and build record. The build record's `source_commit`
-selects the earlier implementation commit and must be its ancestor. Wheels are
+selects the earlier implementation commit and must be its ancestor. The fixed
+entry point is `compat/open_xquant/operator_catalog.json`; catalog build-record,
+manifest, and baseline paths are relative to `compat/open_xquant/`. Wheels are
 read from `<provider-repo>/dist` by default. Results are published below
 `.open-xquant/certifications/<provider>/<release>/` in the current directory.
 Use `--artifact-dir` and `--output-dir` to override those defaults.
 
 This command accepts only an existing local Git directory and a full lowercase
-40-character SHA. It does not accept a GitHub URL, clone, use the network,
-build, or install the provider. Provider wheels execute during certification,
-so `--trust-provider-code` is mandatory. The child process isolates imports,
-failures, and timeouts; it is not an operating-system security sandbox for
-malicious code.
+40-character SHA. It does not accept a GitHub URL. Certifier-owned code does
+not clone, fetch, download, install, build, or proactively retrieve artifacts
+from the network. Provider wheels execute during certification, so
+`--trust-provider-code` is mandatory. The child process isolates imports,
+failures, and timeouts; it is neither an operating-system nor a network
+security sandbox. Trusted provider code can still access local files and the
+network.
 
 `research-certified` permits research and offline analysis only. Strategy or
 live execution still requires `runtime-certified` together with `past_only`.

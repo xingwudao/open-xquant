@@ -11,6 +11,8 @@ from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.submission import load_provider_submission
 from tests.operators.helpers import (
     BUILD_IDENTIFIER,
+    CATALOG_NAME,
+    COMPATIBILITY_ROOT,
     commit_mutation,
     rewrite_json,
     sha256,
@@ -41,7 +43,7 @@ def test_loads_a_committed_submission_into_an_independent_archive(tmp_path: Path
 def test_uses_committed_data_not_a_dirty_working_tree(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path / "provider-catalog-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
         lambda value: value["provider"].update({"name": "dirty-provider"}),  # type: ignore[index,union-attr]
     )
 
@@ -49,6 +51,30 @@ def test_uses_committed_data_not_a_dirty_working_tree(tmp_path: Path) -> None:
         fixture.path, fixture.submission_commit, fixture.artifact_dir
     ) as submission:
         assert submission.provider == "equant-py"
+
+
+def test_ignores_legacy_catalog_files_outside_compatibility_root(
+    tmp_path: Path,
+) -> None:
+    def add_root_decoys(repository: Path) -> None:
+        (repository / "provider-catalog-v1.json").write_text(
+            "legacy root catalog must not be read",
+            encoding="utf-8",
+        )
+        (repository / CATALOG_NAME).write_text(
+            "root operator catalog must not be read",
+            encoding="utf-8",
+        )
+
+    fixture = write_provider_repository(tmp_path, mutate=add_root_decoys)
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert submission.provider == "equant-py"
+        assert submission.release == "1.0.0"
 
 
 @pytest.mark.parametrize("revision", ["deadbeef", "A" * 40, "not-a-commit"])
@@ -85,7 +111,7 @@ def test_rejects_an_existing_directory_that_is_not_a_git_repository(tmp_path: Pa
 def test_rejects_unsafe_catalog_paths(tmp_path: Path, path_value: str) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path / "provider-catalog-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
         lambda value: value.update({"build_record": path_value}),
     )
     commit = commit_mutation(fixture.path)
@@ -96,9 +122,37 @@ def test_rejects_unsafe_catalog_paths(tmp_path: Path, path_value: str) -> None:
     )
 
 
+@pytest.mark.parametrize("field", ["manifest", "baseline"])
+def test_rejects_catalog_references_that_escape_compatibility_root(
+    tmp_path: Path,
+    field: str,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+
+    def escape_reference(catalog: dict[str, object]) -> None:
+        operators = catalog["operators"]  # type: ignore[assignment]
+        entry = operators["equant.ttr.sma@1.0.0"]  # type: ignore[index]
+        entry[field] = f"../{field}.json"  # type: ignore[index]
+
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
+        escape_reference,
+    )
+    commit = commit_mutation(fixture.path, f"escape {field} reference")
+
+    _assert_error(
+        lambda: load_provider_submission(
+            fixture.path,
+            commit,
+            fixture.artifact_dir,
+        ),
+        "submission_schema_invalid",
+    )
+
+
 def test_rejects_duplicate_json_keys_and_nonstandard_constants(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
-    (fixture.path / "provider-catalog-v1.json").write_text(
+    (fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME).write_text(
         '{"schema_version": 1, "schema_version": 1}', encoding="utf-8"
     )
     commit = commit_mutation(fixture.path)
@@ -108,7 +162,9 @@ def test_rejects_duplicate_json_keys_and_nonstandard_constants(tmp_path: Path) -
     )
 
     fixture = write_provider_repository(tmp_path / "nan")
-    (fixture.path / "candidate-build-v1.json").write_text("NaN", encoding="utf-8")
+    (fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json").write_text(
+        "NaN", encoding="utf-8"
+    )
     commit = commit_mutation(fixture.path)
     _assert_error(
         lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
@@ -118,7 +174,7 @@ def test_rejects_duplicate_json_keys_and_nonstandard_constants(tmp_path: Path) -
 
 def test_rejects_duplicate_keyed_catalog_operator_identity(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
-    catalog_path = fixture.path / "provider-catalog-v1.json"
+    catalog_path = fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
     operator_key = "equant.ttr.sma@1.0.0"
     entry = json.dumps(catalog.pop("operators")[operator_key], sort_keys=True)
@@ -136,7 +192,10 @@ def test_rejects_duplicate_keyed_catalog_operator_identity(tmp_path: Path) -> No
 def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path / "numerical_baselines" / "technical-v1.json",
+        fixture.path
+        / COMPATIBILITY_ROOT
+        / "numerical_baselines"
+        / "technical-v1.json",
         lambda value: value.update({"provider": "another-provider"}),
     )
     commit = commit_mutation(fixture.path)
@@ -147,7 +206,7 @@ def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
 
     fixture = write_provider_repository(tmp_path / "schema")
     rewrite_json(
-        fixture.path / "candidate-build-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value.update({"unexpected": True}),
     )
     commit = commit_mutation(fixture.path)
@@ -160,7 +219,10 @@ def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
 def test_rejects_baseline_case_identity_that_differs_from_catalog(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path / "numerical_baselines" / "technical-v1.json",
+        fixture.path
+        / COMPATIBILITY_ROOT
+        / "numerical_baselines"
+        / "technical-v1.json",
         lambda value: value["cases"][0].update({"operator_id": "equant.ttr.ema"}),  # type: ignore[index]
     )
     commit = commit_mutation(fixture.path)
@@ -180,7 +242,10 @@ def test_rejects_duplicate_global_baseline_case_identity(tmp_path: Path) -> None
         value["cases"].append(first)  # type: ignore[union-attr]
 
     rewrite_json(
-        fixture.path / "numerical_baselines" / "technical-v1.json",
+        fixture.path
+        / COMPATIBILITY_ROOT
+        / "numerical_baselines"
+        / "technical-v1.json",
         duplicate_case,
     )
     commit = commit_mutation(fixture.path)
@@ -206,8 +271,13 @@ def test_loads_shared_baseline_file_once_for_all_referencing_catalog_entries(
     ][:operator_count]
 
     def share_baseline(repository: Path) -> None:
-        catalog_path = repository / "provider-catalog-v1.json"
-        baseline_path = repository / "numerical_baselines" / "technical-v1.json"
+        catalog_path = repository / COMPATIBILITY_ROOT / CATALOG_NAME
+        baseline_path = (
+            repository
+            / COMPATIBILITY_ROOT
+            / "numerical_baselines"
+            / "technical-v1.json"
+        )
         catalog = json.loads(catalog_path.read_text())
         baseline = json.loads(baseline_path.read_text())
         original_case = baseline["cases"][0]
@@ -255,7 +325,7 @@ def test_rejects_shared_baseline_missing_a_referencing_catalog_identity(
 ) -> None:
     def add_uncovered_operator(repository: Path) -> None:
         rewrite_json(
-            repository / "provider-catalog-v1.json",
+            repository / COMPATIBILITY_ROOT / CATALOG_NAME,
             lambda catalog: catalog["operators"].update(  # type: ignore[union-attr]
                 {
                     "equant.ttr.ema@1.0.0": {
@@ -287,7 +357,7 @@ def test_rejects_missing_or_nonfull_implementation_commit(
 ) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path / "candidate-build-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value.update({"source_commit": source_commit}),
     )
     commit = commit_mutation(fixture.path)
@@ -313,7 +383,7 @@ def test_rejects_an_implementation_commit_not_ancestral_to_submission(tmp_path: 
         capture_output=True,
     ).stdout.strip()
     rewrite_json(
-        fixture.path / "candidate-build-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value.update({"source_commit": f"git-sha1:{unrelated}"}),
     )
     commit = commit_mutation(fixture.path)
@@ -327,7 +397,7 @@ def test_rejects_an_implementation_commit_not_ancestral_to_submission(tmp_path: 
 def test_rejects_duplicate_or_missing_artifacts(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path / "candidate-build-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
         lambda value: value["artifacts"].append(  # type: ignore[index,union-attr]
             {
                 "distribution": "equant-ttr",
@@ -393,7 +463,12 @@ def test_normalizes_an_artifact_read_race_to_artifact_missing(
 
 def test_rejects_referenced_symlinks_from_the_committed_archive(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
-    manifest = fixture.path / "manifests" / "equant.ttr.sma.operator.json"
+    manifest = (
+        fixture.path
+        / COMPATIBILITY_ROOT
+        / "manifests"
+        / "equant.ttr.sma.operator.json"
+    )
     manifest.unlink()
     manifest.symlink_to("../candidate-build-v1.json")
     commit = commit_mutation(fixture.path)
@@ -407,7 +482,12 @@ def test_rejects_referenced_symlinks_from_the_committed_archive(tmp_path: Path) 
 @pytest.mark.parametrize("source_path", ["/source.py", "../source.py", "dir\\source.py", "./source.py"])
 def test_rejects_unsafe_manifest_source_paths(tmp_path: Path, source_path: str) -> None:
     fixture = write_provider_repository(tmp_path)
-    manifest_path = fixture.path / "manifests" / "equant.ttr.sma.operator.json"
+    manifest_path = (
+        fixture.path
+        / COMPATIBILITY_ROOT
+        / "manifests"
+        / "equant.ttr.sma.operator.json"
+    )
     rewrite_json(
         manifest_path,
         lambda value: value["implementation"].update({"source_files": [source_path]}),  # type: ignore[index,union-attr]

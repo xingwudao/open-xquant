@@ -15,7 +15,11 @@ from oxq.operators.certification import validate_provider_contract
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.resources import materialize_contract_surface
 from oxq.operators.submission import load_provider_submission
-from tests.operators.helpers import rewrite_json, write_provider_repository
+from tests.operators.helpers import (
+    COMPATIBILITY_ROOT,
+    rewrite_json,
+    write_provider_repository,
+)
 
 EXPECTED_SURFACE_DIGESTS = {
     "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
@@ -70,7 +74,10 @@ def _rewrite_manifest(
     repository: Path, mutate: Callable[[dict[str, object]], None]
 ) -> None:
     rewrite_json(
-        repository / "manifests" / "equant.ttr.sma.operator.json",
+        repository
+        / COMPATIBILITY_ROOT
+        / "manifests"
+        / "equant.ttr.sma.operator.json",
         mutate,
     )
 

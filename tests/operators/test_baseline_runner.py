@@ -31,7 +31,12 @@ from oxq.operators.models import (
     ProviderSubmission,
 )
 from oxq.operators.submission import load_provider_submission
-from tests.operators.helpers import rewrite_json, write_provider_repository
+from tests.operators.helpers import (
+    CATALOG_NAME,
+    COMPATIBILITY_ROOT,
+    rewrite_json,
+    write_provider_repository,
+)
 
 
 def _sha256(value: bytes) -> str:
@@ -697,7 +702,7 @@ def _write_certifiable_provider(
 
     def mutate(repository: Path) -> None:
         rewrite_json(
-            repository / "candidate-build-v1.json",
+            repository / COMPATIBILITY_ROOT / "candidate-build-v1.json",
             lambda build: (
                 build["artifacts"][0].update({"digest": provider_digest}),  # type: ignore[index,union-attr]
                 build["artifacts"].append(  # type: ignore[union-attr]
@@ -713,7 +718,10 @@ def _write_certifiable_provider(
             ),
         )
         rewrite_json(
-            repository / "manifests" / "equant.ttr.sma.operator.json",
+            repository
+            / COMPATIBILITY_ROOT
+            / "manifests"
+            / "equant.ttr.sma.operator.json",
             lambda manifest: manifest["implementation"].update(  # type: ignore[union-attr]
                 {"implementation_digest": provider_digest}
             ),
@@ -725,7 +733,10 @@ def _write_certifiable_provider(
             case["expected"] = {"sma_3": expected}
 
         rewrite_json(
-            repository / "numerical_baselines" / "technical-v1.json",
+            repository
+            / COMPATIBILITY_ROOT
+            / "numerical_baselines"
+            / "technical-v1.json",
             replace_case,
         )
 
@@ -775,7 +786,7 @@ def zzz(frame, *, window):
 
     def mutate(repository: Path) -> None:
         rewrite_json(
-            repository / "candidate-build-v1.json",
+            repository / COMPATIBILITY_ROOT / "candidate-build-v1.json",
             lambda build: (
                 build["artifacts"][0].update({"digest": provider_digest}),  # type: ignore[index,union-attr]
                 build["artifacts"].append(  # type: ignore[union-attr]
@@ -791,7 +802,10 @@ def zzz(frame, *, window):
             ),
         )
         sma_manifest_path = (
-            repository / "manifests" / "equant.ttr.sma.operator.json"
+            repository
+            / COMPATIBILITY_ROOT
+            / "manifests"
+            / "equant.ttr.sma.operator.json"
         )
         rewrite_json(
             sma_manifest_path,
@@ -810,7 +824,10 @@ def zzz(frame, *, window):
         )
         zzz_manifest["output"]["fields"][0]["name_template"] = "zzz_{window}"
         zzz_manifest_path = (
-            repository / "manifests" / "equant.ttr.zzz.operator.json"
+            repository
+            / COMPATIBILITY_ROOT
+            / "manifests"
+            / "equant.ttr.zzz.operator.json"
         )
         zzz_manifest_path.write_text(
             json.dumps(zzz_manifest, sort_keys=True),
@@ -823,7 +840,10 @@ def zzz(frame, *, window):
             case["expected"] = {"sma_3": [None, None, 2.0]}
 
         sma_baseline_path = (
-            repository / "numerical_baselines" / "technical-v1.json"
+            repository
+            / COMPATIBILITY_ROOT
+            / "numerical_baselines"
+            / "technical-v1.json"
         )
         rewrite_json(sma_baseline_path, replace_sma_case)
         zzz_baseline = json.loads(sma_baseline_path.read_text(encoding="utf-8"))
@@ -835,14 +855,17 @@ def zzz(frame, *, window):
             }
         )
         zzz_baseline_path = (
-            repository / "numerical_baselines" / "technical-zzz-v1.json"
+            repository
+            / COMPATIBILITY_ROOT
+            / "numerical_baselines"
+            / "technical-zzz-v1.json"
         )
         zzz_baseline_path.write_text(
             json.dumps(zzz_baseline, sort_keys=True),
             encoding="utf-8",
         )
         rewrite_json(
-            repository / "provider-catalog-v1.json",
+            repository / COMPATIBILITY_ROOT / CATALOG_NAME,
             lambda catalog: catalog["operators"].update(  # type: ignore[union-attr]
                 {
                     "equant.ttr.zzz@1.0.0": {

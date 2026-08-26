@@ -9,6 +9,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 BUILD_IDENTIFIER = "build-20260826-equant-ttr"
+COMPATIBILITY_ROOT = Path("compat/open_xquant")
+CATALOG_NAME = "operator_catalog.json"
 
 
 def sha256(value: bytes) -> str:
@@ -49,9 +51,10 @@ def write_provider_repository(
     wheel_name = "equant_ttr-1.0.0-py3-none-any.whl"
     wheel_bytes = _wheel_bytes()
     wheel_digest = sha256(wheel_bytes)
-    _write_json(repository / "provider-catalog-v1.json", _catalog())
+    compatibility_root = repository / COMPATIBILITY_ROOT
+    _write_json(compatibility_root / CATALOG_NAME, _catalog())
     _write_json(
-        repository / "candidate-build-v1.json",
+        compatibility_root / "candidate-build-v1.json",
         _build(
             implementation_commit,
             wheel_name,
@@ -59,9 +62,12 @@ def write_provider_repository(
             BUILD_IDENTIFIER,
         ),
     )
-    _write_json(repository / "numerical_baselines" / "technical-v1.json", _baseline())
     _write_json(
-        repository / "manifests" / "equant.ttr.sma.operator.json",
+        compatibility_root / "numerical_baselines" / "technical-v1.json",
+        _baseline(),
+    )
+    _write_json(
+        compatibility_root / "manifests" / "equant.ttr.sma.operator.json",
         _manifest(
             implementation_commit,
             source_tree_digest,

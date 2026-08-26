@@ -25,7 +25,8 @@ from oxq.operators.models import (
 from oxq.operators.resources import materialize_certification_profile
 
 _FULL_SHA1 = re.compile(r"^[0-9a-f]{40}$")
-_CATALOG_FILE = "provider-catalog-v1.json"
+_COMPATIBILITY_ROOT = PurePosixPath("compat/open_xquant")
+_CATALOG_FILE = "operator_catalog.json"
 
 
 def load_provider_submission(
@@ -128,7 +129,11 @@ def _load_archive(
     provider_commit: str,
     artifact_dir: Path,
 ) -> ProviderSubmission:
-    catalog = _read_json(_contained_file(archive_root, _CATALOG_FILE, "catalog"))
+    catalog_path = _COMPATIBILITY_ROOT / _CATALOG_FILE
+    catalog = _read_json(
+        _contained_file(archive_root, catalog_path.as_posix(), "catalog")
+    )
+    compatibility_root = archive_root.joinpath(*_COMPATIBILITY_ROOT.parts)
     schemas = _certification_schemas()
     _validate_schema(catalog, schemas["provider_catalog"], "catalog")
     catalog_data = _mapping(catalog, "catalog")
@@ -137,7 +142,9 @@ def _load_archive(
     release = _string(provider["release"], "catalog")
 
     build_path = _contained_file(
-        archive_root, _string(catalog_data["build_record"], "catalog"), "build"
+        compatibility_root,
+        _string(catalog_data["build_record"], "catalog"),
+        "build",
     )
     build = _read_json(build_path)
     _validate_schema(build, schemas["candidate_build"], "build")
@@ -151,7 +158,7 @@ def _load_archive(
     _archive_commit(repository, source_commit, source_tar)
     _extract_archive(source_tar, source_root)
 
-    operators = _load_operators(archive_root, source_root, catalog_data)
+    operators = _load_operators(compatibility_root, source_root, catalog_data)
     baselines = _load_baselines(operators, schemas["numerical_baseline"], provider_name, release)
     artifacts = _load_artifacts(build_data, artifact_dir)
     return ProviderSubmission(

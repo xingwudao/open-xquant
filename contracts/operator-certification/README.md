@@ -12,24 +12,31 @@ need to be committed.
 
 ```text
 <provider-repo>/
-  provider-catalog-v1.json
-  candidate-build-v1.json
-  manifests/
-    <operator-id>.operator.json
-  numerical_baselines/
-    <baseline>.json
+  compat/
+    open_xquant/
+      operator_catalog.json
+      candidate-build-v1.json
+      manifests/
+        <operator-id>.operator.json
+      numerical_baselines/
+        <baseline>.json
   src/
     ... implementation source ...
   dist/
     ... exact implementation and runtime-dependency wheels ...
 ```
 
-`provider-catalog-v1.json` keys every candidate as
+`compat/open_xquant/operator_catalog.json` is the only submission entry point
+and keys every candidate as
 `<operator_id>@<operator_version>` and references its standalone manifest and
-baseline file. `candidate-build-v1.json` records every wheel filename, role,
-version, build identifier, and SHA-256 digest. Exactly one implementation
-artifact serves each operator; any additional imported provider distribution
-must be declared as a `runtime-dependency` artifact.
+baseline file. Its `build_record` and every `manifest` and `baseline` value are
+normalized paths relative to `compat/open_xquant/`; they cannot escape that
+directory or resolve through links. Manifest `implementation.source_files`
+remain relative to the implementation source commit's repository root.
+`candidate-build-v1.json` records every wheel filename, role, version, build
+identifier, and SHA-256 digest. Exactly one implementation artifact serves
+each operator; any additional imported provider distribution must be declared
+as a `runtime-dependency` artifact.
 
 ## Two-commit provenance
 
@@ -63,16 +70,18 @@ oxq operator certify-provider \
 to `<current-directory>/.open-xquant/certifications`.
 
 The v1 command accepts only an existing local Git directory and an exact local
-commit. It does not accept a GitHub URL, clone or fetch a repository, access
-the network, build wheels, or install provider packages.
+commit. It does not accept a GitHub URL. Certifier-owned code does not clone,
+fetch, download, install, build, or proactively retrieve artifacts from the
+network.
 
 ## Trust and execution boundary
 
 Certification imports and executes the exact verified provider wheels in a
 child Python process. `--trust-provider-code` is mandatory and must be supplied
 before repository loading begins. The child process provides import, failure,
-and timeout isolation. It is not an operating-system sandbox and does not make
-malicious third-party code safe.
+and timeout isolation. It is neither an operating-system nor a network
+sandbox and does not make malicious third-party code safe. Trusted provider
+code can still access local files and the network.
 
 The certifier validates committed metadata, implementation source digests,
 wheel digests, frozen manifests and bindings, QuantPanel inputs, invocation

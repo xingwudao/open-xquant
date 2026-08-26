@@ -6,7 +6,12 @@ import json
 from pathlib import Path
 
 from click.testing import CliRunner
-from tests.operators.helpers import commit_mutation, rewrite_json
+from tests.operators.helpers import (
+    CATALOG_NAME,
+    COMPATIBILITY_ROOT,
+    commit_mutation,
+    rewrite_json,
+)
 from tests.operators.test_baseline_runner import _write_certifiable_provider
 
 from oxq.cli.main import main
@@ -46,10 +51,24 @@ def _tree_bytes(root: Path) -> dict[str, bytes]:
     }
 
 
-def test_certify_provider_with_explicit_paths_emits_stable_json(tmp_path: Path) -> None:
+def test_certify_provider_reads_compat_layout_and_ignores_root_catalogs(
+    tmp_path: Path,
+) -> None:
     fixture = _write_certifiable_provider(
         tmp_path / "fixture",
         expected=[None, None, 2.0],
+    )
+    (fixture.path / "provider-catalog-v1.json").write_text(
+        "legacy root catalog must not be read",
+        encoding="utf-8",
+    )
+    (fixture.path / CATALOG_NAME).write_text(
+        "root operator catalog must not be read",
+        encoding="utf-8",
+    )
+    submission_commit = commit_mutation(
+        fixture.path,
+        "add ignored root catalogs",
     )
     output = tmp_path / "certifications"
 
@@ -57,7 +76,7 @@ def test_certify_provider_with_explicit_paths_emits_stable_json(tmp_path: Path) 
         main,
         _explicit_args(
             fixture.path,
-            fixture.submission_commit,
+            submission_commit,
             fixture.artifact_dir,
             output,
         ),
@@ -71,7 +90,7 @@ def test_certify_provider_with_explicit_paths_emits_stable_json(tmp_path: Path) 
         "release": "1.0.0",
         "source_commit": f"git-sha1:{fixture.implementation_commit}",
         "status": "research-certified",
-        "submission_commit": f"git-sha1:{fixture.submission_commit}",
+        "submission_commit": f"git-sha1:{submission_commit}",
     }
     assert (output / "equant-py" / "1.0.0" / "registry-entry.json").is_file()
 
@@ -196,7 +215,7 @@ def test_empty_provider_release_emits_stable_error_without_publication(
         expected=[None, None, 2.0],
     )
     rewrite_json(
-        fixture.path / "provider-catalog-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
         lambda catalog: catalog.update({"operators": {}}),
     )
     empty_commit = commit_mutation(fixture.path, "empty provider release")
@@ -221,7 +240,75 @@ def test_empty_provider_release_emits_stable_error_without_publication(
     assert not output.exists()
 
 
-def test_baseline_failure_is_atomic_and_human_error_has_no_traceback(
+def test_compat_catalog_reference_cannot_escape_compat_directory(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_certifiable_provider(
+        tmp_path / "fixture",
+        expected=[None, None, 2.0],
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
+        lambda catalog: catalog["operators"]["equant.ttr.sma@1.0.0"].update(  # type: ignore[index]
+            {"manifest": "../manifests/equant.ttr.sma.operator.json"}
+        ),
+    )
+    escaped_commit = commit_mutation(fixture.path, "escape compat directory")
+    output = tmp_path / "certifications"
+
+    result = CliRunner().invoke(
+        main,
+        _explicit_args(
+            fixture.path,
+            escaped_commit,
+            fixture.artifact_dir,
+            output,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "code": "submission_schema_invalid",
+        "message": "submission does not match its schema",
+        "stage": "catalog",
+        "status": "fail",
+    }
+    assert not output.exists()
+
+
+def test_baseline_failure_json_includes_loaded_identity_and_is_atomic(
+    tmp_path: Path,
+) -> None:
+    fixture = _write_certifiable_provider(
+        tmp_path / "fixture",
+        expected=[None, None, 99.0],
+    )
+    output = tmp_path / "certifications"
+
+    result = CliRunner().invoke(
+        main,
+        _explicit_args(
+            fixture.path,
+            fixture.submission_commit,
+            fixture.artifact_dir,
+            output,
+        ),
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "code": "baseline_mismatch",
+        "message": "provider output does not match the numerical baseline",
+        "operator_id": "equant.ttr.sma",
+        "provider": "equant-py",
+        "release": "1.0.0",
+        "stage": "baseline",
+        "status": "fail",
+    }
+    assert not output.exists() or not list(output.rglob("registry-entry.json"))
+
+
+def test_human_failure_reports_loaded_identity_without_traceback(
     tmp_path: Path,
 ) -> None:
     fixture = _write_certifiable_provider(
@@ -242,7 +329,7 @@ def test_baseline_failure_is_atomic_and_human_error_has_no_traceback(
     )
 
     assert result.exit_code == 1
-    assert "Certification failed" in result.output
+    assert "Certification failed for equant-py 1.0.0" in result.output
     assert "baseline_mismatch" in result.output
     assert "Traceback" not in result.output
     assert not output.exists() or not list(output.rglob("registry-entry.json"))
@@ -295,7 +382,10 @@ def test_conflicting_release_is_rejected_without_overwriting_original(
     release_dir = output / "equant-py" / "1.0.0"
     before = _tree_bytes(release_dir)
     rewrite_json(
-        fixture.path / "manifests" / "equant.ttr.sma.operator.json",
+        fixture.path
+        / COMPATIBILITY_ROOT
+        / "manifests"
+        / "equant.ttr.sma.operator.json",
         lambda manifest: manifest.update({"semantic_name": "Simple Moving Average"}),
     )
     conflicting_commit = commit_mutation(fixture.path, "conflicting release")
