@@ -252,6 +252,7 @@ def test_profile_schemas_reject_invalid_certification_inputs(
 
 def test_wheel_contains_operator_contract_and_profile_resources(tmp_path: Path) -> None:
     repository_root = Path(__file__).parents[2]
+    profile_source_directory = repository_root / "contracts" / "operator-certification"
     subprocess.run(
         [
             "uv",
@@ -287,8 +288,24 @@ def test_wheel_contains_operator_contract_and_profile_resources(tmp_path: Path) 
             member.rsplit("/", 1)[-1].removesuffix("-v1.schema.json").replace("-", "_"): json.loads(wheel.read(member))
             for member in PROFILE_WHEEL_MEMBERS
         }
+        wheel_profile_bytes = {
+            member: wheel.read(member) for member in PROFILE_WHEEL_MEMBERS
+        }
+
+    source_profile_bytes = {
+        f"oxq/operators/certification_profile/v1/{filename}": (
+            profile_source_directory / filename
+        ).read_bytes()
+        for filename in (
+            "provider-catalog-v1.schema.json",
+            "candidate-build-v1.schema.json",
+            "numerical-baseline-v1.schema.json",
+            "certification-record-v1.schema.json",
+        )
+    }
 
     assert frozen_members == FROZEN_WHEEL_MEMBERS
     assert profile_members == PROFILE_WHEEL_MEMBERS
     assert frozen_digests == EXPECTED_SURFACE_DIGESTS
+    assert wheel_profile_bytes == source_profile_bytes
     _validate_profile_schemas(profile_schemas)
