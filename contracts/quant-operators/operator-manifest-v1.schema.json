@@ -41,8 +41,17 @@
         "requires_industry_data": { "type": "boolean" },
         "requires_market_cap_data": { "type": "boolean" },
         "requires_fundamental_data": { "type": "boolean" },
-        "requires_sorted_input": { "type": "boolean" },
-        "required_sort_order": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" } },
+        "requires_sorted_input": {
+          "type": "boolean",
+          "description": "Whether the operator requires ascending input sort order."
+        },
+        "required_sort_order": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Ascending sort keys restricted by the semantic validator to date, code, or required input columns.",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
         "required_context": { "type": "array", "uniqueItems": true, "items": { "enum": ["timezone", "calendar", "frequency", "timestamp_semantics", "currency", "price_adjustment", "data_version", "source"] } }
       },
       "allOf": [

@@ -219,8 +219,10 @@ v1 默认使用长格式 `pandas.DataFrame`，一行代表一个资产在一个�
 算子可以要求其他字段，但必须在 manifest 中声明。
 
 `columns[].name` `MUST` 唯一；每条记录 `MUST` 包含所有声明为 required 的
-列，`MUST NOT` 包含未声明字段，且每个声明列的值 `MUST` 符合其 dtype。
-这些跨字段规则由 `reference_validator_v1.py` 执行。
+列，`MUST NOT` 包含未声明字段。required 列的键存在性与其值是否缺失是两个
+不同条件：键缺失始终违法，键存在但值使用第 7.6 节定义的缺失表示则合法。
+每个非缺失声明列的值 `MUST` 符合其 dtype。这些跨字段规则由
+`reference_validator_v1.py` 执行。
 
 ### 7.2 主键
 
@@ -239,7 +241,10 @@ v1 默认使用长格式 `pandas.DataFrame`，一行代表一个资产在一个�
 
 manifest 的 `input.requires_sorted_input` `MUST` 显式存在。值为 `true` 时，
 `required_sort_order` `MUST` 是非空、无重复的列名序列，数组顺序定义排序
-优先级且每列使用升序；值为 `false` 时 `MUST NOT` 携带该字段。
+优先级且每列使用升序。每个排序键 `MUST` 是 `date`、`code` 或
+`input.required_columns` 中声明的必需输入列；未知列和仅在
+`input.optional_columns` 中出现的列不能构成可执行排序要求。值为 `false` 时
+`MUST NOT` 携带该字段。
 
 兼容算子 `SHOULD` 接受无序输入，并按稳定规则处理：
 
@@ -297,6 +302,15 @@ date ASC, code ASC
 原始价格和复权价格 `MUST NOT` 在未声明时混用。
 
 ### 7.6 缺失值
+
+JSON `null` 是 QuantPanel 交换对象的规范缺失值表示。Python adapter `MAY`
+在交给 JSON 序列化边界前把浮点 NaN 或可无歧义识别的 pandas missing sentinel
+作为输入便利表示；它们在可移植产物中 `MUST` 归一化为 JSON `null`。
+正无穷和负无穷都不是缺失值，且对所有声明 dtype 都 `MUST` 判为非法。
+
+required 列的键 `MUST` 出现在每条记录中。该键对应 `null` 或 adapter missing
+sentinel 不等同于键缺失；`reference_validator_v1.py` 先检查键存在，再跳过缺失
+值的 dtype 检查。
 
 算子 `MUST` 声明缺失值策略：
 
@@ -456,8 +470,10 @@ manifest 的 `implementation` `MUST` 包含：
 - build identifier。
 
 manifest digest `MUST NOT` 位于 manifest 自身。外部 binding/certification
-record `MUST` 固定 schema release/digest，并记录 manifest 文件准确 UTF-8
-字节的 SHA-256。source-tree 和正式 wheel 摘要的唯一算法定义见
+record `MUST` 固定完整 contract surface release，以及 QuantPanel schema、
+OperatorManifest schema、OperatorBinding schema 和 `reference_validator_v1.py`
+各自的 release 与准确文件摘要，并记录 manifest 文件准确 UTF-8 字节的
+SHA-256。source-tree 和正式 wheel 摘要的唯一算法定义见
 `hash-profile-v1.md`。
 
 ## 9. OperatorRequest 与 OperatorResult
@@ -861,6 +877,7 @@ contracts/quant-operators/
   operator-contract-v1.md
   operator-manifest-v1.schema.json
   quant-panel-v1.schema.json
+  operator-binding-v1.schema.json
   reference_validator_v1.py
   hash-profile-v1.md
   compatibility-policy-v1.md
@@ -880,8 +897,9 @@ compat/open_xquant/
 
 算子仓库不需要运行时依赖 open-xquant。
 
-其 CI `MUST` 使用 open-xquant 发布的 JSON Schema 和 reference validator
-两层验证 catalog 与 conformance fixtures。
+其 CI `MUST` 使用 binding 固定的三个 JSON Schema 和 reference validator
+两层验证 catalog、binding 与 conformance fixtures。JSON Schema 是结构层，
+`reference_validator_v1.py` 是不可绕过的语义层。
 
 ## 21. 异步发布流程
 

@@ -32,12 +32,24 @@ def _manifest_validator() -> Draft202012Validator:
     return Draft202012Validator(_load("operator-manifest-v1.schema.json"))
 
 
+def _binding_validator() -> Draft202012Validator:
+    return Draft202012Validator(_load("operator-binding-v1.schema.json"))
+
+
+def _valid_panel() -> dict:
+    return _load("examples/valid/daily-cn-panel.json")
+
+
 def _valid_manifest() -> dict:
     return _load("examples/valid/equant-ttr-sma.operator.json")
 
 
 def test_frozen_schemas_are_valid_draft_2020_12() -> None:
-    for filename in ("quant-panel-v1.schema.json", "operator-manifest-v1.schema.json"):
+    for filename in (
+        "quant-panel-v1.schema.json",
+        "operator-manifest-v1.schema.json",
+        "operator-binding-v1.schema.json",
+    ):
         Draft202012Validator.check_schema(_load(filename))
 
 
@@ -69,6 +81,43 @@ def test_quant_panel_requires_declared_required_columns_in_every_record() -> Non
         _reference_validator().validate_quant_panel(panel)
 
 
+def test_quant_panel_allows_json_null_for_a_present_required_missing_value() -> None:
+    panel = _valid_panel()
+    panel["records"][0]["close"] = None
+    _reference_validator().validate_quant_panel(panel)
+
+
+def test_quant_panel_allows_python_nan_as_adapter_missing_value() -> None:
+    panel = _valid_panel()
+    panel["records"][0]["close"] = float("nan")
+    _reference_validator().validate_quant_panel(panel)
+
+
+@pytest.mark.parametrize("infinite_value", [float("inf"), float("-inf")])
+def test_quant_panel_does_not_treat_infinity_as_a_missing_value(
+    infinite_value: float,
+) -> None:
+    panel = _valid_panel()
+    panel["records"][0]["close"] = infinite_value
+    with pytest.raises(ValueError, match="invalid QuantPanel value"):
+        _reference_validator().validate_quant_panel(panel)
+
+
+def test_quant_panel_absent_required_key_is_not_a_missing_value() -> None:
+    panel = _valid_panel()
+    del panel["records"][0]["close"]
+    validator = _reference_validator()
+    with pytest.raises(validator.ContractValidationError, match="missing required"):
+        validator.validate_quant_panel(panel)
+
+
+def test_quant_panel_accepts_declared_null_warmup_values() -> None:
+    panel = _valid_panel()
+    assert {column["name"] for column in panel["columns"]} == {"close", "sma_3"}
+    assert panel["records"][0]["sma_3"] is None
+    _reference_validator().validate_quant_panel(panel)
+
+
 @pytest.mark.parametrize(
     ("dtype", "invalid_value"),
     [
@@ -87,6 +136,7 @@ def test_quant_panel_rejects_values_outside_declared_dtype(
     panel["columns"] = [{"name": "value", "dtype": dtype, "required": True}]
     for record in panel["records"]:
         record.pop("close")
+        record.pop("sma_3")
         record["value"] = invalid_value
     with pytest.raises(ValueError, match="invalid QuantPanel value"):
         _reference_validator().validate_quant_panel(panel)
@@ -110,6 +160,7 @@ def test_quant_panel_accepts_each_declared_dtype(
     panel["columns"] = [{"name": "value", "dtype": dtype, "required": True}]
     for record in panel["records"]:
         record.pop("close")
+        record.pop("sma_3")
         record["value"] = valid_value
     _reference_validator().validate_quant_panel(panel)
 
@@ -119,6 +170,7 @@ def test_quant_panel_rejects_int64_overflow() -> None:
     panel["columns"] = [{"name": "value", "dtype": "int64", "required": True}]
     for record in panel["records"]:
         record.pop("close")
+        record.pop("sma_3")
         record["value"] = 2**63
     with pytest.raises(ValueError, match="invalid QuantPanel value"):
         _reference_validator().validate_quant_panel(panel)
@@ -279,6 +331,34 @@ def test_manifest_rejects_duplicate_required_sort_columns() -> None:
     )
     with pytest.raises(ValidationError):
         _manifest_validator().validate(manifest)
+
+
+@pytest.mark.parametrize("sort_key", ["mystery", "volume"])
+def test_reference_validator_rejects_nonrequired_sort_order_key(
+    sort_key: str,
+) -> None:
+    manifest = _valid_manifest()
+    manifest["input"].update(
+        {
+            "requires_sorted_input": True,
+            "required_sort_order": [sort_key],
+            "optional_columns": ["volume"],
+        }
+    )
+    validator = _reference_validator()
+    with pytest.raises(validator.ContractValidationError, match="required sort key"):
+        validator.validate_operator_manifest(manifest)
+
+
+def test_reference_validator_accepts_executable_required_sort_order() -> None:
+    manifest = _valid_manifest()
+    manifest["input"].update(
+        {
+            "requires_sorted_input": True,
+            "required_sort_order": ["date", "code", "close"],
+        }
+    )
+    _reference_validator().validate_operator_manifest(manifest)
 
 
 @pytest.mark.parametrize(
@@ -722,6 +802,43 @@ def test_source_tree_digest_rejects_unsafe_or_duplicate_paths(tmp_path: Path) ->
         validator.sha256_source_tree(tmp_path, ["../a.txt"])
     with pytest.raises(ValueError, match="duplicate source file"):
         validator.sha256_source_tree(tmp_path, ["a.txt", "a.txt"])
+
+
+def test_operator_binding_schema_is_valid_draft_2020_12() -> None:
+    Draft202012Validator.check_schema(_load("operator-binding-v1.schema.json"))
+
+
+def test_operator_binding_fixture_satisfies_schema() -> None:
+    _binding_validator().validate(
+        _load("examples/valid/equant-ttr-sma.binding.json")
+    )
+
+
+def test_operator_binding_requires_reference_validator_pin() -> None:
+    binding = _load("examples/valid/equant-ttr-sma.binding.json")
+    del binding["contract_surface"]["reference_validator"]
+    with pytest.raises(ValidationError):
+        _binding_validator().validate(binding)
+
+
+def test_operator_binding_contract_surface_pins_exact_artifact_bytes() -> None:
+    binding = _load("examples/valid/equant-ttr-sma.binding.json")
+    validator = _reference_validator()
+    artifact_paths = {
+        "quant_panel_schema": CONTRACT_DIR / "quant-panel-v1.schema.json",
+        "operator_manifest_schema": CONTRACT_DIR
+        / "operator-manifest-v1.schema.json",
+        "operator_binding_schema": CONTRACT_DIR / "operator-binding-v1.schema.json",
+        "reference_validator": REFERENCE_VALIDATOR_PATH,
+    }
+
+    assert binding["surface_release"] == "1.0.0"
+    assert set(binding["contract_surface"]) == set(artifact_paths)
+    for artifact, path in artifact_paths.items():
+        assert binding["contract_surface"][artifact] == {
+            "release": "1.0.0",
+            "digest": validator.sha256_file(path),
+        }
 
 
 def test_valid_digest_fixtures_bind_exact_artifact_bytes(tmp_path: Path) -> None:

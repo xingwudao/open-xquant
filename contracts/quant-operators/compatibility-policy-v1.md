@@ -9,12 +9,21 @@ Providers own their releases and manifests.
 
 Each enabled binding MUST pin all of the following:
 
+- operator identity and operator version;
 - distribution version;
 - full algorithm-prefixed source commit;
 - source-tree digest;
 - manifest digest;
 - implementation digest;
-- contract schema release, schema `$id`, and exact schema-file digest.
+- contract surface release;
+- exact-file releases and digests for the QuantPanel schema,
+  OperatorManifest schema, OperatorBinding schema, and
+  `reference_validator_v1.py`.
+
+The v1 contract surface release is the combined acceptance set of that exact
+pinned four-artifact tuple. JSON Schema is the structural layer and
+`reference_validator_v1.py` is the non-bypassable semantic layer. Passing only
+one layer is not contract validity.
 
 The manifest digest is SHA-256 of the exact UTF-8 manifest file bytes and
 MUST be stored in the external binding/certification record. It MUST NOT be
@@ -49,17 +58,19 @@ published JSON Schema structure layer and the non-bypassable
 This section governs only the contract/schema vocabulary and its meanings. It
 does not govern provider formula, default, or output semantics.
 
-Compatibility within v1 is validator-backward compatibility: every instance
-accepted by an older v1 schema release MUST continue to be accepted by each
-newer v1 schema release. A v1 release MAY add an optional field, but doing so
-MUST create a new schema release and exact schema digest. An older consumer
-MAY reject an instance that uses the new optional field; therefore every
-binding MUST pin the schema release and digest that its consumer actually
-supports before enablement.
+Compatibility within v1 is whole-surface backward compatibility: every object
+accepted by the entire older pinned tuple of three schemas and semantic
+validator MUST continue to be accepted by the entire newer pinned tuple. A v1
+release MAY add an optional field, but doing so MUST create a new surface
+release and exact artifact digests. An older consumer MAY reject an instance
+that uses the new optional field; therefore every binding MUST pin the exact
+surface release and tuple that its consumer actually supports before
+enablement.
 
-Adding a required field, rejecting an instance that was legal under an older
-v1 schema release, or changing the meaning of an existing contract field is a
-breaking contract change and MUST create v2.
+Adding a required field, narrowing acceptance in either a JSON Schema or the
+semantic validator, rejecting an object accepted by the older pinned tuple, or
+changing the meaning of an existing contract field is a breaking contract
+change and MUST create v2.
 
 Provider formula, default, or output changes continue to follow section 6.3
 of `operator-contract-v1.md`: they require an operator/package major version
@@ -68,7 +79,7 @@ create Contract v2.
 
 ## 8. Schema vendoring
 
-Provider schema and reference-validator copies MUST record their exact release
-and SHA-256 digests and MUST NOT be edited locally. A provider MUST upgrade the
-vendored pair explicitly; matching only the major contract number is not
-sufficient evidence of compatibility.
+Provider copies of all three schemas and the reference validator MUST record
+their exact surface release and SHA-256 digests and MUST NOT be edited locally.
+A provider MUST upgrade the vendored tuple explicitly; matching only the major
+contract number is not sufficient evidence of compatibility.

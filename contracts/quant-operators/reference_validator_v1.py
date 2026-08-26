@@ -111,6 +111,25 @@ def _is_declared_dtype(value: object, dtype: str) -> bool:
     return False
 
 
+def _is_missing_value(value: object) -> bool:
+    if value is None:
+        return True
+
+    value_type = type(value)
+    if (
+        value_type.__module__.startswith("pandas.")
+        and value_type.__name__ in {"NAType", "NaTType"}
+    ):
+        return True
+
+    if isinstance(value, bool):
+        return False
+    try:
+        return math.isnan(value)
+    except (TypeError, ValueError):
+        return False
+
+
 def validate_quant_panel(panel: Mapping[str, Any]) -> None:
     """Validate QuantPanel relationships that JSON Schema cannot express."""
 
@@ -143,7 +162,11 @@ def validate_quant_panel(panel: Mapping[str, Any]) -> None:
             )
 
         for field, dtype in declared_dtypes.items():
-            if field in record and not _is_declared_dtype(record[field], dtype):
+            if (
+                field in record
+                and not _is_missing_value(record[field])
+                and not _is_declared_dtype(record[field], dtype)
+            ):
                 raise ContractValidationError(
                     f"invalid QuantPanel value for {field!r}: expected {dtype}"
                 )
@@ -165,6 +188,14 @@ def _validate_input_columns(input_contract: Mapping[str, Any]) -> None:
         raise ContractValidationError(
             f"required and optional input columns overlap: {sorted(overlap)!r}"
         )
+
+    executable_sort_keys = {"date", "code", *required}
+    for sort_key in input_contract.get("required_sort_order", []):
+        if sort_key not in executable_sort_keys:
+            raise ContractValidationError(
+                f"invalid required sort key: {sort_key!r}; expected 'date', "
+                "'code', or a required input column"
+            )
 
 
 _NUMERIC_CONSTRAINTS = {

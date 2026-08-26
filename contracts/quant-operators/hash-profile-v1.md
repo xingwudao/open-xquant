@@ -45,19 +45,27 @@ implementation digest 是最终正式 `.whl` 文件完整原始 bytes 的 SHA-25
 子集或 wheel 内文件摘要的组合。重新打包产生不同 wheel bytes 时，即使源码
 相同，也会产生不同 implementation digest。
 
-## 4. Schema and binding digests
+## 4. Contract surface and binding digests
 
-schema digest 与 manifest digest 使用相同的准确文件 bytes 规则。每个外部
-binding/certification record `MUST` 固定 contract schema release、schema `$id`、
-schema digest、manifest digest、source-tree digest、implementation digest、
-distribution version 和完整 source commit。
+QuantPanel schema、OperatorManifest schema、OperatorBinding schema 和
+`reference_validator_v1.py` 的 digest 都与 manifest digest 使用相同的准确文件
+bytes 规则。每个外部 binding/certification record 的 `contract_surface` `MUST`
+分别固定这四个工件的 release 与 digest，并以 `surface_release` 标识该完整固定
+元组的合并接受集合。
+
+binding 内的 `operator_binding_schema.digest` 是 schema 文件的摘要，不是 binding
+实例自身的摘要。binding `MUST NOT` 包含自身文件摘要；binding instance digest
+如有需要，只能记录在更外层的 registry 或 certification envelope 中。
+
+每个 binding 还 `MUST` 固定 manifest digest、source-tree digest、implementation
+digest、distribution version 和完整 source commit。
 
 ## 5. Reference functions
 
 `reference_validator_v1.py` 发布以下参考函数：
 
-- `sha256_file(path)`：计算准确文件 bytes 的摘要，可用于 manifest、schema
-  和正式 wheel。
+- `sha256_file(path)`：计算准确文件 bytes 的摘要，可用于 manifest、三个 schema、
+  `reference_validator_v1.py` 和正式 wheel。
 - `sha256_source_tree(root, source_files)`：执行第 2 节 source-tree profile。
 
 其他语言可以重新实现这些函数，但 conformance vectors 的结果 `MUST` 与参考
