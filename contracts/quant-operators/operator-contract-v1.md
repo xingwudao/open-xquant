@@ -74,6 +74,10 @@ JSON Schema 是本契约的结构层，只验证可由 Draft 2020-12 表达的�
 字段类型和条件分支。`reference_validator_v1.py` 是不可绕过的语义层，验证
 跨字段集合、QuantPanel 记录、参数约束与摘要输入。一个对象只有依次通过
 对应 JSON Schema 和 reference validator，才是本契约意义上的合法对象。
+OperatorBinding 在通过 `operator-binding-v1.schema.json` 后，还 `MUST` 调用
+发布的 `validate_operator_binding()`，把重复 identity/provenance 字段与真实
+manifest、provider source、正式 implementation artifact 和四项 contract
+surface 文件逐 byte 绑定；只通过 binding JSON Schema 不能启用 binding。
 
 ## 4. 非目标
 
@@ -307,6 +311,9 @@ JSON `null` 是 QuantPanel 交换对象的规范缺失值表示。Python adapter
 在交给 JSON 序列化边界前把浮点 NaN 或可无歧义识别的 pandas missing sentinel
 作为输入便利表示；它们在可移植产物中 `MUST` 归一化为 JSON `null`。
 正无穷和负无穷都不是缺失值，且对所有声明 dtype 都 `MUST` 判为非法。
+reference validator 仅把精确 builtin `float` NaN 和明确的 pandas
+`NAType`/`NaTType` 当作 adapter missing，`MUST NOT` 为 missing 检测对任意对象
+执行隐式数值转换；可转换对象和超大整数仍 `MUST` 进入 dtype 校验并稳定报错。
 
 required 列的键 `MUST` 出现在每条记录中。该键对应 `null` 或 adapter missing
 sentinel 不等同于键缺失；`reference_validator_v1.py` 先检查键存在，再跳过缺失
@@ -475,6 +482,11 @@ OperatorManifest schema、OperatorBinding schema 和 `reference_validator_v1.py`
 各自的 release 与准确文件摘要，并记录 manifest 文件准确 UTF-8 字节的
 SHA-256。source-tree 和正式 wheel 摘要的唯一算法定义见
 `hash-profile-v1.md`。
+
+启用前，`validate_operator_binding()` `MUST` 先执行 manifest semantic validator，
+再验证 binding 与 manifest identity、provider source tree、manifest exact bytes、
+正式 wheel exact bytes、legacy schema pin 和四项 contract surface pin。任何重复
+字段不一致都 `MUST` 报错，不能静默选择其中一个来源。
 
 ## 9. OperatorRequest 与 OperatorResult
 
@@ -790,6 +802,8 @@ ml:
 
 提供方 contract test `MUST` 先执行发布的 JSON Schema 结构层，再执行
 `reference_validator_v1.py` 语义层；任何一层失败都不能声明 contract-valid。
+binding fixture 还 `MUST` 在 binding JSON Schema 之后调用发布的
+`validate_operator_binding()`；schema-valid 本身不是 binding-valid。
 
 兼容目录 `MUST` 覆盖：
 
@@ -821,7 +835,8 @@ ml:
 
 open-xquant certification `MUST` 对收到的 QuantPanel 与 OperatorManifest
 执行同一 JSON Schema 结构层和 reference validator 语义层，不得用一层
-替代另一层。
+替代另一层。对每个待启用 binding，还 `MUST` 使用认证输入的真实路径调用
+`validate_operator_binding()`，不得仅信任 binding JSON 中已有的摘要字符串。
 
 open-xquant 的认证额外检查：
 
@@ -899,7 +914,8 @@ compat/open_xquant/
 
 其 CI `MUST` 使用 binding 固定的三个 JSON Schema 和 reference validator
 两层验证 catalog、binding 与 conformance fixtures。JSON Schema 是结构层，
-`reference_validator_v1.py` 是不可绕过的语义层。
+`reference_validator_v1.py` 是不可绕过的语义层；enabled binding `MUST` 额外
+调用发布的 `validate_operator_binding()` 复算所有 provenance 摘要。
 
 ## 21. 异步发布流程
 

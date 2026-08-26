@@ -7,6 +7,7 @@ module is deliberately standalone and has no dependency on ``oxq``.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -85,11 +86,14 @@ def _is_declared_dtype(value: object, dtype: str) -> bool:
             and -(2**63) <= value < 2**63
         )
     if dtype == "float64":
-        return (
-            isinstance(value, (int, float))
-            and not isinstance(value, bool)
-            and math.isfinite(value)
-        )
+        if isinstance(value, float):
+            return math.isfinite(value)
+        if isinstance(value, int) and not isinstance(value, bool):
+            try:
+                return math.isfinite(value)
+            except OverflowError:
+                return False
+        return False
     if dtype == "string":
         return isinstance(value, str)
     if dtype == "date":
@@ -122,12 +126,7 @@ def _is_missing_value(value: object) -> bool:
     ):
         return True
 
-    if isinstance(value, bool):
-        return False
-    try:
-        return math.isnan(value)
-    except (TypeError, ValueError):
-        return False
+    return type(value) is float and math.isnan(value)
 
 
 def validate_quant_panel(panel: Mapping[str, Any]) -> None:
@@ -374,6 +373,114 @@ def validate_operator_manifest(manifest: Mapping[str, Any]) -> None:
     _validate_input_columns(manifest["input"])
     _validate_parameter_definitions(manifest["parameters"])
     _validate_seed_parameter(manifest)
+
+
+_CONTRACT_SURFACE_ARTIFACTS = {
+    "quant_panel_schema",
+    "operator_manifest_schema",
+    "operator_binding_schema",
+    "reference_validator",
+}
+
+
+def _binding_mismatch(field: str) -> ContractValidationError:
+    return ContractValidationError(f"operator binding mismatch: {field}")
+
+
+def _binding_file_digest(
+    path: str | os.PathLike[str],
+    *,
+    field: str,
+) -> str:
+    try:
+        return sha256_file(path)
+    except (OSError, ValueError) as error:
+        raise _binding_mismatch(field) from error
+
+
+def validate_operator_binding(
+    binding: Mapping[str, Any],
+    manifest: Mapping[str, Any],
+    manifest_path: str | os.PathLike[str],
+    source_root: str | os.PathLike[str],
+    implementation_artifact_path: str | os.PathLike[str],
+    contract_surface_paths: Mapping[str, str | os.PathLike[str]],
+) -> None:
+    """Validate one binding against exact manifest, source, and artifact bytes."""
+
+    validate_operator_manifest(manifest)
+
+    implementation = manifest["implementation"]
+    manifest_fields = {
+        "operator_id": manifest["operator_id"],
+        "operator_version": manifest["operator_version"],
+        "distribution": manifest["distribution"],
+        "distribution_version": implementation["package_version"],
+        "source_commit": implementation["source_commit"],
+        "source_tree_digest": implementation["source_tree_digest"],
+        "implementation_digest": implementation["implementation_digest"],
+    }
+    for field, expected in manifest_fields.items():
+        if binding[field] != expected:
+            raise _binding_mismatch(field)
+
+    operator_manifest_pin = binding["contract_surface"][
+        "operator_manifest_schema"
+    ]
+    if (
+        binding["schema_release"] != operator_manifest_pin["release"]
+        or binding["schema_digest"] != operator_manifest_pin["digest"]
+    ):
+        raise _binding_mismatch("legacy operator manifest schema pin")
+
+    if binding["manifest_digest"] != _binding_file_digest(
+        manifest_path,
+        field="manifest_digest",
+    ):
+        raise _binding_mismatch("manifest_digest")
+
+    try:
+        actual_source_tree_digest = sha256_source_tree(
+            source_root,
+            implementation["source_files"],
+        )
+    except (OSError, ValueError) as error:
+        raise _binding_mismatch("source_tree_digest") from error
+    if binding["source_tree_digest"] != actual_source_tree_digest:
+        raise _binding_mismatch("source_tree_digest")
+
+    if binding["implementation_digest"] != _binding_file_digest(
+        implementation_artifact_path,
+        field="implementation_digest",
+    ):
+        raise _binding_mismatch("implementation_digest")
+
+    if set(contract_surface_paths) != _CONTRACT_SURFACE_ARTIFACTS:
+        raise _binding_mismatch("contract_surface artifact paths")
+
+    surface_release = binding["surface_release"]
+    for artifact in sorted(_CONTRACT_SURFACE_ARTIFACTS):
+        pin = binding["contract_surface"][artifact]
+        if pin["release"] != surface_release:
+            raise _binding_mismatch(f"contract_surface.{artifact}.release")
+        digest_field = f"contract_surface.{artifact}.digest"
+        if pin["digest"] != _binding_file_digest(
+            contract_surface_paths[artifact],
+            field=digest_field,
+        ):
+            raise _binding_mismatch(digest_field)
+
+    operator_manifest_schema_path = Path(
+        contract_surface_paths["operator_manifest_schema"]
+    )
+    try:
+        schema_id = json.loads(
+            operator_manifest_schema_path.read_text(encoding="utf-8")
+        )["$id"]
+    except (KeyError, OSError, UnicodeError, ValueError) as error:
+        raise _binding_mismatch("legacy operator manifest schema pin") from error
+    if binding["schema_id"] != schema_id:
+        raise _binding_mismatch("legacy operator manifest schema pin")
 
 
 def validate_operator_request_parameters(

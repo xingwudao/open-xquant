@@ -67,6 +67,14 @@ digest、distribution version 和完整 source commit。
 - `sha256_file(path)`：计算准确文件 bytes 的摘要，可用于 manifest、三个 schema、
   `reference_validator_v1.py` 和正式 wheel。
 - `sha256_source_tree(root, source_files)`：执行第 2 节 source-tree profile。
+- `validate_operator_binding(binding, manifest, manifest_path, source_root,
+  implementation_artifact_path, contract_surface_paths)`：先验证 manifest 语义，
+  再以真实路径复算 manifest、source tree、正式 implementation artifact 和四项
+  contract surface 摘要，并拒绝所有重复 identity/provenance 字段不一致。
+
+enabled binding `MUST` 先通过 binding JSON Schema，再调用
+`validate_operator_binding()`；不能把结构校验或 binding 中已有的摘要文本当成
+exact-file 语义校验的替代品。
 
 其他语言可以重新实现这些函数，但 conformance vectors 的结果 `MUST` 与参考
 实现逐 byte 一致。

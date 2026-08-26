@@ -44,6 +44,53 @@ def _valid_manifest() -> dict:
     return _load("examples/valid/equant-ttr-sma.operator.json")
 
 
+def _valid_binding() -> dict:
+    return _load("examples/valid/equant-ttr-sma.binding.json")
+
+
+def _contract_surface_paths() -> dict[str, Path]:
+    return {
+        "quant_panel_schema": CONTRACT_DIR / "quant-panel-v1.schema.json",
+        "operator_manifest_schema": CONTRACT_DIR
+        / "operator-manifest-v1.schema.json",
+        "operator_binding_schema": CONTRACT_DIR / "operator-binding-v1.schema.json",
+        "reference_validator": REFERENCE_VALIDATOR_PATH,
+    }
+
+
+def _implementation_artifact(tmp_path: Path) -> Path:
+    wheel_base64_path = (
+        CONTRACT_DIR / "examples/valid/equant_ttr-1.0.0-py3-none-any.whl.b64"
+    )
+    wheel_path = tmp_path / "equant_ttr-1.0.0-py3-none-any.whl"
+    wheel_path.write_bytes(
+        base64.b64decode(wheel_base64_path.read_bytes().strip(), validate=True)
+    )
+    return wheel_path
+
+
+def _validate_binding_fixture(
+    validator: ModuleType,
+    tmp_path: Path,
+    *,
+    binding: dict | None = None,
+    manifest: dict | None = None,
+    manifest_path: Path | None = None,
+    source_root: Path | None = None,
+    implementation_artifact_path: Path | None = None,
+    contract_surface_paths: dict[str, Path] | None = None,
+) -> None:
+    validator.validate_operator_binding(
+        binding or _valid_binding(),
+        manifest or _valid_manifest(),
+        manifest_path
+        or CONTRACT_DIR / "examples/valid/equant-ttr-sma.operator.json",
+        source_root or CONTRACT_DIR,
+        implementation_artifact_path or _implementation_artifact(tmp_path),
+        contract_surface_paths or _contract_surface_paths(),
+    )
+
+
 def test_frozen_schemas_are_valid_draft_2020_12() -> None:
     for filename in (
         "quant-panel-v1.schema.json",
@@ -101,6 +148,29 @@ def test_quant_panel_does_not_treat_infinity_as_a_missing_value(
     panel["records"][0]["close"] = infinite_value
     with pytest.raises(ValueError, match="invalid QuantPanel value"):
         _reference_validator().validate_quant_panel(panel)
+
+
+class _CoercibleNan:
+    def __float__(self) -> float:
+        return float("nan")
+
+
+@pytest.mark.parametrize(
+    "invalid_value",
+    [_CoercibleNan(), 10**10000],
+    ids=["coercible-object", "huge-integer"],
+)
+def test_quant_panel_does_not_coerce_arbitrary_values_for_missing_detection(
+    invalid_value: object,
+) -> None:
+    panel = _valid_panel()
+    panel["records"][0]["close"] = invalid_value
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="invalid QuantPanel value",
+    ):
+        validator.validate_quant_panel(panel)
 
 
 def test_quant_panel_absent_required_key_is_not_a_missing_value() -> None:
@@ -839,6 +909,202 @@ def test_operator_binding_contract_surface_pins_exact_artifact_bytes() -> None:
             "release": "1.0.0",
             "digest": validator.sha256_file(path),
         }
+
+
+def test_operator_binding_semantics_accept_valid_exact_artifacts(
+    tmp_path: Path,
+) -> None:
+    _validate_binding_fixture(_reference_validator(), tmp_path)
+
+
+def test_operator_binding_semantics_validate_manifest_first(tmp_path: Path) -> None:
+    manifest = _valid_manifest()
+    manifest["input"]["optional_columns"] = ["close"]
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="required and optional input columns overlap",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            manifest=manifest,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        ("operator_id", "other.vendor.sma"),
+        ("operator_version", "2.0.0"),
+        ("distribution", "other-ttr"),
+        ("distribution_version", "2.0.0"),
+        (
+            "source_commit",
+            "git-sha1:1111111111111111111111111111111111111111",
+        ),
+        ("source_tree_digest", "sha256:" + "1" * 64),
+        ("implementation_digest", "sha256:" + "1" * 64),
+    ],
+)
+def test_operator_binding_semantics_reject_manifest_identity_mismatch(
+    field: str,
+    invalid_value: str,
+    tmp_path: Path,
+) -> None:
+    binding = _valid_binding()
+    binding[field] = invalid_value
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match=f"operator binding mismatch: {field}",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value"),
+    [
+        (
+            "schema_id",
+            "https://open-xquant.dev/contracts/quant-operators/quant-panel-v1.schema.json",
+        ),
+        ("schema_release", "1.0.1"),
+        ("schema_digest", "sha256:" + "1" * 64),
+    ],
+)
+def test_operator_binding_semantics_reject_legacy_surface_schema_pin_mismatch(
+    field: str,
+    invalid_value: str,
+    tmp_path: Path,
+) -> None:
+    binding = _valid_binding()
+    binding[field] = invalid_value
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: legacy operator manifest schema pin",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+        )
+
+
+def test_operator_binding_semantics_reject_manifest_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    manifest_path = tmp_path / "operator.json"
+    manifest_path.write_bytes(b"{}\n")
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: manifest_digest",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            manifest_path=manifest_path,
+        )
+
+
+def test_operator_binding_semantics_reject_source_tree_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    source_root = tmp_path / "source-root"
+    source_path = source_root / "examples/valid/provider-source/ettr.py"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_bytes(b"tampered provider source\n")
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: source_tree_digest",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            source_root=source_root,
+        )
+
+
+def test_operator_binding_semantics_reject_implementation_exact_bytes(
+    tmp_path: Path,
+) -> None:
+    implementation_path = tmp_path / "tampered.whl"
+    implementation_path.write_bytes(b"tampered wheel bytes")
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match="operator binding mismatch: implementation_digest",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            implementation_artifact_path=implementation_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        "quant_panel_schema",
+        "operator_manifest_schema",
+        "operator_binding_schema",
+        "reference_validator",
+    ],
+)
+def test_operator_binding_semantics_reject_contract_surface_artifact_exact_bytes(
+    artifact: str,
+    tmp_path: Path,
+) -> None:
+    artifact_paths = _contract_surface_paths()
+    tampered_path = tmp_path / f"{artifact}.tampered"
+    tampered_path.write_bytes(b"tampered contract artifact\n")
+    artifact_paths[artifact] = tampered_path
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match=rf"operator binding mismatch: contract_surface\.{artifact}\.digest",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            contract_surface_paths=artifact_paths,
+        )
+
+
+@pytest.mark.parametrize(
+    "artifact",
+    [
+        "quant_panel_schema",
+        "operator_manifest_schema",
+        "operator_binding_schema",
+        "reference_validator",
+    ],
+)
+def test_operator_binding_semantics_reject_contract_surface_release_mismatch(
+    artifact: str,
+    tmp_path: Path,
+) -> None:
+    binding = _valid_binding()
+    binding["contract_surface"][artifact]["release"] = "1.0.1"
+    if artifact == "operator_manifest_schema":
+        binding["schema_release"] = "1.0.1"
+    validator = _reference_validator()
+    with pytest.raises(
+        validator.ContractValidationError,
+        match=rf"operator binding mismatch: contract_surface\.{artifact}\.release",
+    ):
+        _validate_binding_fixture(
+            validator,
+            tmp_path,
+            binding=binding,
+        )
 
 
 def test_valid_digest_fixtures_bind_exact_artifact_bytes(tmp_path: Path) -> None:

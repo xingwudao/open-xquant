@@ -25,6 +25,13 @@ pinned four-artifact tuple. JSON Schema is the structural layer and
 `reference_validator_v1.py` is the non-bypassable semantic layer. Passing only
 one layer is not contract validity.
 
+Before enablement, every binding MUST pass `operator-binding-v1.schema.json`
+and the published `validate_operator_binding()` semantic entry point with the
+exact manifest path, provider source root, formal implementation artifact, and
+all four contract-surface artifact paths. A schema-valid binding is not an
+enabled binding. Duplicate legacy and contract-surface pins MUST agree; a
+consumer MUST NOT silently choose one of conflicting provenance fields.
+
 The manifest digest is SHA-256 of the exact UTF-8 manifest file bytes and
 MUST be stored in the external binding/certification record. It MUST NOT be
 stored in the manifest body. All digest scopes and encodings are normative in
@@ -51,7 +58,8 @@ The release flow is: provider release candidate, provider contract tests,
 OpenXQuant certification, compatibility record, and binding enablement.
 Provider contract tests and OpenXQuant certification MUST both execute the
 published JSON Schema structure layer and the non-bypassable
-`reference_validator_v1.py` semantic layer.
+`reference_validator_v1.py` semantic layer. Binding enablement MUST additionally
+execute `validate_operator_binding()` against the certified exact artifacts.
 
 ## 7. Change policy
 
