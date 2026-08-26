@@ -43,6 +43,30 @@ class BaselineCase:
 
 
 @dataclass(frozen=True)
+class ContractCandidate:
+    """One schema-valid, provenance-bound operator candidate."""
+
+    manifest: dict[str, object]
+    binding: dict[str, object]
+    manifest_path: Path
+    implementation_artifact: Path
+
+
+@dataclass(frozen=True)
+class ContractCertification:
+    """A provider release whose operators satisfy the frozen contract."""
+
+    provider: str
+    release: str
+    submission_commit: str
+    source_commit: str
+    source_root: Path
+    operators: tuple[ContractCandidate, ...]
+    artifacts: tuple[BuildArtifact, ...]
+    baseline_cases: tuple[BaselineCase, ...]
+
+
+@dataclass(frozen=True)
 class ProviderSubmission:
     """A verified archive, retaining its temporary directory until exit."""
 
