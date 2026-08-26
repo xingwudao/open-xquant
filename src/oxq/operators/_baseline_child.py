@@ -17,6 +17,11 @@ from typing import Any, cast
 
 _PLATFORM_RUNTIME_ROOTS = {"numpy", "pandas"}
 _OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
+_OUTPUT_ALIGNMENTS = {
+    "preserve_input_order",
+    "canonical_order",
+    "explicit_keyed_output",
+}
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 
@@ -56,6 +61,7 @@ def _read_request(path: Path) -> dict[str, object]:
         "input",
         "output_field",
         "output_dtype",
+        "output_alignment",
     }:
         raise ValueError("request fields are invalid")
     return value
@@ -98,9 +104,13 @@ def _json_value(value: object, output_dtype: str) -> object:
         return value
     if output_dtype == "string" and type(value) is str:
         return value
-    if output_dtype == "date" and isinstance(value, date) and not isinstance(
-        value,
-        datetime,
+    if (
+        output_dtype == "date"
+        and isinstance(value, date)
+        and not isinstance(
+            value,
+            datetime,
+        )
     ):
         return value.isoformat()
     if output_dtype == "datetime" and isinstance(value, datetime):
@@ -126,35 +136,68 @@ def _extract_output(
     frame: Any,
     output_field: str,
     output_dtype: str,
+    output_alignment: str,
 ) -> list[object]:
     import pandas as pd
 
+    input_keys = _frame_keys(frame)
     if isinstance(result, pd.Series):
         if result.name != output_field:
             raise KeyError("declared output field is missing")
-        if len(result) != len(frame) or not result.index.equals(frame.index):
-            raise IndexError("series alignment changed")
-        return [_json_value(value, output_dtype) for value in result.tolist()]
+        output_keys = _index_keys(result.index)
+        values = [_json_value(value, output_dtype) for value in result.tolist()]
+        return _align_output(values, output_keys, input_keys, output_alignment)
     if isinstance(result, pd.DataFrame):
         if output_field not in result.columns:
             raise KeyError("declared output field is missing")
-        if len(result) != len(frame):
-            raise IndexError("dataframe length changed")
         key_columns = {"date", "code"}.intersection(result.columns)
         if key_columns and key_columns != {"date", "code"}:
             raise IndexError("partial key alignment cannot be proven")
         if key_columns:
-            if result[["date", "code"]].to_dict("records") != frame[
-                ["date", "code"]
-            ].to_dict("records"):
-                raise IndexError("dataframe keys changed")
-        elif not result.index.equals(frame.index):
-            raise IndexError("dataframe index changed")
-        return [
-            _json_value(value, output_dtype)
-            for value in result[output_field].tolist()
-        ]
+            output_keys = _frame_keys(result)
+        else:
+            output_keys = _index_keys(result.index)
+        values = [_json_value(value, output_dtype) for value in result[output_field].tolist()]
+        return _align_output(values, output_keys, input_keys, output_alignment)
     raise TypeError("provider output must be a Series or DataFrame")
+
+
+def _frame_keys(frame: Any) -> list[tuple[object, object]]:
+    return [(record["date"], record["code"]) for record in frame[["date", "code"]].to_dict("records")]
+
+
+def _index_keys(index: Any) -> list[tuple[object, object]]:
+    keys = list(index.tolist())
+    if not all(isinstance(key, tuple) and len(key) == 2 for key in keys):
+        raise IndexError("output index does not identify panel keys")
+    return [cast(tuple[object, object], key) for key in keys]
+
+
+def _align_output(
+    values: list[object],
+    output_keys: list[tuple[object, object]],
+    input_keys: list[tuple[object, object]],
+    output_alignment: str,
+) -> list[object]:
+    if (
+        len(values) != len(input_keys)
+        or len(output_keys) != len(input_keys)
+        or len(set(output_keys)) != len(output_keys)
+        or set(output_keys) != set(input_keys)
+    ):
+        raise IndexError("output keys do not match input keys")
+    if output_alignment == "preserve_input_order":
+        if output_keys != input_keys:
+            raise IndexError("output does not preserve input order")
+        return values
+    if output_alignment == "canonical_order":
+        if output_keys != sorted(input_keys):
+            raise IndexError("output is not in canonical order")
+        return values
+    if output_alignment == "explicit_keyed_output":
+        by_key = dict(zip(output_keys, values, strict=True))
+        return [by_key[key] for key in input_keys]
+    raise ValueError("output alignment is unsupported")
 
 
 def _module_locations(module: ModuleType) -> tuple[str, ...]:
@@ -168,9 +211,7 @@ def _module_locations(module: ModuleType) -> tuple[str, ...]:
         locations.append(module_file)
     search_locations = getattr(spec, "submodule_search_locations", None)
     if search_locations is not None:
-        locations.extend(
-            location for location in search_locations if isinstance(location, str)
-        )
+        locations.extend(location for location in search_locations if isinstance(location, str))
     return tuple(dict.fromkeys(locations))
 
 
@@ -185,11 +226,7 @@ def _module_is_from_archives(
     archives: list[str],
 ) -> bool:
     locations = _module_locations(module)
-    return bool(locations) and any(
-        _location_is_in_archive(location, archive)
-        for location in locations
-        for archive in archives
-    )
+    return bool(locations) and any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
 
 
 def _new_modules_are_allowed(
@@ -222,11 +259,7 @@ def _globals_are_from_archives(
     module_file = globals_value.get("__file__")
     if isinstance(module_file, str):
         locations.append(module_file)
-    return any(
-        _location_is_in_archive(location, archive)
-        for location in locations
-        for archive in archives
-    )
+    return any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
 
 
 class _ProviderImportGate:
@@ -267,9 +300,7 @@ class _ProviderImportGate:
         absolute_name = self._absolute_name(name, globals, level)
         if not self._provider_import_is_allowed(absolute_name):
             self.violation = True
-            raise ImportError(
-                f"provider import is outside the verified closure: {absolute_name}"
-            )
+            raise ImportError(f"provider import is outside the verified closure: {absolute_name}")
         return imported
 
     def _guarded_import_module(
@@ -300,9 +331,7 @@ class _ProviderImportGate:
             raise
         if provider_call and not self._provider_import_is_allowed(absolute_name):
             self.violation = True
-            raise ImportError(
-                f"provider import is outside the verified closure: {absolute_name}"
-            )
+            raise ImportError(f"provider import is outside the verified closure: {absolute_name}")
         return imported
 
     def _absolute_name(
@@ -350,14 +379,12 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
     panel = request["input"]
     output_field = request["output_field"]
     output_dtype = request["output_dtype"]
+    output_alignment = request["output_alignment"]
     if (
         not isinstance(implementation_artifact, str)
         or not Path(implementation_artifact).is_absolute()
         or not isinstance(dependency_artifacts, list)
-        or not all(
-            isinstance(path, str) and Path(path).is_absolute()
-            for path in dependency_artifacts
-        )
+        or not all(isinstance(path, str) and Path(path).is_absolute() for path in dependency_artifacts)
         or not isinstance(module_name, str)
         or not isinstance(callable_name, str)
         or not isinstance(parameters, dict)
@@ -365,6 +392,8 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
         or not isinstance(output_field, str)
         or not isinstance(output_dtype, str)
         or output_dtype not in _OUTPUT_DTYPES
+        or not isinstance(output_alignment, str)
+        or output_alignment not in _OUTPUT_ALIGNMENTS
     ):
         return _error(response_path, "provider_execution_failed")
     try:
@@ -428,6 +457,7 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                     original,
                     output_field,
                     output_dtype,
+                    output_alignment,
                 )
             except KeyError:
                 return _provider_error(

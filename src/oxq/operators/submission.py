@@ -7,8 +7,10 @@ import json
 import re
 import stat
 import subprocess
-import tarfile
+import zipfile
 from collections.abc import Mapping
+from email import policy
+from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from tempfile import TemporaryDirectory
 from typing import cast
@@ -27,6 +29,8 @@ from oxq.operators.resources import materialize_certification_profile
 _FULL_SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _COMPATIBILITY_ROOT = PurePosixPath("compat/open_xquant")
 _CATALOG_FILE = "operator_catalog.json"
+_CONTRACT_RELEASE = "1.0.0"
+_REGULAR_GIT_MODES = {"100644": 0o644, "100755": 0o755}
 
 
 def load_provider_submission(
@@ -50,9 +54,7 @@ def load_provider_submission(
     try:
         archive_root = Path(archive.name) / "submission"
         archive_root.mkdir()
-        tar_path = Path(archive.name) / "submission.tar"
-        _archive_commit(repository, provider_commit, tar_path)
-        _extract_archive(tar_path, archive_root)
+        _materialize_commit(repository, provider_commit, archive_root)
         return _load_archive(
             archive=archive,
             archive_root=archive_root,
@@ -79,15 +81,6 @@ def _is_git_repository(repository: Path) -> bool:
     return _git(repository, ["rev-parse", "--git-dir"]).returncode == 0
 
 
-def _archive_commit(repository: Path, provider_commit: str, tar_path: Path) -> None:
-    result = _git(
-        repository,
-        ["archive", "--format=tar", f"--output={tar_path}", provider_commit],
-    )
-    if result.returncode != 0 or not tar_path.is_file():
-        raise _error("provider_commit_invalid", "cannot archive provider commit", "repository")
-
-
 def _git(repository: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         ["git", "-C", str(repository), *args],
@@ -97,28 +90,105 @@ def _git(repository: Path, args: list[str]) -> subprocess.CompletedProcess[str]:
     )
 
 
-def _extract_archive(tar_path: Path, archive_root: Path) -> None:
+def _git_bytes(
+    repository: Path,
+    args: list[str],
+    *,
+    input_bytes: bytes | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", "-C", str(repository), *args],
+        check=False,
+        input=input_bytes,
+        capture_output=True,
+    )
+
+
+def _materialize_commit(repository: Path, commit: str, destination: Path) -> None:
+    tree = _git_bytes(repository, ["ls-tree", "-rz", "--full-tree", commit])
+    if tree.returncode != 0:
+        raise _error(
+            "provider_commit_invalid",
+            "cannot read provider commit tree",
+            "repository",
+        )
+    entries: list[tuple[str, str, str]] = []
+    for raw_entry in tree.stdout.split(b"\0"):
+        if not raw_entry:
+            continue
+        try:
+            header, raw_path = raw_entry.split(b"\t", 1)
+            mode, object_type, object_id = header.decode("ascii").split(" ", 2)
+            relative_path = raw_path.decode("utf-8")
+        except (UnicodeError, ValueError):
+            continue
+        if object_type != "blob" or mode not in _REGULAR_GIT_MODES:
+            continue
+        if not _safe_git_path(relative_path):
+            continue
+        entries.append((mode, object_id, relative_path))
+
+    blobs = _read_git_blobs(repository, [object_id for _, object_id, _ in entries])
     try:
-        with tarfile.open(tar_path, "r") as archive:
-            members = archive.getmembers()
-            for member in members:
-                _validate_tar_member(member)
-            archive.extractall(archive_root, filter="data")
-    except (OSError, tarfile.TarError) as exc:
-        raise _error("submission_path_invalid", "provider archive is unsafe", "archive") from exc
+        for (mode, _, relative_path), blob in zip(entries, blobs, strict=True):
+            path = destination.joinpath(*PurePosixPath(relative_path).parts)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(blob)
+            path.chmod(_REGULAR_GIT_MODES[mode])
+    except OSError as exc:
+        raise _error(
+            "submission_path_invalid",
+            "provider commit tree cannot be materialized safely",
+            "archive",
+        ) from exc
 
 
-def _validate_tar_member(member: tarfile.TarInfo) -> None:
-    path = PurePosixPath(member.name)
-    if (
-        path.is_absolute()
-        or not member.name
-        or any(part in {"", ".", ".."} for part in path.parts)
-        or member.issym()
-        or member.islnk()
-        or not (member.isfile() or member.isdir())
-    ):
-        raise _error("submission_path_invalid", "provider archive contains an unsafe member", "archive")
+def _safe_git_path(relative_path: str) -> bool:
+    path = PurePosixPath(relative_path)
+    return bool(
+        relative_path and "\\" not in relative_path and not path.is_absolute() and all(part not in {"", ".", ".."} for part in path.parts)
+    )
+
+
+def _read_git_blobs(repository: Path, object_ids: list[str]) -> list[bytes]:
+    if not object_ids:
+        return []
+    result = _git_bytes(
+        repository,
+        ["cat-file", "--batch"],
+        input_bytes=("\n".join(object_ids) + "\n").encode("ascii"),
+    )
+    if result.returncode != 0:
+        raise _error(
+            "provider_commit_invalid",
+            "cannot read provider commit blobs",
+            "repository",
+        )
+    blobs: list[bytes] = []
+    offset = 0
+    try:
+        for expected_id in object_ids:
+            header_end = result.stdout.index(b"\n", offset)
+            header = result.stdout[offset:header_end].decode("ascii")
+            object_id, object_type, raw_size = header.split(" ", 2)
+            if object_id != expected_id or object_type != "blob":
+                raise ValueError("unexpected Git object")
+            size = int(raw_size)
+            start = header_end + 1
+            end = start + size
+            if result.stdout[end : end + 1] != b"\n":
+                raise ValueError("truncated Git object")
+            blobs.append(result.stdout[start:end])
+            offset = end + 1
+        if offset != len(result.stdout):
+            raise ValueError("unexpected trailing Git output")
+    except (UnicodeError, ValueError):
+        raise _error(
+            "provider_commit_invalid",
+            "provider commit contains an unreadable blob",
+            "repository",
+        ) from None
+    return blobs
 
 
 def _load_archive(
@@ -130,13 +200,17 @@ def _load_archive(
     artifact_dir: Path,
 ) -> ProviderSubmission:
     catalog_path = _COMPATIBILITY_ROOT / _CATALOG_FILE
-    catalog = _read_json(
-        _contained_file(archive_root, catalog_path.as_posix(), "catalog")
-    )
+    catalog = _read_json(_contained_file(archive_root, catalog_path.as_posix(), "catalog"))
     compatibility_root = archive_root.joinpath(*_COMPATIBILITY_ROOT.parts)
     schemas = _certification_schemas()
     _validate_schema(catalog, schemas["provider_catalog"], "catalog")
     catalog_data = _mapping(catalog, "catalog")
+    if catalog_data["contract_version"] != _CONTRACT_RELEASE:
+        raise _error(
+            "submission_schema_invalid",
+            "catalog contract release is unsupported",
+            "catalog",
+        )
     provider = _mapping(catalog_data["provider"], "catalog")
     provider_name = _string(provider["name"], "catalog")
     release = _string(provider["release"], "catalog")
@@ -154,9 +228,7 @@ def _load_archive(
     _verify_source_ancestor(repository, source_commit, provider_commit)
     source_root = Path(archive.name) / "source"
     source_root.mkdir()
-    source_tar = Path(archive.name) / "source.tar"
-    _archive_commit(repository, source_commit, source_tar)
-    _extract_archive(source_tar, source_root)
+    _materialize_commit(repository, source_commit, source_root)
 
     operators = _load_operators(compatibility_root, source_root, catalog_data)
     baselines = _load_baselines(operators, schemas["numerical_baseline"], provider_name, release)
@@ -180,9 +252,7 @@ def _certification_schemas() -> dict[str, dict[str, object]]:
         return {name: _mapping(_read_json(path), "schema") for name, path in paths.items()}
 
 
-def _load_operators(
-    archive_root: Path, source_root: Path, catalog: Mapping[str, object]
-) -> tuple[CatalogEntry, ...]:
+def _load_operators(archive_root: Path, source_root: Path, catalog: Mapping[str, object]) -> tuple[CatalogEntry, ...]:
     raw_operators = _mapping(catalog["operators"], "catalog")
     entries: list[CatalogEntry] = []
     for key, raw_entry in raw_operators.items():
@@ -190,13 +260,9 @@ def _load_operators(
         if not separator or not operator_id or not operator_version:
             raise _error("submission_schema_invalid", "catalog operator key is invalid", "catalog")
         entry = _mapping(raw_entry, "catalog")
-        manifest_path = _contained_file(
-            archive_root, _string(entry["manifest"], "catalog"), "manifest", operator_id
-        )
+        manifest_path = _contained_file(archive_root, _string(entry["manifest"], "catalog"), "manifest", operator_id)
         _validate_manifest_sources(source_root, manifest_path, operator_id)
-        baseline_path = _contained_file(
-            archive_root, _string(entry["baseline"], "catalog"), "baseline", operator_id
-        )
+        baseline_path = _contained_file(archive_root, _string(entry["baseline"], "catalog"), "baseline", operator_id)
         entries.append(CatalogEntry(operator_id, operator_version, manifest_path, baseline_path))
     return tuple(entries)
 
@@ -228,17 +294,12 @@ def _load_baselines(
         entries_by_path.setdefault(entry.baseline_path, []).append(entry)
     for baseline_path, entries in entries_by_path.items():
         error_operator_id = entries[0].operator_id
-        referenced_identities = {
-            (entry.operator_id, entry.operator_version) for entry in entries
-        }
+        referenced_identities = {(entry.operator_id, entry.operator_version) for entry in entries}
         covered_identities: set[tuple[str, str]] = set()
         baseline = _read_json(baseline_path, error_operator_id)
         _validate_schema(baseline, schema, "baseline", error_operator_id)
         baseline_data = _mapping(baseline, "baseline", error_operator_id)
-        if (
-            baseline_data["provider"] != provider
-            or baseline_data["release"] != release
-        ):
+        if baseline_data["provider"] != provider or baseline_data["release"] != release:
             raise _error(
                 "submission_identity_mismatch",
                 "baseline identity does not match catalog",
@@ -249,15 +310,10 @@ def _load_baselines(
             case = _mapping(raw_case, "baseline", error_operator_id)
             case_id = _string(case["case_id"], "baseline", error_operator_id)
             operator_id = _string(case["operator_id"], "baseline", error_operator_id)
-            operator_version = _string(
-                case["operator_version"], "baseline", error_operator_id
-            )
+            operator_version = _string(case["operator_version"], "baseline", error_operator_id)
             operator_identity = (operator_id, operator_version)
             identity = (operator_id, operator_version, case_id)
-            if (
-                operator_identity not in referenced_identities
-                or identity in case_identities
-            ):
+            if operator_identity not in referenced_identities or identity in case_identities:
                 raise _error(
                     "submission_identity_mismatch",
                     "baseline case identity does not match its catalog entry",
@@ -331,10 +387,13 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
         digest = _string(artifact["digest"], "artifact")
         if actual_digest != digest:
             raise _error("artifact_digest_mismatch", f"artifact digest differs: {filename}", "artifact")
+        distribution = _string(artifact["distribution"], "artifact")
+        version = _string(artifact["version"], "artifact")
+        _verify_wheel_identity(wheel_path, distribution, version, filename)
         artifacts.append(
             BuildArtifact(
-                distribution=_string(artifact["distribution"], "artifact"),
-                version=_string(artifact["version"], "artifact"),
+                distribution=distribution,
+                version=version,
                 filename=filename,
                 role=_string(artifact["role"], "artifact"),
                 build_identifier=_string(artifact["build_identifier"], "artifact"),
@@ -345,24 +404,63 @@ def _load_artifacts(build: Mapping[str, object], artifact_dir: Path) -> tuple[Bu
     return tuple(artifacts)
 
 
-def _contained_file(
-    root: Path, relative_path: str, stage: str, operator_id: str | None = None
-) -> Path:
-    pure_path = PurePosixPath(relative_path)
+def _verify_wheel_identity(
+    wheel_path: Path,
+    distribution: str,
+    version: str,
+    filename: str,
+) -> None:
+    try:
+        if wheel_path.suffix != ".whl":
+            raise zipfile.BadZipFile("artifact filename is not a wheel")
+        with zipfile.ZipFile(wheel_path) as wheel:
+            wheel_files = [name for name in wheel.namelist() if _is_dist_info_file(name, "WHEEL")]
+            metadata_files = [name for name in wheel.namelist() if _is_dist_info_file(name, "METADATA")]
+            if (
+                len(wheel_files) != 1
+                or len(metadata_files) != 1
+                or PurePosixPath(wheel_files[0]).parent != PurePosixPath(metadata_files[0]).parent
+            ):
+                raise zipfile.BadZipFile("wheel metadata files are invalid")
+            wheel_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(wheel_files[0]))
+            package_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(metadata_files[0]))
+            if not wheel_metadata.get("Wheel-Version"):
+                raise zipfile.BadZipFile("wheel version header is missing")
+            metadata_name = package_metadata.get("Name")
+            metadata_version = package_metadata.get("Version")
+    except (KeyError, OSError, UnicodeError, ValueError, zipfile.BadZipFile) as exc:
+        raise _error(
+            "artifact_invalid",
+            f"artifact is not a valid wheel: {filename}",
+            "artifact",
+        ) from exc
     if (
-        not relative_path
-        or "\\" in relative_path
-        or pure_path.is_absolute()
-        or any(part in {"", ".", ".."} for part in pure_path.parts)
+        not isinstance(metadata_name, str)
+        or _canonical_distribution(metadata_name) != _canonical_distribution(distribution)
+        or metadata_version != version
     ):
+        raise _error(
+            "artifact_identity_mismatch",
+            f"wheel metadata differs from build record: {filename}",
+            "artifact",
+        )
+
+
+def _is_dist_info_file(name: str, filename: str) -> bool:
+    parts = PurePosixPath(name).parts
+    return len(parts) == 2 and parts[0].endswith(".dist-info") and parts[1] == filename
+
+
+def _canonical_distribution(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def _contained_file(root: Path, relative_path: str, stage: str, operator_id: str | None = None) -> Path:
+    pure_path = PurePosixPath(relative_path)
+    if not relative_path or "\\" in relative_path or pure_path.is_absolute() or any(part in {"", ".", ".."} for part in pure_path.parts):
         raise _error("submission_path_invalid", "submission path is not normalized", stage, operator_id)
     candidate = root.joinpath(*pure_path.parts)
-    if (
-        not candidate.is_relative_to(root)
-        or candidate.is_symlink()
-        or not candidate.exists()
-        or not _is_regular_file(candidate)
-    ):
+    if not candidate.is_relative_to(root) or candidate.is_symlink() or not candidate.exists() or not _is_regular_file(candidate):
         raise _error("submission_path_invalid", "submission path is not a regular archive file", stage, operator_id)
     return candidate
 
@@ -374,7 +472,13 @@ def _read_json(path: Path, operator_id: str | None = None) -> object:
             object_pairs_hook=_reject_duplicate_keys,
             parse_constant=_reject_nonstandard_constant,
         )
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+    except (
+        OSError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+    ) as exc:
         raise _error("submission_json_invalid", f"invalid JSON: {path.name}", "json", operator_id) from exc
 
 
@@ -391,9 +495,7 @@ def _reject_nonstandard_constant(value: str) -> object:
     raise ValueError(f"non-standard JSON constant: {value}")
 
 
-def _validate_schema(
-    instance: object, schema: Mapping[str, object], stage: str, operator_id: str | None = None
-) -> None:
+def _validate_schema(instance: object, schema: Mapping[str, object], stage: str, operator_id: str | None = None) -> None:
     try:
         Draft202012Validator(schema, format_checker=FormatChecker()).validate(instance)
     except ValidationError as exc:
@@ -427,7 +529,5 @@ def _sha256_file(path: Path) -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def _error(
-    code: str, message: str, stage: str, operator_id: str | None = None
-) -> OperatorCertificationError:
+def _error(code: str, message: str, stage: str, operator_id: str | None = None) -> OperatorCertificationError:
     return OperatorCertificationError(code, message, stage=stage, operator_id=operator_id)

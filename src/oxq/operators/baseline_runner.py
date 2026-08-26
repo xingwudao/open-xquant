@@ -92,6 +92,7 @@ def run_research_baselines(
             cases_by_operator[identity] += 1
             _validate_case_input(
                 case,
+                operator.manifest,
                 quant_panel_schema,
                 validate_quant_panel,
             )
@@ -101,6 +102,7 @@ def run_research_baselines(
                 validate_parameters,
             )
             output_field, output_dtype = _output_field(case, operator.manifest)
+            _validate_case_tolerance(case)
             actual = _run_child(
                 manifest=operator.manifest,
                 case=case,
@@ -111,11 +113,7 @@ def run_research_baselines(
                     verified_artifacts,
                     case.operator_id,
                 ),
-                dependency_artifacts=[
-                    str(path)
-                    for artifact, path in verified_artifacts
-                    if artifact.role == "runtime-dependency"
-                ],
+                dependency_artifacts=[str(path) for artifact, path in verified_artifacts if artifact.role == "runtime-dependency"],
                 timeout_seconds=timeout_seconds,
             )
             _assert_expected(case, actual, output_dtype)
@@ -160,10 +158,7 @@ def _verified_artifacts(
             "verified runtime artifact is unavailable",
         ) from None
     implementation_paths = {path for artifact, path in verified if artifact.role == "implementation"}
-    candidate_paths = {
-        operator.implementation_artifact.resolve()
-        for operator in candidate.operators
-    }
+    candidate_paths = {operator.implementation_artifact.resolve() for operator in candidate.operators}
     if not candidate_paths.issubset(implementation_paths):
         raise _error(
             "provider_import_failed",
@@ -178,11 +173,7 @@ def _implementation_artifact(
     operator_id: str,
 ) -> str:
     resolved = implementation_artifact.resolve()
-    matches = [
-        path
-        for artifact, path in verified_artifacts
-        if artifact.role == "implementation" and path == resolved
-    ]
+    matches = [path for artifact, path in verified_artifacts if artifact.role == "implementation" and path == resolved]
     if len(matches) != 1:
         raise _error(
             "provider_import_failed",
@@ -194,6 +185,7 @@ def _implementation_artifact(
 
 def _validate_case_input(
     case: BaselineCase,
+    manifest: Mapping[str, object],
     schema: Mapping[str, object],
     validate_quant_panel: Callable[[Mapping[str, object]], None],
 ) -> None:
@@ -207,6 +199,7 @@ def _validate_case_input(
             operator_id=case.operator_id,
         )
         validate_quant_panel(case.input)
+        _validate_manifest_input(case.input, manifest)
     except OperatorCertificationError:
         raise
     except Exception:
@@ -215,6 +208,48 @@ def _validate_case_input(
             "baseline input violates frozen QuantPanel semantics",
             case.operator_id,
         ) from None
+
+
+def _validate_manifest_input(
+    panel: Mapping[str, object],
+    manifest: Mapping[str, object],
+) -> None:
+    input_contract = cast(Mapping[str, object], manifest["input"])
+    columns = cast(list[Mapping[str, object]], panel["columns"])
+    declared_dtypes = {cast(str, column["name"]): cast(str, column["dtype"]) for column in columns}
+    required_columns = cast(list[str], input_contract["required_columns"])
+    supported_dtypes = set(cast(list[str], input_contract["supported_dtypes"]))
+    if any(name not in declared_dtypes or declared_dtypes[name] not in supported_dtypes for name in required_columns):
+        raise ValueError("baseline does not supply required input columns and dtypes")
+
+    context = cast(Mapping[str, object], panel["context"])
+    required_context = cast(list[str], input_contract["required_context"])
+    if any(name not in context for name in required_context):
+        raise ValueError("baseline does not supply required input context")
+
+    records = cast(list[Mapping[str, object]], panel["records"])
+    assets = {record["code"] for record in records}
+    if len(assets) < cast(int, input_contract["minimum_assets"]):
+        raise ValueError("baseline does not meet minimum asset count")
+    time_by_asset: dict[object, set[object]] = {}
+    for record in records:
+        time_by_asset.setdefault(record["code"], set()).add(record["date"])
+    minimum_time_length = cast(int, input_contract["minimum_time_length"])
+    if not time_by_asset or min(map(len, time_by_asset.values())) < minimum_time_length:
+        raise ValueError("baseline does not meet minimum time length")
+
+    if cast(bool, input_contract["requires_complete_cross_section"]):
+        assets_by_time: dict[object, set[object]] = {}
+        for record in records:
+            assets_by_time.setdefault(record["date"], set()).add(record["code"])
+        if any(codes != assets for codes in assets_by_time.values()):
+            raise ValueError("baseline cross section is incomplete")
+
+    if cast(bool, input_contract["requires_sorted_input"]):
+        sort_order = cast(list[str], input_contract["required_sort_order"])
+        observed = [tuple(record[name] for name in sort_order) for record in records]
+        if observed != sorted(observed):
+            raise ValueError("baseline does not meet required sort order")
 
 
 def _validate_case_parameters(
@@ -231,6 +266,22 @@ def _validate_case_parameters(
         raise _error(
             "baseline_parameters_invalid",
             "baseline parameters violate the frozen request contract",
+            case.operator_id,
+        ) from None
+
+
+def _validate_case_tolerance(case: BaselineCase) -> None:
+    try:
+        values = (case.tolerance["absolute"], case.tolerance["relative"])
+        if any(
+            type(value) not in {int, float} or not math.isfinite(float(cast(int | float, value))) or cast(int | float, value) < 0
+            for value in values
+        ):
+            raise ValueError("baseline tolerance must be finite and nonnegative")
+    except (KeyError, OverflowError, TypeError, ValueError):
+        raise _error(
+            "baseline_input_invalid",
+            "baseline tolerance must be finite and nonnegative",
             case.operator_id,
         ) from None
 
@@ -254,10 +305,7 @@ def _output_field(
         )
     try:
         definitions = cast(Mapping[str, Mapping[str, object]], manifest["parameters"])
-        resolved_parameters = {
-            name: case.parameters.get(name, definition["default"])
-            for name, definition in definitions.items()
-        }
+        resolved_parameters = {name: case.parameters.get(name, definition["default"]) for name, definition in definitions.items()}
         output = cast(Mapping[str, object], manifest["output"])
         fields = cast(list[Mapping[str, object]], output["fields"])
         declared_fields = [
@@ -302,6 +350,7 @@ def _run_child(
         "input": case.input,
         "output_field": output_field,
         "output_dtype": output_dtype,
+        "output_alignment": cast(Mapping[str, object], manifest["output"])["alignment"],
     }
     try:
         request_bytes = json.dumps(
@@ -408,8 +457,7 @@ def _assert_expected(
         if (
             not isinstance(expected, list)
             or len(actual) != len(expected)
-            or [value is None for value in actual]
-            != [value is None for value in expected]
+            or [value is None for value in actual] != [value is None for value in expected]
         ):
             raise TypeError("baseline output shape or missing positions differ")
         if output_dtype == "float64":
@@ -467,12 +515,7 @@ def _valid_int64_scalar(value: object) -> bool:
 
 def _valid_iso_date(value: str) -> bool:
     try:
-        return (
-            len(value) == 10
-            and value[4] == "-"
-            and value[7] == "-"
-            and date.fromisoformat(value).isoformat() == value
-        )
+        return len(value) == 10 and value[4] == "-" and value[7] == "-" and date.fromisoformat(value).isoformat() == value
     except ValueError:
         return False
 

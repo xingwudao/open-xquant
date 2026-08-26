@@ -50,8 +50,11 @@ def _wheel_bytes(distribution: str, package: str, source: str) -> bytes:
         archive.writestr(f"{package}/__init__.py", source)
         archive.writestr(
             f"{dist_info}-1.0.0.dist-info/WHEEL",
-            "Wheel-Version: 1.0\nGenerator: test\n"
-            "Root-Is-Purelib: true\nTag: py3-none-any\n",
+            "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            f"{dist_info}-1.0.0.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: {distribution}\nVersion: 1.0.0\n",
         )
     return buffer.getvalue()
 
@@ -82,9 +85,7 @@ def _panel() -> dict[str, object]:
     return {
         "schema_version": 1,
         "primary_key": ["date", "code"],
-        "columns": [
-            {"name": "close", "dtype": "float64", "required": True}
-        ],
+        "columns": [{"name": "close", "dtype": "float64", "required": True}],
         "context": {
             "timezone": "Asia/Shanghai",
             "calendar": "XSHG",
@@ -216,9 +217,7 @@ def _contract(
     tmp_path.mkdir(parents=True, exist_ok=True)
     provider_path = tmp_path / "baseline_provider-1.0.0-py3-none-any.whl"
     dependency_path = tmp_path / "baseline_dependency-1.0.0-py3-none-any.whl"
-    provider_path.write_bytes(
-        _wheel_bytes("baseline-provider", "baseline_provider", provider_source)
-    )
+    provider_path.write_bytes(_wheel_bytes("baseline-provider", "baseline_provider", provider_source))
     dependency_path.write_bytes(
         _wheel_bytes(
             "baseline-dependency",
@@ -254,9 +253,7 @@ def _contract(
         operator_version="1.0.0",
         parameters={"window": 3} if parameters is None else parameters,
         input=_panel() if input_panel is None else input_panel,
-        expected={"sma_3": [None, None, 2.0]}
-        if expected is None
-        else expected,
+        expected={"sma_3": [None, None, 2.0]} if expected is None else expected,
         tolerance={"absolute": 0.0, "relative": 0.0},
     )
     return ContractCertification(
@@ -301,6 +298,19 @@ def _with_output_dtype(
     )
 
 
+def _with_output_alignment(
+    candidate: ContractCertification,
+    alignment: str,
+) -> ContractCertification:
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    manifest["output"]["alignment"] = alignment
+    return replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+    )
+
+
 def test_executes_exact_provider_and_dependency_wheels_without_parent_imports(
     tmp_path: Path,
 ) -> None:
@@ -314,17 +324,10 @@ def test_executes_exact_provider_and_dependency_wheels_without_parent_imports(
         timeout_seconds=5,
     )
 
-    assert [(item.case_id, item.status) for item in results] == [
-        ("sma-3", "passed")
-    ]
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
     assert sys.path == before_path
-    assert set(sys.modules).difference(before_modules).isdisjoint(
-        {"baseline_provider", "baseline_dependency"}
-    )
-    assert not any(
-        name == "baseline_provider" or name.startswith("baseline_provider.")
-        for name in sys.modules
-    )
+    assert set(sys.modules).difference(before_modules).isdisjoint({"baseline_provider", "baseline_dependency"})
+    assert not any(name == "baseline_provider" or name.startswith("baseline_provider.") for name in sys.modules)
 
 
 def test_executes_equant_style_groupby_code_with_key_columns_preserved(
@@ -514,9 +517,7 @@ def test_enforces_signed_int64_scalar_bounds(
             candidate.artifacts,
             timeout_seconds=5,
         )
-        assert [(item.case_id, item.status) for item in results] == [
-            ("sma-3", "passed")
-        ]
+        assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
     else:
         _assert_failure(candidate, "baseline_mismatch")
 
@@ -660,9 +661,7 @@ def test_numeric_tolerance_applies_only_to_float64_outputs(tmp_path: Path) -> No
         float_candidate.artifacts,
         timeout_seconds=5,
     )
-    assert [(item.case_id, item.status) for item in float_results] == [
-        ("sma-3", "passed")
-    ]
+    assert [(item.case_id, item.status) for item in float_results] == [("sma-3", "passed")]
 
     integer_source = """
 import pandas as pd
@@ -689,9 +688,30 @@ def sma(frame, *, window):
     _assert_failure(integer_candidate, "baseline_mismatch")
 
 
+@pytest.mark.parametrize("field", ["absolute", "relative"])
+def test_rejects_nonfinite_float_tolerance_before_child_execution(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    field: str,
+) -> None:
+    candidate = _contract(tmp_path)
+    tolerance = {"absolute": 0.0, "relative": 0.0}
+    tolerance[field] = float("inf")
+    candidate = replace(
+        candidate,
+        baseline_cases=(replace(candidate.baseline_cases[0], tolerance=tolerance),),
+    )
+
+    def child_must_not_run(*args: object, **kwargs: object) -> object:
+        raise AssertionError(f"child executed: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(baseline_runner.subprocess, "run", child_must_not_run)
+    _assert_failure(candidate, "baseline_input_invalid")
+
+
 def test_float_tolerance_does_not_relax_missing_value_positions(tmp_path: Path) -> None:
     source = SUCCESS_SOURCE.replace(
-        "rolling_mean(frame[\"close\"].tolist(), window)",
+        'rolling_mean(frame["close"].tolist(), window)',
         "[None, 0.0, 2.0]",
     )
     candidate = _contract(
@@ -814,9 +834,7 @@ def test_rejects_provider_dynamic_import_of_preloaded_environment_dependency(
 ) -> None:
     source = SUCCESS_SOURCE.replace(
         "def sma(frame, *, window):",
-        "import importlib\n"
-        "def sma(frame, *, window):\n"
-        f"    importlib.import_module({dependency!r})",
+        f"import importlib\ndef sma(frame, *, window):\n    importlib.import_module({dependency!r})",
     )
     candidate = _contract(tmp_path, source)
 
@@ -926,7 +944,7 @@ def test_rejects_preimported_module_name_not_owned_by_implementation(
     [
         (
             SUCCESS_SOURCE.replace(
-                "rolling_mean(frame[\"close\"].tolist(), window)",
+                'rolling_mean(frame["close"].tolist(), window)',
                 "[0.0, 0.0, 0.0]",
             ),
             "baseline_mismatch",
@@ -935,7 +953,7 @@ def test_rejects_preimported_module_name_not_owned_by_implementation(
         (
             SUCCESS_SOURCE.replace(
                 "def sma(frame, *, window):",
-                "def sma(frame, *, window):\n    frame.loc[0, \"close\"] = 99.0",
+                'def sma(frame, *, window):\n    frame.loc[0, "close"] = 99.0',
             ),
             "provider_mutated_input",
         ),
@@ -990,6 +1008,60 @@ def sma(frame, *, window):
     return pd.Series([None, None, 2.0], name=f"sma_{window}", dtype="float64")
 """
     _assert_failure(_contract(tmp_path, source), "provider_alignment_failed")
+
+
+def test_accepts_canonical_output_for_noncanonical_input(tmp_path: Path) -> None:
+    panel = _panel()
+    records = cast(list[dict[str, object]], panel["records"])
+    panel["records"] = [records[2], records[0], records[1]]
+    source = """
+def sma(frame, *, window):
+    result = frame.sort_values(["date", "code"])[["date", "code", "close"]].copy()
+    result[f"sma_{window}"] = result["close"]
+    return result[["date", "code", f"sma_{window}"]]
+"""
+    candidate = _with_output_alignment(
+        _contract(
+            tmp_path,
+            source,
+            input_panel=panel,
+            expected={"sma_3": [1.0, 2.0, 3.0]},
+        ),
+        "canonical_order",
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
+
+
+def test_accepts_reordered_explicit_keyed_output(tmp_path: Path) -> None:
+    source = """
+def sma(frame, *, window):
+    result = frame.iloc[[1, 2, 0]][["date", "code", "close"]].copy()
+    result[f"sma_{window}"] = result["close"]
+    return result[["date", "code", f"sma_{window}"]]
+"""
+    candidate = _with_output_alignment(
+        _contract(
+            tmp_path,
+            source,
+            expected={"sma_3": [1.0, 2.0, 3.0]},
+        ),
+        "explicit_keyed_output",
+    )
+
+    results = run_research_baselines(
+        candidate,
+        candidate.artifacts,
+        timeout_seconds=5,
+    )
+
+    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
 
 
 def test_rejects_malformed_child_json(
@@ -1073,6 +1145,51 @@ def test_rejects_invalid_frozen_quant_panel_before_child_execution(
     _assert_failure(candidate, "baseline_input_invalid")
 
 
+@pytest.mark.parametrize(
+    "requirement",
+    [
+        "required-column",
+        "supported-dtype",
+        "minimum-assets",
+        "minimum-time-length",
+        "required-sort-order",
+    ],
+)
+def test_rejects_baseline_that_does_not_meet_manifest_input_requirements(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    requirement: str,
+) -> None:
+    panel = _panel()
+    candidate = _contract(tmp_path, input_panel=panel)
+    operator = candidate.operators[0]
+    manifest = json.loads(json.dumps(operator.manifest))
+    input_contract = manifest["input"]
+    if requirement == "required-column":
+        input_contract["required_columns"] = ["volume"]
+    elif requirement == "supported-dtype":
+        input_contract["supported_dtypes"] = ["int64"]
+    elif requirement == "minimum-assets":
+        input_contract["minimum_assets"] = 2
+    elif requirement == "minimum-time-length":
+        input_contract["minimum_time_length"] = 4
+    else:
+        input_contract["requires_sorted_input"] = True
+        input_contract["required_sort_order"] = ["date", "code"]
+        records = cast(list[dict[str, object]], panel["records"])
+        panel["records"] = list(reversed(records))
+    candidate = replace(
+        candidate,
+        operators=(replace(operator, manifest=manifest),),
+    )
+
+    def child_must_not_run(*args: object, **kwargs: object) -> object:
+        raise AssertionError(f"child executed: {args!r} {kwargs!r}")
+
+    monkeypatch.setattr(baseline_runner.subprocess, "run", child_must_not_run)
+    _assert_failure(candidate, "baseline_input_invalid")
+
+
 @pytest.mark.parametrize("parameters", [{"unknown": 1}, {"window": 0}])
 def test_rejects_invalid_parameters_before_child_execution(
     tmp_path: Path,
@@ -1138,6 +1255,7 @@ def _write_certifiable_provider(
                 ),
             ),
         )
+
         def update_manifest(manifest: dict[str, object]) -> None:
             manifest["implementation"].update(  # type: ignore[union-attr]
                 {"implementation_digest": provider_digest}
@@ -1145,10 +1263,7 @@ def _write_certifiable_provider(
             manifest["output"]["fields"][0]["dtype"] = output_dtype  # type: ignore[index]
 
         rewrite_json(
-            repository
-            / COMPATIBILITY_ROOT
-            / "manifests"
-            / "equant.ttr.sma.operator.json",
+            repository / COMPATIBILITY_ROOT / "manifests" / "equant.ttr.sma.operator.json",
             update_manifest,
         )
 
@@ -1158,10 +1273,7 @@ def _write_certifiable_provider(
             case["expected"] = {"sma_3": expected}
 
         rewrite_json(
-            repository
-            / COMPATIBILITY_ROOT
-            / "numerical_baselines"
-            / "technical-v1.json",
+            repository / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json",
             replace_case,
         )
 
@@ -1226,12 +1338,7 @@ def zzz(frame, *, window):
                 ),
             ),
         )
-        sma_manifest_path = (
-            repository
-            / COMPATIBILITY_ROOT
-            / "manifests"
-            / "equant.ttr.sma.operator.json"
-        )
+        sma_manifest_path = repository / COMPATIBILITY_ROOT / "manifests" / "equant.ttr.sma.operator.json"
         rewrite_json(
             sma_manifest_path,
             lambda manifest: manifest["implementation"].update(  # type: ignore[union-attr]
@@ -1248,12 +1355,7 @@ def zzz(frame, *, window):
             }
         )
         zzz_manifest["output"]["fields"][0]["name_template"] = "zzz_{window}"
-        zzz_manifest_path = (
-            repository
-            / COMPATIBILITY_ROOT
-            / "manifests"
-            / "equant.ttr.zzz.operator.json"
-        )
+        zzz_manifest_path = repository / COMPATIBILITY_ROOT / "manifests" / "equant.ttr.zzz.operator.json"
         zzz_manifest_path.write_text(
             json.dumps(zzz_manifest, sort_keys=True),
             encoding="utf-8",
@@ -1264,12 +1366,7 @@ def zzz(frame, *, window):
             case["input"] = _panel()
             case["expected"] = {"sma_3": [None, None, 2.0]}
 
-        sma_baseline_path = (
-            repository
-            / COMPATIBILITY_ROOT
-            / "numerical_baselines"
-            / "technical-v1.json"
-        )
+        sma_baseline_path = repository / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json"
         rewrite_json(sma_baseline_path, replace_sma_case)
         zzz_baseline = json.loads(sma_baseline_path.read_text(encoding="utf-8"))
         zzz_case = zzz_baseline["cases"][0]
@@ -1279,12 +1376,7 @@ def zzz(frame, *, window):
                 "expected": {"zzz_3": [None, None, 2.0]},
             }
         )
-        zzz_baseline_path = (
-            repository
-            / COMPATIBILITY_ROOT
-            / "numerical_baselines"
-            / "technical-zzz-v1.json"
-        )
+        zzz_baseline_path = repository / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-zzz-v1.json"
         zzz_baseline_path.write_text(
             json.dumps(zzz_baseline, sort_keys=True),
             encoding="utf-8",
@@ -1318,12 +1410,8 @@ def test_certify_provider_promotes_only_revalidated_passing_bindings(
     ) as submission:
         result = certify_provider(submission)
 
-    assert [item.binding["certification_state"] for item in result.operators] == [
-        "research-certified"
-    ]
-    assert [(item.case_id, item.status) for item in result.baseline_results] == [
-        ("sma-window-3", "passed")
-    ]
+    assert [item.binding["certification_state"] for item in result.operators] == ["research-certified"]
+    assert [(item.case_id, item.status) for item in result.baseline_results] == [("sma-window-3", "passed")]
 
     with pytest.raises(TypeError):
         result.operators[0].binding["certification_state"] = "contract-valid"  # type: ignore[index]

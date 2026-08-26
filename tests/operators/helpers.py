@@ -122,6 +122,10 @@ def _wheel_bytes() -> bytes:
             "equant_ttr-1.0.0.dist-info/WHEEL",
             "Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
         )
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/METADATA",
+            "Metadata-Version: 2.1\nName: equant-ttr\nVersion: 1.0.0\n",
+        )
     return buffer.getvalue()
 
 
@@ -174,14 +178,16 @@ def _build(
         "source_commit": f"git-sha1:{source_commit}",
         "python": "3.12.0",
         "build_command": "uv build",
-        "artifacts": [{
-            "distribution": "equant-ttr",
-            "version": "1.0.0",
-            "filename": wheel_name,
-            "role": "implementation",
-            "build_identifier": build_identifier,
-            "digest": wheel_digest,
-        }],
+        "artifacts": [
+            {
+                "distribution": "equant-ttr",
+                "version": "1.0.0",
+                "filename": wheel_name,
+                "role": "implementation",
+                "build_identifier": build_identifier,
+                "digest": wheel_digest,
+            }
+        ],
     }
 
 
@@ -190,15 +196,17 @@ def _baseline() -> dict[str, object]:
         "schema_version": 1,
         "provider": "equant-py",
         "release": "1.0.0",
-        "cases": [{
-            "case_id": "sma-window-3",
-            "operator_id": "equant.ttr.sma",
-            "operator_version": "1.0.0",
-            "parameters": {"window": 3},
-            "input": _panel(),
-            "expected": {"sma_3": [None, 10.0]},
-            "tolerance": {"absolute": 0.0, "relative": 0.0},
-        }],
+        "cases": [
+            {
+                "case_id": "sma-window-3",
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "parameters": {"window": 3},
+                "input": _panel(),
+                "expected": {"sma_3": [None, 10.0]},
+                "tolerance": {"absolute": 0.0, "relative": 0.0},
+            }
+        ],
     }
 
 

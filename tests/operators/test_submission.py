@@ -2,6 +2,7 @@
 
 import json
 import subprocess
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -23,9 +24,7 @@ from tests.operators.helpers import (
 def test_loads_a_committed_submission_into_an_independent_archive(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
 
-    with load_provider_submission(
-        fixture.path, fixture.submission_commit, fixture.artifact_dir
-    ) as submission:
+    with load_provider_submission(fixture.path, fixture.submission_commit, fixture.artifact_dir) as submission:
         assert submission.provider == "equant-py"
         assert submission.release == "1.0.0"
         assert submission.submission_commit == f"git-sha1:{fixture.submission_commit}"
@@ -47,9 +46,7 @@ def test_uses_committed_data_not_a_dirty_working_tree(tmp_path: Path) -> None:
         lambda value: value["provider"].update({"name": "dirty-provider"}),  # type: ignore[index,union-attr]
     )
 
-    with load_provider_submission(
-        fixture.path, fixture.submission_commit, fixture.artifact_dir
-    ) as submission:
+    with load_provider_submission(fixture.path, fixture.submission_commit, fixture.artifact_dir) as submission:
         assert submission.provider == "equant-py"
 
 
@@ -152,9 +149,7 @@ def test_rejects_catalog_references_that_escape_compatibility_root(
 
 def test_rejects_duplicate_json_keys_and_nonstandard_constants(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
-    (fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME).write_text(
-        '{"schema_version": 1, "schema_version": 1}', encoding="utf-8"
-    )
+    (fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME).write_text('{"schema_version": 1, "schema_version": 1}', encoding="utf-8")
     commit = commit_mutation(fixture.path)
     _assert_error(
         lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
@@ -162,9 +157,7 @@ def test_rejects_duplicate_json_keys_and_nonstandard_constants(tmp_path: Path) -
     )
 
     fixture = write_provider_repository(tmp_path / "nan")
-    (fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json").write_text(
-        "NaN", encoding="utf-8"
-    )
+    (fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json").write_text("NaN", encoding="utf-8")
     commit = commit_mutation(fixture.path)
     _assert_error(
         lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
@@ -179,7 +172,7 @@ def test_rejects_duplicate_keyed_catalog_operator_identity(tmp_path: Path) -> No
     operator_key = "equant.ttr.sma@1.0.0"
     entry = json.dumps(catalog.pop("operators")[operator_key], sort_keys=True)
     catalog_path.write_text(
-        f"{json.dumps(catalog, sort_keys=True)[:-1]}, \"operators\": {{\"{operator_key}\": {entry}, \"{operator_key}\": {entry}}}}}",
+        f'{json.dumps(catalog, sort_keys=True)[:-1]}, "operators": {{"{operator_key}": {entry}, "{operator_key}": {entry}}}}}',
         encoding="utf-8",
     )
     commit = commit_mutation(fixture.path)
@@ -189,13 +182,25 @@ def test_rejects_duplicate_keyed_catalog_operator_identity(tmp_path: Path) -> No
         "submission_json_invalid",
     )
 
+
+def test_rejects_a_catalog_for_an_unsupported_contract_release(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / CATALOG_NAME,
+        lambda value: value.update({"contract_version": "2.0.0"}),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_schema_invalid",
+    )
+
+
 def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path
-        / COMPATIBILITY_ROOT
-        / "numerical_baselines"
-        / "technical-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json",
         lambda value: value.update({"provider": "another-provider"}),
     )
     commit = commit_mutation(fixture.path)
@@ -219,10 +224,7 @@ def test_rejects_schema_and_identity_mismatches(tmp_path: Path) -> None:
 def test_rejects_baseline_case_identity_that_differs_from_catalog(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
-        fixture.path
-        / COMPATIBILITY_ROOT
-        / "numerical_baselines"
-        / "technical-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json",
         lambda value: value["cases"][0].update({"operator_id": "equant.ttr.ema"}),  # type: ignore[index]
     )
     commit = commit_mutation(fixture.path)
@@ -242,10 +244,7 @@ def test_rejects_duplicate_global_baseline_case_identity(tmp_path: Path) -> None
         value["cases"].append(first)  # type: ignore[union-attr]
 
     rewrite_json(
-        fixture.path
-        / COMPATIBILITY_ROOT
-        / "numerical_baselines"
-        / "technical-v1.json",
+        fixture.path / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json",
         duplicate_case,
     )
     commit = commit_mutation(fixture.path)
@@ -272,12 +271,7 @@ def test_loads_shared_baseline_file_once_for_all_referencing_catalog_entries(
 
     def share_baseline(repository: Path) -> None:
         catalog_path = repository / COMPATIBILITY_ROOT / CATALOG_NAME
-        baseline_path = (
-            repository
-            / COMPATIBILITY_ROOT
-            / "numerical_baselines"
-            / "technical-v1.json"
-        )
+        baseline_path = repository / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json"
         catalog = json.loads(catalog_path.read_text())
         baseline = json.loads(baseline_path.read_text())
         original_case = baseline["cases"][0]
@@ -313,8 +307,7 @@ def test_loads_shared_baseline_file_once_for_all_referencing_catalog_entries(
     ) as submission:
         assert [case.operator_id for case in submission.baseline_cases] == operator_ids
         assert [case.case_id for case in submission.baseline_cases] == [
-            operator_id.rsplit(".", 1)[-1] + "-window-3"
-            for operator_id in operator_ids
+            operator_id.rsplit(".", 1)[-1] + "-window-3" for operator_id in operator_ids
         ]
 
     assert baseline_reads == 1
@@ -352,9 +345,7 @@ def test_rejects_shared_baseline_missing_a_referencing_catalog_identity(
     "source_commit",
     ["git-sha1:" + "a" * 40, "git-sha1:deadbeef"],
 )
-def test_rejects_missing_or_nonfull_implementation_commit(
-    tmp_path: Path, source_commit: str
-) -> None:
+def test_rejects_missing_or_nonfull_implementation_commit(tmp_path: Path, source_commit: str) -> None:
     fixture = write_provider_repository(tmp_path)
     rewrite_json(
         fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
@@ -440,9 +431,61 @@ def test_rejects_invalid_artifact_files_and_digests(tmp_path: Path) -> None:
     )
 
 
-def test_normalizes_an_artifact_read_race_to_artifact_missing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+def test_rejects_an_artifact_that_is_not_a_wheel(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    wheel_path.write_bytes(b"not a wheel")
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+@pytest.mark.parametrize(
+    ("metadata_name", "metadata_version"),
+    [("another-project", "1.0.0"), ("equant-ttr", "2.0.0")],
+    ids=["distribution", "version"],
+)
+def test_rejects_wheel_metadata_that_differs_from_the_build_record(
+    tmp_path: Path,
+    metadata_name: str,
+    metadata_version: str,
 ) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    with zipfile.ZipFile(wheel_path, "w") as archive:
+        archive.writestr("equant_ttr/__init__.py", "")
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/WHEEL",
+            "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        )
+        archive.writestr(
+            "equant_ttr-1.0.0.dist-info/METADATA",
+            f"Metadata-Version: 2.1\nName: {metadata_name}\nVersion: {metadata_version}\n",
+        )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_identity_mismatch",
+    )
+
+
+def test_normalizes_an_artifact_read_race_to_artifact_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fixture = write_provider_repository(tmp_path)
     wheel_path = fixture.artifact_dir / fixture.wheel_name
     path_open = Path.open
@@ -463,12 +506,7 @@ def test_normalizes_an_artifact_read_race_to_artifact_missing(
 
 def test_rejects_referenced_symlinks_from_the_committed_archive(tmp_path: Path) -> None:
     fixture = write_provider_repository(tmp_path)
-    manifest = (
-        fixture.path
-        / COMPATIBILITY_ROOT
-        / "manifests"
-        / "equant.ttr.sma.operator.json"
-    )
+    manifest = fixture.path / COMPATIBILITY_ROOT / "manifests" / "equant.ttr.sma.operator.json"
     manifest.unlink()
     manifest.symlink_to("../candidate-build-v1.json")
     commit = commit_mutation(fixture.path)
@@ -479,15 +517,66 @@ def test_rejects_referenced_symlinks_from_the_committed_archive(tmp_path: Path) 
     )
 
 
+def test_allows_an_unreferenced_symlink_in_the_committed_repository(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    target = fixture.path / "docs" / "target.md"
+    target.parent.mkdir()
+    target.write_text("documentation\n", encoding="utf-8")
+    (target.parent / "latest.md").symlink_to(target.name)
+    commit = commit_mutation(fixture.path)
+
+    with load_provider_submission(
+        fixture.path,
+        commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert submission.provider == "equant-py"
+
+
+def test_reads_exact_source_blobs_without_export_substitution(tmp_path: Path) -> None:
+    source_bytes = b'BUILD = "$Format:%H$"\ndef sma():\n    return 10.0\n'
+
+    def add_archive_attribute(repository: Path) -> None:
+        (repository / "src" / "equant_ttr" / "sma.py").write_bytes(source_bytes)
+        (repository / ".gitattributes").write_text(
+            "src/equant_ttr/sma.py export-subst\n",
+            encoding="utf-8",
+        )
+
+    fixture = write_provider_repository(
+        tmp_path,
+        implementation_mutate=add_archive_attribute,
+    )
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert (submission.source_root / "src" / "equant_ttr" / "sma.py").read_bytes() == source_bytes
+
+
+def test_reads_referenced_blobs_even_when_export_ignore_is_set(tmp_path: Path) -> None:
+    def ignore_manifest_in_archives(repository: Path) -> None:
+        (repository / ".gitattributes").write_text(
+            "compat/open_xquant/manifests/equant.ttr.sma.operator.json export-ignore\n",
+            encoding="utf-8",
+        )
+
+    fixture = write_provider_repository(tmp_path, mutate=ignore_manifest_in_archives)
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert submission.operators[0].manifest_path.is_file()
+
+
 @pytest.mark.parametrize("source_path", ["/source.py", "../source.py", "dir\\source.py", "./source.py"])
 def test_rejects_unsafe_manifest_source_paths(tmp_path: Path, source_path: str) -> None:
     fixture = write_provider_repository(tmp_path)
-    manifest_path = (
-        fixture.path
-        / COMPATIBILITY_ROOT
-        / "manifests"
-        / "equant.ttr.sma.operator.json"
-    )
+    manifest_path = fixture.path / COMPATIBILITY_ROOT / "manifests" / "equant.ttr.sma.operator.json"
     rewrite_json(
         manifest_path,
         lambda value: value["implementation"].update({"source_files": [source_path]}),  # type: ignore[index,union-attr]
@@ -513,6 +602,25 @@ def test_rejects_a_symlinked_implementation_source_file(tmp_path: Path) -> None:
     _assert_error(
         lambda: load_provider_submission(fixture.path, fixture.submission_commit, fixture.artifact_dir),
         "submission_path_invalid",
+    )
+
+
+def test_normalizes_deeply_nested_json_to_an_intake_error(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    baseline_path = fixture.path / COMPATIBILITY_ROOT / "numerical_baselines" / "technical-v1.json"
+    baseline = baseline_path.read_text(encoding="utf-8")
+    marker = '"parameters": {"window": 3}'
+    assert marker in baseline
+    nested = "[" * 10000 + "0" + "]" * 10000
+    baseline_path.write_text(
+        baseline.replace(marker, f'"parameters": {{"nested": {nested}}}'),
+        encoding="utf-8",
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_json_invalid",
     )
 
 
