@@ -79,6 +79,10 @@ invocation parameters, a QuantPanel-compatible literal input, literal expected
 output values, and absolute/relative tolerances. The tuple
 `(operator_id, operator_version, case_id)` is globally unique within one
 provider release and is preserved unchanged in the execution result.
+Multiple catalog entries may reference the same baseline file. The loader
+reads and validates each unique file once, rejects cases for identities that
+do not reference that file, and requires at least one case for every catalog
+identity that does reference it.
 
 The catalog, baseline, and build-record formats form an independently
 versioned local certification intake profile. Their schemas live under
@@ -170,6 +174,32 @@ binding digests. The registry entry is an index over this immutable record;
 any repeated submission, source, artifact, operator, or digest field must
 match the record exactly. It does not copy provider source code and does not
 modify provider files.
+
+Immediately before rendering a publication, the publisher reopens every
+candidate manifest with no-follow regular-file semantics, strict-decodes its
+actual bytes, and requires semantic equality with the retained certified
+manifest. It authenticates those exact bytes through `manifest_digest`, then
+reopens every declared source file under the retained source root and
+recomputes the frozen source-tree digest with normalized relative POSIX paths
+and no links. The source root is held by one stable directory descriptor; each
+path component is traversed descriptor-relative with no-follow semantics, and
+the final opened descriptor must identify a regular file. The publisher also
+reruns the full frozen manifest schema, standalone manifest semantics, binding
+schema, and binding provenance validator against an exact manifest snapshot.
+Manifest, binding, result, and the unique implementation artifact must agree
+on operator/distribution identity, commits, source tree, package version, build
+identifier, and implementation digest. Therefore publication must run while
+the `ProviderSubmission` context still retains its temporary manifest and
+source archives; unavailable input is rejected rather than trusted from the
+in-memory result.
+
+Publication does not execute the numerical baselines a second time. The
+`ResearchCertification` baseline-pass results are a same-process capability
+issued by `certify_provider`; the publisher verifies that the declared and
+passed case identity sets match exactly. Protecting against a malicious local
+process that can rewrite Python memory or certification inputs while the
+certifier is running is outside this v1 boundary, but a manually constructed
+result cannot bypass frozen manifest/binding structure or byte provenance.
 
 Publication uses a same-filesystem staging directory, file flush/fsync, and
 one atomic directory `os.replace`. There is no persistent lock or mutable

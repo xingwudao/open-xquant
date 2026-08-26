@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import threading
 from dataclasses import replace
@@ -27,11 +28,31 @@ from oxq.operators.models import (
 from oxq.operators.registry import CertificationRegistry, publish_certification
 from oxq.operators.resources import materialize_certification_profile
 from oxq.operators.submission import load_provider_submission
+from tests.operators.helpers import _manifest as _valid_manifest
 from tests.operators.test_baseline_runner import _write_certifiable_provider
+
+_SURFACE_DIGESTS = {
+    "quant_panel_schema": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c",
+    "operator_manifest_schema": "sha256:adea87a6caec3984d65d9fbaaa0ba132be76e5609ed17407de5e8b85c38bf82e",
+    "operator_binding_schema": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
+    "reference_validator": "sha256:48099f887ebfc9fd9857ba8cececaa8b52c1dd5a2020ccc5eca21c3120664d9a",
+}
 
 
 def _sha256(value: bytes) -> str:
     return f"sha256:{hashlib.sha256(value).hexdigest()}"
+
+
+def _source_tree_digest(root: Path, source_files: list[str]) -> str:
+    digest = hashlib.sha256()
+    for relative_path in sorted(source_files):
+        digest.update(relative_path.encode())
+        digest.update(b"\0")
+        digest.update(
+            hashlib.sha256((root / relative_path).read_bytes()).hexdigest().encode()
+        )
+        digest.update(b"\n")
+    return f"sha256:{digest.hexdigest()}"
 
 
 def _binding(
@@ -53,27 +74,13 @@ def _binding(
             "operator-manifest-v1.schema.json"
         ),
         "schema_release": "1.0.0",
-        "schema_digest": "sha256:" + "c" * 64,
+        "schema_digest": _SURFACE_DIGESTS["operator_manifest_schema"],
         "manifest_digest": "sha256:" + "d" * 64,
         "implementation_digest": "sha256:" + "e" * 64,
         "surface_release": "1.0.0",
         "contract_surface": {
-            "quant_panel_schema": {
-                "release": "1.0.0",
-                "digest": "sha256:" + "1" * 64,
-            },
-            "operator_manifest_schema": {
-                "release": "1.0.0",
-                "digest": "sha256:" + "2" * 64,
-            },
-            "operator_binding_schema": {
-                "release": "1.0.0",
-                "digest": "sha256:" + "3" * 64,
-            },
-            "reference_validator": {
-                "release": "1.0.0",
-                "digest": "sha256:" + "4" * 64,
-            },
+            name: {"release": "1.0.0", "digest": digest}
+            for name, digest in _SURFACE_DIGESTS.items()
         },
         "certification_state": state,
     }
@@ -91,27 +98,31 @@ def _result(
 ) -> ResearchCertification:
     source_root = tmp_path / f"{provider}-{release}-source"
     source_root.mkdir(parents=True, exist_ok=True)
-    (source_root / "provider.py").write_text("SECRET_PROVIDER_SOURCE = True\n")
+    source_files = ["src/equant_ttr/sma.py"]
+    source_file = source_root / source_files[0]
+    source_file.parent.mkdir(parents=True, exist_ok=True)
+    source_file.write_text("SECRET_PROVIDER_SOURCE = True\n")
+    source_tree_digest = _source_tree_digest(source_root, source_files)
     wheel = tmp_path / f"{provider}-{release}.whl"
     wheel.write_bytes(b"exact provider wheel")
     wheel_digest = _sha256(wheel.read_bytes())
-    manifest = {
-        "operator_id": operator_id,
-        "operator_version": operator_version,
-        "distribution": "equant-ttr",
-        "implementation": {
-            "package_version": "1.0.0",
-            "source_commit": "git-sha1:" + "a" * 40,
-            "build_identifier": "registry-test-build",
-            "implementation_digest": wheel_digest,
-        },
-    }
+    manifest = _valid_manifest(
+        "a" * 40,
+        source_tree_digest,
+        wheel_digest,
+        "registry-test-build",
+    )
+    manifest["operator_id"] = operator_id
+    manifest["operator_version"] = operator_version
     manifest_path = source_root / "operator.json"
-    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+    manifest_path.write_bytes(manifest_bytes)
     candidate = ContractCandidate(
         manifest=manifest,
         binding={
             **_binding(operator_id, operator_version, state=state),
+            "source_tree_digest": source_tree_digest,
+            "manifest_digest": _sha256(manifest_bytes),
             "implementation_digest": wheel_digest,
         },
         manifest_path=manifest_path,
@@ -175,6 +186,30 @@ def _write_canonical_json(path: Path, value: object) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n")
 
 
+def _with_manifest(
+    result: ResearchCertification,
+    manifest: dict[str, object],
+) -> ResearchCertification:
+    candidate = result.operators[0]
+    manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+    candidate.manifest_path.write_bytes(manifest_bytes)
+    binding = dict(candidate.binding)
+    binding["manifest_digest"] = _sha256(manifest_bytes)
+    return replace(
+        result,
+        operators=(replace(candidate, manifest=manifest, binding=binding),),
+    )
+
+
+def _with_changed_manifest(
+    result: ResearchCertification,
+    marker: str,
+) -> ResearchCertification:
+    manifest = dict(result.operators[0].manifest)
+    manifest["semantic_name"] = marker
+    return _with_manifest(result, manifest)
+
+
 def test_publishes_exact_canonical_layout_and_looks_up_binding(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -222,7 +257,7 @@ def test_publishes_exact_canonical_layout_and_looks_up_binding(
         "baseline_cases": [{"case_id": "sma-window-3", "status": "passed"}],
         "binding_digest": _sha256(binding_path.read_bytes()),
         "implementation_digest": result.artifacts[0].digest,
-        "manifest_digest": "sha256:" + "d" * 64,
+        "manifest_digest": result.operators[0].binding["manifest_digest"],
         "operator_id": "equant.ttr.sma",
         "operator_version": "1.0.0",
     }]
@@ -346,10 +381,7 @@ def test_conflicting_republication_preserves_original_release(tmp_path: Path) ->
     result = _result(tmp_path)
     first = publish_certification(result, output)
     original = _tree_bytes(first.release_dir)
-    changed_binding = dict(result.operators[0].binding)
-    changed_binding["manifest_digest"] = "sha256:" + "9" * 64
-    changed_candidate = replace(result.operators[0], binding=changed_binding)
-    conflict = replace(result, operators=(changed_candidate,))
+    conflict = _with_changed_manifest(result, "conflicting-manifest")
 
     with pytest.raises(OperatorCertificationError) as caught:
         publish_certification(conflict, output)
@@ -521,6 +553,201 @@ def test_rejects_manifest_artifact_mismatch_and_changed_wheel_bytes(
     assert caught.value.code == "certification_input_invalid"
 
 
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        "manifest-bytes",
+        "declared-manifest-digest",
+        "retained-manifest",
+        "source-tree-bytes",
+        "non-normalized-source-path",
+        "missing-manifest",
+        "missing-source",
+    ],
+)
+def test_rejects_manifest_and_source_tree_provenance_tampering(
+    tmp_path: Path,
+    tamper: str,
+) -> None:
+    result = _result(tmp_path)
+    candidate = result.operators[0]
+    if tamper == "manifest-bytes":
+        candidate.manifest_path.write_bytes(candidate.manifest_path.read_bytes() + b" ")
+    elif tamper == "declared-manifest-digest":
+        binding = dict(candidate.binding)
+        binding["manifest_digest"] = "sha256:" + "9" * 64
+        result = replace(result, operators=(replace(candidate, binding=binding),))
+    elif tamper == "retained-manifest":
+        retained = dict(candidate.manifest)
+        retained["semantic_name"] = "forged-retained-value"
+        result = replace(result, operators=(replace(candidate, manifest=retained),))
+    elif tamper == "source-tree-bytes":
+        (result.source_root / "src/equant_ttr/sma.py").write_text(
+            "SECRET_PROVIDER_SOURCE = False\n"
+        )
+    elif tamper == "non-normalized-source-path":
+        manifest = dict(candidate.manifest)
+        implementation = dict(manifest["implementation"])  # type: ignore[arg-type]
+        source_files = ["src//equant_ttr/sma.py"]
+        implementation["source_files"] = source_files
+        implementation["source_tree_digest"] = _source_tree_digest(
+            result.source_root,
+            source_files,
+        )
+        manifest["implementation"] = implementation
+        manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+        candidate.manifest_path.write_bytes(manifest_bytes)
+        binding = dict(candidate.binding)
+        binding["manifest_digest"] = _sha256(manifest_bytes)
+        binding["source_tree_digest"] = implementation["source_tree_digest"]
+        result = replace(
+            result,
+            operators=(replace(candidate, manifest=manifest, binding=binding),),
+        )
+    elif tamper == "missing-manifest":
+        candidate.manifest_path.unlink()
+    else:
+        (result.source_root / "src/equant_ttr/sma.py").unlink()
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        publish_certification(result, tmp_path / "certifications")
+
+    assert caught.value.code == "certification_input_invalid"
+    assert caught.value.stage == "registry"
+
+
+@pytest.mark.parametrize("invalidity", ["schema", "semantics", "binding"])
+def test_revalidates_full_frozen_manifest_and_binding_contract(
+    tmp_path: Path,
+    invalidity: str,
+) -> None:
+    result = _result(tmp_path)
+    candidate = result.operators[0]
+    if invalidity == "binding":
+        binding = dict(candidate.binding)
+        binding["schema_digest"] = "sha256:" + "9" * 64
+        result = replace(result, operators=(replace(candidate, binding=binding),))
+    else:
+        manifest = json.loads(json.dumps(candidate.manifest))
+        if invalidity == "schema":
+            del manifest["semantic_name"]
+        else:
+            manifest["input"]["optional_columns"] = ["close"]
+        result = _with_manifest(result, manifest)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        publish_certification(result, tmp_path / "certifications")
+
+    assert caught.value.code == "certification_input_invalid"
+    assert caught.value.stage == "registry"
+
+
+def test_source_tree_read_cannot_escape_through_parent_symlink_swap(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    result = _result(tmp_path / "result")
+    candidate = result.operators[0]
+    relative_source = "src/equant_ttr/sma.py"
+    source_parent = result.source_root / "src/equant_ttr"
+    outside_root = tmp_path / "outside"
+    outside_source = outside_root / relative_source
+    outside_source.parent.mkdir(parents=True)
+    outside_source.write_text("SECRET_PROVIDER_SOURCE = OUTSIDE\n")
+    outside_digest = _source_tree_digest(outside_root, [relative_source])
+    manifest = dict(candidate.manifest)
+    implementation = dict(manifest["implementation"])  # type: ignore[arg-type]
+    implementation["source_tree_digest"] = outside_digest
+    manifest["implementation"] = implementation
+    manifest_bytes = (json.dumps(manifest, sort_keys=True) + "\n").encode()
+    candidate.manifest_path.write_bytes(manifest_bytes)
+    binding = dict(candidate.binding)
+    binding["manifest_digest"] = _sha256(manifest_bytes)
+    binding["source_tree_digest"] = outside_digest
+    result = replace(
+        result,
+        operators=(replace(candidate, manifest=manifest, binding=binding),),
+    )
+    real_open = registry_module.os.open
+    swapped = False
+
+    def swap_parent_before_leaf_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        nonlocal swapped
+        if not swapped and Path(path).name == "sma.py":
+            swapped = True
+            source_parent.rename(source_parent.with_name("equant_ttr-original"))
+            source_parent.symlink_to(outside_source.parent, target_is_directory=True)
+        return real_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(registry_module.os, "open", swap_parent_before_leaf_open)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        publish_certification(result, tmp_path / "certifications")
+
+    assert swapped
+    assert caught.value.code == "certification_input_invalid"
+
+
+def test_source_root_descriptor_closes_when_fstat_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_root = tmp_path / "source"
+    source_root.mkdir()
+    real_open = registry_module.os.open
+    real_fstat = registry_module.os.fstat
+    opened: list[int] = []
+
+    def observed_open(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        flags: int,
+        mode: int = 0o777,
+        *,
+        dir_fd: int | None = None,
+    ) -> int:
+        descriptor = real_open(path, flags, mode, dir_fd=dir_fd)
+        opened.append(descriptor)
+        return descriptor
+
+    def fail_fstat(descriptor: int) -> os.stat_result:
+        del descriptor
+        raise OSError("injected fstat failure")
+
+    monkeypatch.setattr(registry_module.os, "open", observed_open)
+    monkeypatch.setattr(registry_module.os, "fstat", fail_fstat)
+
+    with pytest.raises(OSError, match="injected fstat failure"):
+        registry_module._open_directory_no_follow(source_root)
+
+    assert len(opened) == 1
+    with pytest.raises(OSError):
+        real_fstat(opened[0])
+
+
+def test_descriptor_cleanup_attempts_every_close_after_one_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    attempted: list[int] = []
+
+    def flaky_close(descriptor: int) -> None:
+        attempted.append(descriptor)
+        if descriptor == 22:
+            raise OSError("injected close failure")
+
+    monkeypatch.setattr(registry_module.os, "close", flaky_close)
+
+    with pytest.raises(OSError, match="injected close failure"):
+        registry_module._close_descriptors([11, 22, 33])
+
+    assert attempted == [11, 22, 33]
+
+
 def test_allows_multiple_operators_bound_to_one_implementation_artifact(
     tmp_path: Path,
 ) -> None:
@@ -528,9 +755,20 @@ def test_allows_multiple_operators_bound_to_one_implementation_artifact(
     first = result.operators[0]
     second_manifest = dict(first.manifest)
     second_manifest["operator_id"] = "equant.ttr.ema"
+    second_manifest_path = result.source_root / "ema.operator.json"
+    second_manifest_bytes = (
+        json.dumps(second_manifest, sort_keys=True) + "\n"
+    ).encode()
+    second_manifest_path.write_bytes(second_manifest_bytes)
     second_binding = dict(first.binding)
     second_binding["operator_id"] = "equant.ttr.ema"
-    second = replace(first, manifest=second_manifest, binding=second_binding)
+    second_binding["manifest_digest"] = _sha256(second_manifest_bytes)
+    second = replace(
+        first,
+        manifest=second_manifest,
+        binding=second_binding,
+        manifest_path=second_manifest_path,
+    )
     second_case = replace(
         result.baseline_cases[0],
         case_id="ema-window-3",
@@ -658,7 +896,7 @@ def test_registry_rejects_cross_release_identity_collision(tmp_path: Path) -> No
 
 @pytest.mark.parametrize(
     "schema_loader",
-    ["_binding_schema", "_certification_record_schema"],
+    ["_snapshot_contract_surface", "_certification_record_schema"],
 )
 def test_normalizes_unavailable_publication_schema(
     tmp_path: Path,
@@ -749,12 +987,7 @@ def test_concurrent_conflicting_publications_have_one_winner_and_no_residue(
     output = tmp_path / "certifications"
     first = _result(tmp_path / "first")
     second = _result(tmp_path / "second")
-    changed_binding = dict(second.operators[0].binding)
-    changed_binding["manifest_digest"] = "sha256:" + "9" * 64
-    second = replace(
-        second,
-        operators=(replace(second.operators[0], binding=changed_binding),),
-    )
+    second = _with_changed_manifest(second, "concurrent-conflict")
     barrier = threading.Barrier(2)
     successes: list[object] = []
     failures: list[OperatorCertificationError] = []

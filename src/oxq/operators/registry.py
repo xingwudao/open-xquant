@@ -12,7 +12,7 @@ import tempfile
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import MappingProxyType
 from typing import cast
 
@@ -23,12 +23,24 @@ from jsonschema import (  # type: ignore[import-untyped]
     ValidationError,
 )
 
-from oxq.operators.certification import _snapshot_contract_surface
+from oxq.operators.certification import (
+    _load_reference_validator,
+    _snapshot_contract_surface,
+    _validate_binding_semantics,
+    _validate_manifest_semantics,
+)
+from oxq.operators.certification import (
+    _load_schema as _load_contract_schema,
+)
+from oxq.operators.certification import (
+    _validate_schema as _validate_contract_schema,
+)
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import (
     BaselineCase,
     BaselineResult,
     BuildArtifact,
+    CatalogEntry,
     ContractCandidate,
     ResearchCertification,
 )
@@ -258,85 +270,10 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
 
     entry_artifacts, implementation_artifacts = _prepare_artifacts(result.artifacts)
 
-    try:
-        binding_schema = _binding_schema()
-    except (
-        OperatorCertificationError,
-        OSError,
-        ValueError,
-        TypeError,
-        UnicodeError,
-        json.JSONDecodeError,
-    ):
-        raise _error(
-            "certification_publish_failed",
-            "certification schemas are unavailable",
-        ) from None
-
-    identities: set[tuple[str, str]] = set()
-    matched_implementation_artifacts: set[tuple[str, str, str]] = set()
-    binding_bytes: dict[str, bytes] = {}
-    binding_values: dict[tuple[str, str], Mapping[str, object]] = {}
-    for candidate in result.operators:
-        if (
-            not isinstance(candidate, ContractCandidate)
-            or not isinstance(candidate.manifest, Mapping)
-            or not isinstance(candidate.binding, Mapping)
-            or not isinstance(candidate.manifest_path, Path)
-            or not isinstance(candidate.implementation_artifact, Path)
-        ):
-            raise _input_error("certified operator fields are invalid")
-        binding = candidate.binding
-        operator_id = binding.get("operator_id")
-        operator_version = binding.get("operator_version")
-        if not isinstance(operator_id, str) or not isinstance(operator_version, str):
-            raise _input_error("certified binding identity is invalid")
-        identity = (operator_id, operator_version)
-        if identity in identities or not _valid_operator_identity(*identity):
-            raise _input_error("certified operator identity is duplicated or invalid", operator_id)
-        if binding.get("certification_state") != "research-certified":
-            raise _input_error("publisher accepts only research-certified bindings", operator_id)
-        if (
-            candidate.manifest.get("operator_id") != operator_id
-            or candidate.manifest.get("operator_version") != operator_version
-        ):
-            raise _input_error("manifest and binding identities do not match", operator_id)
-        if binding.get("source_commit") != result.source_commit:
-            raise _input_error("binding source commit does not match certification", operator_id)
-        matching_artifacts = [
-            artifact
-            for artifact in implementation_artifacts
-            if _candidate_matches_artifact(result, candidate, artifact)
-        ]
-        if len(matching_artifacts) != 1:
-            raise _input_error(
-                "certified binding does not match exactly one implementation artifact",
-                operator_id,
-            )
-        matched = matching_artifacts[0]
-        matched_implementation_artifacts.add(
-            (matched.distribution, matched.version, matched.filename)
-        )
-        _validate_schema(
-            binding,
-            binding_schema,
-            code="certification_input_invalid",
-            message="research-certified binding is invalid",
-            operator_id=operator_id,
-        )
-        identities.add(identity)
-        binding_values[identity] = binding
-        filename = _binding_filename(*identity)
-        if filename in binding_bytes:
-            raise _input_error("certified binding filename collides", operator_id)
-        binding_bytes[filename] = _json_bytes(binding)
-
-    expected_implementation_artifacts = {
-        (artifact.distribution, artifact.version, artifact.filename)
-        for artifact in implementation_artifacts
-    }
-    if matched_implementation_artifacts != expected_implementation_artifacts:
-        raise _input_error("certification contains an unrelated implementation artifact")
+    identities, binding_values, binding_bytes = _prepare_candidates(
+        result,
+        implementation_artifacts,
+    )
 
     case_counts = {identity: 0 for identity in identities}
     declared_cases: set[tuple[str, str, str]] = set()
@@ -423,6 +360,197 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
     )
 
 
+def _prepare_candidates(
+    result: ResearchCertification,
+    implementation_artifacts: tuple[BuildArtifact, ...],
+) -> tuple[
+    set[tuple[str, str]],
+    dict[tuple[str, str], Mapping[str, object]],
+    dict[str, bytes],
+]:
+    identities: set[tuple[str, str]] = set()
+    matched_implementation_artifacts: set[tuple[str, str, str]] = set()
+    binding_bytes: dict[str, bytes] = {}
+    binding_values: dict[tuple[str, str], Mapping[str, object]] = {}
+    try:
+        with _snapshot_contract_surface() as (surface_bytes, surface_paths):
+            manifest_schema = _load_contract_schema(
+                surface_bytes["operator_manifest_schema"],
+                "manifest_schema_invalid",
+                "manifest",
+            )
+            binding_schema = _load_contract_schema(
+                surface_bytes["operator_binding_schema"],
+                "binding_validation_failed",
+                "binding",
+            )
+            validator = _load_reference_validator(
+                surface_bytes["reference_validator"],
+                surface_paths["reference_validator"],
+            )
+            for candidate in result.operators:
+                if (
+                    not isinstance(candidate, ContractCandidate)
+                    or not isinstance(candidate.manifest, Mapping)
+                    or not isinstance(candidate.binding, Mapping)
+                    or not isinstance(candidate.manifest_path, Path)
+                    or not isinstance(candidate.implementation_artifact, Path)
+                ):
+                    raise _input_error("certified operator fields are invalid")
+                binding = candidate.binding
+                operator_id = binding.get("operator_id")
+                operator_version = binding.get("operator_version")
+                if not isinstance(operator_id, str) or not isinstance(
+                    operator_version, str
+                ):
+                    raise _input_error("certified binding identity is invalid")
+                identity = (operator_id, operator_version)
+                if identity in identities or not _valid_operator_identity(*identity):
+                    raise _input_error(
+                        "certified operator identity is duplicated or invalid",
+                        operator_id,
+                    )
+                if binding.get("certification_state") != "research-certified":
+                    raise _input_error(
+                        "publisher accepts only research-certified bindings",
+                        operator_id,
+                    )
+                if binding.get("source_commit") != result.source_commit:
+                    raise _input_error(
+                        "binding source commit does not match certification",
+                        operator_id,
+                    )
+                manifest, manifest_bytes = _read_candidate_manifest(
+                    candidate,
+                    operator_id,
+                    operator_version,
+                )
+                matched = _verify_candidate_provenance(
+                    result,
+                    candidate,
+                    implementation_artifacts,
+                    operator_id,
+                    operator_version,
+                )
+                try:
+                    _validate_contract_schema(
+                        manifest,
+                        manifest_schema,
+                        code="manifest_schema_invalid",
+                        message="operator manifest does not match frozen schema",
+                        stage="manifest",
+                        operator_id=operator_id,
+                    )
+                    _validate_manifest_semantics(validator, manifest, operator_id)
+                    _validate_contract_schema(
+                        _thaw_json_mapping(binding),
+                        binding_schema,
+                        code="binding_validation_failed",
+                        message="operator binding validation failed",
+                        stage="binding",
+                        operator_id=operator_id,
+                    )
+                    with tempfile.TemporaryDirectory(
+                        prefix="oxq-certified-manifest-"
+                    ) as directory:
+                        manifest_snapshot = Path(directory) / "operator.json"
+                        manifest_snapshot.write_bytes(manifest_bytes)
+                        entry = CatalogEntry(
+                            operator_id=operator_id,
+                            operator_version=operator_version,
+                            manifest_path=manifest_snapshot,
+                            baseline_path=manifest_snapshot,
+                        )
+                        _validate_binding_semantics(
+                            validator,
+                            binding,
+                            manifest,
+                            entry,
+                            result.source_root,
+                            matched.wheel_path,
+                            surface_paths,
+                        )
+                except OperatorCertificationError:
+                    raise _input_error(
+                        "certified manifest or binding violates the frozen contract",
+                        operator_id,
+                    ) from None
+                matched = _verify_candidate_provenance(
+                    result,
+                    candidate,
+                    implementation_artifacts,
+                    operator_id,
+                    operator_version,
+                )
+                matched_implementation_artifacts.add(
+                    (matched.distribution, matched.version, matched.filename)
+                )
+                identities.add(identity)
+                binding_values[identity] = binding
+                filename = _binding_filename(*identity)
+                if filename in binding_bytes:
+                    raise _input_error(
+                        "certified binding filename collides",
+                        operator_id,
+                    )
+                binding_bytes[filename] = _json_bytes(binding)
+    except OperatorCertificationError as error:
+        if error.code == "certification_input_invalid":
+            raise
+        raise _error(
+            "certification_publish_failed",
+            "frozen certification contract is unavailable",
+        ) from None
+    except (OSError, ValueError, TypeError, UnicodeError, json.JSONDecodeError):
+        raise _error(
+            "certification_publish_failed",
+            "frozen certification contract is unavailable",
+        ) from None
+
+    expected_implementation_artifacts = {
+        (artifact.distribution, artifact.version, artifact.filename)
+        for artifact in implementation_artifacts
+    }
+    if matched_implementation_artifacts != expected_implementation_artifacts:
+        raise _input_error("certification contains an unrelated implementation artifact")
+    return identities, binding_values, binding_bytes
+
+
+def _read_candidate_manifest(
+    candidate: ContractCandidate,
+    operator_id: str,
+    operator_version: str,
+) -> tuple[dict[str, object], bytes]:
+    try:
+        manifest_bytes = _read_regular_file(candidate.manifest_path)
+        manifest = _strict_json_object(manifest_bytes)
+        retained_manifest = _thaw_json_mapping(candidate.manifest)
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        UnicodeError,
+        json.JSONDecodeError,
+        RecursionError,
+    ):
+        raise _input_error(
+            "certified operator manifest is unavailable or invalid",
+            operator_id,
+        ) from None
+    if (
+        manifest != retained_manifest
+        or candidate.binding.get("manifest_digest") != _sha256(manifest_bytes)
+        or manifest.get("operator_id") != operator_id
+        or manifest.get("operator_version") != operator_version
+        or manifest.get("distribution") != candidate.binding.get("distribution")
+    ):
+        raise _input_error(
+            "manifest bytes do not match certified binding provenance",
+            operator_id,
+        )
+    return manifest, manifest_bytes
+
+
 def _prepare_artifacts(
     artifacts: tuple[BuildArtifact, ...],
 ) -> tuple[tuple[dict[str, object], ...], tuple[BuildArtifact, ...]]:
@@ -485,33 +613,171 @@ def _prepare_artifacts(
     )
 
 
-def _candidate_matches_artifact(
+def _verify_candidate_provenance(
     result: ResearchCertification,
     candidate: ContractCandidate,
-    artifact: BuildArtifact,
-) -> bool:
-    manifest = candidate.manifest
+    artifacts: tuple[BuildArtifact, ...],
+    operator_id: str,
+    operator_version: str,
+) -> BuildArtifact:
+    manifest, _ = _read_candidate_manifest(
+        candidate,
+        operator_id,
+        operator_version,
+    )
     binding = candidate.binding
     implementation = manifest.get("implementation")
-    if not isinstance(implementation, Mapping):
-        return False
+    if (
+        not isinstance(implementation, Mapping)
+    ):
+        raise _input_error(
+            "manifest bytes do not match certified binding provenance",
+            operator_id,
+        )
+    source_files = implementation.get("source_files")
+    if (
+        not isinstance(source_files, list)
+        or not source_files
+        or not all(isinstance(path, str) for path in source_files)
+        or len(source_files) != len(set(cast(list[str], source_files)))
+    ):
+        raise _input_error("manifest source file list is invalid", operator_id)
+    try:
+        actual_source_tree_digest = _source_tree_digest(
+            result.source_root,
+            cast(list[str], source_files),
+        )
+    except (OSError, ValueError, TypeError):
+        raise _input_error(
+            "certified source tree is unavailable or invalid",
+            operator_id,
+        ) from None
+    if (
+        implementation.get("source_commit") != result.source_commit
+        or implementation.get("source_commit") != binding.get("source_commit")
+        or implementation.get("source_tree_digest") != actual_source_tree_digest
+        or implementation.get("source_tree_digest")
+        != binding.get("source_tree_digest")
+    ):
+        raise _input_error(
+            "manifest source provenance does not match certified source tree",
+            operator_id,
+        )
     try:
         candidate_path = candidate.implementation_artifact.resolve(strict=True)
-        artifact_path = artifact.wheel_path.resolve(strict=True)
     except OSError:
-        return False
-    return (
-        candidate_path == artifact_path
-        and manifest.get("distribution") == artifact.distribution
-        and binding.get("distribution") == artifact.distribution
-        and binding.get("distribution_version") == artifact.version
-        and binding.get("implementation_digest") == artifact.digest
-        and binding.get("source_commit") == result.source_commit
-        and implementation.get("package_version") == artifact.version
-        and implementation.get("implementation_digest") == artifact.digest
-        and implementation.get("build_identifier") == artifact.build_identifier
-        and implementation.get("source_commit") == result.source_commit
+        raise _input_error("implementation artifact path is unavailable", operator_id) from None
+    matching_artifacts: list[BuildArtifact] = []
+    for artifact in artifacts:
+        try:
+            artifact_path = artifact.wheel_path.resolve(strict=True)
+        except OSError:
+            continue
+        if (
+            candidate_path == artifact_path
+            and manifest.get("distribution") == artifact.distribution
+            and binding.get("distribution") == artifact.distribution
+            and binding.get("distribution_version") == artifact.version
+            and binding.get("implementation_digest") == artifact.digest
+            and implementation.get("package_version") == artifact.version
+            and implementation.get("implementation_digest") == artifact.digest
+            and implementation.get("build_identifier") == artifact.build_identifier
+        ):
+            matching_artifacts.append(artifact)
+    if len(matching_artifacts) != 1:
+        raise _input_error(
+            "certified binding does not match exactly one implementation artifact",
+            operator_id,
+        )
+    return matching_artifacts[0]
+
+
+def _source_tree_digest(root: Path, source_files: list[str]) -> str:
+    normalized_paths: list[tuple[str, list[str]]] = []
+    for relative in sorted(source_files):
+        path = PurePosixPath(relative)
+        parts = relative.split("/")
+        if (
+            not relative
+            or path.is_absolute()
+            or "\\" in relative
+            or any(part in {"", ".", ".."} for part in parts)
+        ):
+            raise ValueError("source path is not normalized")
+        normalized_paths.append((relative, parts))
+
+    root_descriptor = _open_directory_no_follow(root)
+    digest = hashlib.sha256()
+    try:
+        for relative, parts in normalized_paths:
+            source_bytes = _read_relative_regular_file(root_descriptor, parts)
+            digest.update(relative.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(hashlib.sha256(source_bytes).hexdigest().encode("ascii"))
+            digest.update(b"\n")
+    finally:
+        _close_descriptors([root_descriptor])
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _open_directory_no_follow(path: Path) -> int:
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
     )
+    descriptor = os.open(path, flags)
+    try:
+        if not stat.S_ISDIR(os.fstat(descriptor).st_mode):
+            raise OSError("path is not a real directory")
+    except BaseException:
+        _close_descriptors([descriptor])
+        raise
+    return descriptor
+
+
+def _read_relative_regular_file(root_descriptor: int, parts: list[str]) -> bytes:
+    directory_flags = (
+        os.O_RDONLY
+        | getattr(os, "O_DIRECTORY", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+    )
+    opened_directories: list[int] = []
+    current_descriptor = root_descriptor
+    leaf_descriptor: int | None = None
+    try:
+        for part in parts[:-1]:
+            current_descriptor = os.open(
+                part,
+                directory_flags,
+                dir_fd=current_descriptor,
+            )
+            opened_directories.append(current_descriptor)
+            if not stat.S_ISDIR(os.fstat(current_descriptor).st_mode):
+                raise OSError("source parent is not a real directory")
+        leaf_descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=current_descriptor,
+        )
+        return _read_regular_descriptor(leaf_descriptor)
+    finally:
+        descriptors = (
+            [leaf_descriptor] if leaf_descriptor is not None else []
+        ) + list(reversed(opened_directories))
+        _close_descriptors(descriptors)
+
+
+def _close_descriptors(descriptors: Sequence[int]) -> None:
+    first_error: OSError | None = None
+    for descriptor in descriptors:
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise first_error
 
 
 def _render_publication(
@@ -1107,14 +1373,18 @@ def _read_regular_file(path: Path) -> bytes:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
     try:
-        if not stat.S_ISREG(os.fstat(descriptor).st_mode):
-            raise OSError("path is not a regular file")
-        chunks: list[bytes] = []
-        while chunk := os.read(descriptor, 1024 * 1024):
-            chunks.append(chunk)
-        return b"".join(chunks)
+        return _read_regular_descriptor(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _read_regular_descriptor(descriptor: int) -> bytes:
+    if not stat.S_ISREG(os.fstat(descriptor).st_mode):
+        raise OSError("path is not a regular file")
+    chunks: list[bytes] = []
+    while chunk := os.read(descriptor, 1024 * 1024):
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _sha256(value: bytes) -> str:

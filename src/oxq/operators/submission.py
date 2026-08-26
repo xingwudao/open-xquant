@@ -216,45 +216,66 @@ def _load_baselines(
 ) -> tuple[BaselineCase, ...]:
     cases: list[BaselineCase] = []
     case_identities: set[tuple[str, str, str]] = set()
+    entries_by_path: dict[Path, list[CatalogEntry]] = {}
     for entry in operators:
-        baseline = _read_json(entry.baseline_path, entry.operator_id)
-        _validate_schema(baseline, schema, "baseline", entry.operator_id)
-        baseline_data = _mapping(baseline, "baseline", entry.operator_id)
+        entries_by_path.setdefault(entry.baseline_path, []).append(entry)
+    for baseline_path, entries in entries_by_path.items():
+        error_operator_id = entries[0].operator_id
+        referenced_identities = {
+            (entry.operator_id, entry.operator_version) for entry in entries
+        }
+        covered_identities: set[tuple[str, str]] = set()
+        baseline = _read_json(baseline_path, error_operator_id)
+        _validate_schema(baseline, schema, "baseline", error_operator_id)
+        baseline_data = _mapping(baseline, "baseline", error_operator_id)
         if (
             baseline_data["provider"] != provider
             or baseline_data["release"] != release
         ):
-            raise _error("submission_identity_mismatch", "baseline identity does not match catalog", "baseline", entry.operator_id)
-        for raw_case in cast(list[object], baseline_data["cases"]):
-            case = _mapping(raw_case, "baseline", entry.operator_id)
-            case_id = _string(case["case_id"], "baseline", entry.operator_id)
-            operator_id = _string(case["operator_id"], "baseline", entry.operator_id)
-            operator_version = _string(
-                case["operator_version"], "baseline", entry.operator_id
+            raise _error(
+                "submission_identity_mismatch",
+                "baseline identity does not match catalog",
+                "baseline",
+                error_operator_id,
             )
+        for raw_case in cast(list[object], baseline_data["cases"]):
+            case = _mapping(raw_case, "baseline", error_operator_id)
+            case_id = _string(case["case_id"], "baseline", error_operator_id)
+            operator_id = _string(case["operator_id"], "baseline", error_operator_id)
+            operator_version = _string(
+                case["operator_version"], "baseline", error_operator_id
+            )
+            operator_identity = (operator_id, operator_version)
             identity = (operator_id, operator_version, case_id)
             if (
-                operator_id != entry.operator_id
-                or operator_version != entry.operator_version
+                operator_identity not in referenced_identities
                 or identity in case_identities
             ):
                 raise _error(
                     "submission_identity_mismatch",
                     "baseline case identity does not match its catalog entry",
                     "baseline",
-                    entry.operator_id,
+                    error_operator_id,
                 )
+            covered_identities.add(operator_identity)
             case_identities.add(identity)
             cases.append(
                 BaselineCase(
                     case_id=case_id,
                     operator_id=operator_id,
                     operator_version=operator_version,
-                    parameters=_mapping(case["parameters"], "baseline", entry.operator_id),
-                    input=_mapping(case["input"], "baseline", entry.operator_id),
-                    expected=_mapping(case["expected"], "baseline", entry.operator_id),
-                    tolerance=_mapping(case["tolerance"], "baseline", entry.operator_id),
+                    parameters=_mapping(case["parameters"], "baseline", error_operator_id),
+                    input=_mapping(case["input"], "baseline", error_operator_id),
+                    expected=_mapping(case["expected"], "baseline", error_operator_id),
+                    tolerance=_mapping(case["tolerance"], "baseline", error_operator_id),
                 )
+            )
+        if covered_identities != referenced_identities:
+            raise _error(
+                "submission_identity_mismatch",
+                "shared baseline does not cover every catalog identity",
+                "baseline",
+                error_operator_id,
             )
     return tuple(cases)
 

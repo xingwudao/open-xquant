@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import oxq.operators.submission as submission_module
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.submission import load_provider_submission
 from tests.operators.helpers import (
@@ -186,6 +187,93 @@ def test_rejects_duplicate_global_baseline_case_identity(tmp_path: Path) -> None
 
     _assert_error(
         lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "submission_identity_mismatch",
+    )
+
+
+@pytest.mark.parametrize("operator_count", [2, 5])
+def test_loads_shared_baseline_file_once_for_all_referencing_catalog_entries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    operator_count: int,
+) -> None:
+    operator_ids = [
+        "equant.ttr.sma",
+        "equant.ttr.ema",
+        "equant.ttr.rsi",
+        "equant.ttr.atr",
+        "equant.ttr.momentum",
+    ][:operator_count]
+
+    def share_baseline(repository: Path) -> None:
+        catalog_path = repository / "provider-catalog-v1.json"
+        baseline_path = repository / "numerical_baselines" / "technical-v1.json"
+        catalog = json.loads(catalog_path.read_text())
+        baseline = json.loads(baseline_path.read_text())
+        original_case = baseline["cases"][0]
+        baseline["cases"] = []
+        for operator_id in operator_ids:
+            catalog["operators"][f"{operator_id}@1.0.0"] = {
+                "manifest": "manifests/equant.ttr.sma.operator.json",
+                "baseline": "numerical_baselines/technical-v1.json",
+            }
+            case = dict(original_case)
+            case["operator_id"] = operator_id
+            case["case_id"] = operator_id.rsplit(".", 1)[-1] + "-window-3"
+            baseline["cases"].append(case)
+        catalog_path.write_text(json.dumps(catalog, sort_keys=True))
+        baseline_path.write_text(json.dumps(baseline, sort_keys=True))
+
+    fixture = write_provider_repository(tmp_path, mutate=share_baseline)
+    baseline_reads = 0
+    real_read_json = submission_module._read_json
+
+    def observed_read_json(path: Path, operator_id: str | None = None) -> object:
+        nonlocal baseline_reads
+        if path.name == "technical-v1.json":
+            baseline_reads += 1
+        return real_read_json(path, operator_id)
+
+    monkeypatch.setattr(submission_module, "_read_json", observed_read_json)
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        assert [case.operator_id for case in submission.baseline_cases] == operator_ids
+        assert [case.case_id for case in submission.baseline_cases] == [
+            operator_id.rsplit(".", 1)[-1] + "-window-3"
+            for operator_id in operator_ids
+        ]
+
+    assert baseline_reads == 1
+
+
+def test_rejects_shared_baseline_missing_a_referencing_catalog_identity(
+    tmp_path: Path,
+) -> None:
+    def add_uncovered_operator(repository: Path) -> None:
+        rewrite_json(
+            repository / "provider-catalog-v1.json",
+            lambda catalog: catalog["operators"].update(  # type: ignore[union-attr]
+                {
+                    "equant.ttr.ema@1.0.0": {
+                        "manifest": "manifests/equant.ttr.sma.operator.json",
+                        "baseline": "numerical_baselines/technical-v1.json",
+                    }
+                }
+            ),
+        )
+
+    fixture = write_provider_repository(tmp_path, mutate=add_uncovered_operator)
+
+    _assert_error(
+        lambda: load_provider_submission(
+            fixture.path,
+            fixture.submission_commit,
+            fixture.artifact_dir,
+        ),
         "submission_identity_mismatch",
     )
 
