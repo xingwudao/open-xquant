@@ -69,7 +69,8 @@ The build record contains:
 
 - schema version and provider release;
 - the exact implementation source commit;
-- every local wheel's distribution, version, filename, role, and SHA-256;
+- every local wheel's distribution, version, filename, build identifier, role,
+  and SHA-256;
 - the Python version and exact build command used by the provider.
 
 The baseline file contains one or more cases. Each case identifies the exact
