@@ -1,0 +1,13 @@
+{
+  "binding_version": 1,
+  "distribution": "equant-ttr",
+  "distribution_version": "1.0.0",
+  "source_commit": "git-sha1:0123456789abcdef0123456789abcdef01234567",
+  "source_tree_digest": "sha256:ef3604168a06b136282e297c62a40aa340352c711a475e88ee2def218d4f854e",
+  "schema_id": "https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json",
+  "schema_release": "1.0.0",
+  "schema_digest": "sha256:a1b968565ac61a3c4cd5b36ca3907775b7e54a60ce0e6094cf719f2760ba42aa",
+  "manifest_digest": "sha256:6905d991b15b346af97000ca2d83dec6973d0e501d5bca3d8cfbe7127375f4ec",
+  "implementation_digest": "sha256:97b9dc8fbbdad66716caf7d3d1bf74d7179f7c2f8c83e60cf1fb1790a79f1d7a",
+  "certification_state": "contract-valid"
+}

@@ -70,6 +70,11 @@ open-xquant 负责研究真实性：
 - `SHOULD`：原则上必须满足，例外需要在 manifest 中解释。
 - `MAY`：可选能力。
 
+JSON Schema 是本契约的结构层，只验证可由 Draft 2020-12 表达的对象形状、
+字段类型和条件分支。`reference_validator_v1.py` 是不可绕过的语义层，验证
+跨字段集合、QuantPanel 记录、参数约束与摘要输入。一个对象只有依次通过
+对应 JSON Schema 和 reference validator，才是本契约意义上的合法对象。
+
 ## 4. 非目标
 
 本规范不要求算子仓库：
@@ -171,6 +176,11 @@ open-xquant `MUST NOT` 以开发者本地路径或 editable install
 
 patch version `MUST NOT` 改变有效计算语义。
 
+本节管理 provider 的 operator/package 语义版本。公式、默认值或输出变化
+按照本节提升 provider major version 并重新认证，`MUST NOT` 因此自动提升
+Quant Operator Contract major version。Contract/schema 自身的兼容方向由
+`compatibility-policy-v1.md` 定义。
+
 ### 6.4 运行环境声明
 
 每个发布版本 `MUST` 准确声明：
@@ -208,6 +218,10 @@ v1 默认使用长格式 `pandas.DataFrame`，一行代表一个资产在一个�
 
 算子可以要求其他字段，但必须在 manifest 中声明。
 
+`columns[].name` `MUST` 唯一；每条记录 `MUST` 包含所有声明为 required 的
+列，`MUST NOT` 包含未声明字段，且每个声明列的值 `MUST` 符合其 dtype。
+这些跨字段规则由 `reference_validator_v1.py` 执行。
+
 ### 7.2 主键
 
 `(date, code)` `MUST` 唯一。
@@ -222,6 +236,10 @@ v1 默认使用长格式 `pandas.DataFrame`，一行代表一个资产在一个�
 ### 7.3 排序
 
 算子 `MUST` 声明是否要求排序。
+
+manifest 的 `input.requires_sorted_input` `MUST` 显式存在。值为 `true` 时，
+`required_sort_order` `MUST` 是非空、无重复的列名序列，数组顺序定义排序
+优先级且每列使用升序；值为 `false` 时 `MUST NOT` 携带该字段。
 
 兼容算子 `SHOULD` 接受无序输入，并按稳定规则处理：
 
@@ -387,6 +405,9 @@ manifest `MUST` 声明：
 - 是否要求完整横截面。
 - 是否要求基准序列。
 - 是否要求行业、市值或基本面数据。
+- 是否要求排序，以及要求时的稳定升序列优先级。
+
+必需字段与可选字段列表各自 `MUST` 无重复，且两个集合 `MUST` 互不相交。
 
 ### 8.7 参数声明
 
@@ -402,6 +423,11 @@ manifest `MUST` 声明：
 - 是否影响因果性或可用时点。
 
 未知参数 `MUST` 报错。
+
+参数 constraint 只能用于相符的参数类型；上下界、长度界和 item-count 界
+`MUST` 自洽。默认值和每次请求值 `MUST` 同时满足声明类型以及 enum、range、
+pattern、length 和 item-count 约束。`validate_operator_request_parameters()`
+是标准请求参数语义检查入口，并 `MUST` 拒绝未知参数和缺少的 required 参数。
 
 ### 8.8 输出声明
 
@@ -419,14 +445,20 @@ manifest `MUST` 声明：
 
 ### 8.9 实现摘要
 
-正式发布的 operator catalog `MUST` 包含：
+manifest 的 `implementation` `MUST` 包含：
 
 - package version。
-- source commit。
+- 完整 source commit，格式仅允许 `git-sha1:<40 lowercase hex>` 或
+  `git-sha256:<64 lowercase hex>`。
+- 非空、唯一、相对 POSIX 且不包含 `..` 的 `source_files`。
 - source tree digest。
-- manifest digest。
+- implementation digest。
 - build identifier。
-- contract version。
+
+manifest digest `MUST NOT` 位于 manifest 自身。外部 binding/certification
+record `MUST` 固定 schema release/digest，并记录 manifest 文件准确 UTF-8
+字节的 SHA-256。source-tree 和正式 wheel 摘要的唯一算法定义见
+`hash-profile-v1.md`。
 
 ## 9. OperatorRequest 与 OperatorResult
 
@@ -605,7 +637,9 @@ data_manifest: {}
 - 全局随机状态。
 - 输入行的偶然顺序。
 
-随机算子 `MUST` 接受显式随机种子。
+随机算子 `MUST` 接受显式随机种子。`random_seed_required: true` 时，
+`seed_parameter` `MUST` 指向 `parameters` 中存在的 integer 参数；为 `false`
+时 `MUST NOT` 声明 `seed_parameter`。
 
 并行、numba、BLAS 或 GPU 实现 `MUST` 声明：
 
@@ -738,6 +772,9 @@ ml:
 
 ### 18.2 契约测试
 
+提供方 contract test `MUST` 先执行发布的 JSON Schema 结构层，再执行
+`reference_validator_v1.py` 语义层；任何一层失败都不能声明 contract-valid。
+
 兼容目录 `MUST` 覆盖：
 
 - 输入无序。
@@ -765,6 +802,10 @@ ml:
 - 数据摘要。
 
 ### 18.4 open-xquant 认证
+
+open-xquant certification `MUST` 对收到的 QuantPanel 与 OperatorManifest
+执行同一 JSON Schema 结构层和 reference validator 语义层，不得用一层
+替代另一层。
 
 open-xquant 的认证额外检查：
 
@@ -820,6 +861,8 @@ contracts/quant-operators/
   operator-contract-v1.md
   operator-manifest-v1.schema.json
   quant-panel-v1.schema.json
+  reference_validator_v1.py
+  hash-profile-v1.md
   compatibility-policy-v1.md
 ```
 
@@ -837,7 +880,8 @@ compat/open_xquant/
 
 算子仓库不需要运行时依赖 open-xquant。
 
-其 CI 可以使用 open-xquant 发布的 JSON Schema 验证 catalog。
+其 CI `MUST` 使用 open-xquant 发布的 JSON Schema 和 reference validator
+两层验证 catalog 与 conformance fixtures。
 
 ## 21. 异步发布流程
 
@@ -856,8 +900,8 @@ flowchart LR
 发布顺序如下：
 
 1. 算子仓库开发并发布 release candidate。
-2. 提供方完成单元测试和 contract test。
-3. open-xquant 对指定版本执行认证。
+2. 提供方完成单元测试，并在 contract test 中执行 Schema 与语义 validator。
+3. open-xquant 对指定版本执行包含同样两层验证的认证。
 4. 认证通过后更新兼容矩阵。
 5. open-xquant 在后续版本中启用绑定。
 
