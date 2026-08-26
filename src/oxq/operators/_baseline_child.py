@@ -191,13 +191,16 @@ class _ProviderImportGate:
     def __init__(self, verified_archives: list[str]) -> None:
         self._verified_archives = verified_archives
         self._original_import = builtins.__import__
+        self._original_import_module = importlib.import_module
         self.violation = False
 
     def install(self) -> None:
         setattr(builtins, "__import__", self._guarded_import)
+        setattr(importlib, "import_module", self._guarded_import_module)
 
     def restore(self) -> None:
         setattr(builtins, "__import__", self._original_import)
+        setattr(importlib, "import_module", self._original_import_module)
 
     def _guarded_import(
         self,
@@ -207,11 +210,53 @@ class _ProviderImportGate:
         fromlist: tuple[str, ...] = (),
         level: int = 0,
     ) -> object:
-        imported = self._original_import(name, globals, locals, fromlist, level)
-        if not _globals_are_from_archives(globals, self._verified_archives):
+        provider_call = _globals_are_from_archives(
+            globals,
+            self._verified_archives,
+        )
+        try:
+            imported = self._original_import(name, globals, locals, fromlist, level)
+        except BaseException:
+            if provider_call:
+                self.violation = True
+            raise
+        if not provider_call:
             return imported
         absolute_name = self._absolute_name(name, globals, level)
         if not self._provider_import_is_allowed(absolute_name):
+            self.violation = True
+            raise ImportError(
+                f"provider import is outside the verified closure: {absolute_name}"
+            )
+        return imported
+
+    def _guarded_import_module(
+        self,
+        name: str,
+        package: str | None = None,
+    ) -> ModuleType:
+        caller_globals = sys._getframe(1).f_globals
+        provider_call = _globals_are_from_archives(
+            caller_globals,
+            self._verified_archives,
+        )
+        absolute_name = name
+        if provider_call and name.startswith("."):
+            if not isinstance(package, str) or not package:
+                self.violation = True
+                raise ImportError("provider relative import has no package")
+            try:
+                absolute_name = importlib.util.resolve_name(name, package)
+            except (ImportError, ValueError) as error:
+                self.violation = True
+                raise ImportError("provider relative import is invalid") from error
+        try:
+            imported = self._original_import_module(name, package)
+        except BaseException:
+            if provider_call:
+                self.violation = True
+            raise
+        if provider_call and not self._provider_import_is_allowed(absolute_name):
             self.violation = True
             raise ImportError(
                 f"provider import is outside the verified closure: {absolute_name}"
@@ -243,6 +288,15 @@ class _ProviderImportGate:
             module,
             self._verified_archives,
         )
+
+
+def _provider_error(
+    path: Path,
+    import_gate: _ProviderImportGate,
+    fallback_code: str,
+) -> int:
+    code = "provider_import_failed" if import_gate.violation else fallback_code
+    return _error(path, code)
 
 
 def _execute(request: dict[str, object], response_path: Path) -> int:
@@ -293,7 +347,11 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
             ):
                 raise ImportError("provider imported an undeclared ambient dependency")
         except BaseException:
-            return _error(response_path, "provider_import_failed")
+            return _provider_error(
+                response_path,
+                import_gate,
+                "provider_import_failed",
+            )
 
         try:
             records = panel["records"]
@@ -311,13 +369,25 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
                     check_like=False,
                 )
             except AssertionError:
-                return _error(response_path, "provider_mutated_input")
+                return _provider_error(
+                    response_path,
+                    import_gate,
+                    "provider_mutated_input",
+                )
             try:
                 output = _extract_output(result, original, output_field)
             except KeyError:
-                return _error(response_path, "baseline_mismatch")
+                return _provider_error(
+                    response_path,
+                    import_gate,
+                    "baseline_mismatch",
+                )
             except (IndexError, TypeError, ValueError):
-                return _error(response_path, "provider_alignment_failed")
+                return _provider_error(
+                    response_path,
+                    import_gate,
+                    "provider_alignment_failed",
+                )
             response_bytes = _encode_response({"status": "ok", "output": output})
             if import_gate.violation or not _new_modules_are_allowed(
                 modules_before_provider,
@@ -325,12 +395,11 @@ def _execute(request: dict[str, object], response_path: Path) -> int:
             ):
                 return _error(response_path, "provider_import_failed")
         except BaseException:
-            code = (
-                "provider_import_failed"
-                if import_gate.violation
-                else "provider_execution_failed"
+            return _provider_error(
+                response_path,
+                import_gate,
+                "provider_execution_failed",
             )
-            return _error(response_path, code)
     finally:
         import_gate.restore()
     response_path.write_bytes(response_bytes)

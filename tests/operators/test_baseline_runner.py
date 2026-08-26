@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import builtins
 import hashlib
+import importlib
 import io
 import json
 import os
@@ -17,6 +19,7 @@ import pytest
 
 import oxq.operators.baseline_runner as baseline_runner
 import oxq.operators.certification as certification
+from oxq.operators import _baseline_child
 from oxq.operators.baseline_runner import run_research_baselines
 from oxq.operators.certification import certify_provider, validate_provider_contract
 from oxq.operators.errors import OperatorCertificationError
@@ -377,6 +380,94 @@ def test_rejects_provider_direct_import_of_preloaded_environment_dependency(
     candidate = _contract(tmp_path, f"import {dependency}\n" + SUCCESS_SOURCE)
 
     _assert_failure(candidate, "provider_import_failed")
+
+
+@pytest.mark.parametrize("dependency", ["dateutil", "pytz"])
+def test_rejects_provider_dynamic_import_of_preloaded_environment_dependency(
+    tmp_path: Path,
+    dependency: str,
+) -> None:
+    source = SUCCESS_SOURCE.replace(
+        "def sma(frame, *, window):",
+        "import importlib\n"
+        "def sma(frame, *, window):\n"
+        f"    importlib.import_module({dependency!r})",
+    )
+    candidate = _contract(tmp_path, source)
+
+    _assert_failure(candidate, "provider_import_failed")
+
+
+@pytest.mark.parametrize(
+    "violation_statement",
+    ["import jsonschema", "importlib.import_module('dateutil')"],
+    ids=["ordinary-import", "dynamic-import"],
+)
+@pytest.mark.parametrize("after_violation", ["mutation", "alignment"])
+def test_import_violation_dominates_later_provider_result_failures(
+    tmp_path: Path,
+    after_violation: str,
+    violation_statement: str,
+) -> None:
+    if after_violation == "mutation":
+        consequence = (
+            "    frame.loc[frame.index[0], 'close'] = 99.0\n"
+            "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')"
+        )
+    else:
+        consequence = (
+            "    return pd.DataFrame({\n"
+            "        'date': list(reversed(frame['date'].tolist())),\n"
+            "        'code': frame['code'].tolist(),\n"
+            "        f'sma_{window}': [None, None, 2.0],\n"
+            "    })"
+        )
+    source = (
+        "import importlib\n"
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        "    try:\n"
+        f"        {violation_statement}\n"
+        "    except ImportError:\n"
+        "        pass\n"
+        f"{consequence}\n"
+    )
+
+    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
+
+
+def test_import_gate_restores_both_import_entry_points() -> None:
+    original_import = builtins.__import__
+    original_import_module = importlib.import_module
+    gate = _baseline_child._ProviderImportGate([])
+
+    gate.install()
+    try:
+        assert builtins.__import__ != original_import
+        assert importlib.import_module != original_import_module
+    finally:
+        gate.restore()
+
+    assert builtins.__import__ is original_import
+    assert importlib.import_module is original_import_module
+
+
+def test_caught_unavailable_dynamic_import_remains_a_sticky_violation(
+    tmp_path: Path,
+) -> None:
+    source = (
+        "import importlib\n"
+        "import pandas as pd\n"
+        "def sma(frame, *, window):\n"
+        "    try:\n"
+        "        importlib.import_module('unverified_package_that_does_not_exist')\n"
+        "    except ImportError:\n"
+        "        pass\n"
+        "    frame.loc[frame.index[0], 'close'] = 99.0\n"
+        "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')\n"
+    )
+
+    _assert_failure(_contract(tmp_path, source), "provider_import_failed")
 
 
 def test_allows_pandas_runtime_to_use_its_platform_dependencies(
