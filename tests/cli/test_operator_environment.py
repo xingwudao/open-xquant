@@ -20,6 +20,7 @@ def fake_verified_provider(monkeypatch: pytest.MonkeyPatch) -> InstalledEnvironm
     provider = EnvironmentProvider(
         provider="equant-py",
         distribution="equant-py",
+        distributions=("equant-py",),
         version="1.0.0",
         certification_state="research-certified",
         operators=(

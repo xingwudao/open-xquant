@@ -5,7 +5,7 @@ from __future__ import annotations
 import importlib.metadata
 from collections.abc import Mapping
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from oxq.operators.environment_index import (
     EnvironmentProvider,
@@ -31,6 +31,13 @@ class InstalledEnvironmentProvider:
     runtime_files: Mapping[str, VerifiedRuntimeFile]
 
 
+@dataclass(frozen=True)
+class _InstalledDistribution:
+    name: str
+    distribution: importlib.metadata.Distribution
+    installed_paths: set[str]
+
+
 def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
     """Verify installed package bytes against the official environment index."""
     try:
@@ -39,33 +46,9 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
     except ValueError as exc:
         raise _error("environment_provider_invalid", str(exc)) from None
 
-    try:
-        distribution = importlib.metadata.distribution(provider.distribution)
-    except importlib.metadata.PackageNotFoundError as exc:
-        raise _error(
-            "environment_provider_not_installed",
-            f"environment provider distribution is not installed: {provider.distribution}",
-        ) from exc
-
-    installed_version = getattr(distribution, "version", None)
-    if installed_version != provider.version:
-        raise _error(
-            "environment_provider_version_mismatch",
-            (
-                "environment provider version mismatch: "
-                f"expected {provider.version}, found {installed_version}"
-            ),
-        )
-
-    available_files = getattr(distribution, "files", None)
-    if available_files is None:
-        raise _error(
-            "environment_provider_files_unavailable",
-            f"installed environment provider file metadata is unavailable: {provider.distribution}",
-        )
-    installed_paths = {str(path) for path in available_files}
+    distributions = _load_installed_distributions(provider.distributions, provider.version)
     for package_path in provider.declared_artifact_paths:
-        if package_path not in installed_paths:
+        if _find_distribution_with_file(distributions, package_path) is None:
             raise _error(
                 "environment_provider_file_missing",
                 f"installed environment provider file is missing: {package_path}",
@@ -76,8 +59,7 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
     runtime_files: dict[str, VerifiedRuntimeFile] = {}
     for operator in provider.operators:
         manifest_bytes = _read_declared_file(
-            distribution,
-            installed_paths,
+            distributions,
             operator.manifest_path,
             provider.manifest_digests[operator.manifest_path],
         )
@@ -87,15 +69,13 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
         manifests[operator.manifest_path] = manifest
         for baseline_path in operator.baseline_paths:
             baselines[baseline_path] = _read_declared_file(
-                distribution,
-                installed_paths,
+                distributions,
                 baseline_path,
                 provider.baseline_digests[baseline_path],
             )
     for runtime_path, expected_digest in provider.runtime_digests.items():
         raw, path = _read_declared_file_with_path(
-            distribution,
-            installed_paths,
+            distributions,
             runtime_path,
             expected_digest,
         )
@@ -114,15 +94,62 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
     )
 
 
+def _load_installed_distributions(
+    distribution_names: tuple[str, ...],
+    expected_version: str,
+) -> tuple[_InstalledDistribution, ...]:
+    result: list[_InstalledDistribution] = []
+    for distribution_name in distribution_names:
+        try:
+            distribution = importlib.metadata.distribution(distribution_name)
+        except importlib.metadata.PackageNotFoundError as exc:
+            raise _error(
+                "environment_provider_not_installed",
+                f"environment provider distribution is not installed: {distribution_name}",
+            ) from exc
+
+        installed_version = getattr(distribution, "version", None)
+        if installed_version != expected_version:
+            raise _error(
+                "environment_provider_version_mismatch",
+                (
+                    "environment provider version mismatch: "
+                    f"{distribution_name} expected {expected_version}, found {installed_version}"
+                ),
+            )
+        available_files = getattr(distribution, "files", None)
+        if available_files is None:
+            raise _error(
+                "environment_provider_files_unavailable",
+                f"installed environment provider file metadata is unavailable: {distribution_name}",
+            )
+        result.append(
+            _InstalledDistribution(
+                name=distribution_name,
+                distribution=distribution,
+                installed_paths={str(path) for path in available_files},
+            )
+        )
+    return tuple(result)
+
+
+def _find_distribution_with_file(
+    distributions: tuple[_InstalledDistribution, ...],
+    package_path: str,
+) -> _InstalledDistribution | None:
+    for distribution in distributions:
+        if package_path in distribution.installed_paths:
+            return distribution
+    return None
+
+
 def _read_declared_file(
-    distribution: importlib.metadata.Distribution,
-    installed_paths: set[str],
+    distributions: tuple[_InstalledDistribution, ...],
     package_path: str,
     expected_digest: str,
 ) -> bytes:
     raw, _ = _read_declared_file_with_path(
-        distribution,
-        installed_paths,
+        distributions,
         package_path,
         expected_digest,
     )
@@ -130,18 +157,18 @@ def _read_declared_file(
 
 
 def _read_declared_file_with_path(
-    distribution: importlib.metadata.Distribution,
-    installed_paths: set[str],
+    distributions: tuple[_InstalledDistribution, ...],
     package_path: str,
     expected_digest: str,
 ) -> tuple[bytes, Path]:
-    if package_path not in installed_paths:
+    installed = _find_distribution_with_file(distributions, package_path)
+    if installed is None:
         raise _error(
             "environment_provider_file_missing",
             f"installed environment provider file is missing: {package_path}",
         )
-    path = Path(distribution.locate_file(package_path))
-    if _path_has_symlink_component(path) or not path.is_file():
+    path = Path(installed.distribution.locate_file(package_path))
+    if _path_has_symlink_component(installed.distribution, package_path) or not path.is_file():
         raise _error(
             "environment_provider_file_not_regular",
             f"installed environment provider file must be a regular file: {package_path}",
@@ -162,9 +189,12 @@ def _read_declared_file_with_path(
     return raw, path.resolve(strict=True)
 
 
-def _path_has_symlink_component(path: Path) -> bool:
-    current = Path(path.anchor) if path.is_absolute() else Path()
-    for part in path.parts[1:] if path.is_absolute() else path.parts:
+def _path_has_symlink_component(
+    distribution: importlib.metadata.Distribution,
+    package_path: str,
+) -> bool:
+    current = Path(distribution.locate_file(""))
+    for part in PurePosixPath(package_path).parts:
         current = current / part
         if current.is_symlink():
             return True

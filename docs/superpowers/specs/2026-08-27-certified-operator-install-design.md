@@ -14,7 +14,7 @@ as a normal Python distribution in the same environment as `open-xquant`.
 The first supported user flow is:
 
 ```bash
-pip install equant-py==1.0.0
+pip install equant-core==1.0.0 equant-ttr==1.0.0
 oxq operator verify equant-py==1.0.0
 ```
 
@@ -34,7 +34,9 @@ research-runtime invocation.
 
 ### `equant-py`
 
-`equant-py` is the certified operator provider package. It owns:
+`equant-py` is the certified operator provider name. Its installed code is
+packaged as canonical split Python distributions such as `equant-core` and
+`equant-ttr`. It owns:
 
 - operator implementation code;
 - packaged operator manifests;
@@ -42,7 +44,8 @@ research-runtime invocation.
 - packaged provider catalog or equivalent discovery metadata;
 - normal Python distribution metadata and versioning.
 
-The certified release is a normal wheel such as `equant_py-1.0.0-*.whl`.
+The certified release is a normal wheel set such as
+`equant_core-1.0.0-*.whl` and `equant_ttr-1.0.0-*.whl`.
 
 ### `open-xquant`
 
@@ -67,7 +70,7 @@ Phase one trusts only exact provider versions that are listed in the
 The index binds:
 
 - provider name, initially `equant-py`;
-- Python distribution name, initially `equant-py`;
+- Python distribution closure, initially `equant-core` and `equant-ttr`;
 - exact version, initially `1.0.0`;
 - expected package metadata;
 - expected manifest paths and SHA-256 digests;

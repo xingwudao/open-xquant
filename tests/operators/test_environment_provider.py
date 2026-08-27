@@ -64,6 +64,7 @@ def official_provider(monkeypatch: pytest.MonkeyPatch) -> EnvironmentProvider:
     provider = EnvironmentProvider(
         provider="equant-py",
         distribution="equant-py",
+        distributions=("equant-py",),
         version="1.0.0",
         certification_state="research-certified",
         operators=(
@@ -179,6 +180,56 @@ def test_verify_installed_provider_rejects_symlinked_parent_component(
 
     with pytest.raises(OperatorCertificationError, match="regular file"):
         verify_installed_provider("equant-py==1.0.0")
+
+
+def test_verify_installed_provider_allows_symlink_above_distribution_root(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    official_provider: EnvironmentProvider,
+) -> None:
+    del official_provider
+    real_root = tmp_path / "real-site-packages"
+    link_root = tmp_path / "linked-site-packages"
+    distribution = FakeDistribution(link_root)
+    real_root.mkdir()
+    os.symlink(real_root, link_root)
+    distribution.add_file(MANIFEST_PATH, MANIFEST_BYTES)
+    distribution.add_file(BASELINE_PATH, BASELINE_BYTES)
+    distribution.add_file(RUNTIME_PATH, RUNTIME_BYTES)
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
+
+    installed = verify_installed_provider("equant-py==1.0.0")
+
+    assert installed.runtime_files[RUNTIME_PATH].path == real_root / RUNTIME_PATH
+
+
+def test_verify_installed_provider_reads_declared_files_from_distribution_closure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    official_provider: EnvironmentProvider,
+) -> None:
+    object.__setattr__(official_provider, "distribution", "equant-core")
+    object.__setattr__(official_provider, "distributions", ("equant-core", "equant-ttr"))
+    core_distribution = FakeDistribution(tmp_path / "core")
+    core_distribution.add_file(MANIFEST_PATH, MANIFEST_BYTES)
+    core_distribution.add_file(BASELINE_PATH, BASELINE_BYTES)
+    ttr_distribution = FakeDistribution(tmp_path / "ttr")
+    ttr_distribution.add_file(RUNTIME_PATH, RUNTIME_BYTES)
+
+    def distribution(name: str) -> FakeDistribution:
+        if name == "equant-core":
+            return core_distribution
+        if name == "equant-ttr":
+            return ttr_distribution
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+
+    installed = verify_installed_provider("equant-py==1.0.0")
+
+    assert installed.manifests[MANIFEST_PATH]["operator_id"] == "equant.ttr.sma"
+    assert installed.baselines[BASELINE_PATH] == BASELINE_BYTES
+    assert installed.runtime_files[RUNTIME_PATH].path == ttr_distribution.root / RUNTIME_PATH
 
 
 @pytest.mark.parametrize("artifact_kind", ["directory", "symlink"])

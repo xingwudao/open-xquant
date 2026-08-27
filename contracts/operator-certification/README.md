@@ -88,8 +88,11 @@ baseline values. Any failed operator rejects the whole provider release.
 
 ## Certified package result
 
-A certified provider is distributed as a normal Python package. The provider
-wheel carries its own open-xquant certification artifacts, for example:
+A certified provider is distributed as normal Python packages. The canonical
+provider name remains `equant-py`, while the installed Python distributions are
+the certified split packages such as `equant-core` and `equant-ttr`. The
+implementation wheels carry their own open-xquant certification artifacts, for
+example:
 
 ```text
 <provider-wheel>/
@@ -106,7 +109,7 @@ registry for runtime use. Users install the provider with Python packaging and
 then ask open-xquant to verify the installed package:
 
 ```bash
-pip install equant-py==1.0.0
+pip install equant-core==1.0.0 equant-ttr==1.0.0
 oxq operator verify equant-py==1.0.0
 oxq operator list --provider equant-py
 ```

@@ -35,6 +35,7 @@ class CertifiedOperatorRef:
 class EnvironmentProvider:
     provider: str
     distribution: str
+    distributions: tuple[str, ...]
     version: str
     certification_state: str
     operators: tuple[CertifiedOperatorRef, ...]
@@ -91,31 +92,41 @@ def _provider_from_payload(
     version: str,
     payload: dict[str, object],
 ) -> EnvironmentProvider:
-    if set(payload) != {
-        "distribution",
-        "certification_state",
-        "operators",
-        "manifest_digests",
-        "baseline_digests",
-        "runtime_digests",
-    }:
+    if set(payload) not in (
+        {
+            "distribution",
+            "certification_state",
+            "operators",
+            "manifest_digests",
+            "baseline_digests",
+            "runtime_digests",
+        },
+        {
+            "distributions",
+            "certification_state",
+            "operators",
+            "manifest_digests",
+            "baseline_digests",
+            "runtime_digests",
+        },
+    ):
         raise ValueError("official environment provider entry is invalid")
-    distribution = payload["distribution"]
+    distribution = payload.get("distribution")
+    distributions = payload.get("distributions")
     certification_state = payload["certification_state"]
     operators = payload["operators"]
     manifest_digests = payload["manifest_digests"]
     baseline_digests = payload["baseline_digests"]
     runtime_digests = payload["runtime_digests"]
     if (
-        not isinstance(distribution, str)
-        or not isinstance(certification_state, str)
+        not isinstance(certification_state, str)
         or not isinstance(operators, list)
         or not isinstance(manifest_digests, dict)
         or not isinstance(baseline_digests, dict)
         or not isinstance(runtime_digests, dict)
     ):
         raise ValueError("official environment provider entry is invalid")
-    safe_relative_path(distribution)
+    typed_distributions = _distribution_tuple(distribution, distributions)
 
     typed_manifest_digests = _digest_map(manifest_digests)
     typed_baseline_digests = _digest_map(baseline_digests)
@@ -129,7 +140,8 @@ def _provider_from_payload(
     )
     return EnvironmentProvider(
         provider=provider,
-        distribution=distribution,
+        distribution=typed_distributions[0],
+        distributions=typed_distributions,
         version=version,
         certification_state=certification_state,
         operators=typed_operators,
@@ -137,6 +149,26 @@ def _provider_from_payload(
         baseline_digests=typed_baseline_digests,
         runtime_digests=typed_runtime_digests,
     )
+
+
+def _distribution_tuple(
+    distribution: object,
+    distributions: object,
+) -> tuple[str, ...]:
+    if isinstance(distribution, str) and distributions is None:
+        safe_relative_path(distribution)
+        return (distribution,)
+    if distribution is None and isinstance(distributions, list) and distributions:
+        result: list[str] = []
+        for item in distributions:
+            if not isinstance(item, str):
+                raise ValueError("official environment provider entry is invalid")
+            safe_relative_path(item)
+            result.append(item)
+        if len(set(result)) != len(result):
+            raise ValueError("official environment provider entry is invalid")
+        return tuple(result)
+    raise ValueError("official environment provider entry is invalid")
 
 
 def _operator_from_payload(payload: dict[str, object]) -> CertifiedOperatorRef:

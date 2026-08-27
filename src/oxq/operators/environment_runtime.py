@@ -248,6 +248,7 @@ def _verified_runtime_importer(
 class _VerifiedRuntimeFinder(importlib.abc.MetaPathFinder):
     def __init__(self, sources: Mapping[str, _VerifiedModuleSource]) -> None:
         self._sources = sources
+        self._provider_roots = frozenset(name.partition(".")[0] for name in sources)
 
     def find_spec(
         self,
@@ -258,6 +259,11 @@ class _VerifiedRuntimeFinder(importlib.abc.MetaPathFinder):
         del path, target
         source = self._sources.get(fullname)
         if source is None:
+            if fullname.partition(".")[0] in self._provider_roots:
+                raise ImportError(
+                    f"provider runtime module is not declared: {fullname}",
+                    name=fullname,
+                )
             return None
         loader = _VerifiedRuntimeLoader(source)
         spec = importlib.machinery.ModuleSpec(

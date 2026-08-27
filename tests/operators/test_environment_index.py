@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 import pytest
-import oxq.operators.environment_index as environment_index
 
+import oxq.operators.environment_index as environment_index
 from oxq.operators.environment_index import (
     load_environment_provider,
     parse_exact_provider_requirement,
@@ -37,7 +37,8 @@ def test_official_index_contains_equant_py_100() -> None:
     provider = load_environment_provider("equant-py", "1.0.0")
 
     assert provider.provider == "equant-py"
-    assert provider.distribution == "equant-py"
+    assert provider.distribution == "equant-core"
+    assert provider.distributions == ("equant-core", "equant-ttr")
     assert provider.version == "1.0.0"
     assert provider.certification_state == "research-certified"
     assert len(provider.operators) == 60
