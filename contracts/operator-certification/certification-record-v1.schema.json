@@ -55,6 +55,7 @@
     "provider": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
     "semanticVersion": {"allOf": [{"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"}, {"not": {"pattern": "[\\r\\n]"}}]},
     "operatorId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"},
+    "pythonPackageVersion": {"allOf": [{"type": "string", "pattern": "^[0-9][A-Za-z0-9.!+_-]*$"}, {"not": {"pattern": "[\\r\\n]"}}]},
     "sha256Digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "artifact": {
       "type": "object",
@@ -62,7 +63,7 @@
       "required": ["distribution", "version", "filename", "role", "build_identifier", "digest"],
       "properties": {
         "distribution": {"$ref": "#/$defs/provider"},
-        "version": {"$ref": "#/$defs/semanticVersion"},
+        "version": {"$ref": "#/$defs/pythonPackageVersion"},
         "filename": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"},
         "role": {"enum": ["implementation", "runtime-dependency"]},
         "build_identifier": {"type": "string", "minLength": 1},

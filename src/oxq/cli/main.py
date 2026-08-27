@@ -100,6 +100,13 @@ def operator_group() -> None:
     is_flag=True,
     help="Acknowledge that provider wheels execute as trusted local code.",
 )
+@click.option(
+    "--baseline-timeout",
+    type=float,
+    default=30.0,
+    show_default=True,
+    help="Seconds allowed for each isolated numerical baseline execution.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
 def certify_provider_command(
     provider_repo: Path,
@@ -107,6 +114,7 @@ def certify_provider_command(
     artifact_dir: Path | None,
     output_dir: Path | None,
     trust_provider_code: bool,
+    baseline_timeout: float,
     as_json: bool,
 ) -> None:
     """Certify one exact local provider submission for research use."""
@@ -139,7 +147,10 @@ def certify_provider_command(
             resolved_artifact_dir,
         ) as submission:
             known_identity = (submission.provider, submission.release)
-            certified = certify_provider(submission)
+            certified = certify_provider(
+                submission,
+                baseline_timeout_seconds=baseline_timeout,
+            )
             published = publish_certification(certified, resolved_output_dir)
     except OperatorCertificationError as error:
         if as_json:

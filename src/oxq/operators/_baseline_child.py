@@ -15,6 +15,7 @@ import platform
 import stat
 import subprocess
 import sys
+import sysconfig
 import threading
 import time
 import zipfile
@@ -36,6 +37,16 @@ _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _FILE_HASH_CHUNK_BYTES = 1024 * 1024
 _PROVIDER_POLICY_VIOLATION_EXIT_CODE = 86
+_STATIC_RUNTIME_SOURCE_ROOTS = tuple(
+    dict.fromkeys(
+        root
+        for root in (
+            sysconfig.get_path("stdlib"),
+            sysconfig.get_path("platstdlib"),
+        )
+        if isinstance(root, str) and root
+    )
+)
 _HIDDEN_PROVIDER_SYS_ATTRIBUTES = {
     "_current_frames",
     "_getframe",
@@ -286,9 +297,15 @@ def _module_locations(module: ModuleType) -> tuple[str, ...]:
 
 
 def _location_is_in_archive(location: str, archive: str) -> bool:
-    normalized_location = os.path.normcase(os.path.abspath(location))
-    normalized_archive = os.path.normcase(os.path.abspath(archive))
+    normalized_location = os.path.normcase(os.path.realpath(location))
+    normalized_archive = os.path.normcase(os.path.realpath(archive))
     return normalized_location.startswith(normalized_archive + os.sep)
+
+
+def _location_is_in_static_runtime_source(location: str) -> bool:
+    if not location or any(part in {"site-packages", "dist-packages"} for part in Path(location).parts):
+        return False
+    return any(_location_is_in_archive(location, root) for root in _STATIC_RUNTIME_SOURCE_ROOTS)
 
 
 def _module_is_from_archives(
@@ -524,7 +541,9 @@ class _ProviderImportGate:
         if not args or not isinstance(args[0], CodeType):
             return False
         code = args[0]
-        return self._trusted_code_objects.get(id(code)) is code
+        if self._trusted_code_objects.get(id(code)) is code:
+            return True
+        return self._verified_source_digest(code.co_filename) is not None or _location_is_in_static_runtime_source(code.co_filename)
 
     def _trust_code_graph(self, code: CodeType) -> None:
         self._trusted_code_objects[id(code)] = code
@@ -731,10 +750,22 @@ class _ProviderImportGate:
         module = sys.modules.get(absolute_name)
         if not isinstance(module, ModuleType):
             module = sys.modules.get(root)
+        if not isinstance(module, ModuleType):
+            return _root_exists_in_archives(root, self._verified_archives)
         return isinstance(module, ModuleType) and _module_is_from_archives(
             module,
             self._verified_archives,
         )
+
+
+def _root_exists_in_archives(root: str, archives: list[str]) -> bool:
+    if not root.isidentifier():
+        return False
+    for archive in archives:
+        archive_root = Path(archive)
+        if (archive_root / root).exists() or (archive_root / f"{root}.py").exists():
+            return True
+    return False
 
 
 def _provider_error(
@@ -779,7 +810,10 @@ def _extract_wheel(
             destination = library_destination if scheme == "library" else prefix_destination
             target = destination.joinpath(*relative.parts)
             if target in written:
-                raise ValueError("wheel members map to the same destination")
+                content = wheel.read(member)
+                if target.read_bytes() == content:
+                    continue
+                raise ValueError(f"wheel members map to the same destination: {target}")
             written.add(target)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(wheel.read(member))

@@ -54,6 +54,7 @@ _SEMVER_PATTERN = re.compile(
     r"(?:\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+_PYTHON_PACKAGE_VERSION_PATTERN = re.compile(r"^[0-9][A-Za-z0-9.!+_-]*$")
 _OPERATOR_ID_PATTERN = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
     r"(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"
@@ -1339,7 +1340,7 @@ def _valid_entry_artifact(value: Mapping[str, object]) -> bool:
     return (
         value["role"] in {"implementation", "runtime-dependency"}
         and _PROVIDER_PATTERN.fullmatch(cast(str, value["distribution"])) is not None
-        and _SEMVER_PATTERN.fullmatch(cast(str, value["version"])) is not None
+        and _PYTHON_PACKAGE_VERSION_PATTERN.fullmatch(cast(str, value["version"])) is not None
         and Path(filename).name == filename
         and "/" not in filename
         and "\\" not in filename

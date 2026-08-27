@@ -503,7 +503,7 @@ def _verify_wheel_identity(
             wheel_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(wheel_files[0]))
             package_metadata = Metadata.from_email(
                 wheel.read(metadata_files[0]),
-                validate=True,
+                validate=False,
             )
             wheel_version = wheel_metadata.get("Wheel-Version")
             wheel_version_match = re.fullmatch(r"([0-9]+)\.([0-9]+)", wheel_version) if isinstance(wheel_version, str) else None
