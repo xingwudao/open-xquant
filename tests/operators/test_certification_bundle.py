@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import copy
+import os
 import stat
 import warnings
 import zipfile
@@ -107,6 +109,23 @@ def test_validation_rejects_unsafe_members(tmp_path: Path, name: str, configure)
         validate_certification_bundle(path)
 
 
+def test_validation_rejects_per_entry_zip_comments(tmp_path: Path) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "fixture", tmp_path / "comment.zip")
+    rewritten = tmp_path / "rewritten.zip"
+    with zipfile.ZipFile(bundle.bundle_path) as source, zipfile.ZipFile(
+        rewritten, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9
+    ) as destination:
+        for info in source.infolist():
+            replacement = copy.copy(info)
+            if info.filename == "bundle-manifest.json":
+                replacement.comment = b"forbidden"
+            destination.writestr(replacement, source.read(info))
+    rewritten.replace(bundle.bundle_path)
+
+    with pytest.raises(ValueError):
+        validate_certification_bundle(bundle.bundle_path)
+
+
 def test_validation_rejects_member_and_expansion_limits(tmp_path: Path) -> None:
     bundle, _ = _export_bundle_fixture(tmp_path / "fixture", tmp_path / "limits.zip")
     too_many = bundle.bundle_path
@@ -115,6 +134,18 @@ def test_validation_rejects_member_and_expansion_limits(tmp_path: Path) -> None:
             archive.writestr(f"member-{index}", b"x")
     with pytest.raises(ValueError):
         validate_certification_bundle(too_many)
+
+
+def test_validation_rejects_total_expanded_size_below_outer_size_limit(tmp_path: Path) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "fixture", tmp_path / "total-size.zip")
+    payload = os.urandom(100_000) + b"x" * (8 * 1024 * 1024 - 100_000)
+    with zipfile.ZipFile(bundle.bundle_path, "a", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
+        for index in range(9):
+            archive.writestr(f"aggregate-{index}", payload)
+    assert bundle.bundle_path.stat().st_size < 32 * 1024 * 1024
+
+    with pytest.raises(ValueError):
+        validate_certification_bundle(bundle.bundle_path)
 
 
 @pytest.mark.parametrize(

@@ -214,7 +214,7 @@ def _read_members(archive: zipfile.ZipFile, infos: list[zipfile.ZipInfo]) -> dic
 
 def _validate_info(info: zipfile.ZipInfo, members: Mapping[str, bytes]) -> None:
     safe_relative_path(info.filename)
-    if info.filename in members or info.is_dir() or info.extra:
+    if info.filename in members or info.is_dir() or info.extra or info.comment:
         raise ValueError("bundle member metadata is invalid")
     if info.flag_bits & 1 or info.compress_type != zipfile.ZIP_DEFLATED:
         raise ValueError("bundle member compression is invalid")
