@@ -79,6 +79,26 @@ def test_resolve_environment_operator_rejects_uncertified_operator(
         resolve_environment_operator("equant.ttr.not_real", "1.0.0", "equant-py==1.0.0")
 
 
+def test_resolve_environment_operator_rejects_missing_manifest_certification_state(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    manifest = fake_verified_provider.manifests["manifests/equant.ttr.sma.operator.json"]
+    manifest.pop("certification_state")
+
+    with pytest.raises(OperatorCertificationError, match="not research-certified"):
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+
+def test_resolve_environment_operator_rejects_non_research_certified_manifest(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    manifest = fake_verified_provider.manifests["manifests/equant.ttr.sma.operator.json"]
+    manifest["certification_state"] = "contract-valid"
+
+    with pytest.raises(OperatorCertificationError, match="not research-certified"):
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+
 def test_resolve_environment_operator_returns_callable_binding(
     fake_verified_provider: InstalledEnvironmentProvider,
 ) -> None:

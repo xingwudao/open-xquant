@@ -108,7 +108,7 @@ def _validate_manifest_certification_state(
     operator_id: str,
 ) -> None:
     state = manifest.get("certification_state")
-    if state is not None and state != "research-certified":
+    if state != "research-certified":
         raise _error(
             "environment_operator_not_research_certified",
             "environment operator manifest is not research-certified",
