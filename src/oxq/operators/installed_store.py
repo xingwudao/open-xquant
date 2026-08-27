@@ -38,7 +38,10 @@ class InstalledReleaseStore:
    try:
     for n,v in vals.items():
      p=tmp.joinpath(*safe_relative_path(n).parts); p.parent.mkdir(parents=True,exist_ok=True); write_file(p,v)
-    write_file(tmp/MARKER,raw); fsync_directory(tmp); dest=_store_path(self.home,*ident); replace_directory(tmp,dest); tmp=None
+    write_file(tmp/MARKER,raw); fsync_directory(tmp); dest=_store_path(self.home,*ident); replace_directory(tmp,dest); tmp=None; dest=_existing_store_path(self.home,*ident)
+   except (OSError,ValueError):
+    _remove_redirected_release(dest,{**vals,MARKER:raw})
+    raise ValueError("store publication path changed") from None
    finally:
     if tmp is not None: shutil.rmtree(tmp,ignore_errors=True)
   return self._read(dest)
@@ -67,7 +70,7 @@ class InstalledReleaseStore:
    return InstalledOperator(r,MappingProxyType(b),MappingProxyType(m),tuple(cases))
  @contextmanager
  def snapshot(self,release:InstalledRelease)->Iterator[InstalledReleaseSnapshot]:
-  current=self._read(release.path); marker=_readmarker(release.path); _,_,files=_marker(marker); vals=_check(release.path,files,True); td=Path(tempfile.mkdtemp(prefix="oxq-installed-release-"))
+  path=_existing_store_path(self.home,release.provider,release.release,release.target); current=self._read(path); marker=_readmarker(path); _,_,files=_marker(marker); vals=_check(path,files,True); td=Path(tempfile.mkdtemp(prefix="oxq-installed-release-"))
   try:
    wheels={}
    for n,v in vals.items():
@@ -111,6 +114,18 @@ def _store_path(home,*parts):
  if os.path.lexists(target): _require_real_directory(target)
  if not _contained(home,target): raise ValueError("store destination escapes home")
  return target
+def _existing_store_path(home,*parts):
+ _require_real_directory(home)
+ current=home
+ for part in parts:
+  current=current/part
+  _require_real_directory(current)
+ if not _contained(home,current): raise ValueError("store destination escapes home")
+ return current
+def _remove_redirected_release(path,expected):
+ try:
+  if path.exists() and _all(path)==expected: shutil.rmtree(path)
+ except (OSError,ValueError): pass
 def _child_directories(root):
  try:
   _require_real_directory(root)

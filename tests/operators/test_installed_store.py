@@ -245,3 +245,44 @@ def test_publish_revalidates_provider_after_staging_creation(tmp_path: Path, mon
     with pytest.raises(ValueError, match="store"):
         store.publish(staging, marker)
     assert not any(outside.rglob("bundle.zip"))
+
+
+def test_snapshot_rejects_stale_release_path_replaced_by_outside_symlink(tmp_path: Path) -> None:
+    store = InstalledReleaseStore(tmp_path / "home")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    marker, _ = _write_release(staging)
+    release = store.publish(staging, marker)
+    outside_store = InstalledReleaseStore(tmp_path / "outside")
+    outside = outside_store.publish(release.path, marker)
+    moved = tmp_path / "moved-release"
+    os.replace(release.path, moved)
+    release.path.symlink_to(outside.path, target_is_directory=True)
+    with pytest.raises(ValueError, match="store"):
+        with store.snapshot(release):
+            pass
+
+
+def test_publish_cleans_redirected_final_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import oxq.operators.installed_store as store_module
+
+    store = InstalledReleaseStore(tmp_path / "home")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    marker, _ = _write_release(staging)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original = store_module.replace_directory
+
+    def redirect(source: Path, target: Path) -> None:
+        provider = store.home / "equant-py"
+        moved = tmp_path / "moved-provider"
+        os.replace(provider, moved)
+        provider.symlink_to(outside, target_is_directory=True)
+        (outside / "1.0.0").mkdir()
+        original(moved / "1.0.0" / source.name, target)
+
+    monkeypatch.setattr(store_module, "replace_directory", redirect)
+    with pytest.raises(ValueError, match="store"):
+        store.publish(staging, marker)
+    assert not any(outside.rglob("bundle.zip"))
