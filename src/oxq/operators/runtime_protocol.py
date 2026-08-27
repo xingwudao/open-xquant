@@ -53,10 +53,10 @@ def run_exact_wheel_request(
         secret = secrets.token_bytes(32)
         environment = dict(os.environ)
         if "pytest" in sys.modules:
-            environment["OXQ_BASELINE_TEST_RUNTIME"] = "1"
-            environment["OXQ_BASELINE_TEST_RUNTIME_PATHS"] = os.pathsep.join(
+            payload["test_runtime_paths"] = [
                 item for item in sys.path if "site-packages" in Path(item).parts
-            )
+            ]
+            request_path.write_bytes(canonical_protocol_bytes(payload))
         returncode = run_contained_child(
             [sys.executable, "-I", "-S", str(_child_path()), str(request_path), str(response_path)],
             timeout_seconds=timeout_seconds,
@@ -74,7 +74,8 @@ def _read_authenticated_response(path: Path, returncode: int, secret: bytes) -> 
     if returncode == _POLICY_EXIT_CODE:
         return {"status": "error", "code": "provider_import_failed"}
     try:
-        raw = path.read_bytes()
+        with path.open("rb") as stream:
+            raw = stream.read(_MAX_RESPONSE_BYTES + 1)
         if len(raw) > _MAX_RESPONSE_BYTES:
             raise ValueError("response is too large")
         value = json.loads(raw.decode("utf-8"), object_pairs_hook=_reject_duplicates, parse_constant=_reject_constant)
