@@ -32,6 +32,7 @@ def run_exact_wheel_request(
     wheel_snapshots: Sequence[str | Path],
     *,
     timeout_seconds: float,
+    _test_runtime_paths: Sequence[str | Path] = (),
 ) -> dict[str, object]:
     """Execute a request in a contained ``-I -S`` exact-wheel child.
 
@@ -52,9 +53,9 @@ def run_exact_wheel_request(
         request_path.write_bytes(canonical_protocol_bytes(payload))
         secret = secrets.token_bytes(32)
         environment = dict(os.environ)
-        if "pytest" in sys.modules:
+        if _test_runtime_paths:
             payload["test_runtime_paths"] = [
-                item for item in sys.path if "site-packages" in Path(item).parts
+                str(Path(item).resolve(strict=True)) for item in _test_runtime_paths
             ]
             request_path.write_bytes(canonical_protocol_bytes(payload))
         returncode = run_contained_child(

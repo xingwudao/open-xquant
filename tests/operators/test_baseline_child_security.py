@@ -100,6 +100,7 @@ def _run_child(
         request,
         [wheel_path, *([dependency_path] if with_dependency else [])],
         timeout_seconds=10,
+        _test_runtime_paths=[item for item in sys.path if "site-packages" in Path(item).parts],
     )
 
 
