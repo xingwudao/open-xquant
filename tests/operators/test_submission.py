@@ -12,6 +12,7 @@ import oxq.operators.submission as submission_module
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.submission import load_provider_submission
 from tests.operators.helpers import (
+    BASELINE_RELATIVE_PATH,
     BUILD_IDENTIFIER,
     CATALOG_NAME,
     COMPATIBILITY_ROOT,
@@ -38,6 +39,25 @@ def test_loads_a_committed_submission_into_an_independent_archive(tmp_path: Path
         assert submission.operators[0].baseline_path.is_file()
         assert submission.artifacts[0].wheel_path == fixture.artifact_dir / fixture.wheel_name
         assert submission.artifacts[0].build_identifier == BUILD_IDENTIFIER
+
+
+def test_retains_committed_baseline_case_provenance(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+
+    with load_provider_submission(
+        fixture.path,
+        fixture.submission_commit,
+        fixture.artifact_dir,
+    ) as submission:
+        case = submission.baseline_cases[0]
+        assert case.baseline_path == (
+            submission.archive_root
+            / COMPATIBILITY_ROOT
+            / "numerical_baselines"
+            / "technical-v1.json"
+        )
+        assert case.baseline_relative_path == BASELINE_RELATIVE_PATH
+        assert case.case_index == 0
 
 
 def test_uses_committed_data_not_a_dirty_working_tree(tmp_path: Path) -> None:

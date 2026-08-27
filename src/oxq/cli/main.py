@@ -107,6 +107,11 @@ def operator_group() -> None:
     show_default=True,
     help="Seconds allowed for each isolated numerical baseline execution.",
 )
+@click.option(
+    "--target",
+    default=None,
+    help="Optional canonical Python-ABI-platform target for v2 certification.",
+)
 @click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
 def certify_provider_command(
     provider_repo: Path,
@@ -115,6 +120,7 @@ def certify_provider_command(
     output_dir: Path | None,
     trust_provider_code: bool,
     baseline_timeout: float,
+    target: str | None,
     as_json: bool,
 ) -> None:
     """Certify one exact local provider submission for research use."""
@@ -129,6 +135,18 @@ def certify_provider_command(
                 stage="trust",
             )
 
+        from oxq.operators.models import CertificationTarget
+
+        try:
+            certification_target = (
+                CertificationTarget.parse(target) if target is not None else None
+            )
+        except ValueError as exc:
+            raise OperatorCertificationError(
+                "certification_target_invalid",
+                str(exc),
+                stage="target",
+            ) from None
         from oxq.operators.certification import certify_provider
         from oxq.operators.registry import publish_certification
         from oxq.operators.submission import load_provider_submission
@@ -151,7 +169,11 @@ def certify_provider_command(
                 submission,
                 baseline_timeout_seconds=baseline_timeout,
             )
-            published = publish_certification(certified, resolved_output_dir)
+            published = publish_certification(
+                certified,
+                resolved_output_dir,
+                target=certification_target,
+            )
     except OperatorCertificationError as error:
         if as_json:
             payload = error.as_dict()

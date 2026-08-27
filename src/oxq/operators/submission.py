@@ -374,7 +374,7 @@ def _load_baselines(
                 "baseline",
                 error_operator_id,
             )
-        for raw_case in cast(list[object], baseline_data["cases"]):
+        for case_index, raw_case in enumerate(cast(list[object], baseline_data["cases"])):
             case = _mapping(raw_case, "baseline", error_operator_id)
             case_id = _string(case["case_id"], "baseline", error_operator_id)
             operator_id = _string(case["operator_id"], "baseline", error_operator_id)
@@ -399,6 +399,11 @@ def _load_baselines(
                     input=_mapping(case["input"], "baseline", error_operator_id),
                     expected=_mapping(case["expected"], "baseline", error_operator_id),
                     tolerance=_mapping(case["tolerance"], "baseline", error_operator_id),
+                    baseline_path=baseline_path,
+                    baseline_relative_path=baseline_path.relative_to(
+                        baseline_path.parents[1]
+                    ).as_posix(),
+                    case_index=case_index,
                 )
             )
         if covered_identities != referenced_identities:

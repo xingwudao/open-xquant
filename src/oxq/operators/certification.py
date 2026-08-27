@@ -306,6 +306,9 @@ def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:
         input=_freeze_json_mapping(case.input),
         expected=_freeze_json_mapping(case.expected),
         tolerance=_freeze_json_mapping(case.tolerance),
+        baseline_path=case.baseline_path,
+        baseline_relative_path=case.baseline_relative_path,
+        case_index=case.case_index,
     )
 
 

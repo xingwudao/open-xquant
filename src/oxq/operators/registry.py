@@ -38,16 +38,17 @@ from oxq.operators.certification import (
     _validate_schema as _validate_contract_schema,
 )
 from oxq.operators.errors import OperatorCertificationError
-from oxq.operators.formats import sha256_bytes, strict_json_object
+from oxq.operators.formats import canonical_json_bytes, sha256_bytes, strict_json_object
 from oxq.operators.models import (
     BaselineCase,
     BaselineResult,
     BuildArtifact,
     CatalogEntry,
+    CertificationTarget,
     ContractCandidate,
     ResearchCertification,
 )
-from oxq.operators.resources import materialize_certification_profile
+from oxq.operators.resources import materialize_certification_profile, materialize_operator_distribution_profile
 
 _PROVIDER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _SEMVER_PATTERN = re.compile(
@@ -110,6 +111,7 @@ class _PreparedCertification:
     binding_bytes: Mapping[str, bytes]
     record_operators: tuple[dict[str, object], ...]
     entry_artifacts: tuple[dict[str, object], ...]
+    target: CertificationTarget | None
 
 
 @dataclass(frozen=True)
@@ -122,9 +124,11 @@ class _RenderedPublication:
 def publish_certification(
     result: ResearchCertification,
     output_dir: str | Path,
+    *,
+    target: CertificationTarget | None = None,
 ) -> PublishedCertification:
     """Atomically publish one fully passed research certification."""
-    prepared = _prepare_certification(result)
+    prepared = _prepare_certification(result, target=target)
     output_root = Path(output_dir).expanduser().resolve()
     provider_dir = output_root / result.provider
     release_dir = provider_dir / result.release
@@ -251,7 +255,11 @@ class CertificationRegistry:
         return matches[0] if matches else None
 
 
-def _prepare_certification(result: ResearchCertification) -> _PreparedCertification:
+def _prepare_certification(
+    result: ResearchCertification,
+    *,
+    target: CertificationTarget | None = None,
+) -> _PreparedCertification:
     if not isinstance(result, ResearchCertification):
         raise _input_error("publisher requires a research certification result")
     if not _is_issued_research_certification(result):
@@ -274,6 +282,8 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         raise _input_error("certification commit identity is invalid")
     if not result.operators or not result.baseline_cases or not result.baseline_results:
         raise _input_error("research certification must not be empty")
+    if target is not None and not isinstance(target, CertificationTarget):
+        raise _input_error("certification target is invalid")
 
     entry_artifacts, implementation_artifacts = _prepare_artifacts(result.artifacts)
 
@@ -284,6 +294,7 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
 
     case_counts = {identity: 0 for identity in identities}
     declared_cases: set[tuple[str, str, str]] = set()
+    declared_by_key: dict[tuple[str, str, str], BaselineCase] = {}
     for case in result.baseline_cases:
         if (
             not isinstance(case, BaselineCase)
@@ -302,6 +313,7 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         if identity not in case_counts or case_identity in declared_cases:
             raise _input_error("baseline case does not identify a certified operator")
         declared_cases.add(case_identity)
+        declared_by_key[case_identity] = case
         case_counts[identity] += 1
 
     cases_by_identity: dict[tuple[str, str], list[dict[str, object]]] = {identity: [] for identity in identities}
@@ -320,7 +332,41 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         if identity not in identities or baseline.status != "passed" or not baseline.case_id or result_key in passed_cases:
             raise _input_error("numerical baseline results are incomplete or invalid")
         passed_cases.add(result_key)
-        cases_by_identity[identity].append({"case_id": baseline.case_id, "status": "passed"})
+        rendered_case: dict[str, object] = {"case_id": baseline.case_id, "status": "passed"}
+        if target is not None:
+            declared = declared_by_key[result_key]
+            if (
+                not isinstance(declared.baseline_path, Path)
+                or not isinstance(declared.baseline_relative_path, str)
+                or not declared.baseline_relative_path
+                or not isinstance(declared.case_index, int)
+                or declared.case_index < 0
+            ):
+                raise _input_error("targeted certification requires committed baseline provenance")
+            try:
+                baseline_bytes = declared.baseline_path.read_bytes()
+                baseline_value = strict_json_object(baseline_bytes)
+                raw_cases = baseline_value["cases"]
+                if not isinstance(raw_cases, list) or raw_cases[declared.case_index] != {
+                    "case_id": declared.case_id,
+                    "operator_id": declared.operator_id,
+                    "operator_version": declared.operator_version,
+                    "parameters": _thaw_json_mapping(declared.parameters),
+                    "input": _thaw_json_mapping(declared.input),
+                    "expected": _thaw_json_mapping(declared.expected),
+                    "tolerance": _thaw_json_mapping(declared.tolerance),
+                }:
+                    raise ValueError("baseline case differs from committed evidence")
+            except (OSError, KeyError, IndexError, TypeError, ValueError):
+                raise _input_error("targeted certification requires committed baseline provenance") from None
+            rendered_case.update(
+                {
+                    "baseline_path": declared.baseline_relative_path,
+                    "case_index": declared.case_index,
+                    "case_digest": sha256_bytes(canonical_json_bytes(raw_cases[declared.case_index])),
+                }
+            )
+        cases_by_identity[identity].append(rendered_case)
     if declared_cases != passed_cases or any(case_counts[identity] == 0 for identity in identities):
         raise _input_error("not every certified operator baseline passed")
 
@@ -351,6 +397,7 @@ def _prepare_certification(result: ResearchCertification) -> _PreparedCertificat
         binding_bytes=MappingProxyType(binding_bytes),
         record_operators=tuple(record_operators),
         entry_artifacts=entry_artifacts,
+        target=target,
     )
 
 
@@ -996,8 +1043,34 @@ def _render_publication(
         "artifacts": list(prepared.entry_artifacts),
         "operators": list(prepared.record_operators),
     }
+    if prepared.target is not None:
+        baseline_sets: dict[str, str] = {}
+        for case in result.baseline_cases:
+            assert case.baseline_path is not None
+            assert case.baseline_relative_path is not None
+            try:
+                baseline_sets[case.baseline_relative_path] = sha256_bytes(
+                    case.baseline_path.read_bytes()
+                )
+            except OSError:
+                raise _input_error(
+                    "targeted certification requires committed baseline provenance"
+                ) from None
+        record = {
+            **record,
+            "schema_version": 2,
+            "target": {
+                "python_tag": prepared.target.python_tag,
+                "abi_tag": prepared.target.abi_tag,
+                "platform_tag": prepared.target.platform_tag,
+            },
+            "baseline_sets": [
+                {"path": path, "digest": digest}
+                for path, digest in sorted(baseline_sets.items())
+            ],
+        }
     try:
-        record_schema = _certification_record_schema()
+        record_schema = _certification_record_schema(record["schema_version"])
     except (
         OperatorCertificationError,
         OSError,
@@ -1139,7 +1212,7 @@ def _read_publication(
         _validate_registry_entry(entry, provider, release)
         _validate_schema(
             record,
-            record_schema,
+            _certification_record_schema(record.get("schema_version")),
             code="registry_invalid",
             message="certification record is invalid",
         )
@@ -1257,6 +1330,42 @@ def _read_publication(
         RecursionError,
     ):
         raise _error("registry_invalid", "certification registry entry is invalid") from None
+
+
+def read_certification_publication(release_dir: str | Path) -> PublishedCertification:
+    """Read and validate either a v1 or targeted v2 certification publication."""
+    return _read_publication(
+        Path(release_dir).expanduser().resolve(),
+        binding_schema=_binding_schema(),
+        record_schema=_certification_record_schema(),
+    )
+
+
+def import_certification_publication(
+    publication_dir: str | Path,
+    output_dir: str | Path,
+) -> PublishedCertification:
+    """Validate and atomically copy an external publication into a local registry."""
+    source = Path(publication_dir).expanduser().resolve()
+    read_certification_publication(source)
+    destination = Path(output_dir).expanduser().resolve() / source.parent.name / source.name
+    if _lexists(destination):
+        return read_certification_publication(destination)
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    staging: Path | None = Path(
+        tempfile.mkdtemp(prefix=f".{source.name}.import-", dir=destination.parent)
+    )
+    try:
+        for relative_path, value in _publication_files(source).items():
+            target_path = staging / relative_path
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            _write_file(target_path, value)
+        _replace_directory(staging, destination)
+        staging = None
+    finally:
+        if staging is not None and staging.exists():
+            shutil.rmtree(staging, ignore_errors=True)
+    return read_certification_publication(destination)
 
 
 def _validate_registry_entry(
@@ -1404,9 +1513,14 @@ def _binding_schema() -> Mapping[str, object]:
         return _strict_json_object(surface_bytes["operator_binding_schema"])
 
 
-def _certification_record_schema() -> Mapping[str, object]:
-    with materialize_certification_profile() as paths:
-        return _strict_json_object(paths["certification_record"].read_bytes())
+def _certification_record_schema(version: object = 1) -> Mapping[str, object]:
+    if version == 1:
+        with materialize_certification_profile() as paths:
+            return _strict_json_object(paths["certification_record"].read_bytes())
+    if version == 2:
+        with materialize_operator_distribution_profile() as paths:
+            return _strict_json_object(paths["certification_record_v2"].read_bytes())
+    raise ValueError("unsupported certification record version")
 
 
 def _validate_schema(

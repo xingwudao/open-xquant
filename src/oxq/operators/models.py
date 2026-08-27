@@ -2,11 +2,37 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import TracebackType
+
+_TARGET_PART = re.compile(r"^[a-z0-9_]+$")
+
+
+@dataclass(frozen=True)
+class CertificationTarget:
+    """One immutable Python wheel target for a v2 certification."""
+
+    python_tag: str
+    abi_tag: str
+    platform_tag: str
+
+    @classmethod
+    def parse(cls, value: str) -> CertificationTarget:
+        parts = value.split("-", 2)
+        if len(parts) != 3 or any(not part for part in parts):
+            raise ValueError("certification target must be python-abi-platform")
+        target = cls(*parts)
+        if target.key != value or not all(_TARGET_PART.fullmatch(part) for part in parts):
+            raise ValueError("certification target is not canonical")
+        return target
+
+    @property
+    def key(self) -> str:
+        return f"{self.python_tag}-{self.abi_tag}-{self.platform_tag}"
 
 
 @dataclass(frozen=True)
@@ -43,6 +69,9 @@ class BaselineCase:
     input: Mapping[str, object]
     expected: Mapping[str, object]
     tolerance: Mapping[str, object]
+    baseline_path: Path | None = None
+    baseline_relative_path: str | None = None
+    case_index: int | None = None
 
 
 @dataclass(frozen=True)
