@@ -211,6 +211,146 @@ def certify_provider_command(
     click.echo(f"Output: {published.release_dir}")
 
 
+@operator_group.command(name="export-certification")
+@click.option("--provider", required=True, help="Canonical provider identifier.")
+@click.option("--release", required=True, help="Exact provider release SemVer.")
+@click.option("--registry-dir", required=True, type=click.Path(file_okay=False, path_type=Path))
+@click.option(
+    "--manifest-dir",
+    required=True,
+    type=click.Path(exists=True, file_okay=False, path_type=Path),
+)
+@click.option(
+    "--baseline-file",
+    "baseline_files",
+    required=True,
+    multiple=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--target", required=True, help="Canonical Python-ABI-platform target.")
+@click.option("--output", required=True, type=click.Path(path_type=Path))
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def export_certification_command(
+    provider: str,
+    release: str,
+    registry_dir: Path,
+    manifest_dir: Path,
+    baseline_files: tuple[Path, ...],
+    target: str,
+    output: Path,
+    as_json: bool,
+) -> None:
+    """Export one validated local certification as a portable ZIP."""
+    from oxq.operators.errors import OperatorCertificationError
+
+    try:
+        from oxq.operators.bundle import export_certification_bundle
+        from oxq.operators.models import CertificationTarget
+
+        resolved_registry = registry_dir.expanduser().resolve()
+        resolved_output = output.expanduser().resolve()
+        try:
+            resolved_output.relative_to(resolved_registry)
+        except ValueError:
+            pass
+        else:
+            raise OperatorCertificationError(
+                "bundle_output_invalid",
+                "bundle output must be outside the source registry",
+                stage="output",
+            )
+        try:
+            certification_target = CertificationTarget.parse(target)
+        except ValueError as exc:
+            raise OperatorCertificationError("certification_target_invalid", str(exc), stage="target") from None
+        bundle = export_certification_bundle(
+            provider=provider,
+            release=release,
+            registry_dir=resolved_registry,
+            manifest_dir=manifest_dir,
+            baseline_files=baseline_files,
+            target=certification_target,
+            output_path=resolved_output,
+        )
+    except OperatorCertificationError as error:
+        _bundle_cli_error(error, as_json)
+    except (OSError, ValueError):
+        _bundle_cli_error(OperatorCertificationError("bundle_export_failed", "certification bundle export failed", stage="export"), as_json)
+
+    payload = {
+        "bundle": str(bundle.bundle_path), "operator_count": bundle.operator_count,
+        "provider": bundle.provider, "release": bundle.release,
+        "status": "research-certified", "target": target,
+    }
+    if as_json:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    click.echo("Status: research-certified")
+    click.echo(f"Provider: {bundle.provider}")
+    click.echo(f"Release: {bundle.release}")
+    click.echo(f"Operators: {bundle.operator_count}")
+    click.echo(f"Output: {bundle.bundle_path}")
+
+
+@operator_group.command(name="import-certification")
+@click.option(
+    "--bundle",
+    "bundle_path",
+    required=True,
+    type=click.Path(exists=True, dir_okay=False, path_type=Path),
+)
+@click.option("--output-dir", required=True, type=click.Path(file_okay=False, path_type=Path))
+@click.option(
+    "--trust-unsigned-bundle",
+    is_flag=True,
+    help="Acknowledge that the unsigned bundle is locally trusted.",
+)
+@click.option(
+    "--bundle-store",
+    type=click.Path(file_okay=False, path_type=Path),
+    default=None,
+    help="Optional audit store for the original bundle ZIP.",
+)
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def import_certification_command(
+    bundle_path: Path,
+    output_dir: Path,
+    trust_unsigned_bundle: bool,
+    bundle_store: Path | None,
+    as_json: bool,
+) -> None:
+    """Import one trusted portable certification into a local registry."""
+    from oxq.operators.bundle import import_certification_bundle
+    from oxq.operators.errors import OperatorCertificationError
+
+    try:
+        imported = import_certification_bundle(
+            bundle_path, output_dir, trust_unsigned_bundle=trust_unsigned_bundle, bundle_store=bundle_store
+        )
+    except OperatorCertificationError as error:
+        _bundle_cli_error(error, as_json)
+
+    payload = {
+        "output": str(imported.release_dir), "provider": imported.record["provider"],
+        "release": imported.record["release"], "status": "research-certified",
+    }
+    if as_json:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    click.echo("Status: research-certified")
+    click.echo(f"Provider: {imported.record['provider']}")
+    click.echo(f"Release: {imported.record['release']}")
+    click.echo(f"Output: {imported.release_dir}")
+
+
+def _bundle_cli_error(error, as_json: bool) -> None:
+    if as_json:
+        click.echo(json.dumps(error.as_dict(), sort_keys=True))
+    else:
+        click.echo(f"Certification bundle failed: [{error.stage}/{error.code}] {error.message}")
+    raise click.exceptions.Exit(1)
+
+
 @main.group()
 def spec():
     """Manage strategy specs."""

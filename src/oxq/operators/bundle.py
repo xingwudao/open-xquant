@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 import stat
 import tempfile
@@ -14,9 +15,10 @@ from typing import cast
 
 from jsonschema import Draft202012Validator, FormatChecker, SchemaError, ValidationError  # type: ignore[import-untyped]
 
+from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.formats import canonical_json_bytes, safe_relative_path, sha256_bytes, strict_json_object
 from oxq.operators.models import CertificationTarget
-from oxq.operators.registry import read_certification_publication
+from oxq.operators.registry import PublishedCertification, import_certification_publication, read_certification_publication
 from oxq.operators.resources import materialize_operator_distribution_profile
 
 _MAX_MEMBERS = 512
@@ -123,6 +125,121 @@ def materialize_validated_bundle(bundle: ValidatedCertificationBundle, destinati
     except Exception:
         shutil.rmtree(root, ignore_errors=True)
         raise
+
+
+def import_certification_bundle(
+    bundle_path: str | Path,
+    output_dir: str | Path,
+    *,
+    trust_unsigned_bundle: bool,
+    bundle_store: str | Path | None = None,
+) -> PublishedCertification:
+    """Validate and atomically import a portable certification bundle.
+
+    A bundle is audit evidence, not an installed runtime.  Only its validated
+    publication is committed to the supplied local certification registry.
+    """
+    if not trust_unsigned_bundle:
+        raise OperatorCertificationError(
+            "bundle_trust_required",
+            "--trust-unsigned-bundle is required to import a bundle",
+            stage="trust",
+        )
+    source = Path(bundle_path).expanduser().resolve()
+    output = Path(output_dir).expanduser().resolve()
+    if _is_within(source, output):
+        raise OperatorCertificationError(
+            "bundle_input_invalid",
+            "bundle input must be outside the destination registry",
+            stage="input",
+        )
+    try:
+        bundle = validate_certification_bundle(source)
+    except ValueError as exc:
+        raise OperatorCertificationError(
+            "bundle_invalid",
+            "certification bundle is invalid",
+            stage="validation",
+        ) from exc
+
+    staging: Path | None = None
+    try:
+        output.mkdir(parents=True, exist_ok=True)
+        staging = Path(tempfile.mkdtemp(prefix=f".{bundle.release}.bundle-import-", dir=output))
+        staging.rmdir()
+        materialize_validated_bundle(bundle, staging)
+        # The full materialization is useful only for validation.  The registry
+        # transaction copies and publishes the publication subtree atomically.
+        provider_dir = staging / bundle.provider
+        provider_dir.mkdir()
+        publication = provider_dir / bundle.release
+        (staging / "publication").replace(publication)
+        imported = import_certification_publication(publication, output)
+    except OperatorCertificationError:
+        raise
+    except (OSError, ValueError):
+        raise OperatorCertificationError(
+            "bundle_import_failed",
+            "certification bundle import failed before registry commit",
+            stage="import",
+        ) from None
+    finally:
+        if staging is not None:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    if bundle_store is not None:
+        try:
+            _store_bundle(source, Path(bundle_store).expanduser().resolve())
+        except OSError:
+            raise OperatorCertificationError(
+                "bundle_store_failed",
+                "certification bundle was imported but audit storage failed",
+                stage="audit",
+            ) from None
+    return imported
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _store_bundle(source: Path, store: Path) -> None:
+    """Durably publish a byte-identical audit copy after registry success."""
+    store.mkdir(parents=True, exist_ok=True)
+    destination = store / source.name
+    source_bytes = source.read_bytes()
+    if destination.exists():
+        if destination.read_bytes() != source_bytes:
+            raise OSError("audit bundle name conflicts with different bytes")
+        return
+    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{source.name}.", dir=store)
+    temporary = Path(temporary_name)
+    try:
+        with open(descriptor, "wb", closefd=True) as stream:
+            stream.write(source_bytes)
+            stream.flush()
+            os.fsync(stream.fileno())
+        try:
+            os.link(temporary, destination)
+        except FileExistsError:
+            if destination.read_bytes() != source_bytes:
+                raise OSError("audit bundle name conflicts with different bytes") from None
+        _fsync_directory(store)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _fsync_directory(path: Path) -> None:
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    descriptor = os.open(path, flags)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
 
 
 def _export_members(

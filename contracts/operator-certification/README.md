@@ -108,3 +108,37 @@ never allowed to overwrite the original release.
 The resulting `research-certified` state permits research and offline analysis
 only. It does not authorize strategy runtime or live trading. Those uses remain
 gated on `runtime-certified` together with `past_only` causality.
+
+## Portable certification bundles
+
+Export a targeted v2 certification with its manifest and baseline evidence:
+
+```bash
+oxq operator export-certification \
+  --provider equant-py \
+  --release 1.0.0 \
+  --registry-dir .open-xquant/certifications \
+  --manifest-dir /path/to/equant-py/compat/open_xquant/manifests \
+  --baseline-file /path/to/equant-py/compat/open_xquant/numerical_baselines/technical-v1.json \
+  --target cp312-cp312-macosx_14_0_arm64 \
+  --output /path/to/certification.zip \
+  --json
+```
+
+`--baseline-file` may be repeated. The output ZIP must be outside the source
+registry. Import it only after explicitly acknowledging the local trust
+decision:
+
+```bash
+oxq operator import-certification \
+  --bundle /path/to/certification.zip \
+  --output-dir .open-xquant/certifications \
+  --trust-unsigned-bundle \
+  --bundle-store .open-xquant/certification-bundles \
+  --json
+```
+
+The import validates the entire ZIP before atomically publishing only its
+certification publication. When supplied, `--bundle-store` receives the
+original ZIP after registry publication succeeds. A plain bundle import does
+not create an installed runtime or make an operator invocable.

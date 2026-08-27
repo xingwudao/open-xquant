@@ -13,10 +13,12 @@ import pytest
 
 from oxq.operators.bundle import (
     export_certification_bundle,
+    import_certification_bundle,
     materialize_validated_bundle,
     validate_certification_bundle,
 )
 from oxq.operators.certification import certify_provider
+from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import CertificationTarget
 from oxq.operators.registry import publish_certification
 from oxq.operators.submission import load_provider_submission
@@ -76,6 +78,98 @@ def test_export_validates_and_materializes_evidence_complete_bundle(tmp_path: Pa
     assert validated.target == TARGET
     assert validated.operator_count == 1
     assert (destination / "bundle-manifest.json").read_bytes() == validated.members["bundle-manifest.json"]
+
+
+def test_import_requires_trust_and_is_idempotent(tmp_path: Path) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "source", tmp_path / "bundle.zip")
+
+    with pytest.raises(OperatorCertificationError, match="trust"):
+        import_certification_bundle(
+            bundle.bundle_path,
+            tmp_path / "registry",
+            trust_unsigned_bundle=False,
+        )
+
+    one = import_certification_bundle(
+        bundle.bundle_path,
+        tmp_path / "registry",
+        trust_unsigned_bundle=True,
+    )
+    two = import_certification_bundle(
+        bundle.bundle_path,
+        tmp_path / "registry",
+        trust_unsigned_bundle=True,
+    )
+
+    assert one.release_dir == two.release_dir
+    assert not (tmp_path / "registry" / "installed").exists()
+
+
+def test_import_rejects_bundle_inside_destination_registry(tmp_path: Path) -> None:
+    registry = tmp_path / "registry"
+    bundle, _ = _export_bundle_fixture(tmp_path / "source", registry / "bundle.zip")
+
+    with pytest.raises(OperatorCertificationError, match="outside"):
+        import_certification_bundle(bundle.bundle_path, registry, trust_unsigned_bundle=True)
+
+
+def test_import_cleans_staging_when_materialization_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "source", tmp_path / "bundle.zip")
+
+    def fail_materialization(*args, **kwargs) -> None:
+        raise OSError("simulated staging failure")
+
+    monkeypatch.setattr("oxq.operators.bundle.materialize_validated_bundle", fail_materialization)
+    with pytest.raises(OperatorCertificationError, match="import"):
+        import_certification_bundle(bundle.bundle_path, tmp_path / "registry", trust_unsigned_bundle=True)
+
+    assert not list((tmp_path / "registry").rglob("registry-entry.json")) if (tmp_path / "registry").exists() else True
+
+
+def test_import_writes_audit_bundle_only_after_registry_commit(tmp_path: Path) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "source", tmp_path / "bundle.zip")
+    store = tmp_path / "bundle-store"
+
+    imported = import_certification_bundle(
+        bundle.bundle_path,
+        tmp_path / "registry",
+        trust_unsigned_bundle=True,
+        bundle_store=store,
+    )
+
+    stored = store / bundle.bundle_path.name
+    assert imported.release_dir.is_dir()
+    assert stored.read_bytes() == bundle.bundle_path.read_bytes()
+
+
+def test_import_rejects_different_valid_bytes_for_an_existing_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import oxq.operators.registry as registry_module
+
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: "2026-08-27T00:00:00Z")
+    first, _ = _export_bundle_fixture(tmp_path / "one", tmp_path / "one.zip")
+    monkeypatch.setattr(registry_module, "_utc_now", lambda: "2026-08-27T00:00:01Z")
+    second, _ = _export_bundle_fixture(tmp_path / "two", tmp_path / "two.zip")
+    destination = tmp_path / "registry"
+
+    import_certification_bundle(first.bundle_path, destination, trust_unsigned_bundle=True)
+    with pytest.raises(OperatorCertificationError, match="different certification bytes"):
+        import_certification_bundle(second.bundle_path, destination, trust_unsigned_bundle=True)
+
+
+def test_audit_store_failure_does_not_roll_back_registry_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "source", tmp_path / "bundle.zip")
+    destination = tmp_path / "registry"
+
+    monkeypatch.setattr("oxq.operators.bundle._fsync_directory", lambda path: (_ for _ in ()).throw(OSError("fsync failed")))
+    with pytest.raises(OperatorCertificationError, match="audit storage"):
+        import_certification_bundle(
+            bundle.bundle_path,
+            destination,
+            trust_unsigned_bundle=True,
+            bundle_store=tmp_path / "bundle-store",
+        )
+
+    assert (destination / "equant-py" / "1.0.0" / "registry-entry.json").is_file()
 
 
 @pytest.mark.parametrize(
