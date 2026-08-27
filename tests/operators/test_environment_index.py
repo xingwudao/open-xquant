@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+import oxq.operators.environment_index as environment_index
 
 from oxq.operators.environment_index import (
     load_environment_provider,
@@ -42,3 +43,27 @@ def test_official_index_contains_equant_py_100() -> None:
     assert provider.operators
     assert provider.operators[0].operator_id == "equant.ttr.sma"
     assert provider.operators[0].operator_version == "1.0.0"
+
+
+def test_rejects_non_object_operator_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        environment_index,
+        "_load_index_payload",
+        lambda: {
+            "schema_version": 1,
+            "providers": {
+                "equant-py": {
+                    "1.0.0": {
+                        "distribution": "equant-py",
+                        "certification_state": "research-certified",
+                        "operators": [None],
+                        "manifest_digests": {},
+                        "baseline_digests": {},
+                    }
+                }
+            },
+        },
+    )
+
+    with pytest.raises(ValueError, match="official environment operator entry is invalid"):
+        load_environment_provider("equant-py", "1.0.0")

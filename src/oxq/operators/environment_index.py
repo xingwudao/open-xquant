@@ -106,7 +106,7 @@ def _provider_from_payload(
 
     typed_manifest_digests = _digest_map(manifest_digests)
     typed_baseline_digests = _digest_map(baseline_digests)
-    typed_operators = tuple(_operator_from_payload(cast(dict[str, object], item)) for item in operators)
+    typed_operators = tuple(_operator_from_payload(_operator_payload(item)) for item in operators)
     _validate_operator_artifacts(typed_operators, typed_manifest_digests, typed_baseline_digests)
     return EnvironmentProvider(
         provider=provider,
@@ -138,6 +138,12 @@ def _operator_from_payload(payload: dict[str, object]) -> CertifiedOperatorRef:
         manifest_path=manifest_path,
         baseline_paths=typed_baselines,
     )
+
+
+def _operator_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError("official environment operator entry is invalid")
+    return cast(dict[str, object], value)
 
 
 def _baseline_path(value: object) -> str:
