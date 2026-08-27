@@ -3,7 +3,7 @@
   "providers": {
     "equant-py": {
       "1.0.0": {
-        "distribution": "equant-core",
+        "distribution": "equant-py",
         "certification_state": "research-certified",
         "operators": [
           {

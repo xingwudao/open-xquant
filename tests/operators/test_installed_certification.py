@@ -45,6 +45,7 @@ EXPECTED_DIGESTS = {
     "operator_release": "0e98caac81ba70b2e37ff8d9d8d6b8ad1b628fea6ab821f51e8f0919659d6470",
     "runtime_protocol": "0b65c7adba6497463c4143cde5b0786ae001e316dec78a62cacad42d77acd239",
     "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
+    "official_environment_providers": "4617a22bc283599c1d1016a7fa3a2093331bc911c3790b9b634852dba9e504eb",
 }
 
 provider_repo = Path(sys.argv[1])
@@ -228,6 +229,6 @@ def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> No
         "output": str((output_dir / "equant-py" / "1.0.0").resolve()),
         "provider": "equant-py",
         "release": "1.0.0",
-        "resource_count": 13,
+        "resource_count": 14,
         "state": "research-certified",
     }

@@ -17,6 +17,9 @@ from oxq.operators.errors import OperatorCertificationError
 MANIFEST_PATH = "manifests/equant.ttr.sma.operator.json"
 BASELINE_PATH = "numerical_baselines/equant.ttr.sma.json"
 MANIFEST_BYTES = b'{"operator_id":"equant.ttr.sma","version":"1.0.0"}\n'
+CONFLICTING_MANIFEST_BYTES = (
+    b'{"certification_state":"contract-valid","operator_id":"equant.ttr.sma","version":"1.0.0"}\n'
+)
 BASELINE_BYTES = b'{"cases":[]}\n'
 
 
@@ -163,10 +166,26 @@ def test_verify_installed_provider_returns_verified_artifacts(
 
     assert installed.provider.provider == "equant-py"
     assert installed.manifests[MANIFEST_PATH] == {
+        "certification_state": "research-certified",
         "operator_id": "equant.ttr.sma",
         "version": "1.0.0",
     }
     assert installed.baselines[BASELINE_PATH] == BASELINE_BYTES
+
+
+def test_verify_installed_provider_rejects_conflicting_manifest_state(
+    fake_distribution: FakeDistribution,
+    official_provider: EnvironmentProvider,
+) -> None:
+    fake_distribution.add_file(MANIFEST_PATH, CONFLICTING_MANIFEST_BYTES)
+    object.__setattr__(
+        official_provider,
+        "manifest_digests",
+        {MANIFEST_PATH: _digest(CONFLICTING_MANIFEST_BYTES)},
+    )
+
+    with pytest.raises(OperatorCertificationError, match="certification state"):
+        verify_installed_provider("equant-py==1.0.0")
 
 
 def _digest(raw: bytes) -> str:

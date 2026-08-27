@@ -72,7 +72,10 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
             operator.manifest_path,
             provider.manifest_digests[operator.manifest_path],
         )
-        manifests[operator.manifest_path] = strict_json_object(manifest_bytes)
+        manifest = strict_json_object(manifest_bytes)
+        _verify_manifest_certification_state(manifest, provider.certification_state, operator.manifest_path)
+        manifest["certification_state"] = provider.certification_state
+        manifests[operator.manifest_path] = manifest
         for baseline_path in operator.baseline_paths:
             baselines[baseline_path] = _read_declared_file(
                 distribution,
@@ -119,6 +122,19 @@ def _read_declared_file(
             f"installed environment provider file digest mismatch: {package_path}",
         )
     return raw
+
+
+def _verify_manifest_certification_state(
+    manifest: dict[str, object],
+    certification_state: str,
+    package_path: str,
+) -> None:
+    manifest_state = manifest.get("certification_state")
+    if manifest_state is not None and manifest_state != certification_state:
+        raise _error(
+            "environment_provider_manifest_state_mismatch",
+            f"installed environment provider manifest certification state mismatch: {package_path}",
+        )
 
 
 def _error(code: str, message: str) -> OperatorCertificationError:

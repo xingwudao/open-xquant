@@ -37,7 +37,7 @@ def test_official_index_contains_equant_py_100() -> None:
     provider = load_environment_provider("equant-py", "1.0.0")
 
     assert provider.provider == "equant-py"
-    assert provider.distribution == "equant-core"
+    assert provider.distribution == "equant-py"
     assert provider.version == "1.0.0"
     assert provider.certification_state == "research-certified"
     assert len(provider.operators) == 60
