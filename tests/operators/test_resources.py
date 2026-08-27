@@ -168,6 +168,50 @@ def _validate_profile_schemas(schemas: dict[str, dict[str, object]]) -> None:
         ).validate(instance)
 
 
+def test_certification_artifact_version_policy_matches_artifact_roles() -> None:
+    schemas = {
+        path.name: json.loads(path.read_text(encoding="utf-8"))
+        for path in (Path(__file__).parents[2] / "contracts" / "operator-certification").glob("*.schema.json")
+    }
+    instances = _valid_profile_instances()
+
+    candidate_build = deepcopy(instances["candidate_build"])
+    candidate_build["artifacts"][0]["version"] = "1.0.0.post1"  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schemas["candidate-build-v1.schema.json"]).validate(candidate_build)
+
+    runtime_candidate_build = deepcopy(instances["candidate_build"])
+    runtime_candidate_build["artifacts"].append(  # type: ignore[union-attr]
+        {
+            "distribution": "helper-pkg",
+            "version": "1.0.0.post1",
+            "filename": "helper_pkg-1.0.0.post1-py3-none-any.whl",
+            "role": "runtime-dependency",
+            "build_identifier": "helper-build",
+            "digest": "sha256:" + "b" * 64,
+        }
+    )
+    Draft202012Validator(schemas["candidate-build-v1.schema.json"]).validate(runtime_candidate_build)
+
+    certification_record = deepcopy(instances["certification_record"])
+    certification_record["artifacts"][0]["version"] = "1.0.0.post1"  # type: ignore[index]
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schemas["certification-record-v1.schema.json"]).validate(certification_record)
+
+    runtime_certification_record = deepcopy(instances["certification_record"])
+    runtime_certification_record["artifacts"].append(  # type: ignore[union-attr]
+        {
+            "distribution": "helper-pkg",
+            "version": "1.0.0.post1",
+            "filename": "helper_pkg-1.0.0.post1-py3-none-any.whl",
+            "role": "runtime-dependency",
+            "build_identifier": "helper-build",
+            "digest": "sha256:" + "b" * 64,
+        }
+    )
+    Draft202012Validator(schemas["certification-record-v1.schema.json"]).validate(runtime_certification_record)
+
+
 def test_materialized_frozen_surface_has_exact_digests() -> None:
     with materialize_contract_surface() as paths:
         assert set(paths) == set(EXPECTED_SURFACE_DIGESTS)

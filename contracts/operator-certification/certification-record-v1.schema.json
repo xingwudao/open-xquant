@@ -61,9 +61,19 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["distribution", "version", "filename", "role", "build_identifier", "digest"],
+      "allOf": [
+        {
+          "if": {"properties": {"role": {"const": "implementation"}}, "required": ["role"]},
+          "then": {"properties": {"version": {"$ref": "#/$defs/semanticVersion"}}}
+        },
+        {
+          "if": {"properties": {"role": {"const": "runtime-dependency"}}, "required": ["role"]},
+          "then": {"properties": {"version": {"$ref": "#/$defs/pythonPackageVersion"}}}
+        }
+      ],
       "properties": {
         "distribution": {"$ref": "#/$defs/provider"},
-        "version": {"$ref": "#/$defs/pythonPackageVersion"},
+        "version": {"type": "string", "minLength": 1},
         "filename": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"},
         "role": {"enum": ["implementation", "runtime-dependency"]},
         "build_identifier": {"type": "string", "minLength": 1},

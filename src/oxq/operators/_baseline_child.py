@@ -541,9 +541,7 @@ class _ProviderImportGate:
         if not args or not isinstance(args[0], CodeType):
             return False
         code = args[0]
-        if self._trusted_code_objects.get(id(code)) is code:
-            return True
-        return self._verified_source_digest(code.co_filename) is not None or _location_is_in_static_runtime_source(code.co_filename)
+        return self._trusted_code_objects.get(id(code)) is code
 
     def _trust_code_graph(self, code: CodeType) -> None:
         self._trusted_code_objects[id(code)] = code
