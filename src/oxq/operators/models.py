@@ -72,6 +72,8 @@ class BaselineCase:
     baseline_path: Path | None = None
     baseline_relative_path: str | None = None
     case_index: int | None = None
+    baseline_digest: str | None = None
+    case_digest: str | None = None
 
 
 @dataclass(frozen=True)

@@ -53,11 +53,34 @@ def test_targeted_certification_issues_v2_from_committed_evidence(
             "abi_tag": "cp312",
             "platform_tag": "macosx_14_0_arm64",
         }
-        assert record["baseline_sets"][0]["digest"].startswith("sha256:")  # type: ignore[index]
+        baseline_bytes = result.baseline_cases[0].baseline_path.read_bytes()
+        assert record["baseline_sets"][0]["digest"] == sha256_bytes(baseline_bytes)  # type: ignore[index]
         case = record["operators"][0]["baseline_cases"][0]  # type: ignore[index]
         baseline = strict_json_object(result.baseline_cases[0].baseline_path.read_bytes())
         expected_case = baseline["cases"][0]  # type: ignore[index]
         assert case["case_digest"] == sha256_bytes(canonical_json_bytes(expected_case))
+    finally:
+        submission.__exit__(None, None, None)
+
+
+def test_targeted_certification_uses_baseline_bytes_captured_before_execution(
+    tmp_path: Path,
+) -> None:
+    submission, result = _certified_result_with_committed_baseline(tmp_path)
+    try:
+        baseline_path = result.baseline_cases[0].baseline_path
+        committed_bytes = baseline_path.read_bytes()
+        baseline_path.write_bytes(b" \n" + committed_bytes)
+
+        published = publish_certification(
+            result,
+            tmp_path / "registry",
+            target=CertificationTarget.parse("cp312-cp312-macosx_14_0_arm64"),
+        )
+        record = strict_json_object(
+            (published.release_dir / "certification-record.json").read_bytes()
+        )
+        assert record["baseline_sets"][0]["digest"] == sha256_bytes(committed_bytes)  # type: ignore[index]
     finally:
         submission.__exit__(None, None, None)
 
@@ -87,6 +110,22 @@ def test_reads_and_imports_targeted_publication(tmp_path: Path) -> None:
             tmp_path / "destination",
         )
         assert imported.record["target"]["python_tag"] == "cp312"  # type: ignore[index]
+    finally:
+        submission.__exit__(None, None, None)
+
+
+def test_import_rejects_a_different_existing_publication(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    submission, result = _certified_result_with_committed_baseline(tmp_path)
+    try:
+        target = CertificationTarget.parse("cp312-cp312-macosx_14_0_arm64")
+        monkeypatch.setattr(registry_module, "_utc_now", lambda: "2026-08-27T00:00:00Z")
+        first = publish_certification(result, tmp_path / "first", target=target)
+        monkeypatch.setattr(registry_module, "_utc_now", lambda: "2026-08-27T00:00:01Z")
+        second = publish_certification(result, tmp_path / "second", target=target)
+        import_certification_publication(first.release_dir, tmp_path / "destination")
+
+        with pytest.raises(OperatorCertificationError, match="different certification bytes"):
+            import_certification_publication(second.release_dir, tmp_path / "destination")
     finally:
         submission.__exit__(None, None, None)
 

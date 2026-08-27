@@ -24,6 +24,7 @@ from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel
 from packaging.version import InvalidVersion, Version
 
 from oxq.operators.errors import OperatorCertificationError
+from oxq.operators.formats import canonical_json_bytes, sha256_bytes
 from oxq.operators.models import (
     BaselineCase,
     BuildArtifact,
@@ -365,6 +366,16 @@ def _load_baselines(
         referenced_identities = {(entry.operator_id, entry.operator_version) for entry in entries}
         covered_identities: set[tuple[str, str]] = set()
         baseline = _read_json(baseline_path, error_operator_id)
+        try:
+            baseline_bytes = baseline_path.read_bytes()
+        except OSError as exc:
+            raise _error(
+                "submission_json_invalid",
+                f"invalid JSON: {baseline_path.name}",
+                "json",
+                error_operator_id,
+            ) from exc
+        baseline_digest = sha256_bytes(baseline_bytes)
         _validate_schema(baseline, schema, "baseline", error_operator_id)
         baseline_data = _mapping(baseline, "baseline", error_operator_id)
         if baseline_data["provider"] != provider or baseline_data["release"] != release:
@@ -404,6 +415,8 @@ def _load_baselines(
                         baseline_path.parents[1]
                     ).as_posix(),
                     case_index=case_index,
+                    baseline_digest=baseline_digest,
+                    case_digest=sha256_bytes(canonical_json_bytes(case)),
                 )
             )
         if covered_identities != referenced_identities:

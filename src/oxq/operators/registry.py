@@ -38,7 +38,7 @@ from oxq.operators.certification import (
     _validate_schema as _validate_contract_schema,
 )
 from oxq.operators.errors import OperatorCertificationError
-from oxq.operators.formats import canonical_json_bytes, sha256_bytes, strict_json_object
+from oxq.operators.formats import sha256_bytes, strict_json_object
 from oxq.operators.models import (
     BaselineCase,
     BaselineResult,
@@ -341,29 +341,17 @@ def _prepare_certification(
                 or not declared.baseline_relative_path
                 or not isinstance(declared.case_index, int)
                 or declared.case_index < 0
+                or not isinstance(declared.baseline_digest, str)
+                or not _DIGEST_PATTERN.fullmatch(declared.baseline_digest)
+                or not isinstance(declared.case_digest, str)
+                or not _DIGEST_PATTERN.fullmatch(declared.case_digest)
             ):
                 raise _input_error("targeted certification requires committed baseline provenance")
-            try:
-                baseline_bytes = declared.baseline_path.read_bytes()
-                baseline_value = strict_json_object(baseline_bytes)
-                raw_cases = baseline_value["cases"]
-                if not isinstance(raw_cases, list) or raw_cases[declared.case_index] != {
-                    "case_id": declared.case_id,
-                    "operator_id": declared.operator_id,
-                    "operator_version": declared.operator_version,
-                    "parameters": _thaw_json_mapping(declared.parameters),
-                    "input": _thaw_json_mapping(declared.input),
-                    "expected": _thaw_json_mapping(declared.expected),
-                    "tolerance": _thaw_json_mapping(declared.tolerance),
-                }:
-                    raise ValueError("baseline case differs from committed evidence")
-            except (OSError, KeyError, IndexError, TypeError, ValueError):
-                raise _input_error("targeted certification requires committed baseline provenance") from None
             rendered_case.update(
                 {
                     "baseline_path": declared.baseline_relative_path,
                     "case_index": declared.case_index,
-                    "case_digest": sha256_bytes(canonical_json_bytes(raw_cases[declared.case_index])),
+                    "case_digest": declared.case_digest,
                 }
             )
         cases_by_identity[identity].append(rendered_case)
@@ -1046,16 +1034,9 @@ def _render_publication(
     if prepared.target is not None:
         baseline_sets: dict[str, str] = {}
         for case in result.baseline_cases:
-            assert case.baseline_path is not None
             assert case.baseline_relative_path is not None
-            try:
-                baseline_sets[case.baseline_relative_path] = sha256_bytes(
-                    case.baseline_path.read_bytes()
-                )
-            except OSError:
-                raise _input_error(
-                    "targeted certification requires committed baseline provenance"
-                ) from None
+            assert case.baseline_digest is not None
+            baseline_sets[case.baseline_relative_path] = case.baseline_digest
         record = {
             **record,
             "schema_version": 2,
@@ -1348,15 +1329,22 @@ def import_certification_publication(
     """Validate and atomically copy an external publication into a local registry."""
     source = Path(publication_dir).expanduser().resolve()
     read_certification_publication(source)
+    source_files = _publication_files(source)
     destination = Path(output_dir).expanduser().resolve() / source.parent.name / source.name
     if _lexists(destination):
-        return read_certification_publication(destination)
+        existing = read_certification_publication(destination)
+        if _publication_files(destination) == source_files:
+            return existing
+        raise _error(
+            "certification_conflict",
+            "provider release already has different certification bytes",
+        )
     destination.parent.mkdir(parents=True, exist_ok=True)
     staging: Path | None = Path(
         tempfile.mkdtemp(prefix=f".{source.name}.import-", dir=destination.parent)
     )
     try:
-        for relative_path, value in _publication_files(source).items():
+        for relative_path, value in source_files.items():
             target_path = staging / relative_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
             _write_file(target_path, value)

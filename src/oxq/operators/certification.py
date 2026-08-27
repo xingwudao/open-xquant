@@ -309,6 +309,8 @@ def _freeze_baseline_case(case: BaselineCase) -> BaselineCase:
         baseline_path=case.baseline_path,
         baseline_relative_path=case.baseline_relative_path,
         case_index=case.case_index,
+        baseline_digest=case.baseline_digest,
+        case_digest=case.case_digest,
     )
 
 
