@@ -38,6 +38,7 @@ from oxq.operators.certification import (
     _validate_schema as _validate_contract_schema,
 )
 from oxq.operators.errors import OperatorCertificationError
+from oxq.operators.formats import sha256_bytes, strict_json_object
 from oxq.operators.models import (
     BaselineCase,
     BaselineResult,
@@ -1427,14 +1428,8 @@ def _validate_schema(
 
 
 def _strict_json_object(value: bytes) -> dict[str, object]:
-    parsed = json.loads(
-        value.decode("utf-8"),
-        object_pairs_hook=_reject_duplicate_keys,
-        parse_constant=_reject_nonstandard_constant,
-    )
-    if not isinstance(parsed, dict):
-        raise ValueError("JSON root is not an object")
-    return cast(dict[str, object], parsed)
+    """Compatibility wrapper retained while callers migrate to shared formats."""
+    return strict_json_object(value)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -1629,7 +1624,8 @@ def _read_regular_descriptor(descriptor: int) -> bytes:
 
 
 def _sha256(value: bytes) -> str:
-    return f"sha256:{hashlib.sha256(value).hexdigest()}"
+    """Compatibility wrapper retained while callers migrate to shared formats."""
+    return sha256_bytes(value)
 
 
 def _utc_now() -> str:

@@ -1,0 +1,5 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema", "$id":"https://open-xquant.dev/contracts/operator-install/operator-runtime-protocol-v1.schema.json", "title":"Operator runtime protocol v1", "type":"object", "additionalProperties":false,
+  "required":["schema_version","request_id","status"], "properties":{"schema_version":{"const":1},"request_id":{"type":"string","minLength":1,"maxLength":256},"status":{"enum":["ok","error"]},"provider":{"type":"string","maxLength":128},"release":{"type":"string","maxLength":128},"operator_id":{"type":"string","maxLength":256},"payload":{"type":"object","maxProperties":1024,"additionalProperties":true},"error":{"type":"object","maxProperties":16,"additionalProperties":true}},
+  "$defs":{}
+}
