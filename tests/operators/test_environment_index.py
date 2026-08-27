@@ -37,12 +37,16 @@ def test_official_index_contains_equant_py_100() -> None:
     provider = load_environment_provider("equant-py", "1.0.0")
 
     assert provider.provider == "equant-py"
-    assert provider.distribution == "equant-py"
+    assert provider.distribution == "equant-core"
     assert provider.version == "1.0.0"
     assert provider.certification_state == "research-certified"
-    assert provider.operators
-    assert provider.operators[0].operator_id == "equant.ttr.sma"
-    assert provider.operators[0].operator_version == "1.0.0"
+    assert len(provider.operators) == 60
+    sma = next(operator for operator in provider.operators if operator.operator_id == "equant.ttr.sma")
+    assert sma.operator_version == "1.0.0"
+    assert sma.manifest_path == "compat/open_xquant/manifests/equant.ttr.sma.operator.json"
+    assert sma.baseline_paths == (
+        "compat/open_xquant/numerical_baselines/technical-v1.json",
+    )
 
 
 def test_rejects_non_object_operator_entries(monkeypatch: pytest.MonkeyPatch) -> None:

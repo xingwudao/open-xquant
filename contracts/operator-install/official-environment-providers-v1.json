@@ -3,22 +3,494 @@
   "providers": {
     "equant-py": {
       "1.0.0": {
-        "distribution": "equant-py",
+        "distribution": "equant-core",
         "certification_state": "research-certified",
         "operators": [
           {
-            "operator": "equant.ttr.sma@1.0.0",
-            "manifest_path": "manifests/equant.ttr.sma.operator.json",
+            "operator": "equant.ttr.adj-ratios@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.adj-ratios.operator.json",
             "baseline_paths": [
-              "numerical_baselines/equant.ttr.sma.json"
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.adx@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.adx.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.alma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.alma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.aroon@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.aroon.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.atr@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.atr.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.bollinger@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.bollinger.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.cci@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.cci.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.chaikin-ad@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.chaikin-ad.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.chaikin-volatility@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.chaikin-volatility.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.clv@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.clv.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.cmf@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.cmf.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.cmo@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.cmo.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.cti@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.cti.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.dema@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.dema.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.donchian@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.donchian.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.dpo@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.dpo.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.dvi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.dvi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.ema@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.ema.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.emv@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.emv.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.evwma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.evwma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.gmma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.gmma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.growth@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.growth.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.hma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.hma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.kdj@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.kdj.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.keltner@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.keltner.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.kst@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.kst.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.lags@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.lags.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.macd@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.macd.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.mfi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.mfi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.momentum@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.momentum.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.na-check@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.na-check.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.obv@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.obv.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.pbands@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.pbands.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.pivots@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.pivots.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.po@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.po.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.roc@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.roc.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.roll-sfm@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.roll-sfm.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.rsi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.rsi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.rvi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.rvi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.sar@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.sar.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.sma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.sma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.smi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.smi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.snr@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.snr.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.stoch@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.stoch.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.td-countdown@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.td-countdown.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.td-setup@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.td-setup.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.tdi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.tdi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.tr@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.tr.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.trix@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.trix.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.tsi@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.tsi.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.ultimate-oscillator@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.ultimate-oscillator.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.vhf@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.vhf.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.volatility@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.volatility.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.vwap@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.vwap.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.vwma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.vwma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.williams-ad@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.williams-ad.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.wma@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.wma.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.wpr@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.wpr.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.zigzag@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.zigzag.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
+            ]
+          },
+          {
+            "operator": "equant.ttr.zlema@1.0.0",
+            "manifest_path": "compat/open_xquant/manifests/equant.ttr.zlema.operator.json",
+            "baseline_paths": [
+              "compat/open_xquant/numerical_baselines/technical-v1.json"
             ]
           }
         ],
         "manifest_digests": {
-          "manifests/equant.ttr.sma.operator.json": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          "compat/open_xquant/manifests/equant.ttr.adj-ratios.operator.json": "sha256:d3bc616a2779e81ee5576845558c137213150497e618b879572e7cbedfa2f295",
+          "compat/open_xquant/manifests/equant.ttr.adx.operator.json": "sha256:a6da88786cfc90f5f7e7a5271cd8077c57aa7615c928fd40cc73ee93f28962e7",
+          "compat/open_xquant/manifests/equant.ttr.alma.operator.json": "sha256:c80174d12a2161e9c36eaee3b5146d6ee3c8ca8f99b275bf73036312a38b94cf",
+          "compat/open_xquant/manifests/equant.ttr.aroon.operator.json": "sha256:ef5ba56cf13e2da1f1b8ea8db7fe2320974210efef964a7b9d5cf5abe6ec6dbe",
+          "compat/open_xquant/manifests/equant.ttr.atr.operator.json": "sha256:f64c15f2f094d3f0b8fe76272b5504d24b53b7c993dfe3a114adcc684f9c4d3c",
+          "compat/open_xquant/manifests/equant.ttr.bollinger.operator.json": "sha256:a7548d96e1c0664d4d9db084b066e4e81c3e97cc2a01ad310a4886451b85b2d9",
+          "compat/open_xquant/manifests/equant.ttr.cci.operator.json": "sha256:f1aa4396276a51d7f1ec72be59a244216fa36cefe9ffd40f87dfc618ea2b20d8",
+          "compat/open_xquant/manifests/equant.ttr.chaikin-ad.operator.json": "sha256:ad3ebf831c5b3c1a5704e061dd120d9c600bd09b37b87874d3e9abc235e4a9ed",
+          "compat/open_xquant/manifests/equant.ttr.chaikin-volatility.operator.json": "sha256:21f8908b1d937fd76c33b213cac8ac84d1de9a01623af04efad7b5638fe5ffcb",
+          "compat/open_xquant/manifests/equant.ttr.clv.operator.json": "sha256:c8c83cbfe90554d126545ae6e06451213f3ecc0c762cf650567ca39c71991b53",
+          "compat/open_xquant/manifests/equant.ttr.cmf.operator.json": "sha256:126bf1e3d970c5191135d6d028f74693c92fecf6b3b42b1d29d25f34f558f5a0",
+          "compat/open_xquant/manifests/equant.ttr.cmo.operator.json": "sha256:341283ead178df2ae9f065191d2bf58cf73c98993779adbf599b203751e9f411",
+          "compat/open_xquant/manifests/equant.ttr.cti.operator.json": "sha256:364cf3a76f1f490c410ddc16a302ab2e584efbfdf99ccb3316f23a6f12a5afd8",
+          "compat/open_xquant/manifests/equant.ttr.dema.operator.json": "sha256:497a3c3ba2e4662f9b747ab6988c23c356a95bd7bde13005633a4682ae25ec8f",
+          "compat/open_xquant/manifests/equant.ttr.donchian.operator.json": "sha256:68c548d9d29733d182c94bbc15bfeb6a33559190a72a76bdd7e370b99aa8c13e",
+          "compat/open_xquant/manifests/equant.ttr.dpo.operator.json": "sha256:cc258d5bd378b4c6c464508daa5c94f8452a0ef039f17841dbdcab17cbeddcb7",
+          "compat/open_xquant/manifests/equant.ttr.dvi.operator.json": "sha256:c4fdad0cb56ee7420429995e16741b02e2178ffad47ad5518b7bed62da549c2f",
+          "compat/open_xquant/manifests/equant.ttr.ema.operator.json": "sha256:0e6397d7b5d7a7aee475b8a9a99c8d39de415cef582267508c7a0e419c6e972d",
+          "compat/open_xquant/manifests/equant.ttr.emv.operator.json": "sha256:6eb22695d61b7c08561e847ff0d147291f9bd92e252e8cd1ec7a4e9f47aa96d7",
+          "compat/open_xquant/manifests/equant.ttr.evwma.operator.json": "sha256:845ec3c09feb00109596225158ef15ce81a00467ac1a838a7c8a463d6744dbeb",
+          "compat/open_xquant/manifests/equant.ttr.gmma.operator.json": "sha256:eb43afc9a480e23ab8f2159f6d7b22494eae08c5af5ab25af6761f34b2b7e83a",
+          "compat/open_xquant/manifests/equant.ttr.growth.operator.json": "sha256:cb2fc2c9c9b7bad2afdbad57c2a67bf70e700af3cb34499079aeb0d195de40d8",
+          "compat/open_xquant/manifests/equant.ttr.hma.operator.json": "sha256:b870eae338d7f1b4d7b1db507079aabd4014da3cf786ae3288c20919a8ced4db",
+          "compat/open_xquant/manifests/equant.ttr.kdj.operator.json": "sha256:34dedf68cea99674b5ff6019809c244ad325539b0f8f8c95e157b5a2d8225b91",
+          "compat/open_xquant/manifests/equant.ttr.keltner.operator.json": "sha256:8b8e47bd41cdf4658063bddb2c3a59134f7e793c08d0f96178dab90c6e0ba4e6",
+          "compat/open_xquant/manifests/equant.ttr.kst.operator.json": "sha256:183e64ab1c5261ae18b7e14890aa8821ee5f8cb83024747cdfeb8e411807f03f",
+          "compat/open_xquant/manifests/equant.ttr.lags.operator.json": "sha256:c16753e805f20930ccee5e33a672496a6ae6d78751f63114fa6a64f55528378f",
+          "compat/open_xquant/manifests/equant.ttr.macd.operator.json": "sha256:dcff998e3ea4b4861e74ebaddc4a0dbc76584e4c90dd8edbe2a7d29c74711c2b",
+          "compat/open_xquant/manifests/equant.ttr.mfi.operator.json": "sha256:56cc23c3d392f3ee07beb5a0942bc154cd9782c5bc063005afe42f2200d65deb",
+          "compat/open_xquant/manifests/equant.ttr.momentum.operator.json": "sha256:4216e14152932da844bf9de778406686eb911d62f0db046c3747936dcd11e558",
+          "compat/open_xquant/manifests/equant.ttr.na-check.operator.json": "sha256:d15f8e7736c2aabf1931f3d6f54565a37d7d65ee9b072cca05b1bf32a8b70860",
+          "compat/open_xquant/manifests/equant.ttr.obv.operator.json": "sha256:0f9eb6bde176bd8b9cdb9361faf443ba1820a77bc3105773e70a0fb59ac65ee4",
+          "compat/open_xquant/manifests/equant.ttr.pbands.operator.json": "sha256:1ff92fedbe2154ee1e5a96d7c358c698b5285691710204594d3f1aee1010bf44",
+          "compat/open_xquant/manifests/equant.ttr.pivots.operator.json": "sha256:a565ff1f581300f5b862ebb6fea96100ecd955ecf5fda9c745c9518627962bc0",
+          "compat/open_xquant/manifests/equant.ttr.po.operator.json": "sha256:c5c2479ce37a125574ed56903df37bf7b3057e5426df02c75f7c9b65fa9f77ca",
+          "compat/open_xquant/manifests/equant.ttr.roc.operator.json": "sha256:88ac2a4e7f0a6e1dc1e837b0195a566452919e9df013ade3741096db72680f0f",
+          "compat/open_xquant/manifests/equant.ttr.roll-sfm.operator.json": "sha256:cddea5e0f575793778e2f48d25107545ce0dfe1e673445f3c982e722ea1382e6",
+          "compat/open_xquant/manifests/equant.ttr.rsi.operator.json": "sha256:5172d14d27db471f8374a0a3cd4a27325a6df933d16b4a1c6820d5bde7f08a9a",
+          "compat/open_xquant/manifests/equant.ttr.rvi.operator.json": "sha256:9e57141231e0230939f11125612397c12549cf3cb654bc97a8d5a363dbf99797",
+          "compat/open_xquant/manifests/equant.ttr.sar.operator.json": "sha256:f3cadc1486ab65b22ce810bc194489cf983ac2fc58c975c442df73409a62399e",
+          "compat/open_xquant/manifests/equant.ttr.sma.operator.json": "sha256:0b417423b056e284e7003ebac8fc9307e5b5b62d166d382dba89603f836c41bc",
+          "compat/open_xquant/manifests/equant.ttr.smi.operator.json": "sha256:2b1151c1935403b3b7be584303055ef5e01f3a5a28b9cf8d74fefdb460b90d70",
+          "compat/open_xquant/manifests/equant.ttr.snr.operator.json": "sha256:4bdd7560d56886d3dadc47ded512998ffa94c9c7f81733ed751075296f1def9d",
+          "compat/open_xquant/manifests/equant.ttr.stoch.operator.json": "sha256:486a2240ebd5749201893c9a2016bc0163cd8576c53002a565ebe479cebb3935",
+          "compat/open_xquant/manifests/equant.ttr.td-countdown.operator.json": "sha256:d8b739d872b0169de2059c8ad110ae9cc683218c209da009a446cced7ab61022",
+          "compat/open_xquant/manifests/equant.ttr.td-setup.operator.json": "sha256:16131ce8fcc1173f8c83695e75697b161645d325ff8a13f12ef5d633d23c6150",
+          "compat/open_xquant/manifests/equant.ttr.tdi.operator.json": "sha256:f46928ad2b353e1d140d102bd435550e7e97c30dec9de1c47dc25c537c9dbdef",
+          "compat/open_xquant/manifests/equant.ttr.tr.operator.json": "sha256:9586af63b78ae2736861b7a277a7563fd510ecfb8942e63162050d62bcb8501c",
+          "compat/open_xquant/manifests/equant.ttr.trix.operator.json": "sha256:b097887eb6f573c7eb390affa1005ce2948dfa9d8dd1aea8ca1aef40132cfb00",
+          "compat/open_xquant/manifests/equant.ttr.tsi.operator.json": "sha256:a3dea0665f13ec0777d18996f98a976e1c4e742c2dec09935958742a18b2b1ae",
+          "compat/open_xquant/manifests/equant.ttr.ultimate-oscillator.operator.json": "sha256:7c63ef1fa5bd3d26216d6fbf74454b74c68681bdcbb914287bd34f4f0b67572d",
+          "compat/open_xquant/manifests/equant.ttr.vhf.operator.json": "sha256:dbac82bd193528b281c47978d3f3c19020fa1067bc84c261a4c7517c992164b3",
+          "compat/open_xquant/manifests/equant.ttr.volatility.operator.json": "sha256:8cad9ad49ee2a795178d239aa03726925674cb869c462156739d9187090f5aef",
+          "compat/open_xquant/manifests/equant.ttr.vwap.operator.json": "sha256:a0266a87a4dd2ee234841ebd6c84d0cf1cc9552a9f5e480543ee420f24e08cf2",
+          "compat/open_xquant/manifests/equant.ttr.vwma.operator.json": "sha256:3c026c2996ffd4e470c323f794231e1725a208e0e2e8de1b088e3f99180718fb",
+          "compat/open_xquant/manifests/equant.ttr.williams-ad.operator.json": "sha256:35164cb6923bf38209236e2db3daa8a169a4a43700706d54643b1b0b6501330e",
+          "compat/open_xquant/manifests/equant.ttr.wma.operator.json": "sha256:f377e6cdc43d241a0c279fcbf5257bcaeef17a0f04acef31a00472dc6355d6f4",
+          "compat/open_xquant/manifests/equant.ttr.wpr.operator.json": "sha256:8c1c692d2c596b5bb2df1bb39d88e9386529081889f4020b9093a6dd26817933",
+          "compat/open_xquant/manifests/equant.ttr.zigzag.operator.json": "sha256:4a9d91f58a282f45eec9cc8e82c15680e3ff4649f5eb2879a26e2d29290287ce",
+          "compat/open_xquant/manifests/equant.ttr.zlema.operator.json": "sha256:04a3c080d2fa08b7229abfd2eb2d1f1ec9b425bcbcacc47133ca34063d86a645"
         },
         "baseline_digests": {
-          "numerical_baselines/equant.ttr.sma.json": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          "compat/open_xquant/numerical_baselines/technical-v1.json": "sha256:3b928d48f6a0b2c0500cd1e97f1ad9b10d0cf7c91ab9b908da51d7b9b1b8d579"
         }
       }
     }

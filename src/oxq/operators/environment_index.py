@@ -19,7 +19,7 @@ _EXACT_PROVIDER_REQUIREMENT = re.compile(
     rf"(?P<provider>[a-z][a-z0-9]*(?:-[a-z0-9]+)*)==(?P<version>{_SEMVER})"
 )
 _OPERATOR_REF = re.compile(
-    rf"(?P<operator_id>[a-z][a-z0-9]*(?:\.[a-z][a-z0-9]*)+)@(?P<operator_version>{_SEMVER})"
+    rf"(?P<operator_id>[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+)@(?P<operator_version>{_SEMVER})"
 )
 
 
@@ -103,14 +103,14 @@ def _provider_from_payload(
     manifest_digests = payload["manifest_digests"]
     baseline_digests = payload["baseline_digests"]
     if (
-        distribution != provider
-        or not isinstance(distribution, str)
+        not isinstance(distribution, str)
         or not isinstance(certification_state, str)
         or not isinstance(operators, list)
         or not isinstance(manifest_digests, dict)
         or not isinstance(baseline_digests, dict)
     ):
         raise ValueError("official environment provider entry is invalid")
+    safe_relative_path(distribution)
 
     typed_manifest_digests = _digest_map(manifest_digests)
     typed_baseline_digests = _digest_map(baseline_digests)
