@@ -220,3 +220,28 @@ def test_list_ignores_symlinked_provider_ancestor(tmp_path: Path) -> None:
     store.home.mkdir()
     (store.home / "equant-py").symlink_to(outside_store.home / "equant-py", target_is_directory=True)
     assert store.list() == ()
+
+
+def test_publish_revalidates_provider_after_staging_creation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import oxq.operators.installed_store as store_module
+
+    store = InstalledReleaseStore(tmp_path / "home")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    marker, _ = _write_release(staging)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original = store_module.tempfile.mkdtemp
+
+    def swap_provider(*args, **kwargs):
+        result = original(*args, **kwargs)
+        provider = store.home / "equant-py"
+        moved = tmp_path / "moved-provider"
+        os.replace(provider, moved)
+        provider.symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(store_module.tempfile, "mkdtemp", swap_provider)
+    with pytest.raises(ValueError, match="store"):
+        store.publish(staging, marker)
+    assert not any(outside.rglob("bundle.zip"))

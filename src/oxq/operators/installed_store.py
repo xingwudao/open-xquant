@@ -27,17 +27,18 @@ class InstalledReleaseStore:
  def __init__(self, home: str|Path|None=None): self.home=Path(home if home is not None else os.getenv("OPEN_XQUANT_OPERATOR_HOME", "~/.config/open-xquant/operator-releases")).expanduser().resolve()
  def publish(self, staging_dir: Path, marker: Mapping[str,object])->InstalledRelease:
   raw,ident,files=_marker(marker); src=Path(staging_dir).resolve(strict=True); vals=_check(src,files,(src/MARKER).is_file())
-  self.home.mkdir(parents=True,exist_ok=True); dest=_store_path(self.home,*ident)
+  self.home.mkdir(parents=True,exist_ok=True)
   with _lock(self.home):
+   dest=_store_path(self.home,*ident)
    if os.path.lexists(dest):
     old=self._read(dest)
     if _all(old.path)=={**vals,MARKER:raw}: return old
     raise ValueError("installed release conflict")
-   dest.parent.mkdir(parents=True,exist_ok=True); _require_real_directory(dest.parent); tmp=Path(tempfile.mkdtemp(prefix=".staging-",dir=dest.parent))
+   _store_path(self.home,*ident); tmp=Path(tempfile.mkdtemp(prefix=".staging-",dir=dest.parent))
    try:
     for n,v in vals.items():
      p=tmp.joinpath(*safe_relative_path(n).parts); p.parent.mkdir(parents=True,exist_ok=True); write_file(p,v)
-    write_file(tmp/MARKER,raw); fsync_directory(tmp); replace_directory(tmp,dest); tmp=None
+    write_file(tmp/MARKER,raw); fsync_directory(tmp); dest=_store_path(self.home,*ident); replace_directory(tmp,dest); tmp=None
    finally:
     if tmp is not None: shutil.rmtree(tmp,ignore_errors=True)
   return self._read(dest)
