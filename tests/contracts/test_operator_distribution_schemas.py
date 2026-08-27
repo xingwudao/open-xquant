@@ -25,7 +25,7 @@ def _schemas() -> dict[str, dict[str, object]]:
             return {
                 name: json.loads(path.read_text(encoding="utf-8"))
                 for name, path in {**distribution, **install}.items()
-                if name != "official_providers"
+                if name not in {"official_providers", "official_environment_providers"}
             }
 
 
@@ -143,10 +143,9 @@ def test_release_index_accepts_closed_wheel_entries() -> None:
 @pytest.mark.parametrize("invalid", ["1.2.3foo", "1.2.3.4"])
 def test_public_release_versions_require_exact_semver(invalid: str) -> None:
     schemas = _schemas()
-    for name in ("operator_release", "certification_bundle_manifest"):
-        semver = schemas[name]["$defs"]["semver"]
-        with pytest.raises(ValidationError):
-            Draft202012Validator(semver).validate(invalid)
+    semver = schemas["operator_release"]["$defs"]["semver"]
+    with pytest.raises(ValidationError):
+        Draft202012Validator(semver).validate(invalid)
 
 
 @pytest.mark.parametrize("invalid", ["not-a-version", "1...0"])

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
@@ -15,17 +17,46 @@ from tests.operators.helpers import (
 )
 from tests.operators.test_baseline_runner import _write_certifiable_provider
 
+import oxq.operators.baseline_runner as baseline_runner
+import oxq.operators.runtime_protocol as runtime_protocol
 from oxq.cli.main import main
+
+
+@pytest.fixture(autouse=True)
+def _provide_explicit_fixture_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_paths = [
+        path for path in sys.path if "site-packages" in Path(path).parts
+    ]
+
+    def run_fixture_request(
+        request: Mapping[str, object],
+        wheel_snapshots: Sequence[str | Path],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return runtime_protocol.run_exact_wheel_request(
+            request,
+            wheel_snapshots,
+            timeout_seconds=timeout_seconds,
+            _test_runtime_paths=runtime_paths,
+        )
+
+    monkeypatch.setattr(
+        baseline_runner,
+        "run_exact_wheel_request",
+        run_fixture_request,
+    )
 
 
 def _explicit_args(
     provider_repo: Path,
     provider_commit: str,
     artifact_dir: Path,
-    output_dir: Path,
+    output_dir: Path | None = None,
     *,
     as_json: bool = True,
 ) -> list[str]:
+    del output_dir
     args = [
         "operator",
         "certify-provider",
@@ -35,8 +66,6 @@ def _explicit_args(
         provider_commit,
         "--artifact-dir",
         str(artifact_dir),
-        "--output-dir",
-        str(output_dir),
         "--trust-provider-code",
     ]
     if as_json:
@@ -86,14 +115,13 @@ def test_certify_provider_reads_compat_layout_and_ignores_root_catalogs(
     assert result.exit_code == 0, result.output
     assert json.loads(result.output) == {
         "operator_count": 1,
-        "output": str((output / "equant-py" / "1.0.0").resolve()),
         "provider": "equant-py",
         "release": "1.0.0",
         "source_commit": f"git-sha1:{fixture.implementation_commit}",
         "status": "research-certified",
         "submission_commit": f"git-sha1:{submission_commit}",
     }
-    assert (output / "equant-py" / "1.0.0" / "registry-entry.json").is_file()
+    assert not output.exists()
 
 
 def test_certify_provider_defaults_to_provider_dist_and_current_workspace(
@@ -121,14 +149,11 @@ def test_certify_provider_defaults_to_provider_dist_and_current_workspace(
     first = CliRunner().invoke(main, args)
     second = CliRunner().invoke(main, args)
 
-    expected_release = (
-        workspace / ".open-xquant" / "certifications" / "equant-py" / "1.0.0"
-    ).resolve()
     assert first.exit_code == 0, first.output
     assert second.exit_code == 0, second.output
-    assert json.loads(first.output)["output"] == str(expected_release)
-    assert json.loads(second.output)["output"] == str(expected_release)
-    assert len(list(expected_release.rglob("certification-record.json"))) == 1
+    assert json.loads(first.output)["status"] == "research-certified"
+    assert json.loads(second.output)["status"] == "research-certified"
+    assert not (workspace / ".open-xquant" / "certifications").exists()
 
 
 def test_missing_trust_fails_before_repository_loading(tmp_path: Path) -> None:
@@ -197,8 +222,6 @@ def test_rejects_remote_provider_url_at_the_cli_boundary(tmp_path: Path) -> None
             "--provider-commit",
             "a" * 40,
             "--trust-provider-code",
-            "--output-dir",
-            str(tmp_path / "output"),
             "--json",
         ],
     )
@@ -335,11 +358,11 @@ def test_baseline_failure_json_includes_loaded_identity_and_is_atomic(
         "stage": "baseline",
         "status": "fail",
     }
-    assert not output.exists() or not list(output.rglob("registry-entry.json"))
+    assert not output.exists()
 
 
 @pytest.mark.parametrize("value", [-(2**63) - 1, 2**63])
-def test_out_of_range_int64_baseline_cannot_publish_through_cli(
+def test_out_of_range_int64_baseline_fails_through_cli(
     tmp_path: Path,
     value: int,
 ) -> None:
@@ -369,7 +392,7 @@ def test_out_of_range_int64_baseline_cannot_publish_through_cli(
 
     assert result.exit_code == 1
     assert json.loads(result.output)["code"] == "baseline_mismatch"
-    assert not output.exists() or not list(output.rglob("registry-entry.json"))
+    assert not output.exists()
 
 
 def test_human_failure_reports_loaded_identity_without_traceback(
@@ -396,7 +419,7 @@ def test_human_failure_reports_loaded_identity_without_traceback(
     assert "Certification failed for equant-py 1.0.0" in result.output
     assert "baseline_mismatch" in result.output
     assert "Traceback" not in result.output
-    assert not output.exists() or not list(output.rglob("registry-entry.json"))
+    assert not output.exists()
 
 
 def test_human_success_reports_identity_count_output_and_state(tmp_path: Path) -> None:
@@ -421,50 +444,6 @@ def test_human_success_reports_identity_count_output_and_state(tmp_path: Path) -
     assert "Provider: equant-py" in result.output
     assert "Release: 1.0.0" in result.output
     assert "Operators: 1" in result.output
-    assert f"Output: {(output / 'equant-py' / '1.0.0').resolve()}" in result.output
+    assert "Output:" not in result.output
     assert "Status: research-certified" in result.output
     assert "Traceback" not in result.output
-
-
-def test_conflicting_release_is_rejected_without_overwriting_original(
-    tmp_path: Path,
-) -> None:
-    fixture = _write_certifiable_provider(
-        tmp_path / "fixture",
-        expected=[None, None, 2.0],
-    )
-    output = tmp_path / "certifications"
-    first = CliRunner().invoke(
-        main,
-        _explicit_args(
-            fixture.path,
-            fixture.submission_commit,
-            fixture.artifact_dir,
-            output,
-        ),
-    )
-    release_dir = output / "equant-py" / "1.0.0"
-    before = _tree_bytes(release_dir)
-    rewrite_json(
-        fixture.path
-        / COMPATIBILITY_ROOT
-        / "manifests"
-        / "equant.ttr.sma.operator.json",
-        lambda manifest: manifest.update({"semantic_name": "Simple Moving Average"}),
-    )
-    conflicting_commit = commit_mutation(fixture.path, "conflicting release")
-
-    conflicting = CliRunner().invoke(
-        main,
-        _explicit_args(
-            fixture.path,
-            conflicting_commit,
-            fixture.artifact_dir,
-            output,
-        ),
-    )
-
-    assert first.exit_code == 0, first.output
-    assert conflicting.exit_code == 1
-    assert json.loads(conflicting.output)["code"] == "certification_conflict"
-    assert _tree_bytes(release_dir) == before

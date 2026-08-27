@@ -1,8 +1,8 @@
-# Local operator certification profile v1
+# Operator certification profile v1
 
-This directory defines the open-xquant-owned intake and publication profile
-used to certify an external operator provider. The frozen operator contract
-itself remains under `contracts/quant-operators/`.
+This directory defines the open-xquant-owned intake profile used to certify
+an external operator provider. The frozen operator contract itself remains
+under `contracts/quant-operators/`.
 
 ## Provider repository layout
 
@@ -61,13 +61,11 @@ oxq operator certify-provider \
   --provider-repo ../equant-py \
   --provider-commit <full-40-character-lowercase-submission-sha> \
   --artifact-dir ../equant-py/dist \
-  --output-dir .open-xquant/certifications \
   --trust-provider-code \
   --json
 ```
 
-`--artifact-dir` defaults to `<provider-repo>/dist`. `--output-dir` defaults
-to `<current-directory>/.open-xquant/certifications`.
+`--artifact-dir` defaults to `<provider-repo>/dist`.
 
 The v1 command accepts only an existing local Git directory and an exact local
 commit. It does not accept a GitHub URL. Certifier-owned code does not clone,
@@ -88,57 +86,31 @@ wheel digests, frozen manifests and bindings, QuantPanel inputs, invocation
 parameters, input immutability, alignment, output fields, and all numerical
 baseline values. Any failed operator rejects the whole provider release.
 
-## Published result
+## Certified package result
 
-A successful invocation atomically publishes:
+A certified provider is distributed as a normal Python package. The provider
+wheel carries its own OpenXQuant certification artifacts, for example:
 
 ```text
-.open-xquant/certifications/<provider>/<release>/
-  certification-record.json
-  bindings/
-    <operator-id>@<operator-version>.binding.json
-  registry-entry.json
+<provider-wheel>/
+  <runtime modules>
+  open_xquant/
+    manifests/
+      <operator-id>.operator.json
+    numerical_baselines/
+      <baseline>.json
 ```
 
-The publication records provenance and digests but does not copy provider
-source or wheels. Repeating identical input is idempotent. A different
-submission for an existing provider/release is rejected as a conflict and is
-never allowed to overwrite the original release.
+OpenXQuant does not import a ZIP bundle or maintain a local certification
+registry for runtime use. Users install the provider with Python packaging and
+then ask OpenXQuant to verify the installed package:
+
+```bash
+pip install equant-py==1.0.0
+oxq operator verify equant-py==1.0.0
+oxq operator list --provider equant-py
+```
 
 The resulting `research-certified` state permits research and offline analysis
 only. It does not authorize strategy runtime or live trading. Those uses remain
 gated on `runtime-certified` together with `past_only` causality.
-
-## Portable certification bundles
-
-Export a targeted v2 certification with its manifest and baseline evidence:
-
-```bash
-oxq operator export-certification \
-  --provider equant-py \
-  --release 1.0.0 \
-  --registry-dir .open-xquant/certifications \
-  --manifest-dir /path/to/equant-py/compat/open_xquant/manifests \
-  --baseline-file /path/to/equant-py/compat/open_xquant/numerical_baselines/technical-v1.json \
-  --target cp312-cp312-macosx_14_0_arm64 \
-  --output /path/to/certification.zip \
-  --json
-```
-
-`--baseline-file` may be repeated. The output ZIP must be outside the source
-registry. Import it only after explicitly acknowledging the local trust
-decision:
-
-```bash
-oxq operator import-certification \
-  --bundle /path/to/certification.zip \
-  --output-dir .open-xquant/certifications \
-  --trust-unsigned-bundle \
-  --bundle-store .open-xquant/certification-bundles \
-  --json
-```
-
-The import validates the entire ZIP before atomically publishing only its
-certification publication. When supplied, `--bundle-store` receives the
-original ZIP after registry publication succeeds. A plain bundle import does
-not create an installed runtime or make an operator invocable.

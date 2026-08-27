@@ -19,7 +19,6 @@ _CERTIFICATION_PROFILE = {
 }
 _DISTRIBUTION_PROFILE = {
     "certification_record_v2": "certification-record-v2.schema.json",
-    "certification_bundle_manifest": "certification-bundle-manifest-v1.schema.json",
 }
 _INSTALL_PROFILE = {
     "operator_release": "operator-release-v1.schema.json",
@@ -80,9 +79,6 @@ def materialize_operator_distribution_profile() -> Iterator[dict[str, Path]]:
         "certification_record_v2": package.joinpath(
             "distribution_profile/v1/certification-record-v2.schema.json"
         ),
-        "certification_bundle_manifest": package.joinpath(
-            "distribution_profile/v1/certification-bundle-manifest-v1.schema.json"
-        ),
     }
     if all(path.is_file() for path in packaged.values()):
         with ExitStack() as stack:
@@ -91,8 +87,6 @@ def materialize_operator_distribution_profile() -> Iterator[dict[str, Path]]:
     yield {
         "certification_record_v2": _source_contract_directory("operator-certification")
         / "certification-record-v2.schema.json",
-        "certification_bundle_manifest": _source_contract_directory("operator-distribution")
-        / "certification-bundle-manifest-v1.schema.json",
     }
 
 

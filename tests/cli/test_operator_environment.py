@@ -125,3 +125,16 @@ def test_operator_list_provider_json_is_stable(
         "status": "research-certified",
         "version": "1.0.0",
     }
+
+
+@pytest.mark.parametrize(
+    "legacy_command",
+    ["export-certification", "import-certification"],
+)
+def test_operator_legacy_bundle_commands_are_not_exposed(
+    legacy_command: str,
+) -> None:
+    result = CliRunner().invoke(main, ["operator", legacy_command, "--help"])
+
+    assert result.exit_code == 2
+    assert "No such command" in result.output

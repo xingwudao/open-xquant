@@ -83,7 +83,7 @@ git commit -m "docs: pivot certified operators to environment installs"
 **Interfaces:**
 - Removes all runtime dependencies on `InstalledReleaseStore`.
 - Removes `installed-release-v1` as an active phase-one install contract.
-- Keeps `export-certification` and `import-certification` only as evidence tools, not installation tools.
+- Removes `export-certification` and `import-certification` from the active CLI.
 
 - [ ] **Step 1: Write failing deletion guard tests**
 
@@ -112,7 +112,7 @@ def test_operator_install_is_guidance_not_package_manager(cli_runner) -> None:
 Run:
 
 ```bash
-uv run pytest tests/operators/test_resources.py tests/cli/test_operator_bundle.py -q
+uv run pytest tests/operators/test_resources.py tests/cli/test_operator_environment.py -q
 ```
 
 Expected: FAIL while installed-release resources or self-managed install behavior still exist.
@@ -133,7 +133,7 @@ oxq operator verify equant-py==1.0.0
 Run:
 
 ```bash
-uv run pytest tests/operators/test_resources.py tests/cli/test_operator_bundle.py -q
+uv run pytest tests/operators/test_resources.py tests/cli/test_operator_environment.py -q
 ```
 
 Expected: PASS.
@@ -339,7 +339,7 @@ Wire commands to `verify_installed_provider()`. For `operator install`, do not m
 Run:
 
 ```bash
-uv run pytest tests/cli/test_operator_environment.py tests/cli/test_operator_bundle.py -q
+uv run pytest tests/cli/test_operator_environment.py -q
 ```
 
 Expected: PASS.
@@ -347,7 +347,7 @@ Expected: PASS.
 - [ ] **Step 5: Commit Task 5**
 
 ```bash
-git add src/oxq/cli/main.py tests/cli/test_operator_environment.py tests/cli/test_operator_bundle.py
+git add src/oxq/cli/main.py tests/cli/test_operator_environment.py
 git commit -m "feat: verify certified provider packages"
 ```
 

@@ -251,7 +251,6 @@ def test_operator_distribution_and_install_profiles_are_packaged() -> None:
 
     assert set(paths) == {
         "certification_record_v2",
-        "certification_bundle_manifest",
         "operator_release",
         "runtime_protocol",
         "official_providers",
