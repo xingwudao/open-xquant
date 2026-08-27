@@ -179,3 +179,18 @@ def test_snapshot_retains_verified_bytes_after_managed_path_is_replaced(tmp_path
 def test_home_defaults_from_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPEN_XQUANT_OPERATOR_HOME", str(tmp_path / "custom-home"))
     assert InstalledReleaseStore().home == (tmp_path / "custom-home").resolve()
+
+
+@pytest.mark.parametrize("field,value", [("release", "../escape"), ("release", "a/b"), ("release", ""), ("python_tag", ".."), ("abi_tag", "cp\\312"), ("platform_tag", "bad\x00tag")])
+def test_publish_rejects_marker_path_components(tmp_path: Path, field: str, value: str) -> None:
+    store = InstalledReleaseStore(tmp_path / "home")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    marker, _ = _write_release(staging)
+    if field == "release":
+        marker[field] = value
+    else:
+        marker["target"][field] = value  # type: ignore[index]
+    with pytest.raises(ValueError, match="marker"):
+        store.publish(staging, marker)
+    assert not any(store.home.rglob("bundle.zip")) if store.home.exists() else True

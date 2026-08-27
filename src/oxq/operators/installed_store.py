@@ -81,10 +81,14 @@ class InstalledReleaseStore:
 
 def _marker(m):
  try:
-  v=dict(m); _validator().validate(v); raw=canonical_json_bytes(v); t=v["target"]; ident=(v["provider"],v["release"],"-".join(t[x] for x in ("python_tag","abi_tag","platform_tag"))); items=v["files"]; f={x["path"]:x for x in items}
+  v=dict(m); _validator().validate(v); raw=canonical_json_bytes(v); t=v["target"]
+  if not all(_path_component(value) for value in (v["provider"],v["release"],t["python_tag"],t["abi_tag"],t["platform_tag"])): raise ValueError
+  ident=(v["provider"],v["release"],"-".join(t[x] for x in ("python_tag","abi_tag","platform_tag"))); items=v["files"]; f={x["path"]:x for x in items}
   if len(f)!=len(items) or MARKER in f or any(f.get(v[x]["path"])!=v[x] for x in ("release_index","bundle")): raise ValueError
   return raw,ident,f
  except Exception: raise ValueError("installed release marker is invalid") from None
+def _path_component(value):
+ return isinstance(value,str) and value not in {"",".",".."} and not any(char in value for char in ("/","\\","\x00","\r","\n")) and not any(ord(char)<32 for char in value)
 def _validator():
  with materialize_operator_install_profile() as p: return Draft202012Validator(json.loads(p["installed_release"].read_text()))
 def _all(root):
@@ -111,8 +115,19 @@ def _lock(home):
  try:
   if os.name!="nt":
    import fcntl; fcntl.flock(fd,fcntl.LOCK_EX)
+  else:
+   import msvcrt, time
+   os.lseek(fd,0,os.SEEK_END)
+   if os.lseek(fd,0,os.SEEK_CUR)==0: os.write(fd,b"\0")
+   os.lseek(fd,0,os.SEEK_SET)
+   while True:
+    try: msvcrt.locking(fd,msvcrt.LK_NBLCK,1); break
+    except OSError: time.sleep(0.05)
   yield
  finally:
   if os.name!="nt":
    import fcntl; fcntl.flock(fd,fcntl.LOCK_UN)
+  else:
+   import msvcrt
+   os.lseek(fd,0,os.SEEK_SET); msvcrt.locking(fd,msvcrt.LK_UNLCK,1)
   os.close(fd)
