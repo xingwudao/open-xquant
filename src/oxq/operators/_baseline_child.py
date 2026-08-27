@@ -1162,6 +1162,17 @@ def _execute(
         or output_alignment not in _OUTPUT_ALIGNMENTS
     ):
         return {"status": "error", "code": "provider_execution_failed"}
+    try:
+        verified_archives, install_prefix = _materialize_wheels(
+            [implementation_artifact, *dependency_artifacts],
+            execution_root,
+        )
+    except BaseException:
+        return {"status": "error", "code": "provider_import_failed"}
+    sys.prefix = install_prefix
+    sys.exec_prefix = install_prefix
+    sys.dont_write_bytecode = True
+    _restrict_sys_path(verified_archives)
     sys.path.extend(path for path in test_runtime_paths if Path(path).is_dir())
     try:
         import numpy as np
@@ -1179,6 +1190,7 @@ def _execute(
         series_tolist=pd.Series.tolist,
         dataframe_getitem=pd.DataFrame.__getitem__,
     )
+    sys.path[:] = [path for path in sys.path if path not in test_runtime_paths]
 
     try:
         frame = _frame_from_quant_panel(pd, panel)
@@ -1196,19 +1208,8 @@ def _execute(
     except BaseException:
         return {"status": "error", "code": "provider_execution_failed"}
 
-    try:
-        verified_archives, install_prefix = _materialize_wheels(
-            [implementation_artifact, *dependency_artifacts],
-            execution_root,
-        )
-    except BaseException:
-        return {"status": "error", "code": "provider_import_failed"}
-    sys.prefix = install_prefix
-    sys.exec_prefix = install_prefix
-    sys.dont_write_bytecode = True
     _hide_ambient_modules()
     modules_before_provider = set(sys.modules)
-    _restrict_sys_path(verified_archives)
     try:
         verified_root_snapshot = _snapshot_verified_roots(verified_archives)
     except OSError:

@@ -7,6 +7,7 @@ import os
 import signal
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -199,3 +200,46 @@ def test_process_tree_cleanup_expands_collected_descendant_subtrees(monkeypatch:
     monkeypatch.setattr(child_process, "_kill_posix_processes", lambda process_ids: killed.append(set(process_ids)))
     child_process._kill_process_tree(FakeProcess(), {200})  # type: ignore[arg-type]
     assert killed == [{200, 300}]
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper assertion")
+def test_timeout_reaps_detached_provider_descendant(tmp_path: Path) -> None:
+    pid_path = tmp_path / "descendant.pid"
+    script = (
+        "import pathlib, subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, '-c', "
+        f"'import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)'], "
+        "start_new_session=True)\n"
+        "time.sleep(60)\n"
+    )
+    with pytest.raises(subprocess.TimeoutExpired):
+        child_process.run_contained_child(
+            [sys.executable, "-I", "-S", "-c", script],
+            timeout_seconds=0.5,
+            response_secret=None,
+            environment={},
+        )
+    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(descendant_pid, 0)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux guardian assertion")
+def test_guardian_reaps_provider_after_provider_kills_launcher(tmp_path: Path) -> None:
+    pid_path = tmp_path / "provider.pid"
+    script = (
+        "import os, pathlib, signal, time\n"
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
+        "os.kill(os.getppid(), signal.SIGKILL)\n"
+        "time.sleep(60)\n"
+    )
+    returncode = child_process.run_contained_child(
+        [sys.executable, "-I", "-S", "-c", script],
+        timeout_seconds=5,
+        response_secret=None,
+        environment={},
+    )
+    assert returncode != 0
+    provider_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(provider_pid, 0)
