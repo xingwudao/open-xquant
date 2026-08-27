@@ -1830,9 +1830,9 @@ ebacktestcraft-py 不进入 open-xquant 正式依赖。
 
 但交叉验证输出不能进入 final selection 的正式候选集。
 
-### 18.18 eFinCharts 和 K 线形态
+### 18.18 外部图表 provider 和 K 线形态
 
-#### 18.18.1 eFinCharts
+#### 18.18.1 外部图表 provider
 
 可以作为可选 chart provider 接入报告资产层。
 
