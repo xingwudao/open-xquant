@@ -85,6 +85,77 @@ def test_shared_strict_formats_reject_ambiguous_json_and_paths() -> None:
     for raw in (b'[]', b'{"key": NaN}', b'{"key": 1, "key": 2}'):
         with pytest.raises(ValueError):
             strict_json_object(raw)
-    for path in ("", "/absolute.json", "../escape.json", "one\\two.json", "nul\x00.json"):
+    for path in (
+        "",
+        ".",
+        "dir/.",
+        "dir//file.json",
+        "/absolute.json",
+        "../escape.json",
+        "one\\two.json",
+        "nul\x00.json",
+    ):
         with pytest.raises(ValueError):
             safe_relative_path(path)
+
+
+def test_release_index_accepts_closed_wheel_entries() -> None:
+    schema = _schemas()["operator_release"]
+    digest = "sha256:" + "a" * 64
+    asset = {
+        "filename": "bundle.zip",
+        "url": "https://github.com/xingwudao/equant-py/releases/download/v1.0.0/bundle.zip",
+        "size_bytes": 1,
+        "digest": digest,
+    }
+    index = {
+        "schema_version": 1,
+        "release_type": "open-xquant-operator-release",
+        "provider": "equant-py",
+        "release": "1.0.0",
+        "submission_commit": "git-sha1:" + "a" * 40,
+        "source_commit": "git-sha1:" + "b" * 40,
+        "certification_state": "research-certified",
+        "operator_count": 1,
+        "targets": [
+            {
+                "python_tag": "cp312",
+                "abi_tag": "cp312",
+                "platform_tag": "macosx_14_0_arm64",
+                "bundle": asset,
+                "wheels": [
+                    {
+                        **asset,
+                        "filename": "equant_ttr-1.0.0-py3-none-any.whl",
+                        "distribution": "equant-ttr",
+                        "version": "1.0.0",
+                        "role": "implementation",
+                        "tags": ["py3-none-any"],
+                    }
+                ],
+            }
+        ],
+    }
+
+    Draft202012Validator(schema).validate(index)
+
+
+@pytest.mark.parametrize("invalid", ["1.2.3foo", "1.2.3.4"])
+def test_public_release_versions_require_exact_semver(invalid: str) -> None:
+    schemas = _schemas()
+    for name in ("operator_release", "certification_bundle_manifest"):
+        semver = schemas[name]["$defs"]["semver"]
+        with pytest.raises(ValidationError):
+            Draft202012Validator(semver).validate(invalid)
+
+
+@pytest.mark.parametrize("invalid", ["not-a-version", "1...0"])
+def test_distribution_versions_require_pep440(invalid: str) -> None:
+    schemas = _schemas()
+    for name, definition in (("certification_record_v2", "artifact"), ("operator_release", "wheel")):
+        schema = schemas[name]
+        assert schema["$defs"][definition]["properties"]["version"] == {
+            "$ref": "#/$defs/pythonPackageVersion"
+        }
+        with pytest.raises(ValidationError):
+            Draft202012Validator(schema["$defs"]["pythonPackageVersion"]).validate(invalid)

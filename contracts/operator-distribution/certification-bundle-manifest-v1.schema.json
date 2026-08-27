@@ -8,7 +8,7 @@
     "publication_path": {"$ref": "#/$defs/path"}, "registry_entry_digest": {"$ref": "#/$defs/digest"}, "manifests": {"type": "array", "minItems": 1, "maxItems": 1024, "items": {"$ref": "#/$defs/file"}}, "baseline_sets": {"type": "array", "minItems": 1, "maxItems": 128, "items": {"$ref": "#/$defs/file"}}, "operator_count": {"type": "integer", "minimum": 1, "maximum": 1024}
   },
   "$defs": {
-    "provider": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"}, "semver": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*).*$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+    "provider": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"}, "semver": {"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"}, "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}, "path": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
     "target": {"type": "object", "additionalProperties": false, "required": ["python_tag", "abi_tag", "platform_tag"], "properties": {"python_tag": {"type": "string"}, "abi_tag": {"type": "string"}, "platform_tag": {"type": "string"}}}, "file": {"type": "object", "additionalProperties": false, "required": ["path", "digest"], "properties": {"path": {"$ref": "#/$defs/path"}, "digest": {"$ref": "#/$defs/digest"}}}
   }
 }

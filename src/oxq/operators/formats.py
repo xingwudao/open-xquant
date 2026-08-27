@@ -37,8 +37,11 @@ def safe_relative_path(value: str) -> PurePosixPath:
     """Return one non-empty, portable relative path or raise ``ValueError``."""
     if not value or "\x00" in value or "\\" in value:
         raise ValueError("path must be a non-empty POSIX relative path")
+    components = value.split("/")
+    if any(component in {"", ".", ".."} for component in components):
+        raise ValueError("path must be a canonical POSIX relative path")
     path = PurePosixPath(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
+    if path.is_absolute():
         raise ValueError("path must be a non-empty POSIX relative path")
     return path
 
