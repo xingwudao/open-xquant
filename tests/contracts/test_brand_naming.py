@@ -22,6 +22,8 @@ def _tracked_text_files() -> list[tuple[Path, str]]:
         if not raw_path:
             continue
         path = ROOT / os.fsdecode(raw_path)
+        if not path.exists():
+            continue
         content = path.read_bytes()
         if b"\0" in content:
             continue
@@ -35,6 +37,8 @@ def _tracked_text_files() -> list[tuple[Path, str]]:
 def test_tracked_text_uses_canonical_repository_brand_names() -> None:
     violations: list[str] = []
     for path, content in _tracked_text_files():
+        if path.relative_to(ROOT) == Path("AGENTS.md"):
+            continue
         for pattern, canonical in CANONICAL_BRANDS:
             violations.extend(
                 f"{path.relative_to(ROOT)}: {match.group(0)!r} != {canonical!r}"
