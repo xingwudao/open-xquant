@@ -54,7 +54,14 @@ def resolve_environment_operator(
             operator_id,
         )
 
-    module = importlib.import_module(module_name)
+    try:
+        module = importlib.import_module(module_name)
+    except ImportError as exc:
+        raise _error(
+            "environment_operator_module_unavailable",
+            "certified environment operator module is unavailable",
+            operator_id,
+        ) from exc
     implementation = getattr(module, callable_name, None)
     if not callable(implementation):
         raise _error(
