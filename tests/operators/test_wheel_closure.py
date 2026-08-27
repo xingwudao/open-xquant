@@ -113,6 +113,19 @@ def test_rejects_incomplete_or_defective_wheel_headers(tmp_path: Path, wheel_tex
         _verify(tmp_path, [wheel])
 
 
+@pytest.mark.parametrize(
+    "wheel_text",
+    [
+        "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        "Wheel-Version: 1.0\nGenerator: \nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    ],
+)
+def test_rejects_missing_or_empty_wheel_generator(tmp_path: Path, wheel_text: str) -> None:
+    wheel = wheel_record(tmp_path / "equant_core-1.0.0-py3-none-any.whl", wheel_text=wheel_text)
+    with pytest.raises(OperatorInstallError):
+        _verify(tmp_path, [wheel])
+
+
 def test_rejects_extra_downloaded_wheel(tmp_path: Path) -> None:
     wheel = wheel_record(tmp_path / "equant_core-1.0.0-py3-none-any.whl")
     extra = wheel_record(tmp_path / "equant_extra-1.0.0-py3-none-any.whl", distribution="equant-extra")

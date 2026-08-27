@@ -43,7 +43,7 @@ def wheel_record(
         + "".join(f"Requires-Dist: {item}\n" for item in requires)
     )
     contents[f"{dist_info}/METADATA"] = metadata.encode()
-    wheel_metadata = wheel_text or f"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: {tag}\n"
+    wheel_metadata = wheel_text or f"Wheel-Version: 1.0\nGenerator: test\nRoot-Is-Purelib: true\nTag: {tag}\n"
     contents[f"{dist_info}/WHEEL"] = wheel_metadata.encode()
     record_name = f"{dist_info}/RECORD"
     if record is None:

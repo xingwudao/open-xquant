@@ -231,12 +231,15 @@ def _wheel_tags(value: bytes) -> set[Tag]:
         if headers.defects:
             raise ValueError("wheel header parser defect")
         version = headers.get("Wheel-Version")
+        generator = headers.get("Generator")
         root_is_purelib = headers.get("Root-Is-Purelib")
         singleton_headers = ("Wheel-Version", "Generator", "Root-Is-Purelib", "Build")
         if (
             any(len(headers.get_all(header, [])) > 1 for header in singleton_headers)
             or not isinstance(version, str)
             or not version.startswith("1.")
+            or not isinstance(generator, str)
+            or not generator.strip()
             or root_is_purelib not in {"true", "false"}
         ):
             raise ValueError("wheel version")
