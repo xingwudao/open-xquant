@@ -328,6 +328,27 @@ def _module_is_from_archives(
     return bool(locations) and any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
 
 
+def _module_is_allowed_verified_closure(
+    module: ModuleType,
+    root: str,
+    archives: list[str],
+) -> bool:
+    if _module_is_from_archives(module, archives):
+        return True
+    root_module = sys.modules.get(root)
+    if (
+        not isinstance(root_module, ModuleType)
+        or root_module is module
+        or not _module_is_from_archives(root_module, archives)
+    ):
+        return False
+    locations = _module_locations(module)
+    return not locations or all(
+        _location_is_in_static_runtime_source(location)
+        for location in locations
+    )
+
+
 def _new_modules_are_allowed(
     modules_before_provider: set[str],
     verified_archives: list[str],
@@ -339,7 +360,11 @@ def _new_modules_are_allowed(
         root = name.partition(".")[0]
         if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
             continue
-        if not _module_is_from_archives(module, verified_archives):
+        if not _module_is_allowed_verified_closure(
+            module,
+            root,
+            verified_archives,
+        ):
             return False
     return True
 
@@ -780,8 +805,9 @@ class _ProviderImportGate:
             module = sys.modules.get(root)
         if not isinstance(module, ModuleType):
             return _root_exists_in_archives(root, self._verified_archives)
-        return isinstance(module, ModuleType) and _module_is_from_archives(
+        return isinstance(module, ModuleType) and _module_is_allowed_verified_closure(
             module,
+            root,
             self._verified_archives,
         )
 
