@@ -228,8 +228,17 @@ def _metadata(value: bytes) -> tuple[tuple[Requirement, ...], str, Version]:
 def _wheel_tags(value: bytes) -> set[Tag]:
     try:
         headers = BytesParser(policy=policy.default).parsebytes(value)
+        if headers.defects:
+            raise ValueError("wheel header parser defect")
         version = headers.get("Wheel-Version")
-        if not isinstance(version, str) or not version.startswith("1."):
+        root_is_purelib = headers.get("Root-Is-Purelib")
+        singleton_headers = ("Wheel-Version", "Generator", "Root-Is-Purelib", "Build")
+        if (
+            any(len(headers.get_all(header, [])) > 1 for header in singleton_headers)
+            or not isinstance(version, str)
+            or not version.startswith("1.")
+            or root_is_purelib not in {"true", "false"}
+        ):
             raise ValueError("wheel version")
         tags: set[Tag] = set()
         for header in headers.get_all("Tag", []):
@@ -272,12 +281,25 @@ def _verify_dependency_closure(wheels: tuple[VerifiedWheel, ...]) -> None:
     if len(available) != len(wheels):
         raise _WheelValidationFailure("duplicate distribution")
     try:
-        for wheel in wheels:
-            for requirement in wheel.requirements:
-                if requirement.url is not None or (requirement.marker is None or requirement.marker.evaluate()):
-                    version = available.get(canonicalize_name(requirement.name))
-                    if version is None or version not in requirement.specifier:
-                        raise _WheelValidationFailure("dependency closure")
+        requirements = {canonicalize_name(wheel.distribution): wheel.requirements for wheel in wheels}
+        if any(requirement.url is not None for items in requirements.values() for requirement in items):
+            raise _WheelValidationFailure("direct reference dependency")
+        pending = [(distribution, "") for distribution in available]
+        evaluated = set(pending)
+        while pending:
+            distribution, extra = pending.pop()
+            for requirement in requirements[distribution]:
+                if requirement.marker is not None and not requirement.marker.evaluate({"extra": extra}):
+                    continue
+                dependency = canonicalize_name(requirement.name)
+                version = available.get(dependency)
+                if version is None or version not in requirement.specifier:
+                    raise _WheelValidationFailure("dependency closure")
+                for requested_extra in requirement.extras:
+                    context = (dependency, canonicalize_name(requested_extra))
+                    if context not in evaluated:
+                        evaluated.add(context)
+                        pending.append(context)
     except ValueError as exc:
         raise _WheelValidationFailure("dependency marker") from exc
 

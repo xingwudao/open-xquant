@@ -63,6 +63,29 @@ def test_rejects_unresolved_dependency(tmp_path: Path) -> None:
         _verify(tmp_path, [wheel])
 
 
+def test_rejects_direct_url_dependency_even_when_named_wheel_is_present(tmp_path: Path) -> None:
+    wheel = wheel_record(
+        tmp_path / "equant_core-1.0.0-py3-none-any.whl",
+        requires=("equant-core @ https://example.invalid/equant-core.whl",),
+    )
+    with pytest.raises(OperatorInstallError):
+        _verify(tmp_path, [wheel])
+
+
+def test_activates_extra_context_for_transitive_dependencies(tmp_path: Path) -> None:
+    core = wheel_record(
+        tmp_path / "equant_core-1.0.0-py3-none-any.whl",
+        requires=("equant-ttr[needed]==1.0.0",),
+    )
+    ttr = wheel_record(
+        tmp_path / "equant_ttr-1.0.0-py3-none-any.whl",
+        distribution="equant-ttr",
+        requires=("missing==1.0.0; extra == 'needed'",),
+    )
+    with pytest.raises(OperatorInstallError):
+        _verify(tmp_path, [core, ttr])
+
+
 @pytest.mark.parametrize(
     "argument, value",
     [
@@ -72,6 +95,20 @@ def test_rejects_unresolved_dependency(tmp_path: Path) -> None:
 )
 def test_rejects_invalid_metadata_and_wheel_headers(tmp_path: Path, argument: str, value: str) -> None:
     wheel = wheel_record(tmp_path / "equant_core-1.0.0-py3-none-any.whl", **{argument: value})
+    with pytest.raises(OperatorInstallError):
+        _verify(tmp_path, [wheel])
+
+
+@pytest.mark.parametrize(
+    "wheel_text",
+    [
+        "Wheel-Version: 1.0\nTag: py3-none-any\n",
+        "Wheel-Version: 1.0\nWheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+        "bad header\nWheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
+    ],
+)
+def test_rejects_incomplete_or_defective_wheel_headers(tmp_path: Path, wheel_text: str) -> None:
+    wheel = wheel_record(tmp_path / "equant_core-1.0.0-py3-none-any.whl", wheel_text=wheel_text)
     with pytest.raises(OperatorInstallError):
         _verify(tmp_path, [wheel])
 
@@ -114,8 +151,9 @@ def test_rejects_symlink_and_encrypted_members(tmp_path: Path, mutation: object)
 
 def test_rejects_duplicate_archive_names(tmp_path: Path) -> None:
     wheel = wheel_record(tmp_path / "equant_core-1.0.0-py3-none-any.whl")
-    with zipfile.ZipFile(tmp_path / wheel.filename, "a") as archive:
-        archive.writestr("equant_core/__init__.py", b"")
+    with pytest.warns(UserWarning, match="Duplicate name"):
+        with zipfile.ZipFile(tmp_path / wheel.filename, "a") as archive:
+            archive.writestr("equant_core/__init__.py", b"")
     with pytest.raises(OperatorInstallError):
         _verify(tmp_path, [wheel])
 
