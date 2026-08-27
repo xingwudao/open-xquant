@@ -17,7 +17,7 @@ from tempfile import TemporaryDirectory
 from typing import IO, cast
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError  # type: ignore[import-untyped]
-from packaging.metadata import Metadata
+from packaging.metadata import InvalidMetadata, Metadata
 from packaging.requirements import Requirement
 from packaging.tags import Tag, parse_tag, sys_tags
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
@@ -501,10 +501,7 @@ def _verify_wheel_identity(
             ):
                 raise zipfile.BadZipFile("wheel metadata files are invalid")
             wheel_metadata = BytesParser(policy=policy.default).parsebytes(wheel.read(wheel_files[0]))
-            package_metadata = Metadata.from_email(
-                wheel.read(metadata_files[0]),
-                validate=True,
-            )
+            package_metadata = _parse_wheel_metadata(wheel.read(metadata_files[0]))
             wheel_version = wheel_metadata.get("Wheel-Version")
             wheel_version_match = re.fullmatch(r"([0-9]+)\.([0-9]+)", wheel_version) if isinstance(wheel_version, str) else None
             if wheel_version_match is None or int(wheel_version_match.group(1)) != 1:
@@ -562,6 +559,31 @@ def _verify_wheel_identity(
             "artifact",
         )
     return requirements
+
+
+def _parse_wheel_metadata(metadata: bytes) -> Metadata:
+    try:
+        return Metadata.from_email(metadata, validate=True)
+    except ExceptionGroup as exc:
+        if not _only_supported_license_file_metadata_errors(exc):
+            raise
+    parsed = Metadata.from_email(metadata, validate=False)
+    _ = parsed.metadata_version
+    _ = parsed.name
+    _ = parsed.version
+    _ = tuple(parsed.requires_dist or ())
+    return parsed
+
+
+def _only_supported_license_file_metadata_errors(exc: ExceptionGroup) -> bool:
+    errors = list(exc.exceptions)
+    if not errors:
+        return False
+    return all(_is_supported_license_file_metadata_error(error) for error in errors)
+
+
+def _is_supported_license_file_metadata_error(error: BaseException) -> bool:
+    return isinstance(error, InvalidMetadata) and str(error).startswith("license-file introduced in metadata version 2.4, not ")
 
 
 def _verify_artifact_closure(

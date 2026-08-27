@@ -147,12 +147,20 @@ def validate_provider_contract(
     )
 
 
-def certify_provider(submission: ProviderSubmission) -> ResearchCertification:
+def certify_provider(
+    submission: ProviderSubmission,
+    *,
+    baseline_timeout_seconds: float = 30,
+) -> ResearchCertification:
     """Validate the frozen contract and promote only after every baseline passes."""
     from oxq.operators.baseline_runner import run_research_baselines
 
     contract = validate_provider_contract(submission)
-    baseline_results = run_research_baselines(contract, contract.artifacts)
+    baseline_results = run_research_baselines(
+        contract,
+        contract.artifacts,
+        timeout_seconds=baseline_timeout_seconds,
+    )
     if len(baseline_results) != len(contract.baseline_cases) or any(result.status != "passed" for result in baseline_results):
         raise _error(
             "baseline_mismatch",

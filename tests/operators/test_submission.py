@@ -904,6 +904,57 @@ def test_rejects_invalid_requires_dist_metadata(tmp_path: Path) -> None:
     )
 
 
+def test_rejects_wheel_metadata_without_metadata_version(tmp_path: Path) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        metadata_version=None,
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    _assert_error(
+        lambda: load_provider_submission(fixture.path, commit, fixture.artifact_dir),
+        "artifact_invalid",
+    )
+
+
+def test_accepts_license_file_metadata_from_older_third_party_wheels(
+    tmp_path: Path,
+) -> None:
+    fixture = write_provider_repository(tmp_path)
+    wheel_path = fixture.artifact_dir / fixture.wheel_name
+    _write_wheel(
+        wheel_path,
+        "equant-ttr",
+        "1.0.0",
+        ["License-File: LICENSE"],
+        metadata_version="2.1",
+    )
+    rewrite_json(
+        fixture.path / COMPATIBILITY_ROOT / "candidate-build-v1.json",
+        lambda value: value["artifacts"][0].update(  # type: ignore[index]
+            {"digest": sha256(wheel_path.read_bytes())}
+        ),
+    )
+    commit = commit_mutation(fixture.path)
+
+    with load_provider_submission(
+        fixture.path,
+        commit,
+        fixture.artifact_dir,
+    ) as loaded:
+        assert loaded.artifacts[0].distribution == "equant-ttr"
+
+
 def test_rejects_direct_reference_even_when_distribution_is_in_artifact_closure(
     tmp_path: Path,
 ) -> None:
@@ -1342,15 +1393,17 @@ def _write_wheel(
     distribution: str,
     version: str,
     metadata_headers: list[str] | None = None,
+    metadata_version: str | None = "2.1",
 ) -> None:
     dist_info_distribution = distribution.replace("-", "_").replace(".", "_")
     metadata = [
-        "Metadata-Version: 2.1",
         f"Name: {distribution}",
         f"Version: {version}",
         *(metadata_headers or []),
         "",
     ]
+    if metadata_version is not None:
+        metadata.insert(0, f"Metadata-Version: {metadata_version}")
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(f"{dist_info_distribution}/__init__.py", "")
         archive.writestr(

@@ -22,6 +22,7 @@ from jsonschema import (  # type: ignore[import-untyped]
     SchemaError,
     ValidationError,
 )
+from packaging.version import InvalidVersion, Version
 
 from oxq.operators.certification import (
     _is_issued_research_certification,
@@ -53,6 +54,11 @@ _SEMVER_PATTERN = re.compile(
     r"(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)"
     r"(?:\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+_PYTHON_PACKAGE_VERSION_PATTERN = re.compile(
+    r"^(?:[0-9]+!)?[0-9]+(?:\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?"
+    r"(?:\.post[0-9]+)?(?:\.dev[0-9]+)?"
+    r"(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$"
 )
 _OPERATOR_ID_PATTERN = re.compile(
     r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*"
@@ -1336,15 +1342,30 @@ def _valid_entry_artifact(value: Mapping[str, object]) -> bool:
     if not all(isinstance(item, str) and item for item in strings):
         return False
     filename = cast(str, value["filename"])
+    version = cast(str, value["version"])
+    role = cast(str, value["role"])
     return (
-        value["role"] in {"implementation", "runtime-dependency"}
+        role in {"implementation", "runtime-dependency"}
         and _PROVIDER_PATTERN.fullmatch(cast(str, value["distribution"])) is not None
-        and _SEMVER_PATTERN.fullmatch(cast(str, value["version"])) is not None
+        and (
+            (role == "implementation" and _SEMVER_PATTERN.fullmatch(version) is not None)
+            or (role == "runtime-dependency" and _valid_python_package_version(version))
+        )
         and Path(filename).name == filename
         and "/" not in filename
         and "\\" not in filename
         and _DIGEST_PATTERN.fullmatch(cast(str, value["digest"])) is not None
     )
+
+
+def _valid_python_package_version(value: str) -> bool:
+    if _PYTHON_PACKAGE_VERSION_PATTERN.fullmatch(value) is None:
+        return False
+    try:
+        Version(value)
+    except InvalidVersion:
+        return False
+    return True
 
 
 def _publication_files(release_dir: Path) -> dict[str, bytes]:

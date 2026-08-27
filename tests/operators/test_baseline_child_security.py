@@ -188,6 +188,29 @@ def sma(frame, *, window):
     }
 
 
+def test_provider_can_import_unpreloaded_standard_library_module(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    from fractions import Fraction
+    return pd.Series(
+        [None, None, float(Fraction(2, 1))],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
 def test_restricted_sys_path_does_not_alias_real_sys_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -767,8 +790,14 @@ def sma(frame, *, window):
     }
 
 
+@pytest.mark.parametrize(
+    "filename_expression",
+    ["__file__", "fractions.__file__"],
+    ids=["provider-file", "stdlib-file"],
+)
 def test_provider_cannot_launder_ambient_code_filename(
     tmp_path: Path,
+    filename_expression: str,
 ) -> None:
     ambient_code_path = tmp_path / "ambient-code.bin"
     ambient_code_path.write_bytes(
@@ -781,13 +810,14 @@ def test_provider_cannot_launder_ambient_code_filename(
         )
     )
     source = f"""
+import fractions
 import marshal
 import pathlib
 import pandas as pd
 
 def sma(frame, *, window):
     ambient_code = marshal.loads(pathlib.Path({str(ambient_code_path)!r}).read_bytes())
-    laundered_code = ambient_code.replace(co_filename=__file__)
+    laundered_code = ambient_code.replace(co_filename={filename_expression})
     namespace = {{}}
     exec(laundered_code, namespace)
     return pd.Series(

@@ -250,13 +250,6 @@ def test_equant_sma_satisfies_operator_manifest_schema() -> None:
     _reference_validator().validate_operator_manifest(manifest)
 
 
-def test_uppercase_distribution_is_rejected() -> None:
-    invalid = _load("examples/invalid/uppercase-distribution.operator.json")
-    validator = Draft202012Validator(_load("operator-manifest-v1.schema.json"))
-    with pytest.raises(ValidationError, match="does not match"):
-        validator.validate(invalid)
-
-
 @pytest.mark.parametrize(
     ("location", "invalid_version"),
     [
@@ -297,7 +290,7 @@ def test_manifest_rejects_terminal_line_endings_in_versions(location: tuple[str,
     ("field", "invalid_value"),
     [
         ("operator_id", "equant.ttr_sma"),
-        ("distribution", "eQuant-TTR"),
+        ("distribution", "bad_distribution"),
         ("module", "equant-ttr"),
         ("callable", "sma.value"),
     ],

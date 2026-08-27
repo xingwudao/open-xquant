@@ -55,14 +55,25 @@
     "provider": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
     "semanticVersion": {"allOf": [{"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"}, {"not": {"pattern": "[\\r\\n]"}}]},
     "operatorId": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"},
+    "pythonPackageVersion": {"allOf": [{"type": "string", "pattern": "^(?:[0-9]+!)?[0-9]+(?:\\.[0-9]+)*(?:(?:a|b|rc)[0-9]+)?(?:\\.post[0-9]+)?(?:\\.dev[0-9]+)?(?:\\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$"}, {"not": {"pattern": "[\\r\\n]"}}]},
     "sha256Digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "artifact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["distribution", "version", "filename", "role", "build_identifier", "digest"],
+      "allOf": [
+        {
+          "if": {"properties": {"role": {"const": "implementation"}}, "required": ["role"]},
+          "then": {"properties": {"version": {"$ref": "#/$defs/semanticVersion"}}}
+        },
+        {
+          "if": {"properties": {"role": {"const": "runtime-dependency"}}, "required": ["role"]},
+          "then": {"properties": {"version": {"$ref": "#/$defs/pythonPackageVersion"}}}
+        }
+      ],
       "properties": {
         "distribution": {"$ref": "#/$defs/provider"},
-        "version": {"$ref": "#/$defs/semanticVersion"},
+        "version": {"type": "string", "minLength": 1},
         "filename": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"},
         "role": {"enum": ["implementation", "runtime-dependency"]},
         "build_identifier": {"type": "string", "minLength": 1},

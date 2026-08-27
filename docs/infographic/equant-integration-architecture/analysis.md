@@ -20,7 +20,7 @@ equant-py 是其首个官方认证量化计算层。
 
 After viewing this infographic, the viewer should understand:
 
-1. open-xquant、equant-py 与 eBacktestCraft 的最终职责边界。
+1. open-xquant、equant-py 与 ebacktestcraft-py 的最终职责边界。
 2. Agent、研究治理、编译、量化计算、Engine/执行和 ML 六层如何连接。
 3. 本地需要新增、修改、删除什么，以及下一次 PR 如何分阶段整合。
 
@@ -38,7 +38,7 @@ After viewing this infographic, the viewer should understand:
   外部计算层通过官方集成边界横向接入；底部用新增、修改、删除和 PR 序列
   表达落地路线。
 - **Key Relationships**: Strategy Spec 和 Model Spec 经过 Compiler 与 Runtime
-  Audit 生成 Compiled Plan；Certified Operator Binding 调用 eQuant；
+  Audit 生成 Compiled Plan；Certified Operator Binding 调用 equant-py；
   open-xquant Engine 继续拥有组合、订单、Broker 和成交语义；运行产物回流到
   Audit、Robustness、Comparison 和 Final Selection。
 - **Visual Opportunities**: 用六层剖面表达职责；用外接计算模块表达仓库独立；
@@ -49,14 +49,14 @@ After viewing this infographic, the viewer should understand:
 
 - "open-xquant 是 AI 原生的实用量化研究系统；"
 - "equant-py 是其首个官方认证量化计算层。"
-- "eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。"
+- "ebacktestcraft-py 保持独立，但不成为 open-xquant 的正式执行引擎。"
 - "它不等于“任意插件系统”。"
 - "它只执行通过认证的 operator binding。"
 - "equant-py 不参与订单和成交语义。"
 - "Agent 不能直接改变正式运行语义。"
 - "模型不能绕过训练边界、数据版本和推理时点。"
 - "Agent -> Catalog -> Spec -> Compile -> Certified Executor"
-- "核心 dependencies 不加入任何 eQuant 包。"
+- "核心 dependencies 不加入任何 equant-py 包。"
 - "不能一次删除所有重复实现。"
 - "native-only"
 - "shadow-equant"
@@ -90,4 +90,4 @@ After viewing this infographic, the viewer should understand:
 2. **bento-grid + technical-schematic**: 保留全景信息密度，使用工程图视觉
    强化执行链、控制权和跨仓库接口。
 3. **structural-breakdown + technical-schematic**: 最适合表现六层系统剖面和
-   eQuant 外接模块，但需要压缩本地改动与 PR 路线信息。
+   equant-py 外接模块，但需要压缩本地改动与 PR 路线信息。

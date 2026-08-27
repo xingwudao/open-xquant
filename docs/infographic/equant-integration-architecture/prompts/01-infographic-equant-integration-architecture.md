@@ -64,11 +64,11 @@ Show three project modules:
 - "AI 原生的实用量化研究系统"
 - "equant-py"
 - "官方认证量化计算层"
-- "eBacktestCraft"
+- "ebacktestcraft-py"
 - "独立，但不是正式执行引擎"
 
 Connect equant-py to open-xquant through a locked certified binding.
-Place eBacktestCraft to the side with a gray dashed line, not inside the engine.
+Place ebacktestcraft-py to the side with a gray dashed line, not inside the engine.
 
 ### Central six-layer architecture cell
 
@@ -166,7 +166,7 @@ Blue area title: "修改"
 
 Add a lock icon beside this exact statement:
 
-- "核心 dependencies 不加入任何 eQuant 包"
+- "核心 dependencies 不加入任何 equant-py 包"
 
 ### Rejected PR content cell
 
@@ -245,7 +245,7 @@ Render exactly:
 - open-xquant must be visually presented as the owner of research truth,
   governance, compiler, engine, execution, audit, ML boundaries, and Agent workflow.
 - equant-py must remain an external independently released certified compute layer.
-- eBacktestCraft must remain separate and must not appear as the formal engine.
+- ebacktestcraft-py must remain separate and must not appear as the formal engine.
 - Do not present this as an arbitrary plugin platform.
 - All important text must remain legible at normal document width.
 - Use only the exact labels listed above.
