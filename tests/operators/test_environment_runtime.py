@@ -33,6 +33,7 @@ def fake_verified_provider(
     monkeypatch.syspath_prepend(str(module_root))
     sys.modules.pop("ettr", None)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_BINDINGS.clear()
 
     provider = EnvironmentProvider(
         provider="equant-py",
@@ -147,6 +148,24 @@ def test_resolve_environment_operator_allows_repeated_verified_resolution(
     second = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
 
     assert first.callable is second.callable
+
+
+def test_resolve_environment_operator_rejects_mutated_cached_callable(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    del fake_verified_provider
+    resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    loaded = sys.modules["ettr"]
+    exec(
+        "def sma(frame, **parameters):\n"
+        "    return 'mutated-trusted-module-callable'\n",
+        loaded.__dict__,
+    )
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_callable_unverified"
 
 
 def test_resolve_environment_operator_ignores_unverified_bytecode_cache(
