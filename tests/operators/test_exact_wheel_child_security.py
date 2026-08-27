@@ -100,3 +100,49 @@ def test_child_imports_platform_runtime_only_from_exact_closure(tmp_path: Path) 
     assert pandas_origin.is_relative_to(closure_root)
     assert not numpy_origin.is_relative_to(ambient_root)
     assert not pandas_origin.is_relative_to(ambient_root)
+
+
+def test_child_preserves_platform_runtime_from_exact_closure_without_test_paths(
+    tmp_path: Path,
+) -> None:
+    provider_wheel = tmp_path / "origin-provider.whl"
+    _write_provider_wheel(provider_wheel)
+    runtime_wheels = [
+        _snapshot_installed_distribution(tmp_path, name)
+        for name in ("numpy", "pandas", "python-dateutil", "pytz", "six")
+    ]
+    response = run_exact_wheel_request(
+        {
+            "module": "origin_provider",
+            "callable": "runtime_origins",
+            "parameters": {},
+            "input": {
+                "columns": [
+                    {"name": "close", "dtype": "float64", "required": True},
+                ],
+                "context": {"timezone": "Asia/Shanghai"},
+                "records": [
+                    {
+                        "date": "2026-08-27",
+                        "code": "000001.SZ",
+                        "close": 1.0,
+                    },
+                ],
+            },
+            "output_fields": [
+                {"name": "closure_root", "dtype": "string"},
+                {"name": "numpy_origin", "dtype": "string"},
+                {"name": "pandas_origin", "dtype": "string"},
+            ],
+            "output_alignment": "preserve_input_order",
+        },
+        [provider_wheel, *runtime_wheels],
+        timeout_seconds=60,
+    )
+
+    assert response["status"] == "ok"
+    outputs = response["outputs"]
+    assert isinstance(outputs, dict)
+    closure_root = Path(outputs["closure_root"][0])
+    assert Path(outputs["numpy_origin"][0]).is_relative_to(closure_root)
+    assert Path(outputs["pandas_origin"][0]).is_relative_to(closure_root)

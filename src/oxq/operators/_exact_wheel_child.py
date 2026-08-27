@@ -55,6 +55,7 @@ _HIDDEN_PROVIDER_SYS_ATTRIBUTES = {
 # Only the legacy certification fixtures set this during bootstrap.  Production
 # requests start with an empty set and therefore never admit ambient modules.
 _TEST_BOOTSTRAP_RUNTIME_ROOTS: set[str] = set()
+_VERIFIED_BOOTSTRAP_RUNTIME_ROOTS: set[str] = set()
 
 
 class _OutputTypeError(TypeError):
@@ -312,8 +313,8 @@ def _location_is_in_static_runtime_source(location: str) -> bool:
 
 
 def _location_is_in_test_bootstrap_runtime(location: str) -> bool:
-    """Permit lazy imports only for the test-only numerical bootstrap."""
-    for root in _TEST_BOOTSTRAP_RUNTIME_ROOTS:
+    """Permit lazy imports only for approved numerical bootstrap modules."""
+    for root in _bootstrap_runtime_roots():
         module = sys.modules.get(root)
         if not isinstance(module, ModuleType):
             continue
@@ -323,6 +324,10 @@ def _location_is_in_test_bootstrap_runtime(location: str) -> bool:
         ):
             return True
     return False
+
+
+def _bootstrap_runtime_roots() -> set[str]:
+    return _TEST_BOOTSTRAP_RUNTIME_ROOTS | _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS
 
 
 def _static_runtime_source_digest(location: str) -> str | None:
@@ -355,7 +360,7 @@ def _module_is_allowed_verified_closure(
     root_module = sys.modules.get(root)
     if not isinstance(root_module, ModuleType) or root_module is module or not _module_is_from_archives(root_module, archives):
         return False
-    if root in _TEST_BOOTSTRAP_RUNTIME_ROOTS:
+    if root in _bootstrap_runtime_roots():
         return True
     locations = _module_locations(module)
     return not locations or all(_location_is_in_static_runtime_source(location) for location in locations)
@@ -370,7 +375,7 @@ def _new_modules_are_allowed(
         if not isinstance(module, ModuleType):
             return False
         root = name.partition(".")[0]
-        if root in sys.stdlib_module_names or root in _TEST_BOOTSTRAP_RUNTIME_ROOTS:
+        if root in sys.stdlib_module_names or root in _bootstrap_runtime_roots():
             continue
         if not _module_is_allowed_verified_closure(
             module,
@@ -386,7 +391,7 @@ def _visible_modules(verified_roots: list[str]) -> Mapping[str, object]:
         name: module
         for name, module in sys.modules.items()
         if name.partition(".")[0] in sys.stdlib_module_names
-        or name.partition(".")[0] in _TEST_BOOTSTRAP_RUNTIME_ROOTS
+        or name.partition(".")[0] in _bootstrap_runtime_roots()
         or (isinstance(module, ModuleType) and _module_is_from_archives(module, verified_roots))
     }
 
@@ -397,7 +402,7 @@ class _RestrictedModules(MutableMapping[str, object]):
 
     def _is_visible(self, name: str, module: object) -> bool:
         root = name.partition(".")[0]
-        if root in sys.stdlib_module_names or root in _TEST_BOOTSTRAP_RUNTIME_ROOTS:
+        if root in sys.stdlib_module_names or root in _bootstrap_runtime_roots():
             return True
         return isinstance(module, ModuleType) and _module_is_allowed_verified_closure(
             module,
@@ -896,7 +901,7 @@ class _ProviderImportGate:
 
     def _provider_import_is_allowed(self, absolute_name: str) -> bool:
         root = absolute_name.partition(".")[0]
-        if root in sys.stdlib_module_names or root in _TEST_BOOTSTRAP_RUNTIME_ROOTS:
+        if root in sys.stdlib_module_names or root in _bootstrap_runtime_roots():
             return True
         module = sys.modules.get(absolute_name)
         if not isinstance(module, ModuleType):
@@ -1008,7 +1013,7 @@ def _hide_ambient_modules() -> None:
         if (
             name == "__main__"
             or root in sys.stdlib_module_names
-            or root in _TEST_BOOTSTRAP_RUNTIME_ROOTS
+            or root in _bootstrap_runtime_roots()
             or origin in {"built-in", "frozen"}
         ):
             continue
@@ -1110,7 +1115,7 @@ def _execute(
     request: dict[str, object],
     execution_root: Path,
 ) -> dict[str, object]:
-    global _TEST_BOOTSTRAP_RUNTIME_ROOTS
+    global _TEST_BOOTSTRAP_RUNTIME_ROOTS, _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS
     test_runtime_paths = request.get("test_runtime_paths", [])
     if not isinstance(test_runtime_paths, list) or not all(
         isinstance(path, str) and Path(path).is_dir() for path in test_runtime_paths
@@ -1172,6 +1177,12 @@ def _execute(
         return {"status": "error", "code": "provider_execution_failed"}
     if test_runtime_paths:
         _TEST_BOOTSTRAP_RUNTIME_ROOTS = {"numpy", "pandas"}
+    _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS = {
+        name
+        for name in ("numpy", "pandas")
+        if isinstance(sys.modules.get(name), ModuleType)
+        and _module_is_from_archives(cast(ModuleType, sys.modules[name]), verified_archives)
+    }
     trusted_assert_frame_equal = pd.testing.assert_frame_equal
     trusted_frame_copy = pd.DataFrame.copy
     trusted_pandas_primitives = _PandasValidationPrimitives(

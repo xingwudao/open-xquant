@@ -7,6 +7,7 @@ import importlib.abc
 import importlib.machinery
 import inspect
 import sys
+import threading
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -37,7 +38,7 @@ class _VerifiedModuleSource:
 
 
 _TRUSTED_RUNTIME_MODULES: dict[str, tuple[Path, str, ModuleType]] = {}
-_TRUSTED_RUNTIME_BINDINGS: dict[tuple[str, str, Path, str], Callable[..., object]] = {}
+_RUNTIME_RESOLUTION_LOCK = threading.RLock()
 
 
 def resolve_environment_operator(
@@ -74,40 +75,33 @@ def resolve_environment_operator(
             operator_id,
         )
 
-    sources = _verified_module_sources(installed)
-    origin = _verified_module_origin(sources, module_name, operator_id)
-    _reject_untrusted_preloaded_modules(sources, operator_id)
-    try:
-        module = _import_verified_module(module_name, sources)
-    except ImportError as exc:
-        raise _error(
-            "environment_operator_module_unavailable",
-            "certified environment operator module is unavailable",
-            operator_id,
-        ) from exc
-    except Exception as exc:
-        raise _error(
-            "environment_operator_module_unavailable",
-            "certified environment operator module is unavailable",
-            operator_id,
-        ) from exc
-    _verify_module_object(module, origin, sources[module_name].digest, operator_id)
-    _verify_or_freeze_manifest_bindings(installed, sources, operator_id)
-    implementation = getattr(module, callable_name, None)
-    if not callable(implementation):
-        raise _error(
-            "environment_operator_callable_missing",
-            "certified environment operator callable is unavailable",
-            operator_id,
-        )
-    _verify_callable_owner(implementation, sources, operator_id)
-    _verify_or_store_callable_binding(
-        module_name,
-        callable_name,
-        implementation,
-        sources[module_name],
-        operator_id,
-    )
+    with _RUNTIME_RESOLUTION_LOCK:
+        sources = _verified_module_sources(installed)
+        origin = _verified_module_origin(sources, module_name, operator_id)
+        _reject_untrusted_preloaded_modules(sources, operator_id)
+        try:
+            module = _import_verified_module(module_name, sources)
+        except ImportError as exc:
+            raise _error(
+                "environment_operator_module_unavailable",
+                "certified environment operator module is unavailable",
+                operator_id,
+            ) from exc
+        except Exception as exc:
+            raise _error(
+                "environment_operator_module_unavailable",
+                "certified environment operator module is unavailable",
+                operator_id,
+            ) from exc
+        _verify_module_object(module, origin, sources[module_name].digest, operator_id)
+        implementation = getattr(module, callable_name, None)
+        if not callable(implementation):
+            raise _error(
+                "environment_operator_callable_missing",
+                "certified environment operator callable is unavailable",
+                operator_id,
+            )
+        _verify_callable_owner(implementation, sources, operator_id)
 
     return EnvironmentOperatorBinding(
         operator_id=operator_id,
@@ -215,10 +209,7 @@ def _import_verified_module(
     module_name: str,
     sources: Mapping[str, _VerifiedModuleSource],
 ) -> ModuleType:
-    loaded = sys.modules.get(module_name)
-    trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
-    if loaded is not None and trusted is not None and trusted[2] is loaded:
-        return loaded
+    _drop_trusted_runtime_modules(sources)
     with _verified_runtime_importer(sources):
         module = importlib.import_module(module_name)
     for name, source in sources.items():
@@ -226,6 +217,17 @@ def _import_verified_module(
         if loaded_source is not None:
             _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
     return module
+
+
+def _drop_trusted_runtime_modules(
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> None:
+    for module_name in sorted(sources, key=lambda name: name.count("."), reverse=True):
+        loaded = sys.modules.get(module_name)
+        trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
+        if loaded is not None and trusted is not None and trusted[2] is loaded:
+            sys.modules.pop(module_name, None)
+            _TRUSTED_RUNTIME_MODULES.pop(module_name, None)
 
 
 @contextmanager
@@ -335,54 +337,6 @@ def _verify_callable_owner(
             operator_id,
         )
     _verify_module_object(owner, source.path, source.digest, operator_id)
-
-
-def _verify_or_freeze_manifest_bindings(
-    installed: InstalledEnvironmentProvider,
-    sources: Mapping[str, _VerifiedModuleSource],
-    operator_id: str,
-) -> None:
-    for manifest in installed.manifests.values():
-        module_name = manifest.get("module")
-        callable_name = manifest.get("callable")
-        if not isinstance(module_name, str) or not isinstance(callable_name, str):
-            continue
-        source = sources.get(module_name)
-        loaded = sys.modules.get(module_name)
-        trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
-        if source is None or loaded is None or trusted is None or trusted[2] is not loaded:
-            continue
-        implementation = getattr(loaded, callable_name, None)
-        if not callable(implementation):
-            continue
-        _verify_callable_owner(implementation, sources, operator_id)
-        _verify_or_store_callable_binding(
-            module_name,
-            callable_name,
-            implementation,
-            source,
-            operator_id,
-        )
-
-
-def _verify_or_store_callable_binding(
-    module_name: str,
-    callable_name: str,
-    implementation: Callable[..., object],
-    source: _VerifiedModuleSource,
-    operator_id: str,
-) -> None:
-    key = (module_name, callable_name, source.path, source.digest)
-    trusted = _TRUSTED_RUNTIME_BINDINGS.get(key)
-    if trusted is None:
-        _TRUSTED_RUNTIME_BINDINGS[key] = implementation
-        return
-    if trusted is not implementation:
-        raise _error(
-            "environment_operator_callable_unverified",
-            "certified environment operator callable owner is unverified",
-            operator_id,
-        )
 
 
 def _find_certified_operator(

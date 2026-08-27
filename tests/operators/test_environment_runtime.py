@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import threading
 import types
 from importlib import _bootstrap_external
 from importlib.util import cache_from_source
@@ -33,7 +34,6 @@ def fake_verified_provider(
     monkeypatch.syspath_prepend(str(module_root))
     sys.modules.pop("ettr", None)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
-    environment_runtime._TRUSTED_RUNTIME_BINDINGS.clear()
 
     provider = EnvironmentProvider(
         provider="equant-py",
@@ -144,13 +144,13 @@ def test_resolve_environment_operator_allows_repeated_verified_resolution(
 ) -> None:
     del fake_verified_provider
 
-    first = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
-    second = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
 
-    assert first.callable is second.callable
+    assert binding.callable({"verified": True}) == {"verified": True}
 
 
-def test_resolve_environment_operator_rejects_mutated_cached_callable(
+def test_resolve_environment_operator_reloads_mutated_cached_callable(
     fake_verified_provider: InstalledEnvironmentProvider,
 ) -> None:
     del fake_verified_provider
@@ -162,10 +162,69 @@ def test_resolve_environment_operator_rejects_mutated_cached_callable(
         loaded.__dict__,
     )
 
-    with pytest.raises(OperatorCertificationError) as caught:
-        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
 
-    assert caught.value.code == "environment_operator_callable_unverified"
+    assert binding.callable({"verified": True}) == {"verified": True}
+
+
+def test_resolve_environment_operator_reloads_mutated_callable_code(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    del fake_verified_provider
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    def mutated(frame, **parameters):
+        return "mutated-code-object"
+
+    binding.callable.__code__ = mutated.__code__
+
+    resolved = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert resolved.callable({"verified": True}) == {"verified": True}
+
+
+def test_resolve_environment_operator_serializes_first_verified_import(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    verified = next(iter(fake_verified_provider.runtime_files.values())).path
+    verified.write_text(
+        "import time\n"
+        "time.sleep(0.05)\n"
+        "def sma(frame, **parameters):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    digest = _digest(verified.read_bytes())
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=verified,
+        digest=digest,
+    )
+    sys.modules.pop("ettr", None)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    barrier = threading.Barrier(2)
+    errors: list[BaseException] = []
+
+    def resolve() -> None:
+        try:
+            barrier.wait(timeout=1)
+            binding = resolve_environment_operator(
+                "equant.ttr.sma",
+                "1.0.0",
+                "equant-py==1.0.0",
+            )
+            assert binding.callable({"verified": True}) == {"verified": True}
+        except BaseException as exc:
+            errors.append(exc)
+
+    threads = [threading.Thread(target=resolve) for _ in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2)
+
+    assert errors == []
 
 
 def test_resolve_environment_operator_ignores_unverified_bytecode_cache(
