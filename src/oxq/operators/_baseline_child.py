@@ -537,6 +537,10 @@ class _ProviderImportGate:
     def _reject_provider_dynamic_code(self, operation: str) -> None:
         caller = self._original_getframe(2)
         try:
+            if operation == "eval" and _location_is_in_static_runtime_source(
+                caller.f_code.co_filename,
+            ):
+                return
             provider_call = False
             while True:
                 if any(

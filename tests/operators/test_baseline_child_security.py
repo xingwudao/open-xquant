@@ -204,6 +204,33 @@ def test_verified_package_can_alias_static_runtime_modules(
     )
 
 
+def test_provider_import_allows_static_runtime_namedtuple_eval(
+    tmp_path: Path,
+) -> None:
+    source = """
+from collections import namedtuple
+
+import pandas as pd
+
+VersionInfo = namedtuple("VersionInfo", ["major", "minor"])
+VERSION = VersionInfo(1, 0)
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, float(VERSION.major + VERSION.minor + 1)],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
 def test_importlib_can_still_load_and_execute_verified_provider(
     tmp_path: Path,
 ) -> None:
