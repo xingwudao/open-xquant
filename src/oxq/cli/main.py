@@ -222,6 +222,91 @@ def operator_install_command(requirement: str) -> None:
     raise click.exceptions.Exit(1)
 
 
+@operator_group.command(name="verify")
+@click.argument("requirement")
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def operator_verify_command(requirement: str, as_json: bool) -> None:
+    """Verify an installed certified environment provider package."""
+    from oxq.operators.environment_provider import verify_installed_provider
+    from oxq.operators.errors import OperatorCertificationError
+
+    try:
+        installed = verify_installed_provider(requirement)
+    except OperatorCertificationError as error:
+        _operator_environment_error(error, as_json)
+
+    payload = _operator_environment_payload(installed)
+    if as_json:
+        click.echo(json.dumps(payload, sort_keys=True))
+        return
+    click.echo(f"{payload['provider']}=={payload['version']} verified")
+    click.echo(f"Status: {payload['status']}")
+    click.echo(f"Operators: {payload['operator_count']}")
+
+
+@operator_group.command(name="list")
+@click.option("--provider", "provider_name", required=True, help="Canonical provider identifier.")
+@click.option("--json", "as_json", is_flag=True, help="Output machine-readable JSON.")
+def operator_list_command(provider_name: str, as_json: bool) -> None:
+    """List verified installed certified environment provider packages."""
+    from oxq.operators.environment_index import _load_index_payload
+    from oxq.operators.environment_provider import verify_installed_provider
+    from oxq.operators.errors import OperatorCertificationError
+
+    try:
+        payload = _load_index_payload()
+        providers = payload.get("providers")
+        if not isinstance(providers, dict):
+            raise OperatorCertificationError(
+                "environment_provider_index_invalid",
+                "official environment provider index is invalid",
+                stage="environment_provider",
+            )
+        versions = providers.get(provider_name)
+        if not isinstance(versions, dict):
+            raise OperatorCertificationError(
+                "environment_provider_invalid",
+                "environment provider is not officially supported",
+                stage="environment_provider",
+            )
+
+        verified = []
+        last_error: OperatorCertificationError | None = None
+        for version in sorted(versions):
+            if not isinstance(version, str):
+                continue
+            try:
+                verified.append(
+                    _operator_environment_payload(
+                        verify_installed_provider(f"{provider_name}=={version}")
+                    )
+                )
+            except OperatorCertificationError as error:
+                last_error = error
+        if not verified:
+            raise last_error or OperatorCertificationError(
+                "environment_provider_not_installed",
+                f"environment provider distribution is not installed: {provider_name}",
+                stage="environment_provider",
+            )
+    except OperatorCertificationError as error:
+        _operator_environment_error(error, as_json)
+
+    if as_json:
+        if len(verified) == 1:
+            click.echo(json.dumps(verified[0], sort_keys=True))
+        else:
+            click.echo(json.dumps({"providers": verified}, sort_keys=True))
+        return
+    for index, item in enumerate(verified):
+        if index:
+            click.echo()
+        click.echo(f"Provider: {item['provider']}")
+        click.echo(f"Version: {item['version']}")
+        click.echo(f"Status: {item['status']}")
+        click.echo(f"Operators: {item['operator_count']}")
+
+
 @operator_group.command(name="export-certification")
 @click.option("--provider", required=True, help="Canonical provider identifier.")
 @click.option("--release", required=True, help="Exact provider release SemVer.")
@@ -352,6 +437,35 @@ def import_certification_command(
     click.echo(f"Provider: {imported.record['provider']}")
     click.echo(f"Release: {imported.record['release']}")
     click.echo(f"Output: {imported.release_dir}")
+
+
+def _operator_environment_payload(installed) -> dict[str, object]:
+    provider = installed.provider
+    operators = [
+        {
+            "operator_id": operator.operator_id,
+            "operator_version": operator.operator_version,
+        }
+        for operator in provider.operators
+    ]
+    return {
+        "operator_count": len(operators),
+        "operators": operators,
+        "provider": provider.provider,
+        "status": provider.certification_state,
+        "version": provider.version,
+    }
+
+
+def _operator_environment_error(error, as_json: bool) -> None:
+    if as_json:
+        click.echo(json.dumps(error.as_dict(), sort_keys=True))
+    else:
+        click.echo(
+            f"Operator environment failed: "
+            f"[{error.stage}/{error.code}] {error.message}"
+        )
+    raise click.exceptions.Exit(1)
 
 
 def _bundle_cli_error(error, as_json: bool) -> None:
