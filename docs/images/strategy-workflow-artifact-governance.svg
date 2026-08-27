@@ -9,7 +9,7 @@
 <g id="graph0" class="graph" transform="scale(1 1) rotate(0) translate(25.2 1536.15)">
 <title>StrategyWorkflowArtifactGovernance</title>
 <polygon fill="white" stroke="none" points="-25.2,25.2 -25.2,-1536.15 2228.2,-1536.15 2228.2,25.2 -25.2,25.2"/>
-<text text-anchor="middle" x="1101.5" y="-1484.15" font-family="Helvetica,sans-Serif" font-size="24.00">OpenXQuant Strategy Workflow Artifact Governance</text>
+<text text-anchor="middle" x="1101.5" y="-1484.15" font-family="Helvetica,sans-Serif" font-size="24.00">open&#45;xquant Strategy Workflow Artifact Governance</text>
 <g id="clust1" class="cluster">
 <title>cluster_governance</title>
 <path fill="white" stroke="#94a3b8" stroke-dasharray="5,2" d="M1703,-8C1703,-8 2183,-8 2183,-8 2189,-8 2195,-14 2195,-20 2195,-20 2195,-1386.95 2195,-1386.95 2195,-1392.95 2189,-1398.95 2183,-1398.95 2183,-1398.95 1703,-1398.95 1703,-1398.95 1697,-1398.95 1691,-1392.95 1691,-1386.95 1691,-1386.95 1691,-20 1691,-20 1691,-14 1697,-8 1703,-8"/>

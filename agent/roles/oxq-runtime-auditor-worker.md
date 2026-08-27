@@ -1,7 +1,7 @@
 ---
 name: oxq-runtime-auditor-worker
 description: >-
-  OpenXQuant worker for compiling a validated and provenance-audited SPEC and
+  open-xquant worker for compiling a validated and provenance-audited SPEC and
   checking runtime semantics against the audited SPEC.
 mode: subagent
 role_kind: runtime_auditor

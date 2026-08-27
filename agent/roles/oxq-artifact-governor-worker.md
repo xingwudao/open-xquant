@@ -1,7 +1,7 @@
 ---
 name: oxq-artifact-governor-worker
 description: >-
-  OpenXQuant worker for auditing workspace directory governance, misplaced
+  open-xquant worker for auditing workspace directory governance, misplaced
   phase artifacts, and version-governed layout compliance.
 mode: subagent
 role_kind: artifact_governor

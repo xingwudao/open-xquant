@@ -155,7 +155,7 @@ Run both validators again after every mapping-contract edit. Do not write `build
 Use these dispositions:
 
 - `blocked`: required strategy behavior cannot be represented now
-- `deferred_framework`: requires OpenXQuant framework/runtime development
+- `deferred_framework`: requires open-xquant framework/runtime development
 - `excluded_non_material`: belongs outside `strategy_spec.yaml`
 - `not_applicable`: source field did not apply after user-confirmed changes
 

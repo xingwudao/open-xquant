@@ -1,7 +1,7 @@
 ---
 name: oxq-monitor-worker
 description: >-
-  OpenXQuant worker for post-run reproducibility, research audit, robustness,
+  open-xquant worker for post-run reproducibility, research audit, robustness,
   and experiment registry updates before report writing.
 mode: subagent
 role_kind: monitor

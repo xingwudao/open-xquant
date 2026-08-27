@@ -38,7 +38,7 @@ uses a fresh `report_revision_id` and seals only after chart completion.
 requested equality must be exact. Omitted charts must be generated or recorded
 with a closed skip reason.
 
-本文档定义 OpenXQuant multi-Agent 研究工作流的目录治理、角色协作、
+本文档定义 open-xquant multi-Agent 研究工作流的目录治理、角色协作、
 skill 边界和新增治理能力。
 
 目标不是让目录更好看，而是让每个研究结论都能回答四个问题：

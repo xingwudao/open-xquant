@@ -211,7 +211,7 @@ Read the compiled plan's `open_xquant_version` and compare it with
 `strategy_spec.yaml` field `required_oxq_version`. When a prior or preview
 runtime artifact includes `environment.json`, use it as additional evidence for
 the same version comparison. A compile preview produced by a different
-OpenXQuant package version than the SPEC requires is not a valid runtime gate.
+open-xquant package version than the SPEC requires is not a valid runtime gate.
 
 The compile preview must also include
 `<phase_paths.07_compile_preview>/strategy.py`. Read the complete generated file
@@ -246,7 +246,7 @@ Compare material SPEC fields against `compiled_plan.json`. At minimum audit:
 - portfolio constraints that affect target weights
 - initial cash, cash return, benchmark, and metrics profile when represented in
   runtime artifacts
-- `required_oxq_version` against the OpenXQuant `open_xquant_version` recorded
+- `required_oxq_version` against the open-xquant `open_xquant_version` recorded
   by compile/runtime artifacts such as `compiled_plan.json` and
   `environment.json` when available
 
@@ -292,12 +292,12 @@ formal backtest gate:
 - `spec_hash`: `StrategySpec.from_yaml(...).compute_hash()` or the `Spec Hash`
   printed by `oxq spec validate`. Do not use raw `shasum strategy_spec.yaml`.
 - `spec_audit_hash`: canonical JSON hash of `spec_audit.json`, matching
-  OpenXQuant's `_hash_json_file` helper. Do not use raw file bytes.
+  open-xquant's `_hash_json_file` helper. Do not use raw file bytes.
 - `compiled_plan_hash`: canonical JSON hash of the compiled plan payload that
-  will be used by the formal run, matching OpenXQuant's `_hash_json_payload`
+  will be used by the formal run, matching open-xquant's `_hash_json_payload`
   or `_hash_json_file` helper. Do not use raw file bytes.
 
-When computing hashes from Python, use the installed OpenXQuant helpers exactly:
+When computing hashes from Python, use the installed open-xquant helpers exactly:
 
 ```python
 import hashlib

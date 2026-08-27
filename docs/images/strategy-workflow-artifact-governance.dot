@@ -8,7 +8,7 @@ digraph StrategyWorkflowArtifactGovernance {
     splines=true,
     newrank=true,
     fontname="Helvetica",
-    label="OpenXQuant Strategy Workflow Artifact Governance",
+    label="open-xquant Strategy Workflow Artifact Governance",
     labelloc=t,
     fontsize=24
   ];

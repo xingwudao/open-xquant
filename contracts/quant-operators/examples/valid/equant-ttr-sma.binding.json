@@ -1,0 +1,34 @@
+{
+  "binding_version": 1,
+  "operator_id": "equant.ttr.sma",
+  "operator_version": "1.0.0",
+  "distribution": "equant-ttr",
+  "distribution_version": "1.0.0",
+  "source_commit": "git-sha1:0123456789abcdef0123456789abcdef01234567",
+  "source_tree_digest": "sha256:ef3604168a06b136282e297c62a40aa340352c711a475e88ee2def218d4f854e",
+  "schema_id": "https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json",
+  "schema_release": "1.0.0",
+  "schema_digest": "sha256:b50b15c446d8940a358ff32c31e191407a7841ab57a30f2fcbafb9a15b9f8793",
+  "manifest_digest": "sha256:6905d991b15b346af97000ca2d83dec6973d0e501d5bca3d8cfbe7127375f4ec",
+  "implementation_digest": "sha256:97b9dc8fbbdad66716caf7d3d1bf74d7179f7c2f8c83e60cf1fb1790a79f1d7a",
+  "surface_release": "1.0.0",
+  "contract_surface": {
+    "quant_panel_schema": {
+      "release": "1.0.0",
+      "digest": "sha256:fd6fcd7f3102cdd63913644f87a154a22713c0286a6e9e1cc16e84ca6b283a9c"
+    },
+    "operator_manifest_schema": {
+      "release": "1.0.0",
+      "digest": "sha256:b50b15c446d8940a358ff32c31e191407a7841ab57a30f2fcbafb9a15b9f8793"
+    },
+    "operator_binding_schema": {
+      "release": "1.0.0",
+      "digest": "sha256:1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6"
+    },
+    "reference_validator": {
+      "release": "1.0.0",
+      "digest": "sha256:33528a97f6405809ead8a9f542c1c2dae9d89cb6c966943def6ca80097e8f67a"
+    }
+  },
+  "certification_state": "contract-valid"
+}

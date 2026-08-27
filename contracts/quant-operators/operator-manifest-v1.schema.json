@@ -1,0 +1,239 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json",
+  "title": "OperatorManifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract_version", "operator_id", "operator_version", "semantic_name", "distribution", "module", "callable", "execution_scope", "lifecycle", "causality", "availability", "mutates_input", "availability_depends_on_input", "input", "parameters", "output", "determinism", "implementation"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "contract_version": { "const": 1 },
+    "operator_id": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$" },
+    "operator_version": {
+      "allOf": [
+        { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+        { "not": { "pattern": "[\\r\\n]" } }
+      ]
+    },
+    "semantic_name": { "type": "string", "minLength": 1 },
+    "distribution": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$" },
+    "module": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:_[a-z0-9]+)*)*$" },
+    "callable": { "type": "string", "pattern": "^[a-z][a-z0-9]*(?:_[a-z0-9]+)*$" },
+    "execution_scope": { "enum": ["time_series", "cross_section", "panel", "research_only"] },
+    "lifecycle": { "enum": ["stateless", "fit_transform", "evaluation", "data_access", "visualization"] },
+    "causality": { "enum": ["past_only", "label_dependent", "future_using"] },
+    "availability": { "enum": ["pre_open_t", "open_t", "intraday_t", "close_t", "after_close_t", "publication_time"] },
+    "mutates_input": { "const": false },
+    "availability_depends_on_input": { "type": "boolean" },
+    "availability_derivation": { "type": "string", "minLength": 1 },
+    "input": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["required_columns", "optional_columns", "supported_dtypes", "minimum_assets", "minimum_time_length", "requires_complete_cross_section", "requires_benchmark", "requires_industry_data", "requires_market_cap_data", "requires_fundamental_data", "requires_sorted_input", "required_context"],
+      "properties": {
+        "required_columns": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" } },
+        "optional_columns": { "type": "array", "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" } },
+        "supported_dtypes": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "enum": ["boolean", "int64", "float64", "string", "date", "datetime"] } },
+        "minimum_assets": { "type": "integer", "minimum": 1 },
+        "minimum_time_length": { "type": "integer", "minimum": 1 },
+        "requires_complete_cross_section": { "type": "boolean" },
+        "requires_benchmark": { "type": "boolean" },
+        "requires_industry_data": { "type": "boolean" },
+        "requires_market_cap_data": { "type": "boolean" },
+        "requires_fundamental_data": { "type": "boolean" },
+        "requires_sorted_input": {
+          "type": "boolean",
+          "description": "Whether the operator requires ascending input sort order."
+        },
+        "required_sort_order": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "description": "Ascending sort keys restricted by the semantic validator to date, code, or required input columns.",
+          "items": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" }
+        },
+        "required_context": { "type": "array", "uniqueItems": true, "items": { "enum": ["timezone", "calendar", "frequency", "timestamp_semantics", "currency", "price_adjustment", "data_version", "source"] } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "requires_sorted_input": { "const": true } }, "required": ["requires_sorted_input"] },
+          "then": { "required": ["required_sort_order"] }
+        },
+        {
+          "if": { "properties": { "requires_sorted_input": { "const": false } }, "required": ["requires_sorted_input"] },
+          "then": { "not": { "required": ["required_sort_order"] } }
+        }
+      ]
+    },
+    "parameters": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["type", "default", "required", "constraints", "unit", "affects_warmup", "affects_output_fields", "affects_causality", "affects_availability"],
+        "properties": {
+          "type": { "enum": ["integer", "number", "boolean", "string", "array", "object"] },
+          "default": {},
+          "required": { "type": "boolean" },
+          "constraints": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "enum": { "type": "array", "minItems": 1, "uniqueItems": true },
+              "minimum": { "type": "number" },
+              "maximum": { "type": "number" },
+              "exclusive_minimum": { "type": "number" },
+              "exclusive_maximum": { "type": "number" },
+              "min_length": { "type": "integer", "minimum": 0 },
+              "max_length": { "type": "integer", "minimum": 0 },
+              "pattern": { "type": "string" },
+              "min_items": { "type": "integer", "minimum": 0 },
+              "max_items": { "type": "integer", "minimum": 0 }
+            }
+          },
+          "unit": { "type": "string" },
+          "affects_warmup": { "type": "boolean" },
+          "affects_output_fields": { "type": "boolean" },
+          "affects_causality": { "type": "boolean" },
+          "affects_availability": { "type": "boolean" }
+        },
+        "allOf": [
+          { "if": { "properties": { "type": { "const": "integer" } }, "required": ["type"] }, "then": { "properties": { "default": { "type": "integer" } } } },
+          { "if": { "properties": { "type": { "const": "number" } }, "required": ["type"] }, "then": { "properties": { "default": { "type": "number" } } } },
+          { "if": { "properties": { "type": { "const": "boolean" } }, "required": ["type"] }, "then": { "properties": { "default": { "type": "boolean" } } } },
+          { "if": { "properties": { "type": { "const": "string" } }, "required": ["type"] }, "then": { "properties": { "default": { "type": "string" } } } },
+          { "if": { "properties": { "type": { "const": "array" } }, "required": ["type"] }, "then": { "properties": { "default": { "type": "array" } } } },
+          { "if": { "properties": { "type": { "const": "object" } }, "required": ["type"] }, "then": { "properties": { "default": { "type": "object" } } } }
+        ]
+      }
+    },
+    "output": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fields", "alignment", "warmup", "nan_policy", "multiple_outputs"],
+      "properties": {
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name_template", "dtype", "value_range"],
+            "properties": {
+              "name_template": { "type": "string", "minLength": 1 },
+              "dtype": { "enum": ["boolean", "int64", "float64", "string", "date", "datetime"] },
+              "value_range": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "alignment": { "enum": ["preserve_input_order", "canonical_order", "explicit_keyed_output"] },
+        "warmup": { "type": "string", "minLength": 1 },
+        "nan_policy": { "enum": ["propagate", "skip_window", "require_complete", "explicit_fill"] },
+        "fill_value": { "$ref": "#/$defs/strictJsonValue" },
+        "fill_method": { "enum": ["constant", "forward_fill", "backward_fill", "interpolate"] },
+        "multiple_outputs": { "type": "boolean" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "nan_policy": { "const": "explicit_fill" } }, "required": ["nan_policy"] },
+          "then": { "anyOf": [{ "required": ["fill_value"] }, { "required": ["fill_method"] }] }
+        },
+        {
+          "if": {
+            "properties": {
+              "nan_policy": { "const": "explicit_fill" },
+              "fill_method": { "const": "constant" }
+            },
+            "required": ["nan_policy", "fill_method"]
+          },
+          "then": { "required": ["fill_value"] }
+        }
+      ]
+    },
+    "determinism": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bitwise_deterministic", "random_seed_required", "tolerance", "tested_platforms"],
+      "properties": {
+        "bitwise_deterministic": { "type": "boolean" },
+        "random_seed_required": { "type": "boolean" },
+        "seed_parameter": { "type": "string", "pattern": "^[a-z][a-z0-9_]*$" },
+        "tolerance": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["absolute", "relative"],
+          "properties": {
+            "absolute": { "type": "number", "minimum": 0 },
+            "relative": { "type": "number", "minimum": 0 }
+          }
+        },
+        "tested_platforms": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string", "minLength": 1 } }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "random_seed_required": { "const": true } }, "required": ["random_seed_required"] },
+          "then": { "required": ["seed_parameter"] }
+        },
+        {
+          "if": { "properties": { "random_seed_required": { "const": false } }, "required": ["random_seed_required"] },
+          "then": { "not": { "required": ["seed_parameter"] } }
+        }
+      ]
+    },
+    "implementation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["package_version", "source_commit", "source_files", "source_tree_digest", "implementation_digest", "build_identifier"],
+      "properties": {
+        "package_version": {
+          "allOf": [
+            { "type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$" },
+            { "not": { "pattern": "[\\r\\n]" } }
+          ]
+        },
+        "source_commit": { "type": "string", "pattern": "^(?:git-sha1:[0-9a-f]{40}|git-sha256:[0-9a-f]{64})$" },
+        "source_files": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^(?!/)(?!.*\\\\)(?!.*//)(?!.*(?:^|/)\\.\\.?(?:/|$))[^/]+(?:/[^/]+)*$"
+          }
+        },
+        "source_tree_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "implementation_digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "build_identifier": { "type": "string", "minLength": 1 }
+      }
+    }
+  },
+  "$defs": {
+    "strictJsonValue": {
+      "oneOf": [
+        { "type": "null" },
+        { "type": "boolean" },
+        { "type": "number" },
+        { "type": "string" },
+        { "type": "array", "items": { "$ref": "#/$defs/strictJsonValue" } },
+        { "type": "object", "additionalProperties": { "$ref": "#/$defs/strictJsonValue" } }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "availability_depends_on_input": { "const": true } },
+        "required": ["availability_depends_on_input"]
+      },
+      "then": { "required": ["availability_derivation"] }
+    },
+    {
+      "if": {
+        "properties": { "availability_depends_on_input": { "const": false } },
+        "required": ["availability_depends_on_input"]
+      },
+      "then": { "not": { "required": ["availability_derivation"] } }
+    }
+  ]
+}

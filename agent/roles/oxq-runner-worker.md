@@ -1,7 +1,7 @@
 ---
 name: oxq-runner-worker
 description: >-
-  OpenXQuant worker for running an authorized backtest from gated artifacts
+  open-xquant worker for running an authorized backtest from gated artifacts
   after spec and runtime audits have passed.
 mode: subagent
 role_kind: runner

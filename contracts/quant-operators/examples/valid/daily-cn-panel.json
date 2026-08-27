@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "primary_key": ["date", "code"],
+  "columns": [
+    { "name": "close", "dtype": "float64", "required": true },
+    { "name": "sma_3", "dtype": "float64", "required": true }
+  ],
+  "context": {
+    "timezone": "Asia/Shanghai",
+    "calendar": "XSHG",
+    "frequency": "1d",
+    "timestamp_semantics": "session_date",
+    "currency": "CNY",
+    "price_adjustment": "forward_adjusted",
+    "data_version": "2024-01-02",
+    "source": "example"
+  },
+  "alignment": "canonical_order",
+  "records": [
+    { "date": "2024-01-02", "code": "000001.SZ", "close": 10.25, "sma_3": null },
+    { "date": "2024-01-02", "code": "600000.SH", "close": 7.86, "sma_3": null }
+  ]
+}

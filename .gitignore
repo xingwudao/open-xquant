@@ -44,8 +44,10 @@ docs/superpowers/plans/
 docs/guide-rules.md
 
 # Local research and testing
+.open-xquant/
 examples/research/
 docs/local/
 scripts/
 docs/reference/
 /.baoyu-skills/baoyu-infographic/
+.superpowers/

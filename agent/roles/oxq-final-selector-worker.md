@@ -1,7 +1,7 @@
 ---
 name: oxq-final-selector-worker
 description: >-
-  OpenXQuant worker for selecting the final research candidate version after
+  open-xquant worker for selecting the final research candidate version after
   audits, reports, comparisons, and user-confirmed policy exist.
 mode: subagent
 role_kind: final_selector

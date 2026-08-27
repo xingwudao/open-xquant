@@ -267,7 +267,7 @@ def _windows_local_app_data_path() -> Path:
 
 def _stable_runtime_base_path() -> Path:
     if os.name == "nt":
-        return _windows_local_app_data_path() / "OpenXQuant"
+        return _windows_local_app_data_path() / "open-xquant"
     system_temporary = Path("/tmp")
     if system_temporary.is_dir():
         return system_temporary

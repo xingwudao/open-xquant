@@ -1,0 +1,100 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-xquant.dev/contracts/quant-operators/operator-binding-v1.schema.json",
+  "title": "OperatorBinding v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "binding_version",
+    "operator_id",
+    "operator_version",
+    "distribution",
+    "distribution_version",
+    "source_commit",
+    "source_tree_digest",
+    "schema_id",
+    "schema_release",
+    "schema_digest",
+    "manifest_digest",
+    "implementation_digest",
+    "surface_release",
+    "contract_surface",
+    "certification_state"
+  ],
+  "properties": {
+    "binding_version": { "const": 1 },
+    "operator_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?:\\.[a-z][a-z0-9]*(?:-[a-z0-9]+)*)+$"
+    },
+    "operator_version": { "$ref": "#/$defs/semanticVersion" },
+    "distribution": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "distribution_version": { "$ref": "#/$defs/semanticVersion" },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^(?:git-sha1:[0-9a-f]{40}|git-sha256:[0-9a-f]{64})$"
+    },
+    "source_tree_digest": { "$ref": "#/$defs/sha256Digest" },
+    "schema_id": {
+      "const": "https://open-xquant.dev/contracts/quant-operators/operator-manifest-v1.schema.json"
+    },
+    "schema_release": { "const": "1.0.0" },
+    "schema_digest": { "$ref": "#/$defs/sha256Digest" },
+    "manifest_digest": { "$ref": "#/$defs/sha256Digest" },
+    "implementation_digest": { "$ref": "#/$defs/sha256Digest" },
+    "surface_release": { "const": "1.0.0" },
+    "contract_surface": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quant_panel_schema",
+        "operator_manifest_schema",
+        "operator_binding_schema",
+        "reference_validator"
+      ],
+      "properties": {
+        "quant_panel_schema": { "$ref": "#/$defs/contractArtifact" },
+        "operator_manifest_schema": { "$ref": "#/$defs/contractArtifact" },
+        "operator_binding_schema": { "$ref": "#/$defs/contractArtifact" },
+        "reference_validator": { "$ref": "#/$defs/contractArtifact" }
+      }
+    },
+    "certification_state": {
+      "enum": [
+        "candidate",
+        "contract-valid",
+        "research-certified",
+        "runtime-certified",
+        "ml-certified",
+        "revoked"
+      ]
+    }
+  },
+  "$defs": {
+    "semanticVersion": {
+      "allOf": [
+        {
+          "type": "string",
+          "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+        },
+        { "not": { "pattern": "[\\r\\n]" } }
+      ]
+    },
+    "sha256Digest": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "contractArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["release", "digest"],
+      "properties": {
+        "release": { "const": "1.0.0" },
+        "digest": { "$ref": "#/$defs/sha256Digest" }
+      }
+    }
+  }
+}

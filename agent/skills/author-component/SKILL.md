@@ -1,7 +1,7 @@
 ---
 name: author-component
 description: >-
-  Author workspace-local OpenXQuant custom components from component_request.json,
+  Author workspace-local open-xquant custom components from component_request.json,
   with tests, manifest hashing, catalog refresh, and no global SDK mutation.
 ---
 
@@ -72,7 +72,7 @@ the resolved `<components_dir>` for every reusable component bundle path below.
 
 # Component Author
 
-Create workspace-local custom OpenXQuant components only after the component
+Create workspace-local custom open-xquant components only after the component
 catalog and recipe catalog cannot satisfy the requested behavior.
 
 This is code authoring, testing, registration, and provenance work. It is not
@@ -193,13 +193,13 @@ dirty component bundle.
    `result.json` and stop.
 4. If the request asks for a workspace-local `Rule`, write a blocked
    `result.json` explaining that custom `Rule` components require explicit
-   OpenXQuant framework development and runtime support before they can be
+   open-xquant framework development and runtime support before they can be
    used in audited backtests.
 5. Block when behavior, formula, thresholds, output domain, state semantics, or
    causal suitability are ambiguous.
 6. Create or update the local extension package.
 7. Write targeted tests before implementation for new components.
-8. Implement using OpenXQuant protocols and existing component patterns.
+8. Implement using open-xquant protocols and existing component patterns.
 9. Register the component from the extension package, without modifying the
    installed SDK bundle.
    Use an extension module namespace such as `oxq_components.*`; do not declare
@@ -282,7 +282,7 @@ Signal:
 Rule:
 
 - Block workspace-local `Rule` authoring by default. A custom `Rule` is only
-  allowed when the user explicitly states this is OpenXQuant framework
+  allowed when the user explicitly states this is open-xquant framework
   development and the implementation adds audited spec validation, compile,
   runtime, and backtest support in the source tree.
 - Do not emit `component_ready` for a workspace-local custom `Rule`.
@@ -345,7 +345,7 @@ Write `<components_dir>/bundles/<bundle_id>/component_manifest.json` with:
 }
 ```
 
-The `bundle_hash` must be computed by OpenXQuant, not invented by the worker.
+The `bundle_hash` must be computed by open-xquant, not invented by the worker.
 
 ## Result Artifact
 
@@ -397,7 +397,7 @@ for the user or supervising agent.
 - Do not write reports.
 - Do not modify generated run artifacts.
 - Do not modify the installed SDK bundle.
-- Do not modify OpenXQuant source code unless the user explicitly says the task
+- Do not modify open-xquant source code unless the user explicitly says the task
   is framework development.
 - Do not install unapproved third-party packages.
 - Do not download network data.

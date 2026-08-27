@@ -2316,7 +2316,7 @@ def test_strategy_compile_preview_rejects_unowned_nonempty_directory_without_del
     )
 
     assert result.exit_code == 1
-    assert "not an OpenXQuant-managed compile preview" in result.output
+    assert "not an open-xquant-managed compile preview" in result.output
     assert sentinel.read_text(encoding="utf-8") == "keep me\n"
 
 

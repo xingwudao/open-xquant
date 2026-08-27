@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-xquant.dev/contracts/operator-certification/candidate-build-v1.schema.json",
+  "title": "Operator candidate build v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "provider", "release", "source_commit", "python", "build_command", "artifacts"],
+  "properties": {
+    "schema_version": {"type": "integer", "const": 1},
+    "provider": {"$ref": "#/$defs/provider"},
+    "release": {"$ref": "#/$defs/semanticVersion"},
+    "source_commit": {"type": "string", "pattern": "^git-sha1:[0-9a-f]{40}$"},
+    "python": {"type": "string", "minLength": 1},
+    "build_command": {"type": "string", "minLength": 1},
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "contains": {"type": "object", "properties": {"role": {"const": "implementation"}}, "required": ["role"]},
+      "minContains": 1,
+      "maxContains": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["distribution", "version", "filename", "role", "build_identifier", "digest"],
+        "properties": {
+          "distribution": {"$ref": "#/$defs/provider"},
+          "version": {"$ref": "#/$defs/semanticVersion"},
+          "filename": {"type": "string", "minLength": 1, "pattern": "^[^/\\\\]+$"},
+          "role": {"enum": ["implementation", "runtime-dependency"]},
+          "build_identifier": {"type": "string", "minLength": 1},
+          "digest": {"$ref": "#/$defs/sha256Digest"}
+        }
+      }
+    }
+  },
+  "$defs": {
+    "provider": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"},
+    "semanticVersion": {"allOf": [{"type": "string", "pattern": "^(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)\\.(?:0|[1-9][0-9]*)(?:-(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:(?:0|[1-9][0-9]*)|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"}, {"not": {"pattern": "[\\r\\n]"}}]},
+    "sha256Digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"}
+  }
+}

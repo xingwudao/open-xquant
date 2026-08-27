@@ -1,7 +1,7 @@
 ---
 name: oxq-strategy-brainstorm-worker
 description: >-
-  OpenXQuant worker for guiding the user through the pre-spec strategy idea
+  open-xquant worker for guiding the user through the pre-spec strategy idea
   brainstorm workflow and writing strategy_idea_brief.json.
 mode: subagent
 role_kind: strategy_brainstorm

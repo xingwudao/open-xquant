@@ -2,7 +2,7 @@
 
 name: oxq-experiment-comparator-worker
 description: >-
-  OpenXQuant worker for comparing completed runs or strategy versions without
+  open-xquant worker for comparing completed runs or strategy versions without
   modifying candidate run artifacts.
 mode: subagent
 role_kind: experiment_comparator

@@ -396,7 +396,7 @@ decision_policy:
 ```
 
 `schema_version` 是 SPEC schema 版本；`required_oxq_version` 是生成和审计该
-策略配置时使用的 OpenXQuant 包版本，用于复现和运行时版本校准。
+策略配置时使用的 open-xquant 包版本，用于复现和运行时版本校准。
 
 `oxq spec init` 支持显式模板 preset。默认 `us_equity` 保持最小模板行为；
 `cn_a_share` 用于生成 A 股候选模板，但这些值仍然只是候选值。
@@ -827,13 +827,13 @@ Spec Auditor 在通过前必须用 Python API
 `oxq.spec.validate_mapping_contract` 校验该
 contract。这样可以区分三类边界：
 
-- OpenXQuant SPEC 层必须承载的策略语义
+- open-xquant SPEC 层必须承载的策略语义
 - Studio 或报告层可以承载的展示、交互、审批和 UI 配置
 - 当前框架不支持、需要阻断或转入组件/框架开发的语义
 
 ### 13.3 Agent Roles（agent/roles/）
 
-`agent/roles/*.md` 是 OpenXQuant multi-agent 预制角色的单一来源。
+`agent/roles/*.md` 是 open-xquant multi-agent 预制角色的单一来源。
 安装器会把这些角色渲染成各 Agent 的官方格式：
 
 - Codex: `${CODEX_HOME:-~/.codex}/agents/*.toml`
@@ -987,28 +987,26 @@ oxq experiment add <phase_paths.09_backtests>/<run_id>/
 
 ---
 
-## 18. eQuant-Py 官方量化计算层整合
+## 18. equant-py 官方量化计算层整合
 
-> 状态：方案 B 已由用户确认
+> [Quant Operator Contract v1](../contracts/quant-operators/operator-contract-v1.md)
+> 已于 2026-08-26 冻结。
 >
-> 前提：eQuant-Py 已完整满足
-> [Quant Operator Contract v1](../contracts/quant-operators/operator-contract-v1.md)。
->
-> 目标：在两个仓库继续独立演进的前提下，将 eQuant-Py 作为
+> 目标：在两个仓库继续独立演进的前提下，将 equant-py 作为
 > open-xquant 的官方量化计算层，同时保持 open-xquant 对研究语义、
 > 因果执行、审计、机器学习和 Agent 工作流的控制权。
 
-![open-xquant 与 eQuant-Py 整合架构信息图](infographic/equant-integration-architecture/infographic.png)
+![open-xquant 与 equant-py 整合架构信息图](infographic/equant-integration-architecture/infographic.png)
 
 ### 18.1 结论
 
-open-xquant 不应合并 eQuant-Py 仓库，也不应把 eQuant-Py 直接设置为
+open-xquant 不应合并 equant-py 仓库，也不应把 equant-py 直接设置为
 所有核心模块的硬依赖。
 
 最终关系应是：
 
 > open-xquant 是 AI 原生的实用量化研究系统；
-> eQuant-Py 是其首个官方认证量化计算层。
+> equant-py 是其首个官方认证量化计算层。
 
 open-xquant 负责：
 
@@ -1021,7 +1019,7 @@ open-xquant 负责：
 - ML 数据集切分、训练、推理和模型 artifact。
 - Agent skill、角色、确认和工作区治理。
 
-eQuant-Py 负责：
+equant-py 负责：
 
 - 技术指标和数值原语。
 - 经典因子和 Alpha101。
@@ -1039,11 +1037,11 @@ eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。
 
 - open-xquant `main`：`6af7fa7`。
 - PR #61：`e5a9705`。
-- eQuant-Py `master`：`6d91171`。
+- equant-py `master`：`6d91171`。
 
 审阅覆盖 open-xquant 的 Engine、组件 Protocol、registry、component
 manifest、Strategy Spec、compiler、factor evaluation、audit、robustness、
-report 和 Agent 工作流，也覆盖 eQuant-Py 的 eTTR、eClassic、
+report 和 Agent 工作流，也覆盖 equant-py 的 eTTR、eClassic、
 eFactorCraft、eAlpha101、eBacktestCraft、edatatools 和统一入口。
 
 PR #61 的方向有价值：它识别出了两个项目之间的能力互补。
@@ -1217,11 +1215,11 @@ Agent 不负责：
 - Fill 和 Position。
 - paper/live 一致性。
 
-eQuant-Py 不参与订单和成交语义。
+equant-py 不参与订单和成交语义。
 
 #### 18.4.6 ML 研究层
 
-这是未来 open-xquant 的一等能力，不应交给 eQuant-Py 的便利函数隐式完成。
+这是未来 open-xquant 的一等能力，不应交给 equant-py 的便利函数隐式完成。
 
 负责：
 
@@ -1237,7 +1235,7 @@ eQuant-Py 不参与订单和成交语义。
 - 推理时点和特征可用性。
 - 模型漂移和稳定性分析。
 
-eQuant-Py 为 ML 层提供认证特征算子和拟合型变换。
+equant-py 为 ML 层提供认证特征算子和拟合型变换。
 
 ### 18.5 数据模型
 
@@ -1252,7 +1250,7 @@ dict[str, pd.DataFrame]
 每个 symbol 对应一个带时区索引的宽表。
 
 该模型与逐 bar 组合、规则和 Broker 逻辑结合紧密，
-不应为了 eQuant-Py 全面改写 Engine。
+不应为了 equant-py 全面改写 Engine。
 
 #### 18.5.2 集成边界使用 QuantPanel
 
@@ -1336,7 +1334,7 @@ FittedOperatorState
 ```
 
 这些是 open-xquant 自己的稳定类型，
-不从 eQuant-Py 导入类型。
+不从 equant-py 导入类型。
 
 #### 18.6.2 `manifest.py`
 
@@ -1410,7 +1408,7 @@ src/oxq/integrations/equant/
 
 #### 18.7.1 `loader.py`
 
-只加载 eQuant-Py 发布的：
+只加载 equant-py 发布的：
 
 - compatibility manifest。
 - operator catalog。
@@ -1426,7 +1424,7 @@ src/oxq/integrations/equant/
 
 #### 18.7.3 `executor.py`
 
-负责调用 eQuant-Py 的兼容入口，而不是直接调用全部公开函数。
+负责调用 equant-py 的兼容入口，而不是直接调用全部公开函数。
 
 它必须：
 
@@ -1826,7 +1824,7 @@ eBacktestCraft 不进入 open-xquant 正式依赖。
 
 允许用途：
 
-- eQuant-Py 独立用户快速验证。
+- equant-py 独立用户快速验证。
 - 算法开发者做 smoke backtest。
 - open-xquant 内部交叉验证某些纯组合结果。
 
@@ -2454,9 +2452,9 @@ exposure_policy = volatility_target_15
 
 ### 18.29 发布与兼容治理
 
-#### 18.29.1 eQuant-Py 发布
+#### 18.29.1 equant-py 发布
 
-eQuant-Py 独立发布 release candidate 和正式版本。
+equant-py 独立发布 release candidate 和正式版本。
 
 #### 18.29.2 open-xquant 认证
 
@@ -2464,7 +2462,7 @@ open-xquant 在自己的 CI 和认证记录中决定是否支持该版本。
 
 #### 18.29.3 异步升级
 
-eQuant-Py 新版本发布后，open-xquant 不自动升级。
+equant-py 新版本发布后，open-xquant 不自动升级。
 
 只有在：
 
@@ -2562,7 +2560,7 @@ eQuant-Py 新版本发布后，open-xquant 不自动升级。
 
 ### 18.32 最终架构原则
 
-这次整合不应被理解成“open-xquant 缺少指标，所以引入 eQuant-Py”。
+这次整合不应被理解成“open-xquant 缺少指标，所以引入 equant-py”。
 
 它真正建立的是三个长期能力：
 
@@ -2570,7 +2568,7 @@ eQuant-Py 新版本发布后，open-xquant 不自动升级。
 2. 面向 Agent 和机器学习的结构化计算语义。
 3. 从研究到回测再到实盘的一致性和可追溯性。
 
-eQuant-Py 提高 open-xquant 的计算广度和深度。
+equant-py 提高 open-xquant 的计算广度和深度。
 
 open-xquant 则把这些算法变成可以被严肃研究、验证、比较和交易的资产。
 

@@ -141,7 +141,7 @@ def test_missing_config_root_aliases_share_bootstrap_lock(
 ) -> None:
     monkeypatch.setattr(agent_module, "verified_user_runtime_root", lambda: tmp_path / "runtime")
     if alias_kind == "case":
-        canonical = tmp_path / "Config" / "Open-XQuant"
+        canonical = tmp_path / "Config" / "open-xquant"
         alternate = tmp_path / "config" / "open-xquant"
     else:
         backing = tmp_path / "backing"
@@ -151,7 +151,7 @@ def test_missing_config_root_aliases_share_bootstrap_lock(
             alias.symlink_to(backing, target_is_directory=True)
         except OSError as exc:
             pytest.skip(f"directory symlinks are unavailable: {exc}")
-        canonical = backing / "Config" / "Open-XQuant"
+        canonical = backing / "Config" / "open-xquant"
         alternate = alias / "config" / "open-xquant"
 
     monkeypatch.setattr(agent_module, "config_dir", lambda: canonical)

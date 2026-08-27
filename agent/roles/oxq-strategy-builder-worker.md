@@ -1,7 +1,7 @@
 ---
 name: oxq-strategy-builder-worker
 description: >-
-  OpenXQuant worker for constructing and deterministically validating
+  open-xquant worker for constructing and deterministically validating
   strategy_spec.yaml from audited strategy idea artifacts.
 mode: subagent
 role_kind: strategy_builder

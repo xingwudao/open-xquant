@@ -178,7 +178,7 @@ workspace_classifier:
   `review-research-report`.
 - New workspace-local Indicator, Signal, or PortfolioOptimizer component: use
   `author-component`. Workspace-local custom Rule requests must block unless
-  the user explicitly asks for OpenXQuant framework development that adds
+  the user explicitly asks for open-xquant framework development that adds
   audited spec, compile, runtime, and backtest support; in that framework case
   use `create-component`.
 - Broker connectivity, paper trading, live trading, account checks, or order
@@ -385,7 +385,7 @@ When installing interactively, ask the user to choose one profile for this
 machine:
 
 - `multi-agent`: recommended when the Agent supports multi-Agent or subagent
-  workflows; installs narrow leaf skills and prebuilt OpenXQuant worker roles
+  workflows; installs narrow leaf skills and prebuilt open-xquant worker roles
   where the target has an official agent-role directory.
 - `standalone-agent`: for a single Agent that should orchestrate the same
   narrow phase skills itself; does not install prebuilt worker roles.

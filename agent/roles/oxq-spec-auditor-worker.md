@@ -1,7 +1,7 @@
 ---
 name: oxq-spec-auditor-worker
 description: >-
-  OpenXQuant worker for auditing strategy_spec.yaml against an audited strategy
+  open-xquant worker for auditing strategy_spec.yaml against an audited strategy
   idea, field provenance, and component or recipe provenance.
 mode: subagent
 role_kind: spec_auditor

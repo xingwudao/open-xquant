@@ -69,7 +69,7 @@ _NEGATIVE_CONFIRMATION_RE = re.compile(
     r"(未指定|没有指定|未确认|没有确认|未明确|用户未|用户没有|not specified|not confirmed|unconfirmed|"
     r"did not specify|did not confirm|not explicitly specified|not explicitly confirmed|"
     r"agent\s+(?:chose|added|inferred|split)|agent将|agent自行|"
-    r"framework default|runtime default|parser default|template default|openxquant default|"
+    r"framework default|runtime default|parser default|template default|open-?xquant default|"
     r"effective\s+strategyspec\s+default|documented\s+for\s+full\s+spec\s+coverage|absent\s+from\s+yaml|"
     r"框架默认|运行时默认|解析器默认|模板默认|系统默认)",
     re.IGNORECASE,
