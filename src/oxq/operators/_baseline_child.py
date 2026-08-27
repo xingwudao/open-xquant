@@ -1364,6 +1364,12 @@ def main() -> int:
             time.sleep(0.005)
     request_path = Path(sys.argv[1])
     response_path = Path(sys.argv[2])
+    # The legacy baseline verifier still supplies its vetted numerical runtime
+    # from the control environment.  Start it explicitly because `-S` disables
+    # automatic site initialization for the contained controller startup.
+    import site
+
+    site.main()
     sys.argv[:] = [sys.argv[0]]
     if hasattr(sys, "orig_argv"):
         sys.orig_argv = [sys.orig_argv[0]]

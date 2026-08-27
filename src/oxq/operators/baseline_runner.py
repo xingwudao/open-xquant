@@ -28,6 +28,7 @@ from oxq.operators.certification import (
     _snapshot_contract_surface,
     _validate_schema,
 )
+from oxq.operators.child_process import run_contained_child
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import BaselineCase, BaselineResult, BuildArtifact, ContractCertification
 
@@ -566,16 +567,18 @@ def _run_child(
         request_path.write_bytes(request_bytes)
         response_secret = secrets.token_bytes(32)
         try:
-            returncode = _run_child_process(
+            returncode = run_contained_child(
                 [
                     sys.executable,
                     "-I",
+                    "-S",
                     str(_child_script_path()),
                     str(request_path),
                     str(response_path),
                 ],
-                timeout_seconds,
+                timeout_seconds=timeout_seconds,
                 response_secret=response_secret,
+                environment=os.environ,
             )
         except subprocess.TimeoutExpired:
             raise _error(

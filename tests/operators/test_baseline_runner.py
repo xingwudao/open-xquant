@@ -1589,7 +1589,7 @@ def test_rejects_nonfinite_timeout_before_child_execution(
     def child_must_not_run(*args: object, **kwargs: object) -> object:
         raise AssertionError(f"child executed: {args!r} {kwargs!r}")
 
-    monkeypatch.setattr(baseline_runner, "_run_child_process", child_must_not_run)
+    monkeypatch.setattr(baseline_runner, "run_contained_child", child_must_not_run)
 
     _assert_failure(
         candidate,
