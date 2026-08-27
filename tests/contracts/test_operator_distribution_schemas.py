@@ -99,6 +99,19 @@ def test_shared_strict_formats_reject_ambiguous_json_and_paths() -> None:
             safe_relative_path(path)
 
 
+@pytest.mark.parametrize(
+    "invalid",
+    ["", ".", "dir/.", "dir//file.json", "/absolute.json", "../escape.json", "one\\two.json", "trailing/"],
+)
+def test_certification_record_v2_paths_are_canonical_posix_components(
+    invalid: str,
+) -> None:
+    path_schema = _schemas()["certification_record_v2"]["$defs"]["path"]
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(path_schema).validate(invalid)
+
+
 def test_release_index_accepts_closed_wheel_entries() -> None:
     schema = _schemas()["operator_release"]
     digest = "sha256:" + "a" * 64

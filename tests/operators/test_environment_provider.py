@@ -159,6 +159,28 @@ def test_verify_installed_provider_rejects_missing_runtime_file(
         verify_installed_provider("equant-py==1.0.0")
 
 
+def test_verify_installed_provider_rejects_symlinked_parent_component(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    official_provider: EnvironmentProvider,
+) -> None:
+    del official_provider
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "__init__.py").write_bytes(RUNTIME_BYTES)
+    distribution = FakeDistribution(tmp_path / "site-packages")
+    distribution.add_file(MANIFEST_PATH, MANIFEST_BYTES)
+    distribution.add_file(BASELINE_PATH, BASELINE_BYTES)
+    runtime_parent = distribution.root / "ettr"
+    runtime_parent.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(external, runtime_parent)
+    distribution._files.append(RUNTIME_PATH)
+    monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
+
+    with pytest.raises(OperatorCertificationError, match="regular file"):
+        verify_installed_provider("equant-py==1.0.0")
+
+
 @pytest.mark.parametrize("artifact_kind", ["directory", "symlink"])
 def test_verify_installed_provider_rejects_non_regular_declared_files(
     monkeypatch: pytest.MonkeyPatch,

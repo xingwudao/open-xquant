@@ -67,6 +67,12 @@ def resolve_environment_operator(
             "certified environment operator module is unavailable",
             operator_id,
         ) from exc
+    except Exception as exc:
+        raise _error(
+            "environment_operator_module_unavailable",
+            "certified environment operator module is unavailable",
+            operator_id,
+        ) from exc
     module_file = getattr(module, "__file__", None)
     if not isinstance(module_file, str) or Path(module_file).resolve(strict=True) != origin:
         raise _error(
@@ -102,14 +108,11 @@ def _verified_module_origin(
     }
     loaded = sys.modules.get(module_name)
     if loaded is not None:
-        loaded_file = getattr(loaded, "__file__", None)
-        if not isinstance(loaded_file, str):
-            raise _error(
-                "environment_operator_module_unverified",
-                "certified environment operator module origin is unverified",
-                operator_id,
-            )
-        return _verify_origin_path(Path(loaded_file), verified, operator_id)
+        raise _error(
+            "environment_operator_module_preloaded",
+            "certified environment operator module is already loaded",
+            operator_id,
+        )
 
     spec = importlib.util.find_spec(module_name)
     if spec is None or spec.origin is None or spec.origin in {"built-in", "frozen"}:

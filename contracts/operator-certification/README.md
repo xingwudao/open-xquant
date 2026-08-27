@@ -89,7 +89,7 @@ baseline values. Any failed operator rejects the whole provider release.
 ## Certified package result
 
 A certified provider is distributed as a normal Python package. The provider
-wheel carries its own OpenXQuant certification artifacts, for example:
+wheel carries its own open-xquant certification artifacts, for example:
 
 ```text
 <provider-wheel>/
@@ -101,9 +101,9 @@ wheel carries its own OpenXQuant certification artifacts, for example:
       <baseline>.json
 ```
 
-OpenXQuant does not import a ZIP bundle or maintain a local certification
+open-xquant does not import a ZIP bundle or maintain a local certification
 registry for runtime use. Users install the provider with Python packaging and
-then ask OpenXQuant to verify the installed package:
+then ask open-xquant to verify the installed package:
 
 ```bash
 pip install equant-py==1.0.0

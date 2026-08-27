@@ -182,7 +182,7 @@ def test_missing_trust_fails_before_repository_loading(tmp_path: Path) -> None:
     }
 
 
-def test_invalid_target_fails_before_provider_repository_loading(tmp_path: Path) -> None:
+def test_certify_provider_no_longer_accepts_target(tmp_path: Path) -> None:
     repository = tmp_path / "not-a-repository"
     repository.mkdir()
 
@@ -202,13 +202,8 @@ def test_invalid_target_fails_before_provider_repository_loading(tmp_path: Path)
         ],
     )
 
-    assert result.exit_code == 1
-    assert json.loads(result.output) == {
-        "code": "certification_target_invalid",
-        "message": "certification target must be python-abi-platform",
-        "stage": "target",
-        "status": "fail",
-    }
+    assert result.exit_code == 2
+    assert "No such option: --target" in result.output
 
 
 def test_rejects_remote_provider_url_at_the_cli_boundary(tmp_path: Path) -> None:

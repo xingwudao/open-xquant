@@ -3,14 +3,14 @@
 from __future__ import annotations
 
 import sys
+import types
 from pathlib import Path
 
 import pytest
 
 import oxq.operators.environment_runtime as environment_runtime
 from oxq.operators.environment_index import CertifiedOperatorRef, EnvironmentProvider
-from oxq.operators.environment_provider import InstalledEnvironmentProvider
-from oxq.operators.environment_provider import VerifiedRuntimeFile
+from oxq.operators.environment_provider import InstalledEnvironmentProvider, VerifiedRuntimeFile
 from oxq.operators.environment_runtime import resolve_environment_operator
 from oxq.operators.errors import OperatorCertificationError
 
@@ -155,6 +155,44 @@ def test_resolve_environment_operator_rejects_shadowed_runtime_module_before_imp
 
     assert caught.value.code == "environment_operator_module_unverified"
     assert "ettr" not in sys.modules
+
+
+def test_resolve_environment_operator_rejects_preloaded_provider_module(
+    fake_verified_provider: InstalledEnvironmentProvider,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    del fake_verified_provider
+    module = types.ModuleType("ettr")
+    module.__file__ = str(Path(__file__))
+    module.sma = lambda frame, **parameters: "not verified"
+    monkeypatch.setitem(sys.modules, "ettr", module)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_module_preloaded"
+
+
+def test_resolve_environment_operator_wraps_provider_import_runtime_failure(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    verified = next(iter(fake_verified_provider.runtime_files.values())).path
+    raw = b"raise RuntimeError('broken runtime dependency')\n"
+    verified.write_bytes(raw)
+    digest = _digest(raw)
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=verified,
+        digest=digest,
+    )
+    sys.modules.pop("ettr", None)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_module_unavailable"
+    assert caught.value.stage == "environment_runtime"
 
 
 def _digest(raw: bytes) -> str:

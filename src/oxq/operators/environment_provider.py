@@ -141,7 +141,7 @@ def _read_declared_file_with_path(
             f"installed environment provider file is missing: {package_path}",
         )
     path = Path(distribution.locate_file(package_path))
-    if path.is_symlink() or not path.is_file():
+    if _path_has_symlink_component(path) or not path.is_file():
         raise _error(
             "environment_provider_file_not_regular",
             f"installed environment provider file must be a regular file: {package_path}",
@@ -160,6 +160,15 @@ def _read_declared_file_with_path(
             f"installed environment provider file digest mismatch: {package_path}",
         )
     return raw, path.resolve(strict=True)
+
+
+def _path_has_symlink_component(path: Path) -> bool:
+    current = Path(path.anchor) if path.is_absolute() else Path()
+    for part in path.parts[1:] if path.is_absolute() else path.parts:
+        current = current / part
+        if current.is_symlink():
+            return True
+    return False
 
 
 def _verify_manifest_certification_state(
