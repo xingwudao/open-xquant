@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 import importlib
+import importlib.abc
+import importlib.machinery
 import importlib.util
+import inspect
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType
 
 from oxq.operators.environment_index import CertifiedOperatorRef
 from oxq.operators.environment_provider import InstalledEnvironmentProvider, verify_installed_provider
@@ -22,6 +27,17 @@ class EnvironmentOperatorBinding:
     provider_requirement: str
     manifest: Mapping[str, object]
     callable: Callable[..., object]
+
+
+@dataclass(frozen=True)
+class _VerifiedModuleSource:
+    module_name: str
+    path: Path
+    digest: str
+    is_package: bool
+
+
+_TRUSTED_RUNTIME_MODULES: dict[str, tuple[Path, str, ModuleType]] = {}
 
 
 def resolve_environment_operator(
@@ -58,9 +74,11 @@ def resolve_environment_operator(
             operator_id,
         )
 
-    origin = _verified_module_origin(installed, module_name, operator_id)
+    sources = _verified_module_sources(installed)
+    origin = _verified_module_origin(sources, module_name, operator_id)
+    _reject_untrusted_preloaded_modules(sources, operator_id)
     try:
-        module = importlib.import_module(module_name)
+        module = _import_verified_module(module_name, sources)
     except ImportError as exc:
         raise _error(
             "environment_operator_module_unavailable",
@@ -73,13 +91,7 @@ def resolve_environment_operator(
             "certified environment operator module is unavailable",
             operator_id,
         ) from exc
-    module_file = getattr(module, "__file__", None)
-    if not isinstance(module_file, str) or Path(module_file).resolve(strict=True) != origin:
-        raise _error(
-            "environment_operator_module_unverified",
-            "certified environment operator module origin is unverified",
-            operator_id,
-        )
+    _verify_module_object(module, origin, sources[module_name].digest, operator_id)
     implementation = getattr(module, callable_name, None)
     if not callable(implementation):
         raise _error(
@@ -87,6 +99,7 @@ def resolve_environment_operator(
             "certified environment operator callable is unavailable",
             operator_id,
         )
+    _verify_callable_owner(implementation, sources, operator_id)
 
     return EnvironmentOperatorBinding(
         operator_id=operator_id,
@@ -97,68 +110,223 @@ def resolve_environment_operator(
     )
 
 
-def _verified_module_origin(
+def _verified_module_sources(
     installed: InstalledEnvironmentProvider,
+) -> dict[str, _VerifiedModuleSource]:
+    sources: dict[str, _VerifiedModuleSource] = {}
+    for runtime in installed.runtime_files.values():
+        try:
+            path = runtime.path.resolve(strict=True)
+        except OSError:
+            continue
+        module_name, is_package = _module_name_from_runtime_path(runtime.package_path)
+        if module_name is None:
+            continue
+        sources[module_name] = _VerifiedModuleSource(
+            module_name=module_name,
+            path=path,
+            digest=runtime.digest,
+            is_package=is_package,
+        )
+    return sources
+
+
+def _module_name_from_runtime_path(package_path: str) -> tuple[str | None, bool]:
+    path = Path(package_path)
+    if path.suffix != ".py":
+        return None, False
+    if path.name == "__init__.py":
+        parts = path.parts[:-1]
+        if not parts:
+            return None, False
+        return ".".join(parts), True
+    return ".".join((*path.parts[:-1], path.stem)), False
+
+
+def _verified_module_origin(
+    sources: Mapping[str, _VerifiedModuleSource],
     module_name: str,
     operator_id: str,
 ) -> Path:
-    verified = {
-        runtime.path.resolve(strict=True): runtime.digest
-        for runtime in installed.runtime_files.values()
-    }
-    loaded = sys.modules.get(module_name)
-    if loaded is not None:
-        raise _error(
-            "environment_operator_module_preloaded",
-            "certified environment operator module is already loaded",
-            operator_id,
-        )
-
-    spec = importlib.util.find_spec(module_name)
-    if spec is None or spec.origin is None or spec.origin in {"built-in", "frozen"}:
+    source = sources.get(module_name)
+    if source is None:
         raise _error(
             "environment_operator_module_unavailable",
             "certified environment operator module is unavailable",
             operator_id,
         )
-    return _verify_origin_path(Path(spec.origin), verified, operator_id)
+    return _verify_source_path(source, operator_id)
 
 
-def _verify_origin_path(
-    origin: Path,
-    verified: Mapping[Path, str],
+def _verify_source_path(
+    source: _VerifiedModuleSource,
     operator_id: str,
 ) -> Path:
-    try:
-        resolved = origin.resolve(strict=True)
-    except OSError as exc:
-        raise _error(
-            "environment_operator_module_unverified",
-            "certified environment operator module origin is unverified",
-            operator_id,
-        ) from exc
-    expected_digest = verified.get(resolved)
-    if expected_digest is None or not resolved.is_file() or resolved.is_symlink():
+    if not source.path.is_file() or source.path.is_symlink():
         raise _error(
             "environment_operator_module_unverified",
             "certified environment operator module origin is unverified",
             operator_id,
         )
     try:
-        raw = resolved.read_bytes()
+        raw = source.path.read_bytes()
     except OSError as exc:
         raise _error(
             "environment_operator_module_unverified",
             "certified environment operator module origin is unverified",
             operator_id,
         ) from exc
-    if sha256_bytes(raw) != expected_digest:
+    if sha256_bytes(raw) != source.digest:
         raise _error(
             "environment_operator_module_unverified",
             "certified environment operator module origin is unverified",
             operator_id,
         )
-    return resolved
+    return source.path
+
+
+def _reject_untrusted_preloaded_modules(
+    sources: Mapping[str, _VerifiedModuleSource],
+    operator_id: str,
+) -> None:
+    for module_name, source in sources.items():
+        loaded = sys.modules.get(module_name)
+        if loaded is None:
+            continue
+        trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
+        if trusted is None or trusted[2] is not loaded:
+            raise _error(
+                "environment_operator_module_preloaded",
+                "certified environment operator module is already loaded",
+                operator_id,
+            )
+        _verify_module_object(loaded, source.path, source.digest, operator_id)
+
+
+def _import_verified_module(
+    module_name: str,
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> ModuleType:
+    loaded = sys.modules.get(module_name)
+    trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
+    if loaded is not None and trusted is not None and trusted[2] is loaded:
+        return loaded
+    with _verified_runtime_importer(sources):
+        module = importlib.import_module(module_name)
+    for name, source in sources.items():
+        loaded_source = sys.modules.get(name)
+        if loaded_source is not None:
+            _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
+    return module
+
+
+@contextmanager
+def _verified_runtime_importer(
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> Iterator[None]:
+    finder = _VerifiedRuntimeFinder(sources)
+    sys.meta_path.insert(0, finder)
+    try:
+        yield
+    finally:
+        try:
+            sys.meta_path.remove(finder)
+        except ValueError:
+            pass
+
+
+class _VerifiedRuntimeFinder(importlib.abc.MetaPathFinder):
+    def __init__(self, sources: Mapping[str, _VerifiedModuleSource]) -> None:
+        self._sources = sources
+
+    def find_spec(
+        self,
+        fullname: str,
+        path: object | None,
+        target: ModuleType | None = None,
+    ) -> importlib.machinery.ModuleSpec | None:
+        del path, target
+        source = self._sources.get(fullname)
+        if source is None:
+            return None
+        loader = _VerifiedRuntimeLoader(source)
+        spec = importlib.machinery.ModuleSpec(
+            fullname,
+            loader,
+            origin=str(source.path),
+            is_package=source.is_package,
+        )
+        if source.is_package:
+            spec.submodule_search_locations = [str(source.path.parent)]
+        return spec
+
+
+class _VerifiedRuntimeLoader(importlib.abc.Loader):
+    def __init__(self, source: _VerifiedModuleSource) -> None:
+        self._source = source
+
+    def create_module(
+        self,
+        spec: importlib.machinery.ModuleSpec,
+    ) -> ModuleType | None:
+        del spec
+        return None
+
+    def exec_module(self, module: ModuleType) -> None:
+        raw = self._source.path.read_bytes()
+        if sha256_bytes(raw) != self._source.digest:
+            raise ImportError("verified runtime module digest mismatch")
+        module.__file__ = str(self._source.path)
+        module.__loader__ = self
+        if self._source.is_package:
+            module.__package__ = self._source.module_name
+            module.__path__ = [str(self._source.path.parent)]  # type: ignore[attr-defined]
+        else:
+            module.__package__ = self._source.module_name.rpartition(".")[0]
+        code = compile(raw, str(self._source.path), "exec")
+        exec(code, module.__dict__)
+
+
+def _verify_module_object(
+    module: ModuleType,
+    origin: Path,
+    digest: str,
+    operator_id: str,
+) -> None:
+    module_file = getattr(module, "__file__", None)
+    if not isinstance(module_file, str) or Path(module_file).resolve(strict=True) != origin:
+        raise _error(
+            "environment_operator_module_unverified",
+            "certified environment operator module origin is unverified",
+            operator_id,
+        )
+    _verify_source_path(
+        _VerifiedModuleSource(module.__name__, origin, digest, hasattr(module, "__path__")),
+        operator_id,
+    )
+
+
+def _verify_callable_owner(
+    implementation: Callable[..., object],
+    sources: Mapping[str, _VerifiedModuleSource],
+    operator_id: str,
+) -> None:
+    owner = inspect.getmodule(implementation)
+    if owner is None:
+        raise _error(
+            "environment_operator_callable_unverified",
+            "certified environment operator callable owner is unverified",
+            operator_id,
+        )
+    source = sources.get(owner.__name__)
+    trusted = _TRUSTED_RUNTIME_MODULES.get(owner.__name__)
+    if source is None or trusted is None or trusted[2] is not owner:
+        raise _error(
+            "environment_operator_callable_unverified",
+            "certified environment operator callable owner is unverified",
+            operator_id,
+        )
+    _verify_module_object(owner, source.path, source.digest, operator_id)
 
 
 def _find_certified_operator(

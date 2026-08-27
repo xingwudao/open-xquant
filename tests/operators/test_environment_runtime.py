@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 import types
+from importlib import _bootstrap_external
+from importlib.util import cache_from_source
 from pathlib import Path
 
 import pytest
@@ -30,6 +32,7 @@ def fake_verified_provider(
     )
     monkeypatch.syspath_prepend(str(module_root))
     sys.modules.pop("ettr", None)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
 
     provider = EnvironmentProvider(
         provider="equant-py",
@@ -135,7 +138,58 @@ def test_resolve_environment_operator_returns_callable_binding(
     assert callable(binding.callable)
 
 
-def test_resolve_environment_operator_rejects_shadowed_runtime_module_before_import(
+def test_resolve_environment_operator_allows_repeated_verified_resolution(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    del fake_verified_provider
+
+    first = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    second = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert first.callable is second.callable
+
+
+def test_resolve_environment_operator_ignores_unverified_bytecode_cache(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    source = next(iter(fake_verified_provider.runtime_files.values())).path
+    source.write_text(
+        "def sma(frame, **parameters):\n"
+        "    return 'verified-source'\n",
+        encoding="utf-8",
+    )
+    raw = source.read_bytes()
+    digest = _digest(raw)
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=source,
+        digest=digest,
+    )
+    stat = source.stat()
+    malicious_code = compile(
+        "def sma(frame, **parameters):\n"
+        "    return 'malicious-pyc'\n",
+        str(source),
+        "exec",
+    )
+    pyc_path = Path(cache_from_source(str(source)))
+    pyc_path.parent.mkdir(parents=True, exist_ok=True)
+    pyc_path.write_bytes(
+        _bootstrap_external._code_to_timestamp_pyc(
+            malicious_code,
+            int(stat.st_mtime),
+            stat.st_size,
+        )
+    )
+    sys.modules.pop("ettr", None)
+
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert binding.callable(None) == "verified-source"
+
+
+def test_resolve_environment_operator_ignores_shadowed_runtime_module_before_import(
     fake_verified_provider: InstalledEnvironmentProvider,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -150,11 +204,10 @@ def test_resolve_environment_operator_rejects_shadowed_runtime_module_before_imp
     monkeypatch.syspath_prepend(str(shadow_root))
     sys.modules.pop("ettr", None)
 
-    with pytest.raises(OperatorCertificationError) as caught:
-        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
 
-    assert caught.value.code == "environment_operator_module_unverified"
-    assert "ettr" not in sys.modules
+    assert binding.callable({"verified": True}) == {"verified": True}
+    assert "ettr" in sys.modules
 
 
 def test_resolve_environment_operator_rejects_preloaded_provider_module(
@@ -166,6 +219,84 @@ def test_resolve_environment_operator_rejects_preloaded_provider_module(
     module.__file__ = str(Path(__file__))
     module.sma = lambda frame, **parameters: "not verified"
     monkeypatch.setitem(sys.modules, "ettr", module)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_module_preloaded"
+
+
+def test_resolve_environment_operator_rejects_preloaded_reexport_owner_module(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module_root = tmp_path / "site-packages"
+    package = module_root / "ettr"
+    package.mkdir(parents=True)
+    init_path = package / "__init__.py"
+    trend_path = package / "trend.py"
+    init_path.write_text("from .trend import sma\n", encoding="utf-8")
+    trend_path.write_text(
+        "def sma(frame, **parameters):\n"
+        "    return 'verified-trend'\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(module_root))
+    sys.modules.pop("ettr", None)
+    malicious = types.ModuleType("ettr.trend")
+    malicious.__file__ = str(trend_path)
+    malicious.sma = lambda frame, **parameters: "malicious-preload"
+    monkeypatch.setitem(sys.modules, "ettr.trend", malicious)
+    provider = EnvironmentProvider(
+        provider="equant-py",
+        distribution="equant-py",
+        version="1.0.0",
+        certification_state="research-certified",
+        operators=(
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.sma",
+                operator_version="1.0.0",
+                manifest_path="manifests/equant.ttr.sma.operator.json",
+                baseline_paths=("numerical_baselines/equant.ttr.sma.json",),
+            ),
+        ),
+        manifest_digests={"manifests/equant.ttr.sma.operator.json": "sha256:" + "a" * 64},
+        baseline_digests={"numerical_baselines/equant.ttr.sma.json": "sha256:" + "b" * 64},
+        runtime_digests={
+            "ettr/__init__.py": _digest(init_path.read_bytes()),
+            "ettr/trend.py": _digest(trend_path.read_bytes()),
+        },
+    )
+    installed = InstalledEnvironmentProvider(
+        provider=provider,
+        manifests={
+            "manifests/equant.ttr.sma.operator.json": {
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "certification_state": "research-certified",
+                "module": "ettr",
+                "callable": "sma",
+            },
+        },
+        baselines={"numerical_baselines/equant.ttr.sma.json": b'{"cases":[]}\n'},
+        runtime_files={
+            "ettr/__init__.py": VerifiedRuntimeFile(
+                package_path="ettr/__init__.py",
+                path=init_path,
+                digest=_digest(init_path.read_bytes()),
+            ),
+            "ettr/trend.py": VerifiedRuntimeFile(
+                package_path="ettr/trend.py",
+                path=trend_path,
+                digest=_digest(trend_path.read_bytes()),
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        environment_runtime,
+        "verify_installed_provider",
+        lambda requirement: installed,
+    )
 
     with pytest.raises(OperatorCertificationError) as caught:
         resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
