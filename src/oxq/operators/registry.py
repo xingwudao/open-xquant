@@ -49,6 +49,8 @@ from oxq.operators.models import (
     ResearchCertification,
 )
 from oxq.operators.resources import materialize_certification_profile, materialize_operator_distribution_profile
+from oxq.operators.safe_files import fsync_directory as _safe_fsync_directory
+from oxq.operators.safe_files import read_regular_file as _safe_read_regular_file
 
 _PROVIDER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _SEMVER_PATTERN = re.compile(
@@ -1665,6 +1667,9 @@ def _lexists(path: Path) -> bool:
 
 
 def _fsync_directory(path: Path) -> None:
+    # Shared helper preserves durable publication semantics for all callers.
+    _safe_fsync_directory(path)
+    return
     if _is_windows():
         handle = _open_windows_directory_handle(path)
         _close_windows_handle(handle)
@@ -1708,6 +1713,7 @@ def _move_file_write_through(source: Path, target: Path) -> None:
 
 
 def _read_regular_file(path: Path) -> bytes:
+    return _safe_read_regular_file(path)
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
     descriptor = os.open(path, flags)
     try:
