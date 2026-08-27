@@ -173,6 +173,32 @@ def test_audit_store_failure_does_not_roll_back_registry_import(tmp_path: Path, 
 
 
 @pytest.mark.parametrize(
+    "store_relative",
+    [
+        pytest.param(".", id="registry-root"),
+        pytest.param("equant-py", id="provider-subtree"),
+        pytest.param("equant-py/1.0.0", id="release-subtree"),
+    ],
+)
+def test_import_rejects_audit_store_inside_destination_registry(
+    tmp_path: Path,
+    store_relative: str,
+) -> None:
+    bundle, _ = _export_bundle_fixture(tmp_path / "source", tmp_path / "bundle.zip")
+    destination = tmp_path / "registry"
+
+    with pytest.raises(OperatorCertificationError, match="audit bundle store must be outside"):
+        import_certification_bundle(
+            bundle.bundle_path,
+            destination,
+            trust_unsigned_bundle=True,
+            bundle_store=destination / store_relative,
+        )
+
+    assert not destination.exists()
+
+
+@pytest.mark.parametrize(
     ("name", "configure"),
     [
         ("../escape", lambda info: info),

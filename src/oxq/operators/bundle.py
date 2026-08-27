@@ -153,6 +153,12 @@ def import_certification_bundle(
             "bundle input must be outside the destination registry",
             stage="input",
         )
+    if bundle_store is not None and _is_within(Path(bundle_store).expanduser().resolve(), output):
+        raise OperatorCertificationError(
+            "bundle_store_invalid",
+            "audit bundle store must be outside the destination registry",
+            stage="output",
+        )
     try:
         bundle = validate_certification_bundle(source)
     except ValueError as exc:
