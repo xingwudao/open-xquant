@@ -19,6 +19,7 @@ import pytest
 
 import oxq.operators.baseline_runner as baseline_runner
 import oxq.operators.certification as certification
+import oxq.operators.runtime_protocol as runtime_protocol
 from oxq.operators import _baseline_child
 from oxq.operators.baseline_runner import run_research_baselines
 from oxq.operators.certification import certify_provider, validate_provider_contract
@@ -559,7 +560,7 @@ def test_parent_rejects_out_of_range_int64_child_response(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(candidate, "baseline_mismatch")
 
@@ -626,7 +627,7 @@ def test_parent_rejects_unconvertible_float64_child_response(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(candidate, "baseline_mismatch")
 
@@ -938,7 +939,7 @@ def test_rejects_non_iso_date_child_output_even_when_expected_matches(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(candidate, "baseline_mismatch")
 
@@ -1484,7 +1485,7 @@ def test_rejects_malformed_child_json(
         "import pathlib, sys\npathlib.Path(sys.argv[2]).write_bytes(b'{broken')\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
 
@@ -1528,7 +1529,7 @@ def test_rejects_child_json_with_undeclared_response_fields(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
 
@@ -1585,7 +1586,7 @@ def test_rejects_nonfinite_timeout_before_child_execution(
     def child_must_not_run(*args: object, **kwargs: object) -> object:
         raise AssertionError(f"child executed: {args!r} {kwargs!r}")
 
-    monkeypatch.setattr(baseline_runner, "run_contained_child", child_must_not_run)
+    monkeypatch.setattr(baseline_runner, "run_exact_wheel_request", child_must_not_run)
 
     _assert_failure(
         candidate,

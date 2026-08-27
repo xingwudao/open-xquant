@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import builtins
-import hashlib
-import hmac
 import importlib.util
-import json
 import marshal
 import operator
 import os
-import subprocess
 import sys
 import types
 import zipfile
@@ -19,7 +15,8 @@ from typing import cast
 
 import pytest
 
-from oxq.operators import _baseline_child
+from oxq.operators import _exact_wheel_child as _baseline_child
+from oxq.operators.runtime_protocol import run_exact_wheel_request
 
 
 def _module_from_file(name: str, origin: Path) -> types.ModuleType:
@@ -64,14 +61,10 @@ def _run_child(
 ) -> dict[str, object]:
     wheel_path = tmp_path / "baseline_provider-1.0.0-py3-none-any.whl"
     dependency_path = tmp_path / "baseline_dependency-1.0.0-py3-none-any.whl"
-    request_path = tmp_path / "request.json"
-    response_path = tmp_path / "response.json"
     _write_provider_wheel(wheel_path, provider_source)
     if with_dependency:
         _write_dependency_wheel(dependency_path)
-    request_path.write_text(
-        json.dumps(
-            {
+    request = {
                 "implementation_artifact": str(wheel_path),
                 "dependency_artifacts": ([str(dependency_path)] if with_dependency else []),
                 "module": "baseline_provider",
@@ -102,57 +95,12 @@ def _run_child(
                     {"name": "sma_3", "dtype": "float64"},
                 ],
                 "output_alignment": "preserve_input_order",
-            },
-            allow_nan=False,
-        ),
-        encoding="utf-8",
+            }
+    return run_exact_wheel_request(
+        request,
+        [wheel_path, *([dependency_path] if with_dependency else [])],
+        timeout_seconds=10,
     )
-    child_path = Path(_baseline_child.__file__).resolve()
-    response_secret = b"baseline-child-security-test-key"
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            str(child_path),
-            str(request_path),
-            str(response_path),
-        ],
-        check=False,
-        capture_output=True,
-        input=response_secret.hex() + "\n",
-        text=True,
-        timeout=10,
-    )
-
-    if completed.returncode == getattr(
-        _baseline_child,
-        "_PROVIDER_POLICY_VIOLATION_EXIT_CODE",
-        -999,
-    ):
-        return {"status": "error", "code": "provider_import_failed"}
-    assert completed.returncode == 0, completed.stderr
-    response = cast(
-        dict[str, object],
-        json.loads(response_path.read_text(encoding="utf-8")),
-    )
-    auth = response.pop("auth")
-    payload = json.dumps(
-        response,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    expected_auth = (
-        "hmac-sha256:"
-        + hmac.new(
-            response_secret,
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
-    )
-    assert hmac.compare_digest(cast(str, auth), expected_auth)
-    return response
 
 
 def test_dynamic_code_gate_allows_trusted_callers_and_restores_builtins() -> None:

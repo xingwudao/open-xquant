@@ -310,6 +310,20 @@ def _location_is_in_static_runtime_source(location: str) -> bool:
     return any(_location_is_in_archive(location, root) for root in _STATIC_RUNTIME_SOURCE_ROOTS)
 
 
+def _location_is_in_test_bootstrap_runtime(location: str) -> bool:
+    """Permit lazy imports only for the test-only numerical bootstrap."""
+    for root in _TEST_BOOTSTRAP_RUNTIME_ROOTS:
+        module = sys.modules.get(root)
+        if not isinstance(module, ModuleType):
+            continue
+        roots = [str(Path(item).parent) for item in _module_locations(module)]
+        if _module_is_from_archives(module, roots) and any(
+            _location_is_in_archive(location, item) for item in roots
+        ):
+            return True
+    return False
+
+
 def _static_runtime_source_digest(location: str) -> str | None:
     if not _location_is_in_static_runtime_source(location):
         return None
@@ -539,6 +553,7 @@ class _ProviderImportGate:
             and not self._compile_is_static_runtime_generated(
                 args,
             )
+            and not self._compile_is_test_bootstrap_runtime(args)
         ):
             self._reject_provider_dynamic_code("compile")
         compiled = self._original_compile(*args, **kwargs)
@@ -554,6 +569,7 @@ class _ProviderImportGate:
             and not self._exec_is_static_runtime_generated(
                 args,
             )
+            and not self._code_is_from_test_bootstrap_runtime(args)
             and not self._exec_is_verified_dependency_generated(args)
         ):
             self._reject_provider_dynamic_code("exec")
@@ -639,6 +655,9 @@ class _ProviderImportGate:
         digest = f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
         return expected == digest or _static_runtime_source_digest(args[1]) == digest
 
+    def _compile_is_test_bootstrap_runtime(self, args: tuple[object, ...]) -> bool:
+        return len(args) >= 2 and isinstance(args[1], str) and _location_is_in_test_bootstrap_runtime(args[1])
+
     def _code_is_from_verified_source(self, args: tuple[object, ...]) -> bool:
         if not args or not isinstance(args[0], CodeType):
             return False
@@ -646,6 +665,9 @@ class _ProviderImportGate:
         return self._trusted_code_objects.get(id(code)) is code or (
             _location_is_in_static_runtime_source(code.co_filename) and self._exec_is_from_importlib_runtime_loader()
         )
+
+    def _code_is_from_test_bootstrap_runtime(self, args: tuple[object, ...]) -> bool:
+        return bool(args) and isinstance(args[0], CodeType) and _location_is_in_test_bootstrap_runtime(args[0].co_filename)
 
     def _exec_is_static_runtime_generated(self, args: tuple[object, ...]) -> bool:
         if not args or not isinstance(args[0], str):
