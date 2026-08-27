@@ -231,6 +231,85 @@ def sma(frame, *, window):
     }
 
 
+def test_provider_import_allows_static_runtime_forward_ref_compile(
+    tmp_path: Path,
+) -> None:
+    source = """
+from typing import Dict, Type
+
+import pandas as pd
+
+class Node:
+    children: Dict[type, Type["Node"]] = {}
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
+def test_provider_import_allows_platform_runtime_lazy_compile(
+    tmp_path: Path,
+) -> None:
+    source = """
+import numpy as np
+import pandas as pd
+
+POLYNOMIAL = np.polynomial.polynomial.Polynomial
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
+def test_provider_import_allows_static_runtime_dataclass_exec(
+    tmp_path: Path,
+) -> None:
+    source = """
+from dataclasses import make_dataclass
+
+import pandas as pd
+
+Point = make_dataclass("Point", [("x", float)])
+
+def sma(frame, *, window):
+    point = Point(2.0)
+    return pd.Series(
+        [None, None, point.x],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
 def test_importlib_can_still_load_and_execute_verified_provider(
     tmp_path: Path,
 ) -> None:
