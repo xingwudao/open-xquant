@@ -15,10 +15,13 @@ _SMOKE_SCRIPT = r"""
 import hashlib
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import oxq
 from click.testing import CliRunner
+import oxq.operators.baseline_runner as baseline_runner
+from oxq.operators import runtime_protocol
 from oxq.cli.main import main
 from oxq.operators.registry import CertificationRegistry
 from oxq.operators.resources import (
@@ -40,7 +43,6 @@ EXPECTED_DIGESTS = {
     "certification_record_v2": "0c4ca94dec96cfc3e0a368e1406217d7e5b1a9b8ecb23a70b4ad1980547d88df",
     "certification_bundle_manifest": "b35be9c10ae07f93975a6f281aa954fa851ed7ae6a0555b382a948afffdcddd0",
     "operator_release": "0e98caac81ba70b2e37ff8d9d8d6b8ad1b628fea6ab821f51e8f0919659d6470",
-    "installed_release": "73619350daff45e27db5d1bd9e546f8adb4e932ec5153b4e37bf803b63658cff",
     "runtime_protocol": "0b65c7adba6497463c4143cde5b0786ae001e316dec78a62cacad42d77acd239",
     "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
 }
@@ -65,6 +67,26 @@ with materialize_contract_surface() as surface:
         for name, path in paths.items()
     }
 assert actual == EXPECTED_DIGESTS
+assert "installed_release" not in actual
+
+runtime_paths = [
+    path for path in sys.path if "site-packages" in Path(path).parts
+]
+
+def run_fixture_request(
+    request: Mapping[str, object],
+    wheel_snapshots: Sequence[str | Path],
+    *,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    return runtime_protocol.run_exact_wheel_request(
+        request,
+        wheel_snapshots,
+        timeout_seconds=timeout_seconds,
+        _test_runtime_paths=runtime_paths,
+    )
+
+baseline_runner.run_exact_wheel_request = run_fixture_request
 
 completed = CliRunner().invoke(
     main,
@@ -206,6 +228,6 @@ def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> No
         "output": str((output_dir / "equant-py" / "1.0.0").resolve()),
         "provider": "equant-py",
         "release": "1.0.0",
-        "resource_count": 14,
+        "resource_count": 13,
         "state": "research-certified",
     }
