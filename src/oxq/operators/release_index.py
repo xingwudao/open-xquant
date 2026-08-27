@@ -132,6 +132,7 @@ def parse_release_index(raw_bytes: bytes) -> OperatorReleaseIndex:
         if canonical_json_bytes(payload) != raw_bytes:
             raise ValueError("release index is not canonical")
         _release_validator().validate(payload)
+        _validate_schema_strings(payload)
         return _release_index_from_payload(raw_bytes, payload)
     except (OSError, ValueError, TypeError, UnicodeError, ValidationError):
         raise install_error(
@@ -182,6 +183,21 @@ def _release_validator() -> Draft202012Validator:
         schema = json.loads(paths["operator_release"].read_text(encoding="utf-8"))
     Draft202012Validator.check_schema(schema)
     return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+def _validate_schema_strings(value: object) -> None:
+    """Reject line endings that JSON Schema's ``$`` patterns can admit."""
+    if isinstance(value, str):
+        if "\r" in value or "\n" in value:
+            raise ValueError("release index strings must not contain line endings")
+        return
+    if isinstance(value, dict):
+        for item in value.values():
+            _validate_schema_strings(item)
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_schema_strings(item)
 
 
 def _release_index_from_payload(raw_bytes: bytes, payload: dict[str, object]) -> OperatorReleaseIndex:

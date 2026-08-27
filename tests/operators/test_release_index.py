@@ -134,6 +134,28 @@ def test_rejects_noncanonical_release_index_bytes() -> None:
     assert caught.value.code == "operator_release_invalid"
 
 
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("provider",), "equant-py\n"),
+        (("release",), "1.0.0\n"),
+        (("targets", 0, "python_tag"), "cp312\n"),
+        (("targets", 0, "wheels", 0, "distribution"), "equant-ttr\n"),
+        (("targets", 0, "wheels", 0, "tags", 0), "py3-none-any\n"),
+    ],
+)
+def test_rejects_newline_suffixed_schema_constrained_identifiers(
+    path: tuple[str | int, ...],
+    value: str,
+) -> None:
+    release = _release_index()
+    _set_nested_value(release, path, value)
+
+    with pytest.raises(OperatorInstallError) as caught:
+        parse_release_index(_canonical_bytes(release))
+    assert caught.value.code == "operator_release_invalid"
+
+
 def test_selects_the_single_compatible_target(monkeypatch: pytest.MonkeyPatch) -> None:
     index = parse_release_index(_canonical_bytes(_release_index()))
     monkeypatch.setattr(
@@ -201,3 +223,14 @@ def _canonical_bytes(value: dict[str, object]) -> bytes:
     import json
 
     return (json.dumps(value, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+
+
+def _set_nested_value(
+    value: dict[str, object],
+    path: tuple[str | int, ...],
+    replacement: str,
+) -> None:
+    current: object = value
+    for part in path[:-1]:
+        current = current[part]  # type: ignore[index]
+    current[path[-1]] = replacement  # type: ignore[index]
