@@ -17,10 +17,18 @@ from oxq.operators.formats import sha256_bytes, strict_json_object
 
 
 @dataclass(frozen=True)
+class VerifiedRuntimeFile:
+    package_path: str
+    path: Path
+    digest: str
+
+
+@dataclass(frozen=True)
 class InstalledEnvironmentProvider:
     provider: EnvironmentProvider
     manifests: Mapping[str, dict[str, object]]
     baselines: Mapping[str, bytes]
+    runtime_files: Mapping[str, VerifiedRuntimeFile]
 
 
 def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
@@ -65,6 +73,7 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
 
     manifests: dict[str, dict[str, object]] = {}
     baselines: dict[str, bytes] = {}
+    runtime_files: dict[str, VerifiedRuntimeFile] = {}
     for operator in provider.operators:
         manifest_bytes = _read_declared_file(
             distribution,
@@ -83,11 +92,25 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
                 baseline_path,
                 provider.baseline_digests[baseline_path],
             )
+    for runtime_path, expected_digest in provider.runtime_digests.items():
+        raw, path = _read_declared_file_with_path(
+            distribution,
+            installed_paths,
+            runtime_path,
+            expected_digest,
+        )
+        del raw
+        runtime_files[runtime_path] = VerifiedRuntimeFile(
+            package_path=runtime_path,
+            path=path,
+            digest=expected_digest,
+        )
 
     return InstalledEnvironmentProvider(
         provider=provider,
         manifests=manifests,
         baselines=baselines,
+        runtime_files=runtime_files,
     )
 
 
@@ -97,6 +120,21 @@ def _read_declared_file(
     package_path: str,
     expected_digest: str,
 ) -> bytes:
+    raw, _ = _read_declared_file_with_path(
+        distribution,
+        installed_paths,
+        package_path,
+        expected_digest,
+    )
+    return raw
+
+
+def _read_declared_file_with_path(
+    distribution: importlib.metadata.Distribution,
+    installed_paths: set[str],
+    package_path: str,
+    expected_digest: str,
+) -> tuple[bytes, Path]:
     if package_path not in installed_paths:
         raise _error(
             "environment_provider_file_missing",
@@ -121,7 +159,7 @@ def _read_declared_file(
             "environment_provider_digest_mismatch",
             f"installed environment provider file digest mismatch: {package_path}",
         )
-    return raw
+    return raw, path.resolve(strict=True)
 
 
 def _verify_manifest_certification_state(

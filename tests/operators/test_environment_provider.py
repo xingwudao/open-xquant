@@ -21,6 +21,8 @@ CONFLICTING_MANIFEST_BYTES = (
     b'{"certification_state":"contract-valid","operator_id":"equant.ttr.sma","version":"1.0.0"}\n'
 )
 BASELINE_BYTES = b'{"cases":[]}\n'
+RUNTIME_PATH = "ettr/__init__.py"
+RUNTIME_BYTES = b"def sma(frame, **parameters):\n    return frame\n"
 
 
 class FakeDistribution:
@@ -74,6 +76,7 @@ def official_provider(monkeypatch: pytest.MonkeyPatch) -> EnvironmentProvider:
         ),
         manifest_digests={MANIFEST_PATH: _digest(MANIFEST_BYTES)},
         baseline_digests={BASELINE_PATH: _digest(BASELINE_BYTES)},
+        runtime_digests={RUNTIME_PATH: _digest(RUNTIME_BYTES)},
     )
     monkeypatch.setattr(
         environment_provider,
@@ -93,6 +96,7 @@ def fake_distribution(
     distribution = FakeDistribution(tmp_path)
     distribution.add_file(MANIFEST_PATH, MANIFEST_BYTES)
     distribution.add_file(BASELINE_PATH, BASELINE_BYTES)
+    distribution.add_file(RUNTIME_PATH, RUNTIME_BYTES)
     monkeypatch.setattr(importlib.metadata, "distribution", lambda name: distribution)
     return distribution
 
@@ -137,6 +141,24 @@ def test_verify_installed_provider_rejects_missing_declared_file(
         verify_installed_provider("equant-py==1.0.0")
 
 
+def test_verify_installed_provider_rejects_changed_runtime_bytes(
+    fake_distribution: FakeDistribution,
+) -> None:
+    fake_distribution.add_file(RUNTIME_PATH, b"tampered")
+
+    with pytest.raises(OperatorCertificationError, match="digest"):
+        verify_installed_provider("equant-py==1.0.0")
+
+
+def test_verify_installed_provider_rejects_missing_runtime_file(
+    fake_distribution: FakeDistribution,
+) -> None:
+    fake_distribution._files.remove(RUNTIME_PATH)
+
+    with pytest.raises(OperatorCertificationError, match="missing"):
+        verify_installed_provider("equant-py==1.0.0")
+
+
 @pytest.mark.parametrize("artifact_kind", ["directory", "symlink"])
 def test_verify_installed_provider_rejects_non_regular_declared_files(
     monkeypatch: pytest.MonkeyPatch,
@@ -147,6 +169,7 @@ def test_verify_installed_provider_rejects_non_regular_declared_files(
     del official_provider
     distribution = FakeDistribution(tmp_path)
     distribution.add_file(MANIFEST_PATH, MANIFEST_BYTES)
+    distribution.add_file(RUNTIME_PATH, RUNTIME_BYTES)
     if artifact_kind == "directory":
         distribution.add_directory(BASELINE_PATH)
     else:
@@ -171,6 +194,8 @@ def test_verify_installed_provider_returns_verified_artifacts(
         "version": "1.0.0",
     }
     assert installed.baselines[BASELINE_PATH] == BASELINE_BYTES
+    assert installed.runtime_files[RUNTIME_PATH].digest == _digest(RUNTIME_BYTES)
+    assert installed.runtime_files[RUNTIME_PATH].path == fake_distribution.root / RUNTIME_PATH
 
 
 def test_verify_installed_provider_rejects_conflicting_manifest_state(

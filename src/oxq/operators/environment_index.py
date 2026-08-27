@@ -40,6 +40,7 @@ class EnvironmentProvider:
     operators: tuple[CertifiedOperatorRef, ...]
     manifest_digests: Mapping[str, str]
     baseline_digests: Mapping[str, str]
+    runtime_digests: Mapping[str, str]
 
     @property
     def declared_artifact_paths(self) -> tuple[str, ...]:
@@ -47,6 +48,7 @@ class EnvironmentProvider:
         for operator in self.operators:
             paths.append(operator.manifest_path)
             paths.extend(operator.baseline_paths)
+        paths.extend(self.runtime_digests)
         return tuple(paths)
 
 
@@ -95,6 +97,7 @@ def _provider_from_payload(
         "operators",
         "manifest_digests",
         "baseline_digests",
+        "runtime_digests",
     }:
         raise ValueError("official environment provider entry is invalid")
     distribution = payload["distribution"]
@@ -102,20 +105,28 @@ def _provider_from_payload(
     operators = payload["operators"]
     manifest_digests = payload["manifest_digests"]
     baseline_digests = payload["baseline_digests"]
+    runtime_digests = payload["runtime_digests"]
     if (
         not isinstance(distribution, str)
         or not isinstance(certification_state, str)
         or not isinstance(operators, list)
         or not isinstance(manifest_digests, dict)
         or not isinstance(baseline_digests, dict)
+        or not isinstance(runtime_digests, dict)
     ):
         raise ValueError("official environment provider entry is invalid")
     safe_relative_path(distribution)
 
     typed_manifest_digests = _digest_map(manifest_digests)
     typed_baseline_digests = _digest_map(baseline_digests)
+    typed_runtime_digests = _digest_map(runtime_digests)
     typed_operators = tuple(_operator_from_payload(_operator_payload(item)) for item in operators)
-    _validate_operator_artifacts(typed_operators, typed_manifest_digests, typed_baseline_digests)
+    _validate_operator_artifacts(
+        typed_operators,
+        typed_manifest_digests,
+        typed_baseline_digests,
+        typed_runtime_digests,
+    )
     return EnvironmentProvider(
         provider=provider,
         distribution=distribution,
@@ -124,6 +135,7 @@ def _provider_from_payload(
         operators=typed_operators,
         manifest_digests=typed_manifest_digests,
         baseline_digests=typed_baseline_digests,
+        runtime_digests=typed_runtime_digests,
     )
 
 
@@ -177,9 +189,12 @@ def _validate_operator_artifacts(
     operators: tuple[CertifiedOperatorRef, ...],
     manifest_digests: Mapping[str, str],
     baseline_digests: Mapping[str, str],
+    runtime_digests: Mapping[str, str],
 ) -> None:
     if not operators:
         raise ValueError("official environment provider must contain operators")
+    if not runtime_digests:
+        raise ValueError("official environment provider must contain runtime digests")
     for operator in operators:
         if operator.manifest_path not in manifest_digests:
             raise ValueError("official environment operator manifest digest is missing")

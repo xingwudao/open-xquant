@@ -10,6 +10,7 @@ import pytest
 import oxq.operators.environment_runtime as environment_runtime
 from oxq.operators.environment_index import CertifiedOperatorRef, EnvironmentProvider
 from oxq.operators.environment_provider import InstalledEnvironmentProvider
+from oxq.operators.environment_provider import VerifiedRuntimeFile
 from oxq.operators.environment_runtime import resolve_environment_operator
 from oxq.operators.errors import OperatorCertificationError
 
@@ -21,7 +22,8 @@ def fake_verified_provider(
 ) -> InstalledEnvironmentProvider:
     module_root = tmp_path / "site-packages"
     module_root.mkdir()
-    (module_root / "ettr.py").write_text(
+    verified_ettr = module_root / "ettr.py"
+    verified_ettr.write_text(
         "def sma(frame, **parameters):\n"
         "    return frame\n",
         encoding="utf-8",
@@ -48,6 +50,9 @@ def fake_verified_provider(
         baseline_digests={
             "numerical_baselines/equant.ttr.sma.json": "sha256:" + "b" * 64,
         },
+        runtime_digests={
+            "ettr.py": _digest(verified_ettr.read_bytes()),
+        },
     )
     installed = InstalledEnvironmentProvider(
         provider=provider,
@@ -61,6 +66,13 @@ def fake_verified_provider(
             },
         },
         baselines={"numerical_baselines/equant.ttr.sma.json": b'{"cases":[]}\n'},
+        runtime_files={
+            "ettr.py": VerifiedRuntimeFile(
+                package_path="ettr.py",
+                path=verified_ettr,
+                digest=_digest(verified_ettr.read_bytes()),
+            ),
+        },
     )
     monkeypatch.setattr(
         environment_runtime,
@@ -121,3 +133,31 @@ def test_resolve_environment_operator_returns_callable_binding(
 
     assert binding.operator_id == "equant.ttr.sma"
     assert callable(binding.callable)
+
+
+def test_resolve_environment_operator_rejects_shadowed_runtime_module_before_import(
+    fake_verified_provider: InstalledEnvironmentProvider,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    del fake_verified_provider
+    shadow_root = tmp_path / "shadow"
+    shadow_root.mkdir()
+    (shadow_root / "ettr.py").write_text(
+        "raise RuntimeError('shadow module executed')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(shadow_root))
+    sys.modules.pop("ettr", None)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_module_unverified"
+    assert "ettr" not in sys.modules
+
+
+def _digest(raw: bytes) -> str:
+    import hashlib
+
+    return f"sha256:{hashlib.sha256(raw).hexdigest()}"

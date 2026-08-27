@@ -491,6 +491,22 @@
         },
         "baseline_digests": {
           "compat/open_xquant/numerical_baselines/technical-v1.json": "sha256:3b928d48f6a0b2c0500cd1e97f1ad9b10d0cf7c91ab9b908da51d7b9b1b8d579"
+        },
+        "runtime_digests": {
+          "equant/__init__.py": "sha256:e7297b5efd27f5b773071149753608543e85f84d7d6a736b7f32cad5f660b77c",
+          "equant/utils/__init__.py": "sha256:4e9e3c9ad28518f485142bfc5e1e382ee1c34eca0854f99cd194986da51d4c8e",
+          "equant/utils/decorators.py": "sha256:f44622e4e1df8a0005b13e06604f0b416ee5e5f1b3785895f35b91696004512f",
+          "equant/utils/panel.py": "sha256:8b58b60684470b2b05622bfcc98b9133874c77f1060f6fecbe23f43be46b78dd",
+          "equant/utils/types.py": "sha256:0d42564d923d3430c83dc9f2d29b6b6b9c9ad8c566f425e38ce76d145257a17e",
+          "ettr/__init__.py": "sha256:8eb9346325cff7914af09af24322ce2a0d2bff813d2d5a22e2ffc6b7965f7eb8",
+          "ettr/_panel.py": "sha256:4b2a335bce14df90127e74730be3ebc153e2a1a1e8b367b15f7580e4c7aff67b",
+          "ettr/_rolling.py": "sha256:eff66de68a6015c790326a457f57921d35f7f123c4e5a17ad75b455a2f9c41f8",
+          "ettr/misc.py": "sha256:a0309cd730e12a1175cef17dc5a78ec3a570cd956985ddb499e134ae03538a8e",
+          "ettr/momentum.py": "sha256:9c62fedcc737763cc0011c4b3e425347c42aa8cfea454957c977c9cc501c2fec",
+          "ettr/patterns.py": "sha256:a8cb13e0f21bb45c3c79f48bfc40c9bb0ad658ee7b2e0dffc15e46a4b2d1a2e3",
+          "ettr/trend.py": "sha256:cf882b145999d42c14c96c6f6ed767c60be076e110f24dd288bbff2d9e06f144",
+          "ettr/volatility.py": "sha256:1dd5cc19540c9cb2aaf92c04f6965bf6742b0adf836368704a3baf9c5daafa43",
+          "ettr/volume.py": "sha256:89eb81db5d7ad8ef98a0d013184a542a480e834be7b5b18ab91f5dcfecdc4e47"
         }
       }
     }

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -10,11 +11,12 @@ from click.testing import CliRunner
 import oxq.operators.environment_provider as environment_provider
 from oxq.cli.main import main
 from oxq.operators.environment_index import CertifiedOperatorRef, EnvironmentProvider
-from oxq.operators.environment_provider import InstalledEnvironmentProvider
+from oxq.operators.environment_provider import InstalledEnvironmentProvider, VerifiedRuntimeFile
 
 
 @pytest.fixture
 def fake_verified_provider(monkeypatch: pytest.MonkeyPatch) -> InstalledEnvironmentProvider:
+    runtime_file = Path(__file__)
     provider = EnvironmentProvider(
         provider="equant-py",
         distribution="equant-py",
@@ -34,6 +36,9 @@ def fake_verified_provider(monkeypatch: pytest.MonkeyPatch) -> InstalledEnvironm
         baseline_digests={
             "numerical_baselines/equant.ttr.sma.json": "sha256:" + "b" * 64,
         },
+        runtime_digests={
+            "ettr.py": "sha256:" + "c" * 64,
+        },
     )
     installed = InstalledEnvironmentProvider(
         provider=provider,
@@ -44,6 +49,13 @@ def fake_verified_provider(monkeypatch: pytest.MonkeyPatch) -> InstalledEnvironm
             },
         },
         baselines={"numerical_baselines/equant.ttr.sma.json": b'{"cases":[]}\n'},
+        runtime_files={
+            "ettr.py": VerifiedRuntimeFile(
+                package_path="ettr.py",
+                path=runtime_file,
+                digest="sha256:" + "c" * 64,
+            ),
+        },
     )
     monkeypatch.setattr(
         environment_provider,

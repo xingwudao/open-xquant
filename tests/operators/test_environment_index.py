@@ -63,6 +63,7 @@ def test_rejects_non_object_operator_entries(monkeypatch: pytest.MonkeyPatch) ->
                         "operators": [None],
                         "manifest_digests": {},
                         "baseline_digests": {},
+                        "runtime_digests": {},
                     }
                 }
             },
