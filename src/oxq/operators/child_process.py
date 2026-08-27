@@ -25,6 +25,8 @@ _CHILD_ENVIRONMENT_ALLOWLIST = frozenset(
         "TMP",
         "TZ",
         "WINDIR",
+        "OXQ_BASELINE_TEST_RUNTIME",
+        "OXQ_BASELINE_TEST_RUNTIME_PATHS",
     },
 )
 _DARWIN_SANDBOX_PROFILE = "(version 1) (allow default) (deny process-fork)"

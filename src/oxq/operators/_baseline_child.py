@@ -322,11 +322,7 @@ def _location_is_in_platform_runtime_source(location: str) -> bool:
         )
         roots: list[str] = []
         if search_locations is not None:
-            roots.extend(
-                str(path)
-                for path in search_locations
-                if isinstance(path, str)
-            )
+            roots.extend(str(path) for path in search_locations if isinstance(path, str))
         module_file = getattr(module, "__file__", None)
         if isinstance(module_file, str):
             roots.append(str(Path(module_file).parent))
@@ -363,23 +359,13 @@ def _module_is_allowed_verified_closure(
     if _module_is_from_archives(module, archives):
         return True
     root_module = sys.modules.get(root)
-    if (
-        not isinstance(root_module, ModuleType)
-        or root_module is module
-        or not _module_is_from_archives(root_module, archives)
-    ):
+    if not isinstance(root_module, ModuleType) or root_module is module or not _module_is_from_archives(root_module, archives):
         return False
     module_name = getattr(module, "__name__", "")
-    if (
-        isinstance(module_name, str)
-        and module_name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS
-    ):
+    if isinstance(module_name, str) and module_name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS:
         return True
     locations = _module_locations(module)
-    return not locations or all(
-        _location_is_in_static_runtime_source(location)
-        for location in locations
-    )
+    return not locations or all(_location_is_in_static_runtime_source(location) for location in locations)
 
 
 def _new_modules_are_allowed(
@@ -434,10 +420,7 @@ class _RestrictedModules(MutableMapping[str, object]):
 
     def __setitem__(self, name: str, module: object) -> None:
         module_name = getattr(module, "__name__", name)
-        if not (
-            isinstance(module_name, str)
-            and self._is_visible(module_name, module)
-        ) and not self._is_visible(name, module):
+        if not (isinstance(module_name, str) and self._is_visible(module_name, module)) and not self._is_visible(name, module):
             raise KeyError(name)
         sys.modules[name] = module
 
@@ -571,11 +554,15 @@ class _ProviderImportGate:
         sys.__dict__.update(self._hidden_sys_attributes)
 
     def _guarded_compile(self, *args: object, **kwargs: object) -> object:
-        if not self._compile_matches_verified_source(
-            args,
-        ) and not self._compile_is_static_runtime_generated(
-            args,
-        ) and not self._compile_matches_platform_runtime_source(args):
+        if (
+            not self._compile_matches_verified_source(
+                args,
+            )
+            and not self._compile_is_static_runtime_generated(
+                args,
+            )
+            and not self._compile_matches_platform_runtime_source(args)
+        ):
             self._reject_provider_dynamic_code("compile")
         compiled = self._original_compile(*args, **kwargs)
         if isinstance(compiled, CodeType) and self._compile_matches_verified_source(args):
@@ -583,13 +570,18 @@ class _ProviderImportGate:
         return compiled
 
     def _guarded_exec(self, *args: object, **kwargs: object) -> None:
-        if not self._code_is_from_verified_source(
-            args,
-        ) and not self._code_is_from_platform_runtime_source(
-            args,
-        ) and not self._exec_is_static_runtime_generated(
-            args,
-        ) and not self._exec_is_verified_dependency_generated(args):
+        if (
+            not self._code_is_from_verified_source(
+                args,
+            )
+            and not self._code_is_from_platform_runtime_source(
+                args,
+            )
+            and not self._exec_is_static_runtime_generated(
+                args,
+            )
+            and not self._exec_is_verified_dependency_generated(args)
+        ):
             self._reject_provider_dynamic_code("exec")
         self._original_exec(*args, **kwargs)
 
@@ -663,11 +655,7 @@ class _ProviderImportGate:
         self,
         args: tuple[object, ...],
     ) -> bool:
-        return (
-            len(args) >= 2
-            and isinstance(args[1], str)
-            and _location_is_in_platform_runtime_source(args[1])
-        )
+        return len(args) >= 2 and isinstance(args[1], str) and _location_is_in_platform_runtime_source(args[1])
 
     def _compile_matches_verified_source(self, args: tuple[object, ...]) -> bool:
         if len(args) < 2 or not isinstance(args[1], str):
@@ -713,10 +701,7 @@ class _ProviderImportGate:
             return False
         caller = self._original_getframe(2)
         try:
-            return any(
-                _location_is_in_archive(caller.f_code.co_filename, archive)
-                for archive in self._verified_archives[1:]
-            )
+            return any(_location_is_in_archive(caller.f_code.co_filename, archive) for archive in self._verified_archives[1:])
         finally:
             del caller
 
@@ -1137,6 +1122,9 @@ def _execute(
     request: dict[str, object],
     execution_root: Path,
 ) -> dict[str, object]:
+    test_runtime_paths: list[str] = []
+    if os.environ.pop("OXQ_BASELINE_TEST_RUNTIME", None) == "1":
+        test_runtime_paths = os.environ.pop("OXQ_BASELINE_TEST_RUNTIME_PATHS", "").split(os.pathsep)
     implementation_artifact = request["implementation_artifact"]
     dependency_artifacts = request["dependency_artifacts"]
     module_name = request["module"]
@@ -1174,6 +1162,7 @@ def _execute(
         or output_alignment not in _OUTPUT_ALIGNMENTS
     ):
         return {"status": "error", "code": "provider_execution_failed"}
+    sys.path.extend(path for path in test_runtime_paths if Path(path).is_dir())
     try:
         import numpy as np
         import pandas as pd
@@ -1241,10 +1230,14 @@ def _execute(
             implementation = getattr(module, callable_name)
             if not callable(implementation):
                 raise ImportError("manifest callable is not callable")
-            if import_gate.violation or not _new_modules_are_allowed(
-                modules_before_provider,
-                verified_archives,
-            ) or not import_gate._verified_roots_are_unchanged():
+            if (
+                import_gate.violation
+                or not _new_modules_are_allowed(
+                    modules_before_provider,
+                    verified_archives,
+                )
+                or not import_gate._verified_roots_are_unchanged()
+            ):
                 raise ImportError("provider imported an undeclared ambient dependency")
         except BaseException:
             return _provider_error(
@@ -1364,12 +1357,6 @@ def main() -> int:
             time.sleep(0.005)
     request_path = Path(sys.argv[1])
     response_path = Path(sys.argv[2])
-    # The legacy baseline verifier still supplies its vetted numerical runtime
-    # from the control environment.  Start it explicitly because `-S` disables
-    # automatic site initialization for the contained controller startup.
-    import site
-
-    site.main()
     sys.argv[:] = [sys.argv[0]]
     if hasattr(sys, "orig_argv"):
         sys.orig_argv = [sys.orig_argv[0]]
