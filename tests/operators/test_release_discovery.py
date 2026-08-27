@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from http.client import IncompleteRead
 from pathlib import Path
 
 import pytest
@@ -162,6 +163,35 @@ def test_download_removes_partial_file_on_interrupted_stream(tmp_path: Path) -> 
     asset = ReleaseAsset("asset.bin", url, 2, "sha256:" + hashlib.sha256(b"ab").hexdigest())
     response = _Response(b"ab", url)
     response.read = lambda amount=-1: (_ for _ in ()).throw(OSError("interrupted"))  # type: ignore[method-assign]
+
+    with pytest.raises(OperatorInstallError) as caught:
+        download_verified_asset(asset, tmp_path / "asset.bin", opener=_Opener({url: response}))
+    assert caught.value.code == "operator_download_failed"
+    assert not (tmp_path / "asset.bin").exists()
+
+
+def test_resolver_converts_interrupted_index_read_to_install_error() -> None:
+    api = "https://api.github.com/repos/xingwudao/equant-py/releases/tags/v1.0.0"
+    index_url = "https://github.com/xingwudao/equant-py/releases/download/v1.0.0/operator-release-v1.json"
+    interrupted = _Response(b"", index_url)
+    interrupted.read = lambda amount=-1: (_ for _ in ()).throw(IncompleteRead(b"partial", 1))  # type: ignore[method-assign]
+    opener = _Opener(
+        {
+            api: _Response(_release_response(index_url), api),
+            index_url: interrupted,
+        }
+    )
+
+    with pytest.raises(OperatorInstallError) as caught:
+        OfficialReleaseResolver(opener=opener).resolve(_provider(), "1.0.0")
+    assert caught.value.code == "operator_release_invalid"
+
+
+def test_download_converts_incomplete_read_to_install_error(tmp_path: Path) -> None:
+    url = "https://github.com/file"
+    asset = ReleaseAsset("asset.bin", url, 2, "sha256:" + hashlib.sha256(b"ab").hexdigest())
+    response = _Response(b"", url)
+    response.read = lambda amount=-1: (_ for _ in ()).throw(IncompleteRead(b"a", 1))  # type: ignore[method-assign]
 
     with pytest.raises(OperatorInstallError) as caught:
         download_verified_asset(asset, tmp_path / "asset.bin", opener=_Opener({url: response}))

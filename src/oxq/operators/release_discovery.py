@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 from dataclasses import dataclass
+from http.client import HTTPException
 from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -72,7 +73,7 @@ class OfficialReleaseResolver:
             index = parse_release_index(_fetch_bytes(asset_url, _MAX_INDEX_BYTES, self._opener))
         except OperatorInstallError:
             raise
-        except (OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
+        except (HTTPException, OSError, TypeError, UnicodeError, ValueError, json.JSONDecodeError):
             raise _release_error(provider, release, "official release discovery failed") from None
         if index.provider != provider.name or index.release != release:
             raise _release_error(provider, release, "official release index identity is invalid")
@@ -119,7 +120,7 @@ def download_verified_asset(
         os.replace(temporary_path, destination_path)
         temporary_path = None
         return destination_path
-    except (OSError, TypeError, ValueError, URLError, HTTPError):
+    except (HTTPException, OSError, TypeError, ValueError, URLError, HTTPError):
         raise install_error(
             "operator_download_failed",
             f"verified asset download failed: {asset.url}",
