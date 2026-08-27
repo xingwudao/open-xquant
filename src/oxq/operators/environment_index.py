@@ -41,6 +41,14 @@ class EnvironmentProvider:
     manifest_digests: Mapping[str, str]
     baseline_digests: Mapping[str, str]
 
+    @property
+    def declared_artifact_paths(self) -> tuple[str, ...]:
+        paths: list[str] = []
+        for operator in self.operators:
+            paths.append(operator.manifest_path)
+            paths.extend(operator.baseline_paths)
+        return tuple(paths)
+
 
 def parse_exact_provider_requirement(value: str) -> tuple[str, str]:
     """Parse the official environment provider requirement grammar."""
