@@ -308,6 +308,18 @@ def _location_is_in_static_runtime_source(location: str) -> bool:
     return any(_location_is_in_archive(location, root) for root in _STATIC_RUNTIME_SOURCE_ROOTS)
 
 
+def _static_runtime_source_digest(location: str) -> str | None:
+    if not _location_is_in_static_runtime_source(location):
+        return None
+    try:
+        path = Path(location)
+        if not path.is_file():
+            return None
+        return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+    except OSError:
+        return None
+
+
 def _module_is_from_archives(
     module: ModuleType,
     archives: list[str],
@@ -535,19 +547,37 @@ class _ProviderImportGate:
         else:
             return False
         expected = self._verified_source_digest(args[1])
-        return expected == f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
+        digest = f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
+        return expected == digest or _static_runtime_source_digest(args[1]) == digest
 
     def _code_is_from_verified_source(self, args: tuple[object, ...]) -> bool:
         if not args or not isinstance(args[0], CodeType):
             return False
         code = args[0]
-        return self._trusted_code_objects.get(id(code)) is code
+        return self._trusted_code_objects.get(id(code)) is code or (
+            _location_is_in_static_runtime_source(code.co_filename) and self._exec_is_from_importlib_runtime_loader()
+        )
 
     def _trust_code_graph(self, code: CodeType) -> None:
         self._trusted_code_objects[id(code)] = code
         for constant in code.co_consts:
             if isinstance(constant, CodeType):
                 self._trust_code_graph(constant)
+
+    def _exec_is_from_importlib_runtime_loader(self) -> bool:
+        caller = self._original_getframe(2)
+        try:
+            while True:
+                module_name = caller.f_globals.get("__name__")
+                if module_name in {"importlib._bootstrap", "importlib._bootstrap_external"}:
+                    return True
+                parent = caller.f_back
+                if parent is None:
+                    break
+                caller = parent
+        finally:
+            del caller
+        return False
 
     def _capture_process_entry_points(
         self,

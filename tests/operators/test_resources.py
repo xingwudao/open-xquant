@@ -192,6 +192,11 @@ def test_certification_artifact_version_policy_matches_artifact_roles() -> None:
         }
     )
     Draft202012Validator(schemas["candidate-build-v1.schema.json"]).validate(runtime_candidate_build)
+    for invalid_version in ("1_", "1..."):
+        invalid_runtime_candidate_build = deepcopy(runtime_candidate_build)
+        invalid_runtime_candidate_build["artifacts"][1]["version"] = invalid_version  # type: ignore[index]
+        with pytest.raises(ValidationError):
+            Draft202012Validator(schemas["candidate-build-v1.schema.json"]).validate(invalid_runtime_candidate_build)
 
     certification_record = deepcopy(instances["certification_record"])
     certification_record["artifacts"][0]["version"] = "1.0.0.post1"  # type: ignore[index]
@@ -210,6 +215,11 @@ def test_certification_artifact_version_policy_matches_artifact_roles() -> None:
         }
     )
     Draft202012Validator(schemas["certification-record-v1.schema.json"]).validate(runtime_certification_record)
+    for invalid_version in ("1_", "1..."):
+        invalid_runtime_certification_record = deepcopy(runtime_certification_record)
+        invalid_runtime_certification_record["artifacts"][1]["version"] = invalid_version  # type: ignore[index]
+        with pytest.raises(ValidationError):
+            Draft202012Validator(schemas["certification-record-v1.schema.json"]).validate(invalid_runtime_certification_record)
 
 
 def test_materialized_frozen_surface_has_exact_digests() -> None:

@@ -573,6 +573,47 @@ def test_allows_release_artifacts_to_share_one_build_invocation_identifier(
     assert binding["certification_state"] == "research-certified"
 
 
+@pytest.mark.parametrize("version", ["1.0.0.post1", "2.9.0.post0", "2026.3"])
+def test_registry_accepts_valid_runtime_artifact_python_package_versions(version: str) -> None:
+    assert registry_module._valid_entry_artifact(
+        {
+            "distribution": "helper-pkg",
+            "version": version,
+            "filename": f"helper_pkg-{version}-py3-none-any.whl",
+            "role": "runtime-dependency",
+            "build_identifier": "helper-build",
+            "digest": "sha256:" + "b" * 64,
+        }
+    )
+
+
+@pytest.mark.parametrize("version", ["1_", "1..."])
+def test_registry_rejects_malformed_runtime_artifact_python_package_versions(version: str) -> None:
+    assert not registry_module._valid_entry_artifact(
+        {
+            "distribution": "helper-pkg",
+            "version": version,
+            "filename": f"helper_pkg-{version}-py3-none-any.whl",
+            "role": "runtime-dependency",
+            "build_identifier": "helper-build",
+            "digest": "sha256:" + "b" * 64,
+        }
+    )
+
+
+def test_registry_rejects_python_package_version_on_implementation_artifact() -> None:
+    assert not registry_module._valid_entry_artifact(
+        {
+            "distribution": "equant-ttr",
+            "version": "1.0.0.post1",
+            "filename": "equant_ttr-1.0.0.post1-py3-none-any.whl",
+            "role": "implementation",
+            "build_identifier": "implementation-build",
+            "digest": "sha256:" + "b" * 64,
+        }
+    )
+
+
 def test_rejects_unrelated_extra_implementation_artifact(tmp_path: Path) -> None:
     result = _result(tmp_path)
     unrelated_path = tmp_path / "unrelated.whl"
