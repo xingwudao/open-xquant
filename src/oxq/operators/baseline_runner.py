@@ -3,12 +3,10 @@
 from __future__ import annotations
 
 import hashlib
-import hmac
 import json
 import math
 import os
 import subprocess
-import sys
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -46,8 +44,6 @@ _AUXILIARY_REQUIREMENTS = {
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _ARTIFACT_COPY_CHUNK_BYTES = 1024 * 1024
-_MAX_CHILD_RESPONSE_BYTES = 1024 * 1024
-_PROVIDER_POLICY_VIOLATION_EXIT_CODE = 86
 
 
 @dataclass(frozen=True)
@@ -520,14 +516,6 @@ def _validated_timeout(timeout_seconds: float, operator_id: str) -> float:
     return normalized
 
 
-def _child_environment() -> dict[str, str]:
-    environment = dict(os.environ)
-    if "pytest" in sys.modules:
-        environment["OXQ_BASELINE_TEST_RUNTIME"] = "1"
-        environment["OXQ_BASELINE_TEST_RUNTIME_PATHS"] = os.pathsep.join(path for path in sys.path if "site-packages" in Path(path).parts)
-    return environment
-
-
 def _materialize_artifacts(
     root: Path,
     implementation: _VerifiedArtifact,
@@ -551,66 +539,6 @@ def _materialize_artifacts(
         destination.chmod(0o444)
         paths.append(destination)
     return str(paths[0]), [str(path) for path in paths[1:]]
-
-
-def _read_response(
-    response_path: Path,
-    returncode: int,
-    operator_id: str,
-    response_secret: bytes,
-) -> dict[str, object]:
-    if returncode == _PROVIDER_POLICY_VIOLATION_EXIT_CODE:
-        raise _error(
-            "provider_import_failed",
-            "provider attempted process creation outside the verified closure",
-            operator_id,
-        )
-    try:
-        with response_path.open("rb") as stream:
-            raw = stream.read(_MAX_CHILD_RESPONSE_BYTES + 1)
-        if len(raw) > _MAX_CHILD_RESPONSE_BYTES:
-            raise ValueError("child response is too large")
-        value = json.loads(
-            raw.decode("utf-8"),
-            object_pairs_hook=_reject_duplicate_keys,
-            parse_constant=_reject_nonstandard_constant,
-        )
-        if returncode != 0 or not isinstance(value, dict):
-            raise ValueError("invalid child response")
-        auth = value.pop("auth", None)
-        if not isinstance(auth, str):
-            raise ValueError("missing child response authentication")
-        expected_auth = (
-            "hmac-sha256:"
-            + hmac.new(
-                response_secret,
-                json.dumps(
-                    value,
-                    allow_nan=False,
-                    separators=(",", ":"),
-                    sort_keys=True,
-                ).encode("utf-8"),
-                hashlib.sha256,
-            ).hexdigest()
-        )
-        if not hmac.compare_digest(auth, expected_auth):
-            raise ValueError("invalid child response authentication")
-        status = value.get("status")
-        valid_ok = status == "ok" and set(value) == {
-            "status",
-            "outputs",
-            "repeated_outputs",
-        }
-        valid_error = status == "error" and set(value) == {"status", "code"}
-        if not valid_ok and not valid_error:
-            raise ValueError("invalid child response fields")
-        return cast(dict[str, object], value)
-    except (OSError, UnicodeError, json.JSONDecodeError, ValueError, RecursionError):
-        raise _error(
-            "provider_execution_failed",
-            "provider baseline child response is invalid",
-            operator_id,
-        ) from None
 
 
 def _assert_expected(
@@ -744,26 +672,8 @@ def _valid_iso_datetime(value: str) -> bool:
     return True
 
 
-def _child_script_path() -> Path:
-    return Path(__file__).with_name("_baseline_child.py").resolve(strict=True)
-
-
 def _sha256_file(path: Path) -> str:
     return f"sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
-
-
-def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
-    result: dict[str, object] = {}
-    for key, value in pairs:
-        if key in result:
-            raise ValueError("duplicate child response key")
-        result[key] = value
-    return result
-
-
-def _reject_nonstandard_constant(value: str) -> None:
-    del value
-    raise ValueError("non-standard JSON number")
 
 
 def _error(

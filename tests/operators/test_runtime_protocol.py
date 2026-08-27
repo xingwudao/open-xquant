@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-import pytest
 from pathlib import Path
+from types import TracebackType
+
+import pytest
 
 from oxq.operators import runtime_protocol
 
@@ -18,16 +20,28 @@ def test_canonical_protocol_bytes_are_deterministic_and_reject_non_json() -> Non
 
 def test_active_response_reader_bounds_oversized_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     response = tmp_path / "response.json"
-    response.write_bytes(b"x" * (1024 * 1024 + 1))
-    real_open = Path.open
     sizes: list[int] = []
 
-    class Reader:
-        def __enter__(self): return self
-        def __exit__(self, *args: object): self.stream.close()
-        def read(self, size: int) -> bytes: sizes.append(size); return self.stream.read(size)
-        def __init__(self, stream: object): self.stream = stream
-    monkeypatch.setattr(Path, "open", lambda path, *a, **kw: Reader(real_open(path, *a, **kw)))
-    with pytest.raises(ValueError):
+    class OversizedResponse:
+        def __enter__(self) -> OversizedResponse:
+            return self
+
+        def __exit__(
+            self,
+            exc_type: type[BaseException] | None,
+            exc_value: BaseException | None,
+            traceback: TracebackType | None,
+        ) -> None:
+            del exc_type, exc_value, traceback
+
+        def read(self, size: int = -1) -> bytes:
+            sizes.append(size)
+            if size < 0:
+                pytest.fail("active response reader attempted an unbounded read")
+            return b"x" * size
+
+    monkeypatch.setattr(Path, "open", lambda *args, **kwargs: OversizedResponse())
+    with pytest.raises(ValueError, match="exact-wheel child response is invalid"):
         runtime_protocol._read_authenticated_response(response, 0, b"x" * 32)
+
     assert sizes == [1024 * 1024 + 1]

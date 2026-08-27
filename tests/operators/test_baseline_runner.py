@@ -10,7 +10,7 @@ import io
 import json
 import sys
 import zipfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -38,6 +38,32 @@ from tests.operators.helpers import (
     rewrite_json,
     write_provider_repository,
 )
+
+
+@pytest.fixture(autouse=True)
+def _provide_explicit_fixture_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_paths = [
+        path for path in sys.path if "site-packages" in Path(path).parts
+    ]
+
+    def run_fixture_request(
+        request: Mapping[str, object],
+        wheel_snapshots: Sequence[str | Path],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return runtime_protocol.run_exact_wheel_request(
+            request,
+            wheel_snapshots,
+            timeout_seconds=timeout_seconds,
+            _test_runtime_paths=runtime_paths,
+        )
+
+    monkeypatch.setattr(
+        baseline_runner,
+        "run_exact_wheel_request",
+        run_fixture_request,
+    )
 
 
 def _sha256(value: bytes) -> str:
@@ -1488,30 +1514,6 @@ def test_rejects_malformed_child_json(
     monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
-
-
-def test_rejects_oversized_child_response_without_unbounded_read(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response_path = tmp_path / "oversized-response.json"
-    response_path.write_bytes(b"x" * (1024 * 1024 + 1))
-
-    def unbounded_read_must_not_run(path: Path) -> bytes:
-        del path
-        pytest.fail("child response used an unbounded read")
-
-    monkeypatch.setattr(Path, "read_bytes", unbounded_read_must_not_run)
-
-    with pytest.raises(OperatorCertificationError) as caught:
-        baseline_runner._read_response(
-            response_path,
-            0,
-            "org.open-xquant.indicator.sma",
-            b"x" * 32,
-        )
-
-    assert caught.value.code == "provider_execution_failed"
 
 
 def test_rejects_child_json_with_undeclared_response_fields(
