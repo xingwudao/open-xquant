@@ -27,13 +27,13 @@ class InstalledReleaseStore:
  def __init__(self, home: str|Path|None=None): self.home=Path(home if home is not None else os.getenv("OPEN_XQUANT_OPERATOR_HOME", "~/.config/open-xquant/operator-releases")).expanduser().resolve()
  def publish(self, staging_dir: Path, marker: Mapping[str,object])->InstalledRelease:
   raw,ident,files=_marker(marker); src=Path(staging_dir).resolve(strict=True); vals=_check(src,files,(src/MARKER).is_file())
-  dest=self.home/ident[0]/ident[1]/ident[2]; self.home.mkdir(parents=True,exist_ok=True)
+  self.home.mkdir(parents=True,exist_ok=True); dest=_store_path(self.home,*ident)
   with _lock(self.home):
    if os.path.lexists(dest):
     old=self._read(dest)
     if _all(old.path)=={**vals,MARKER:raw}: return old
     raise ValueError("installed release conflict")
-   dest.parent.mkdir(parents=True,exist_ok=True); tmp=Path(tempfile.mkdtemp(prefix=".staging-",dir=dest.parent))
+   dest.parent.mkdir(parents=True,exist_ok=True); _require_real_directory(dest.parent); tmp=Path(tempfile.mkdtemp(prefix=".staging-",dir=dest.parent))
    try:
     for n,v in vals.items():
      p=tmp.joinpath(*safe_relative_path(n).parts); p.parent.mkdir(parents=True,exist_ok=True); write_file(p,v)
@@ -44,10 +44,12 @@ class InstalledReleaseStore:
  def list(self)->tuple[InstalledRelease,...]:
   if not self.home.is_dir(): return ()
   out=[]
-  for p in self.home.glob("*/*/*"):
-   try:
-    if p.is_dir() and not p.is_symlink() and (p/MARKER).is_file(): out.append(self._read(p))
-   except (OSError,ValueError): pass
+  for provider in _child_directories(self.home):
+   for release in _child_directories(provider):
+    for target in _child_directories(release):
+     try:
+      if (target/MARKER).is_file() and _contained(self.home,target): out.append(self._read(target))
+     except (OSError,ValueError): pass
   return tuple(sorted(out,key=lambda x:(x.provider,x.release,x.target)))
  def get(self,provider:str,release:str,target:str|None=None)->InstalledRelease:
   found=[x for x in self.list() if x.provider==provider and x.release==release and (target is None or x.target==target)]
@@ -89,6 +91,33 @@ def _marker(m):
  except Exception: raise ValueError("installed release marker is invalid") from None
 def _path_component(value):
  return isinstance(value,str) and value not in {"",".",".."} and not any(char in value for char in ("/","\\","\x00","\r","\n")) and not any(ord(char)<32 for char in value)
+def _contained(root,path):
+ try: path.resolve(strict=False).relative_to(root.resolve(strict=True)); return True
+ except (OSError,ValueError): return False
+def _require_real_directory(path):
+ status=path.lstat()
+ if stat.S_ISLNK(status.st_mode) or not stat.S_ISDIR(status.st_mode): raise ValueError("store path is not a real directory")
+ attributes=getattr(status,"st_file_attributes",0)
+ if attributes & getattr(stat,"FILE_ATTRIBUTE_REPARSE_POINT",0x00000400): raise ValueError("store path is a reparse point")
+def _store_path(home,*parts):
+ _require_real_directory(home)
+ current=home
+ for part in parts[:-1]:
+  current=current/part
+  if current.exists() or os.path.lexists(current): _require_real_directory(current)
+  else: current.mkdir(); _require_real_directory(current)
+ target=current/parts[-1]
+ if os.path.lexists(target): _require_real_directory(target)
+ if not _contained(home,target): raise ValueError("store destination escapes home")
+ return target
+def _child_directories(root):
+ try:
+  _require_real_directory(root)
+  return tuple(path for path in root.iterdir() if _is_real_directory(path))
+ except (OSError,ValueError): return ()
+def _is_real_directory(path):
+ try: _require_real_directory(path); return True
+ except (OSError,ValueError): return False
 def _validator():
  with materialize_operator_install_profile() as p: return Draft202012Validator(json.loads(p["installed_release"].read_text()))
 def _all(root):

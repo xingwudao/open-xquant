@@ -194,3 +194,29 @@ def test_publish_rejects_marker_path_components(tmp_path: Path, field: str, valu
     with pytest.raises(ValueError, match="marker"):
         store.publish(staging, marker)
     assert not any(store.home.rglob("bundle.zip")) if store.home.exists() else True
+
+
+def test_publish_rejects_symlinked_provider_ancestor(tmp_path: Path) -> None:
+    store = InstalledReleaseStore(tmp_path / "home")
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    store.home.mkdir()
+    (store.home / "equant-py").symlink_to(outside, target_is_directory=True)
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    marker, _ = _write_release(staging)
+    with pytest.raises(ValueError, match="store"):
+        store.publish(staging, marker)
+    assert not any(outside.rglob("bundle.zip"))
+
+
+def test_list_ignores_symlinked_provider_ancestor(tmp_path: Path) -> None:
+    store = InstalledReleaseStore(tmp_path / "home")
+    outside_store = InstalledReleaseStore(tmp_path / "outside")
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    marker, _ = _write_release(staging)
+    outside_store.publish(staging, marker)
+    store.home.mkdir()
+    (store.home / "equant-py").symlink_to(outside_store.home / "equant-py", target_is_directory=True)
+    assert store.list() == ()
