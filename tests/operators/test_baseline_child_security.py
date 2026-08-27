@@ -5,11 +5,14 @@ from __future__ import annotations
 import builtins
 import hashlib
 import hmac
+import importlib.util
 import json
 import marshal
+import operator
 import os
 import subprocess
 import sys
+import types
 import zipfile
 from pathlib import Path
 from typing import cast
@@ -17,6 +20,13 @@ from typing import cast
 import pytest
 
 from oxq.operators import _baseline_child
+
+
+def _module_from_file(name: str, origin: Path) -> types.ModuleType:
+    module = types.ModuleType(name)
+    module.__file__ = str(origin)
+    module.__spec__ = importlib.util.spec_from_file_location(name, origin)
+    return module
 
 
 def _write_provider_wheel(path: Path, source: str) -> None:
@@ -164,6 +174,140 @@ def test_dynamic_code_gate_allows_trusted_callers_and_restores_builtins() -> Non
     assert builtins.compile is original_compile
     assert builtins.exec is original_exec
     assert builtins.eval is original_eval
+
+
+def test_verified_package_can_alias_static_runtime_modules(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verified_root = tmp_path / "verified"
+    package_root = verified_root / "verified_pkg"
+    package_root.mkdir(parents=True)
+    package_init = package_root / "__init__.py"
+    package_init.write_text("", encoding="utf-8")
+
+    before = set(sys.modules)
+    monkeypatch.setitem(
+        sys.modules,
+        "verified_pkg",
+        _module_from_file("verified_pkg", package_init),
+    )
+    monkeypatch.setitem(
+        sys.modules,
+        "verified_pkg.operator",
+        _module_from_file("verified_pkg.operator", Path(operator.__file__)),
+    )
+
+    assert _baseline_child._new_modules_are_allowed(
+        before,
+        [str(verified_root)],
+    )
+
+
+def test_provider_import_allows_static_runtime_namedtuple_eval(
+    tmp_path: Path,
+) -> None:
+    source = """
+from collections import namedtuple
+
+import pandas as pd
+
+VersionInfo = namedtuple("VersionInfo", ["major", "minor"])
+VERSION = VersionInfo(1, 0)
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, float(VERSION.major + VERSION.minor + 1)],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
+def test_provider_import_allows_static_runtime_forward_ref_compile(
+    tmp_path: Path,
+) -> None:
+    source = """
+from typing import Dict, Type
+
+import pandas as pd
+
+class Node:
+    children: Dict[type, Type["Node"]] = {}
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
+def test_provider_import_allows_platform_runtime_lazy_compile(
+    tmp_path: Path,
+) -> None:
+    source = """
+import numpy as np
+import pandas as pd
+
+POLYNOMIAL = np.polynomial.polynomial.Polynomial
+
+def sma(frame, *, window):
+    return pd.Series(
+        [None, None, 2.0],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
+
+
+def test_provider_import_allows_static_runtime_dataclass_exec(
+    tmp_path: Path,
+) -> None:
+    source = """
+from dataclasses import make_dataclass
+
+import pandas as pd
+
+Point = make_dataclass("Point", [("x", float)])
+
+def sma(frame, *, window):
+    point = Point(2.0)
+    return pd.Series(
+        [None, None, point.x],
+        index=frame.index,
+        name=f"sma_{window}",
+        dtype="float64",
+    )
+"""
+
+    assert _run_child(tmp_path, source) == {
+        "status": "ok",
+        "outputs": {"sma_3": [None, None, 2.0]},
+        "repeated_outputs": {"sma_3": [None, None, 2.0]},
+    }
 
 
 def test_importlib_can_still_load_and_execute_verified_provider(

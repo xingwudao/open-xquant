@@ -19,7 +19,7 @@ import sysconfig
 import threading
 import time
 import zipfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
@@ -308,6 +308,33 @@ def _location_is_in_static_runtime_source(location: str) -> bool:
     return any(_location_is_in_archive(location, root) for root in _STATIC_RUNTIME_SOURCE_ROOTS)
 
 
+def _location_is_in_platform_runtime_source(location: str) -> bool:
+    if not location:
+        return False
+    for root in _PLATFORM_RUNTIME_ROOTS:
+        module = sys.modules.get(root)
+        if not isinstance(module, ModuleType):
+            continue
+        search_locations = getattr(
+            getattr(module, "__spec__", None),
+            "submodule_search_locations",
+            None,
+        )
+        roots: list[str] = []
+        if search_locations is not None:
+            roots.extend(
+                str(path)
+                for path in search_locations
+                if isinstance(path, str)
+            )
+        module_file = getattr(module, "__file__", None)
+        if isinstance(module_file, str):
+            roots.append(str(Path(module_file).parent))
+        if any(_location_is_in_archive(location, package_root) for package_root in roots):
+            return True
+    return False
+
+
 def _static_runtime_source_digest(location: str) -> str | None:
     if not _location_is_in_static_runtime_source(location):
         return None
@@ -328,6 +355,33 @@ def _module_is_from_archives(
     return bool(locations) and any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
 
 
+def _module_is_allowed_verified_closure(
+    module: ModuleType,
+    root: str,
+    archives: list[str],
+) -> bool:
+    if _module_is_from_archives(module, archives):
+        return True
+    root_module = sys.modules.get(root)
+    if (
+        not isinstance(root_module, ModuleType)
+        or root_module is module
+        or not _module_is_from_archives(root_module, archives)
+    ):
+        return False
+    module_name = getattr(module, "__name__", "")
+    if (
+        isinstance(module_name, str)
+        and module_name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS
+    ):
+        return True
+    locations = _module_locations(module)
+    return not locations or all(
+        _location_is_in_static_runtime_source(location)
+        for location in locations
+    )
+
+
 def _new_modules_are_allowed(
     modules_before_provider: set[str],
     verified_archives: list[str],
@@ -339,7 +393,11 @@ def _new_modules_are_allowed(
         root = name.partition(".")[0]
         if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
             continue
-        if not _module_is_from_archives(module, verified_archives):
+        if not _module_is_allowed_verified_closure(
+            module,
+            root,
+            verified_archives,
+        ):
             return False
     return True
 
@@ -352,6 +410,48 @@ def _visible_modules(verified_roots: list[str]) -> Mapping[str, object]:
         or name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS
         or (isinstance(module, ModuleType) and _module_is_from_archives(module, verified_roots))
     }
+
+
+class _RestrictedModules(MutableMapping[str, object]):
+    def __init__(self, verified_roots: list[str]) -> None:
+        self._verified_roots = verified_roots
+
+    def _is_visible(self, name: str, module: object) -> bool:
+        root = name.partition(".")[0]
+        if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
+            return True
+        return isinstance(module, ModuleType) and _module_is_allowed_verified_closure(
+            module,
+            root,
+            self._verified_roots,
+        )
+
+    def __getitem__(self, name: str) -> object:
+        module = sys.modules[name]
+        if not self._is_visible(name, module):
+            raise KeyError(name)
+        return module
+
+    def __setitem__(self, name: str, module: object) -> None:
+        module_name = getattr(module, "__name__", name)
+        if not (
+            isinstance(module_name, str)
+            and self._is_visible(module_name, module)
+        ) and not self._is_visible(name, module):
+            raise KeyError(name)
+        sys.modules[name] = module
+
+    def __delitem__(self, name: str) -> None:
+        module = self[name]
+        if module is not sys.modules.get(name):
+            raise KeyError(name)
+        del sys.modules[name]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(_visible_modules(self._verified_roots))
+
+    def __len__(self) -> int:
+        return len(_visible_modules(self._verified_roots))
 
 
 def _restrict_sys_path(verified_archives: list[str]) -> None:
@@ -370,7 +470,7 @@ def _restricted_sys_module(verified_roots: list[str]) -> ModuleType:
     restricted = ModuleType("sys")
     restricted.__dict__.update({name: value for name, value in sys.__dict__.items() if name not in _HIDDEN_PROVIDER_SYS_ATTRIBUTES})
     restricted.path = list(sys.path)  # type: ignore[attr-defined]
-    restricted.modules = _visible_modules(verified_roots)  # type: ignore[attr-defined]
+    restricted.modules = _RestrictedModules(verified_roots)  # type: ignore[attr-defined]
     return restricted
 
 
@@ -471,7 +571,11 @@ class _ProviderImportGate:
         sys.__dict__.update(self._hidden_sys_attributes)
 
     def _guarded_compile(self, *args: object, **kwargs: object) -> object:
-        if not self._compile_matches_verified_source(args):
+        if not self._compile_matches_verified_source(
+            args,
+        ) and not self._compile_is_static_runtime_generated(
+            args,
+        ) and not self._compile_matches_platform_runtime_source(args):
             self._reject_provider_dynamic_code("compile")
         compiled = self._original_compile(*args, **kwargs)
         if isinstance(compiled, CodeType) and self._compile_matches_verified_source(args):
@@ -479,7 +583,13 @@ class _ProviderImportGate:
         return compiled
 
     def _guarded_exec(self, *args: object, **kwargs: object) -> None:
-        if not self._code_is_from_verified_source(args):
+        if not self._code_is_from_verified_source(
+            args,
+        ) and not self._code_is_from_platform_runtime_source(
+            args,
+        ) and not self._exec_is_static_runtime_generated(
+            args,
+        ) and not self._exec_is_verified_dependency_generated(args):
             self._reject_provider_dynamic_code("exec")
         self._original_exec(*args, **kwargs)
 
@@ -512,6 +622,10 @@ class _ProviderImportGate:
     def _reject_provider_dynamic_code(self, operation: str) -> None:
         caller = self._original_getframe(2)
         try:
+            if operation == "eval" and _location_is_in_static_runtime_source(
+                caller.f_code.co_filename,
+            ):
+                return
             provider_call = False
             while True:
                 if any(
@@ -536,6 +650,25 @@ class _ProviderImportGate:
             self.violation = True
             raise ImportError(f"provider dynamic code execution is outside the verified closure: {operation}")
 
+    def _compile_is_static_runtime_generated(self, args: tuple[object, ...]) -> bool:
+        if len(args) < 2 or args[1] != "<string>":
+            return False
+        caller = self._original_getframe(2)
+        try:
+            return _location_is_in_static_runtime_source(caller.f_code.co_filename)
+        finally:
+            del caller
+
+    def _compile_matches_platform_runtime_source(
+        self,
+        args: tuple[object, ...],
+    ) -> bool:
+        return (
+            len(args) >= 2
+            and isinstance(args[1], str)
+            and _location_is_in_platform_runtime_source(args[1])
+        )
+
     def _compile_matches_verified_source(self, args: tuple[object, ...]) -> bool:
         if len(args) < 2 or not isinstance(args[1], str):
             return False
@@ -557,6 +690,35 @@ class _ProviderImportGate:
         return self._trusted_code_objects.get(id(code)) is code or (
             _location_is_in_static_runtime_source(code.co_filename) and self._exec_is_from_importlib_runtime_loader()
         )
+
+    def _code_is_from_platform_runtime_source(
+        self,
+        args: tuple[object, ...],
+    ) -> bool:
+        if not args or not isinstance(args[0], CodeType):
+            return False
+        return _location_is_in_platform_runtime_source(args[0].co_filename)
+
+    def _exec_is_static_runtime_generated(self, args: tuple[object, ...]) -> bool:
+        if not args or not isinstance(args[0], str):
+            return False
+        caller = self._original_getframe(2)
+        try:
+            return _location_is_in_static_runtime_source(caller.f_code.co_filename)
+        finally:
+            del caller
+
+    def _exec_is_verified_dependency_generated(self, args: tuple[object, ...]) -> bool:
+        if not args or not isinstance(args[0], str):
+            return False
+        caller = self._original_getframe(2)
+        try:
+            return any(
+                _location_is_in_archive(caller.f_code.co_filename, archive)
+                for archive in self._verified_archives[1:]
+            )
+        finally:
+            del caller
 
     def _trust_code_graph(self, code: CodeType) -> None:
         self._trusted_code_objects[id(code)] = code
@@ -701,8 +863,6 @@ class _ProviderImportGate:
         level: int = 0,
     ) -> object:
         provider_call = globals is None or _globals_are_from_archives(globals, self._verified_archives) or self._provider_call_in_stack()
-        if provider_call:
-            self._reject_modified_verified_roots()
         try:
             imported = self._original_import(name, globals, locals, fromlist, level)
         except ModuleNotFoundError:
@@ -713,7 +873,6 @@ class _ProviderImportGate:
             raise
         if not provider_call:
             return imported
-        self._reject_modified_verified_roots()
         absolute_name = self._absolute_name(name, globals, level)
         if not self._provider_import_is_allowed(absolute_name):
             self.violation = True
@@ -738,8 +897,6 @@ class _ProviderImportGate:
             except (ImportError, ValueError) as error:
                 self.violation = True
                 raise ImportError("provider relative import is invalid") from error
-        if provider_call:
-            self._reject_modified_verified_roots()
         try:
             imported = self._original_import_module(name, package)
         except ModuleNotFoundError:
@@ -748,8 +905,6 @@ class _ProviderImportGate:
             if provider_call:
                 self.violation = True
             raise
-        if provider_call:
-            self._reject_modified_verified_roots()
         if provider_call and not self._provider_import_is_allowed(absolute_name):
             self.violation = True
             raise ImportError(f"provider import is outside the verified closure: {absolute_name}")
@@ -780,8 +935,9 @@ class _ProviderImportGate:
             module = sys.modules.get(root)
         if not isinstance(module, ModuleType):
             return _root_exists_in_archives(root, self._verified_archives)
-        return isinstance(module, ModuleType) and _module_is_from_archives(
+        return isinstance(module, ModuleType) and _module_is_allowed_verified_closure(
             module,
+            root,
             self._verified_archives,
         )
 
@@ -1088,7 +1244,7 @@ def _execute(
             if import_gate.violation or not _new_modules_are_allowed(
                 modules_before_provider,
                 verified_archives,
-            ):
+            ) or not import_gate._verified_roots_are_unchanged():
                 raise ImportError("provider imported an undeclared ambient dependency")
         except BaseException:
             return _provider_error(
