@@ -253,12 +253,16 @@ def test_operator_distribution_and_install_profiles_are_packaged() -> None:
         "certification_record_v2",
         "certification_bundle_manifest",
         "operator_release",
-        "installed_release",
         "runtime_protocol",
         "official_providers",
     }
     for path in paths.values():
         assert path.is_file()
+
+
+def test_environment_install_phase_does_not_package_installed_release_schema() -> None:
+    with materialize_operator_install_profile() as paths:
+        assert "installed_release" not in paths
 
 
 def test_catalog_uses_operator_identity_version_keys() -> None:

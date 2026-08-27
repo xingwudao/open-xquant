@@ -46,7 +46,7 @@ def test_operator_distribution_resources_are_packaged_and_strict() -> None:
 
 @pytest.mark.parametrize(
     "name",
-    ["operator_release", "installed_release"],
+    ["operator_release"],
 )
 def test_install_schemas_bound_size_bytes_and_reject_extra_fields(name: str) -> None:
     schema = _schemas()[name]

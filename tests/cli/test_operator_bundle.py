@@ -3,22 +3,48 @@
 from __future__ import annotations
 
 import json
+import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 from click.testing import CliRunner
-from tests.operators.test_baseline_runner import _write_certifiable_provider
 
+import oxq.operators.baseline_runner as baseline_runner
+from oxq.operators import runtime_protocol
 from oxq.cli.main import main
 from oxq.operators.bundle import export_certification_bundle
 from oxq.operators.certification import certify_provider
 from oxq.operators.models import CertificationTarget
 from oxq.operators.registry import publish_certification
 from oxq.operators.submission import load_provider_submission
+from tests.operators.test_baseline_runner import _write_certifiable_provider
 
 TARGET = "cp312-cp312-macosx_14_0_arm64"
 
 
+def _patch_fixture_runtime() -> None:
+    runtime_paths = [
+        path for path in sys.path if "site-packages" in Path(path).parts
+    ]
+
+    def run_fixture_request(
+        request: Mapping[str, object],
+        wheel_snapshots: Sequence[str | Path],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return runtime_protocol.run_exact_wheel_request(
+            request,
+            wheel_snapshots,
+            timeout_seconds=timeout_seconds,
+            _test_runtime_paths=runtime_paths,
+        )
+
+    baseline_runner.run_exact_wheel_request = run_fixture_request
+
+
 def _fixture(tmp_path: Path) -> tuple[Path, Path, Path]:
+    _patch_fixture_runtime()
     fixture = _write_certifiable_provider(tmp_path / "fixture", expected=[None, None, 2.0])
     submission = load_provider_submission(fixture.path, fixture.submission_commit, fixture.artifact_dir)
     try:
@@ -81,3 +107,11 @@ def test_import_emits_human_output_and_stable_success_exit_code(tmp_path: Path) 
     assert result.exit_code == 0, result.output
     assert "Status: research-certified" in result.output
     assert "Provider: equant-py" in result.output
+
+
+def test_operator_install_is_guidance_not_package_manager() -> None:
+    result = CliRunner().invoke(main, ["operator", "install", "equant-py==1.0.0"])
+
+    assert result.exit_code != 0
+    assert "pip install equant-py==1.0.0" in result.output
+    assert "oxq operator verify equant-py==1.0.0" in result.output

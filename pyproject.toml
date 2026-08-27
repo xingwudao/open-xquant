@@ -108,7 +108,6 @@ packages = ["src/oxq"]
 "contracts/operator-certification/certification-record-v2.schema.json" = "oxq/operators/distribution_profile/v1/certification-record-v2.schema.json"
 "contracts/operator-distribution/certification-bundle-manifest-v1.schema.json" = "oxq/operators/distribution_profile/v1/certification-bundle-manifest-v1.schema.json"
 "contracts/operator-install/operator-release-v1.schema.json" = "oxq/operators/install_profile/v1/operator-release-v1.schema.json"
-"contracts/operator-install/installed-release-v1.schema.json" = "oxq/operators/install_profile/v1/installed-release-v1.schema.json"
 "contracts/operator-install/operator-runtime-protocol-v1.schema.json" = "oxq/operators/install_profile/v1/operator-runtime-protocol-v1.schema.json"
 "contracts/operator-install/official-providers-v1.json" = "oxq/operators/install_profile/v1/official-providers-v1.json"
 

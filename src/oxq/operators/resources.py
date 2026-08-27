@@ -23,7 +23,6 @@ _DISTRIBUTION_PROFILE = {
 }
 _INSTALL_PROFILE = {
     "operator_release": "operator-release-v1.schema.json",
-    "installed_release": "installed-release-v1.schema.json",
     "runtime_protocol": "operator-runtime-protocol-v1.schema.json",
     "official_providers": "official-providers-v1.json",
 }

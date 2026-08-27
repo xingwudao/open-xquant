@@ -211,6 +211,17 @@ def certify_provider_command(
     click.echo(f"Output: {published.release_dir}")
 
 
+@operator_group.command(name="install")
+@click.argument("requirement")
+def operator_install_command(requirement: str) -> None:
+    """Show provider package installation guidance."""
+    click.echo("Install provider package with:")
+    click.echo(f"pip install {requirement}")
+    click.echo("Then run:")
+    click.echo(f"oxq operator verify {requirement}")
+    raise click.exceptions.Exit(1)
+
+
 @operator_group.command(name="export-certification")
 @click.option("--provider", required=True, help="Canonical provider identifier.")
 @click.option("--release", required=True, help="Exact provider release SemVer.")
