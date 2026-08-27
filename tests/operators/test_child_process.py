@@ -243,3 +243,87 @@ def test_guardian_reaps_provider_after_provider_kills_launcher(tmp_path: Path) -
     provider_pid = int(pid_path.read_text(encoding="utf-8"))
     with pytest.raises(ProcessLookupError):
         os.kill(provider_pid, 0)
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper assertion")
+def test_success_reaps_detached_provider_descendant(tmp_path: Path) -> None:
+    pid_path = tmp_path / "successful-descendant.pid"
+    script = (
+        "import pathlib, subprocess, sys, time\n"
+        "child = subprocess.Popen([sys.executable, '-c', "
+        f"'import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)'], "
+        "start_new_session=True)\n"
+        "time.sleep(0.2)\n"
+    )
+    assert child_process.run_contained_child(
+        [sys.executable, "-I", "-S", "-c", script],
+        timeout_seconds=5,
+        response_secret=None,
+        environment={},
+    ) == 0
+    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(descendant_pid, 0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX containment assertion")
+def test_success_contains_detached_atexit_descendant_when_tracking_misses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    pid_path = tmp_path / "detached-atexit-descendant.pid"
+    script = (
+        "import atexit, pathlib, subprocess, sys\n"
+        "def spawn_at_exit():\n"
+        "    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)\n"
+        f"    pathlib.Path({str(pid_path)!r}).write_text(str(child.pid))\n"
+        "atexit.register(spawn_at_exit)\n"
+    )
+    monkeypatch.setattr(child_process, "_posix_descendant_pids", lambda root_pid: set())
+    assert child_process.run_contained_child(
+        [sys.executable, "-I", "-S", "-c", script],
+        timeout_seconds=5,
+        response_secret=None,
+        environment={},
+    ) == 0
+    if pid_path.exists():
+        descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+        try:
+            state = subprocess.run(
+                ["ps", "-o", "stat=", "-p", str(descendant_pid)],
+                check=False,
+                capture_output=True,
+                text=True,
+            )
+            assert state.returncode != 0 or state.stdout.lstrip().startswith("Z")
+        finally:
+            try:
+                os.kill(descendant_pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object assertion")
+def test_windows_success_reaps_provider_descendant(tmp_path: Path) -> None:
+    pid_path = tmp_path / "windows-descendant.pid"
+    script = (
+        "import subprocess, sys, time\n"
+        "subprocess.Popen([sys.executable, '-c', "
+        f"'import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)'], "
+        "creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))\n"
+        "time.sleep(0.2)\n"
+    )
+    assert child_process.run_contained_child(
+        [sys.executable, "-I", "-S", "-c", script],
+        timeout_seconds=5,
+        response_secret=None,
+        environment={},
+    ) == 0
+    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
+    completed = subprocess.run(
+        ["tasklist", "/FI", f"PID eq {descendant_pid}", "/NH"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert str(descendant_pid) not in completed.stdout
