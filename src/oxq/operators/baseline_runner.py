@@ -7,7 +7,6 @@ import hmac
 import json
 import math
 import os
-import secrets
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -26,9 +25,9 @@ from oxq.operators.certification import (
     _snapshot_contract_surface,
     _validate_schema,
 )
-from oxq.operators.child_process import run_contained_child
 from oxq.operators.errors import OperatorCertificationError
 from oxq.operators.models import BaselineCase, BaselineResult, BuildArtifact, ContractCertification
+from oxq.operators.runtime_protocol import run_exact_wheel_request
 
 _CHILD_FAILURE_CODES = {
     "provider_import_failed",
@@ -428,7 +427,6 @@ def _run_child(
     timeout_seconds = _validated_timeout(timeout_seconds, case.operator_id)
     with (
         TemporaryDirectory(prefix="oxq-baseline-") as directory,
-        TemporaryDirectory(prefix="oxq-baseline-response-") as response_directory,
     ):
         root = Path(directory)
         try:
@@ -454,35 +452,10 @@ def _run_child(
             "output_alignment": cast(Mapping[str, object], manifest["output"])["alignment"],
         }
         try:
-            request_bytes = json.dumps(
+            response = run_exact_wheel_request(
                 request,
-                allow_nan=False,
-                separators=(",", ":"),
-                sort_keys=True,
-            ).encode("utf-8")
-        except (TypeError, ValueError, RecursionError):
-            raise _error(
-                "baseline_input_invalid",
-                "baseline request is not strict JSON",
-                case.operator_id,
-            ) from None
-        request_path = root / "request.json"
-        response_path = Path(response_directory) / "response.json"
-        request_path.write_bytes(request_bytes)
-        response_secret = secrets.token_bytes(32)
-        try:
-            returncode = run_contained_child(
-                [
-                    sys.executable,
-                    "-I",
-                    "-S",
-                    str(_child_script_path()),
-                    str(request_path),
-                    str(response_path),
-                ],
+                [implementation_path, *dependency_paths],
                 timeout_seconds=timeout_seconds,
-                response_secret=response_secret,
-                environment=_child_environment(),
             )
         except subprocess.TimeoutExpired:
             raise _error(
@@ -496,12 +469,12 @@ def _run_child(
                 "provider baseline child process failed",
                 case.operator_id,
             ) from None
-        response = _read_response(
-            response_path,
-            returncode,
-            case.operator_id,
-            response_secret,
-        )
+        except ValueError:
+            raise _error(
+                "provider_execution_failed",
+                "provider baseline child response is invalid",
+                case.operator_id,
+            ) from None
 
     if response["status"] == "error":
         code = response.get("code")
