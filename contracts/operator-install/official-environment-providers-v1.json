@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "equant-py": {
+      "1.0.0": {
+        "distribution": "equant-py",
+        "certification_state": "research-certified",
+        "operators": [
+          {
+            "operator": "equant.ttr.sma@1.0.0",
+            "manifest_path": "manifests/equant.ttr.sma.operator.json",
+            "baseline_paths": [
+              "numerical_baselines/equant.ttr.sma.json"
+            ]
+          }
+        ],
+        "manifest_digests": {
+          "manifests/equant.ttr.sma.operator.json": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        },
+        "baseline_digests": {
+          "numerical_baselines/equant.ttr.sma.json": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        }
+      }
+    }
+  }
+}

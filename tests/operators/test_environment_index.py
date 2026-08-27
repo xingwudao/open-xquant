@@ -1,0 +1,44 @@
+"""Environment provider index parsing tests."""
+
+from __future__ import annotations
+
+import pytest
+
+from oxq.operators.environment_index import (
+    load_environment_provider,
+    parse_exact_provider_requirement,
+)
+
+
+def test_parse_exact_provider_requirement_accepts_only_exact_version() -> None:
+    assert parse_exact_provider_requirement("equant-py==1.0.0") == ("equant-py", "1.0.0")
+
+    with pytest.raises(ValueError, match="exact"):
+        parse_exact_provider_requirement("equant-py>=1.0.0")
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        " equant-py==1.0.0",
+        "equant-py ==1.0.0",
+        "equant-py==1.0.0 ",
+        "EQuant-Py==1.0.0",
+        "equant-py==1.0.0+local",
+    ],
+)
+def test_parse_exact_provider_requirement_rejects_noncanonical_spelling(value: str) -> None:
+    with pytest.raises(ValueError, match="exact"):
+        parse_exact_provider_requirement(value)
+
+
+def test_official_index_contains_equant_py_100() -> None:
+    provider = load_environment_provider("equant-py", "1.0.0")
+
+    assert provider.provider == "equant-py"
+    assert provider.distribution == "equant-py"
+    assert provider.version == "1.0.0"
+    assert provider.certification_state == "research-certified"
+    assert provider.operators
+    assert provider.operators[0].operator_id == "equant.ttr.sma"
+    assert provider.operators[0].operator_version == "1.0.0"

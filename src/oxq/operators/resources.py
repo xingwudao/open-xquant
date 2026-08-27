@@ -25,6 +25,7 @@ _INSTALL_PROFILE = {
     "operator_release": "operator-release-v1.schema.json",
     "runtime_protocol": "operator-runtime-protocol-v1.schema.json",
     "official_providers": "official-providers-v1.json",
+    "official_environment_providers": "official-environment-providers-v1.json",
 }
 
 

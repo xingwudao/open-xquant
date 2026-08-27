@@ -255,6 +255,7 @@ def test_operator_distribution_and_install_profiles_are_packaged() -> None:
         "operator_release",
         "runtime_protocol",
         "official_providers",
+        "official_environment_providers",
     }
     for path in paths.values():
         assert path.is_file()
