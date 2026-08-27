@@ -3,7 +3,7 @@
 ## Purpose
 
 `open-xquant` is the sole certification authority for external quantitative
-operators. A provider such as eQuant publishes immutable candidate artifacts;
+operators. A provider such as equant-py publishes immutable candidate artifacts;
 `open-xquant` independently verifies them and, only after executing their
 declared numerical baselines, issues `research-certified` bindings.
 
@@ -65,7 +65,7 @@ implementation source commit's repository root.
 
 The local artifact directory contains the immutable wheels named by the build
 record, including the primary implementation wheel and any provider runtime
-wheel required to execute it. For the first eQuant submission these are
+wheel required to execute it. For the first equant-py submission these are
 `equant-core` and `equant-ttr`.
 
 The catalog is an index, not the authoritative manifest byte stream. Each
@@ -266,7 +266,7 @@ Packaging tests build an `open-xquant` wheel, install it into a temporary
 environment, and prove the frozen schemas and validator are available through
 package resources.
 
-The final cross-repository acceptance uses the real eQuant commit, catalog,
+The final cross-repository acceptance uses the real equant-py commit, catalog,
 manifests, baseline, build record, `equant-core` wheel, and `equant-ttr` wheel.
 It must issue five `research-certified` bindings for SMA, EMA, RSI, ATR, and
 Momentum, and independently recompute every recorded digest.

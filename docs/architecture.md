@@ -1029,7 +1029,7 @@ equant-py 负责：
 - 可选的金融图表和形态识别。
 - 计算性能和数值正确性。
 
-eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。
+ebacktestcraft-py 保持独立，但不成为 open-xquant 的正式执行引擎。
 
 ### 18.2 为什么不采用 PR #61 的实现方式
 
@@ -1041,25 +1041,25 @@ eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。
 
 审阅覆盖 open-xquant 的 Engine、组件 Protocol、registry、component
 manifest、Strategy Spec、compiler、factor evaluation、audit、robustness、
-report 和 Agent 工作流，也覆盖 equant-py 的 eTTR、eClassic、
-eFactorCraft、eAlpha101、eBacktestCraft、edatatools 和统一入口。
+report 和 Agent 工作流，也覆盖 equant-py 的 equant-ttr、equant-classic、
+equant-factorcraft、equant-alpha101、ebacktestcraft-py、edatatools 和统一入口。
 
 PR #61 的方向有价值：它识别出了两个项目之间的能力互补。
 
 但实现方式不能直接合并，原因包括：
 
-- 将当前无法解析的 eQuant 子包加入核心硬依赖。
-- PyPI 上的 `eQuant` 名称与目标项目不一致。
+- 将当前无法解析的 equant-py 子包加入核心硬依赖。
+- PyPI 上的 `equant-py` 名称与目标项目不一致。
 - 直接重写 26 个指标，却没有提交对应回归测试。
-- 每个 symbol 单独执行 `to_panel -> eQuant -> from_panel`。
+- 每个 symbol 单独执行 `to_panel -> equant-py -> from_panel`。
 - 没有把 time-series、cross-section、panel 和 research-only 区分开。
-- 允许通过字符串动态导入大量 eQuant 函数。
+- 允许通过字符串动态导入大量 equant-py 函数。
 - 将标签生成、IC、PCA 和因子筛选作为普通便利函数暴露。
 - 没有 fit/transform 边界，存在全样本拟合风险。
 - 数据下载逻辑同时负责网络、缓存、时区和 provider 协议。
-- 新增了 eBacktestCraft 依赖，但 open-xquant 并未使用它。
+- 新增了 ebacktestcraft-py 依赖，但 open-xquant 并未使用它。
 - 用 Python 3.9 兼容修改污染 Python 3.12 项目，且与集成目标无关。
-- 文档鼓励 Agent 直接调用 eQuant，绕过 Strategy Spec 和审计路径。
+- 文档鼓励 Agent 直接调用 equant-py，绕过 Strategy Spec 和审计路径。
 
 因此，下一次 PR 不应在原 PR 上继续堆补丁。
 
@@ -1114,7 +1114,7 @@ flowchart TB
     C --> P[Compiled Plan]
 
     P --> Q[Quant Compute Integration]
-    Q --> E[eQuant Certified Operators]
+    Q --> E[equant-py Certified Operators]
     E --> Q
 
     Q --> R[open-xquant Engine]
@@ -1149,7 +1149,7 @@ Agent 不负责：
 
 - 直接计算正式指标。
 - 直接修改回测结果。
-- 绕过编译器调用任意 eQuant 函数。
+- 绕过编译器调用任意 equant-py 函数。
 - 推断用户没有确认的执行假设。
 
 #### 18.4.2 研究治理层
@@ -1162,7 +1162,7 @@ Agent 不负责：
 - artifact lineage 和不可变证据。
 - experiment comparison 和 final selection。
 
-整合 eQuant 后，治理对象新增：
+整合 equant-py 后，治理对象新增：
 
 - operator catalog hash。
 - operator lock。
@@ -1368,7 +1368,7 @@ operator_version: 1.0.0
 certification: runtime-certified
 ```
 
-Strategy Spec 继续使用 `SMA`，不写 eQuant 模块名。
+Strategy Spec 继续使用 `SMA`，不写 equant-py 模块名。
 
 #### 18.6.5 `executor.py`
 
@@ -1392,7 +1392,7 @@ class QuantOperatorExecutor(Protocol):
 - 输出对齐。
 - 行数和 symbol 完整性检查。
 
-### 18.7 eQuant 官方集成包
+### 18.7 equant-py 官方集成包
 
 建议在 open-xquant 仓库中新增：
 
@@ -1420,7 +1420,7 @@ src/oxq/integrations/equant/
 
 只声明 open-xquant 已认证的绑定。
 
-未认证 eQuant 函数不会自动出现在正式 registry 中。
+未认证 equant-py 函数不会自动出现在正式 registry 中。
 
 #### 18.7.3 `executor.py`
 
@@ -1565,7 +1565,7 @@ class ExposurePolicy(Protocol):
 
 ### 18.11 Strategy Spec 演进
 
-#### 18.11.1 不暴露 eQuant 函数名
+#### 18.11.1 不暴露 equant-py 函数名
 
 用户 Spec 继续声明语义组件：
 
@@ -1708,11 +1708,11 @@ fitted_operators/
 - market state。
 - asset metadata。
 
-不应被 eFactorCraft 的裸 DataFrame 全面替换。
+不应被 equant-factorcraft 的裸 DataFrame 全面替换。
 
-#### 18.14.2 eFactorCraft 的角色
+#### 18.14.2 equant-factorcraft 的角色
 
-eFactorCraft 提供认证算法实现：
+equant-factorcraft 提供认证算法实现：
 
 - winsorize。
 - standardize。
@@ -1742,7 +1742,7 @@ src/oxq/factor_eval/equant.py
 
 ### 18.15 Alpha101 整合
 
-eAlpha101 应作为重要的新能力接入，但必须分批认证。
+equant-alpha101 应作为重要的新能力接入，但必须分批认证。
 
 每个 Alpha 必须声明：
 
@@ -1772,7 +1772,7 @@ eAlpha101 应作为重要的新能力接入，但必须分批认证。
 目标拆分为：
 
 ```text
-eQuant data connector
+equant-py data connector
         |
         v
 open-xquant downloader adapter
@@ -1810,14 +1810,14 @@ market_calendar_equant.py
 
 应实现已有 calendar/provider 边界的适配器。
 
-### 18.17 eBacktestCraft 的边界
+### 18.17 ebacktestcraft-py 的边界
 
-eBacktestCraft 不进入 open-xquant 正式依赖。
+ebacktestcraft-py 不进入 open-xquant 正式依赖。
 
 理由：
 
 - 两个引擎的订单和成交语义不同。
-- eBacktestCraft 直接消费目标权重列。
+- ebacktestcraft-py 直接消费目标权重列。
 - 它没有 open-xquant 的完整 Spec、audit 和 artifact 治理。
 - 同日权重和开盘执行的因果关系没有统一声明。
 - 双引擎会让 Agent 不知道哪个结果是正式证据。
@@ -1843,7 +1843,7 @@ eBacktestCraft 不进入 open-xquant 正式依赖。
 - report QA。
 - chart narrative review。
 
-#### 18.18.2 eCandleSticks
+#### 18.18.2 equant-candlesticks
 
 作为可选信号或特征算子接入。
 
@@ -1896,9 +1896,9 @@ model:
     availability: close_t
 ```
 
-#### 18.19.2 eQuant 的 ML 角色
+#### 18.19.2 equant-py 的 ML 角色
 
-eQuant 提供：
+equant-py 提供：
 
 - 特征算子。
 - 标签算子。
@@ -1933,7 +1933,7 @@ open-xquant 提供：
 
 ### 18.20 Agent 层修改
 
-Agent 不直接阅读所有 eQuant 函数文档。
+Agent 不直接阅读所有 equant-py 函数文档。
 
 新增或修改以下行为：
 
@@ -1974,7 +1974,7 @@ tests/ml/
 
 - 保留现有四类组件 Protocol。
 - 新增或从独立模块导出 `PanelComputable`。
-- 不向核心类型暴露 eQuant 类型。
+- 不向核心类型暴露 equant-py 类型。
 
 #### 18.21.3 修改 `src/oxq/core/registry.py`
 
@@ -2068,7 +2068,7 @@ ML section 在单独版本中加入，避免一次性扩大 PR。
 
 #### 18.21.11 修改 `pyproject.toml`
 
-核心 dependencies 不加入任何 eQuant 包。
+核心 dependencies 不加入任何 equant-py 包。
 
 增加可选 extra：
 
@@ -2160,10 +2160,10 @@ PR 不应直接重写现有指标并改变数值语义。
 删除以下核心 dependencies：
 
 ```text
-eTTR
-eClassic
-eFactorCraft
-eBacktestCraft
+equant-ttr
+equant-classic
+equant-factorcraft
+ebacktestcraft-py
 edatatools
 equant
 ```
@@ -2172,7 +2172,7 @@ equant
 
 #### 18.22.7 不合并无关兼容修改
 
-不接受为了 eQuant 集成而修改：
+不接受为了 equant-py 集成而修改：
 
 - `datetime.UTC`。
 - Python 3.9 entry point 兼容。
@@ -2183,7 +2183,7 @@ open-xquant 的运行基线仍为 Python 3.12。
 
 #### 18.22.8 重写 Agent 文档
 
-删除“Agent 可以直接调用全部 eQuant 函数”的正式工作流建议。
+删除“Agent 可以直接调用全部 equant-py 函数”的正式工作流建议。
 
 正确路径是：
 
@@ -2210,7 +2210,7 @@ native-removed
 
 #### 18.23.2 `shadow-equant`
 
-同一 fixture 同时运行原生和 eQuant 实现。
+同一 fixture 同时运行原生和 equant-py 实现。
 
 记录：
 
@@ -2260,9 +2260,9 @@ native-removed
 - catalog ingestion。
 - 纯单元测试。
 
-不调用 eQuant。
+不调用 equant-py。
 
-#### PR 2：eQuant optional integration
+#### PR 2：equant-py optional integration
 
 包含：
 
@@ -2338,7 +2338,7 @@ native-removed
 每个迁移算子覆盖：
 
 - golden fixture。
-- 原生与 eQuant parity。
+- 原生与 equant-py parity。
 - 单 symbol 与 panel batch parity。
 - NaN 和 warmup。
 - shuffled input。
@@ -2396,7 +2396,7 @@ native-removed
 
 不允许静默切换回原生实现。
 
-如果用户要比较原生和 eQuant 实现，应创建明确的两个实验候选。
+如果用户要比较原生和 equant-py 实现，应创建明确的两个实验候选。
 
 ### 18.27 可观测性
 
@@ -2483,7 +2483,7 @@ equant-py 新版本发布后，open-xquant 不自动升级。
 - Quant Operator Contract。
 - QuantPanel schema。
 - OperatorManifest schema。
-- eQuant package 和 CI 整改。
+- equant-py package 和 CI 整改。
 
 #### 阶段 1：最小官方计算层
 
@@ -2538,14 +2538,14 @@ equant-py 新版本发布后，open-xquant 不自动升级。
 
 ### 18.31 验收标准
 
-整合方案完成不能只以“能够 import eQuant”判断。
+整合方案完成不能只以“能够 import equant-py”判断。
 
 必须同时满足：
 
-- open-xquant 核心安装不依赖 eQuant。
-- eQuant optional extra 可重复安装。
+- open-xquant 核心安装不依赖 equant-py。
+- equant-py optional extra 可重复安装。
 - 未认证函数无法进入正式执行。
-- Strategy Spec 不包含 eQuant 实现细节。
+- Strategy Spec 不包含 equant-py 实现细节。
 - compiled plan 完整记录 operator binding。
 - run artifacts 完整记录版本和摘要。
 - Engine 面板批量执行。
@@ -2553,7 +2553,7 @@ equant-py 新版本发布后，open-xquant 不自动升级。
 - 标签和未来数据无法进入交易信号。
 - 拟合型算子拥有训练边界和 state artifact。
 - 数值和策略回归通过。
-- eBacktestCraft 不成为正式引擎。
+- ebacktestcraft-py 不成为正式引擎。
 - Agent 只能通过 catalog 和 Spec 使用算子。
 - 动态策略约束通过正式 policy 建模。
 - 两个仓库可以独立发布和独立升级。

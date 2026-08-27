@@ -936,7 +936,7 @@ equant-py 作为首个目标实现，应优先完成：
 8. 将 PCA、IC 加权和中性化改造成 fit/transform 模式。
 9. 将数据下载中的 print 和静默跳过改成结构化结果。
 10. 建立跨包 golden fixtures 和兼容矩阵。
-11. 为 eTTR 建立真实 numba 安装和性能 CI。
+11. 为 equant-ttr 建立真实 numba 安装和性能 CI。
 12. 将脚本式 smoke test 转成正式 pytest 契约测试。
 
 ## 25. 最终原则

@@ -26,21 +26,21 @@ The viewer will understand:
 
 - open-xquant 是 AI 原生的实用量化研究系统；
 - equant-py 是其首个官方认证量化计算层。
-- eBacktestCraft 保持独立，但不成为 open-xquant 的正式执行引擎。
+- ebacktestcraft-py 保持独立，但不成为 open-xquant 的正式执行引擎。
 - 两个仓库可以独立发布和独立升级。
 
 **Visual Element**:
 
 - Type: 三方边界图。
 - Subject: open-xquant 为主系统，equant-py 为外部认证计算层，
-  eBacktestCraft 为独立旁路项目。
+  ebacktestcraft-py 为独立旁路项目。
 - Treatment: open-xquant 使用主色，equant-py 使用互补色，
-  eBacktestCraft 使用灰色虚线并标注“不成为正式执行引擎”。
+  ebacktestcraft-py 使用灰色虚线并标注“不成为正式执行引擎”。
 
 **Text Labels**:
 
 - Headline: "方案 B：独立仓库，认证整合"
-- Labels: "open-xquant", "equant-py", "eBacktestCraft",
+- Labels: "open-xquant", "equant-py", "ebacktestcraft-py",
   "官方认证量化计算层", "正式执行引擎"
 
 ---
@@ -85,7 +85,7 @@ The viewer will understand:
 - Agent -> Catalog -> Spec -> Compile -> Certified Executor
 - 它不等于“任意插件系统”。
 - 它只执行通过认证的 operator binding。
-- Strategy Spec 不包含 eQuant 实现细节。
+- Strategy Spec 不包含 equant-py 实现细节。
 - compiled plan 完整记录 operator binding。
 - run artifacts 完整记录版本和摘要。
 
@@ -122,7 +122,7 @@ The viewer will understand:
 **Visual Element**:
 
 - Type: 责任边界清单。
-- Subject: Engine 内部保留的交易语义，eQuant 仅提供计算输出。
+- Subject: Engine 内部保留的交易语义，equant-py 仅提供计算输出。
 - Treatment: Engine 侧使用盾牌边界；算子输出箭头止于指标或特征计算阶段。
 
 **Text Labels**:
@@ -153,7 +153,7 @@ The viewer will understand:
 - 输出对齐和诊断。
 - tracer 记录 operator provenance。
 - 不重写逐 bar 交易阶段。
-- 核心 dependencies 不加入任何 eQuant 包。
+- 核心 dependencies 不加入任何 equant-py 包。
 
 **Visual Element**:
 
@@ -165,7 +165,7 @@ The viewer will understand:
 **Text Labels**:
 
 - Headline: "本地改动"
-- Labels: "新增", "修改", "Operators", "eQuant Integration",
+- Labels: "新增", "修改", "Operators", "equant-py Integration",
   "Compiler", "Audit", "Artifacts"
 
 ---
@@ -235,7 +235,7 @@ The viewer will understand:
 **Content**:
 
 - PR 1：契约和 manifest 基础
-- PR 2：eQuant optional integration
+- PR 2：equant-py optional integration
 - PR 3：首批时间序列指标
 - PR 4：横截面和面板算子
 - PR 5：拟合型因子工程
@@ -245,7 +245,7 @@ The viewer will understand:
 **Visual Element**:
 
 - Type: 七步路线。
-- Subject: 从无 eQuant 调用的契约基础逐步推进到 Agent catalog 和文档。
+- Subject: 从无 equant-py 调用的契约基础逐步推进到 Agent catalog 和文档。
 - Treatment: 每一步使用短标签和编号，依赖顺序用单向箭头连接。
 
 **Text Labels**:
@@ -321,5 +321,5 @@ The viewer will understand:
 
 - 图内技术名称保持英文原文，解释性标签使用中文。
 - 清晰区分“归 open-xquant 所有”“由 equant-py 提供”和“必须删除”。
-- eBacktestCraft 必须显示为独立项目，且不是正式执行引擎。
+- ebacktestcraft-py 必须显示为独立项目，且不是正式执行引擎。
 - 重点标签必须可读，避免将全部目录和验收条目塞入图片。
