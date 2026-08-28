@@ -180,6 +180,8 @@ def run_contained_child(
             start_new_session=True,
             env=child_environment,
         )
+    completed = False
+    descendants: set[int] = set()
     try:
         if response_secret is not None:
             if process.stdin is None:
@@ -197,13 +199,12 @@ def run_contained_child(
                 _kill_process_tree(process)
                 process.wait()
                 raise
-        descendants: set[int] = set()
         deadline = time.monotonic() + timeout_seconds
         while True:
-            if platform_name != "nt":
-                descendants.update(_posix_descendant_pids(process.pid))
             remaining = deadline - time.monotonic()
             if remaining <= 0:
+                if platform_name != "nt":
+                    descendants.update(_posix_descendant_pids(process.pid))
                 if _posix_platform() == "linux":
                     _terminate_linux_supervisor(process, descendants)
                 else:
@@ -216,12 +217,20 @@ def run_contained_child(
             except subprocess.TimeoutExpired:
                 continue
         if platform_name != "nt" and _posix_platform() == "linux" and process.returncode != 0:
+            descendants.update(_posix_descendant_pids(process.pid))
             _kill_process_tree(process, descendants)
+        completed = True
         return int(process.returncode)
     finally:
         try:
-            if windows_job is not None:
-                _close_windows_job(windows_job)
+            try:
+                if not completed and platform_name != "nt" and process.poll() is None:
+                    descendants.update(_posix_descendant_pids(process.pid))
+                    _kill_process_tree(process, descendants)
+                    process.wait()
+            finally:
+                if windows_job is not None:
+                    _close_windows_job(windows_job)
         finally:
             if windows_gate_directory is not None:
                 windows_gate_directory.cleanup()

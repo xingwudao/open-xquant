@@ -14,6 +14,9 @@ from oxq.operators.formats import (
     sha256_bytes,
     strict_json_object,
 )
+from oxq.operators.operator_distribution import (
+    validate_certification_record_v2_semantics,
+)
 from oxq.operators.resources import (
     materialize_operator_distribution_profile,
     materialize_operator_install_profile,
@@ -190,6 +193,68 @@ def test_certification_record_v2_requires_exactly_one_implementation_artifact() 
                 ],
             }
         )
+
+
+def test_certification_record_v2_semantics_bind_every_case_to_one_baseline_set() -> None:
+    digest = "sha256:" + "a" * 64
+    record = {
+        "schema_version": 2,
+        "certifier": "open-xquant-local",
+        "certified_at": "2026-08-28T00:00:00Z",
+        "provider": "equant-py",
+        "release": "1.0.0",
+        "submission_commit": "git-sha1:" + "a" * 40,
+        "source_commit": "git-sha1:" + "b" * 40,
+        "state": "research-certified",
+        "target": {
+            "python_tag": "cp312",
+            "abi_tag": "cp312",
+            "platform_tag": "macosx_14_0_arm64",
+        },
+        "artifacts": [
+            {
+                "distribution": "equant-ttr",
+                "version": "1.0.0",
+                "filename": "equant_ttr-1.0.0-py3-none-any.whl",
+                "role": "implementation",
+                "build_identifier": "build",
+                "digest": digest,
+            }
+        ],
+        "baseline_sets": [{"path": "baselines/equant.ttr.sma.json", "digest": digest}],
+        "operators": [
+            {
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "manifest_digest": digest,
+                "implementation_digest": digest,
+                "binding_digest": digest,
+                "baseline_cases": [
+                    {
+                        "case_id": "sma-2",
+                        "status": "passed",
+                        "baseline_path": "baselines/equant.ttr.sma.json",
+                        "case_index": 0,
+                        "case_digest": digest,
+                    }
+                ],
+            }
+        ],
+    }
+
+    validate_certification_record_v2_semantics(record)
+
+    missing = json.loads(json.dumps(record))
+    missing["operators"][0]["baseline_cases"][0]["baseline_path"] = "baselines/missing.json"
+    with pytest.raises(ValueError, match="exactly one baseline set"):
+        validate_certification_record_v2_semantics(missing)
+
+    duplicate = json.loads(json.dumps(record))
+    duplicate["baseline_sets"].append(
+        {"path": "baselines/equant.ttr.sma.json", "digest": "sha256:" + "b" * 64}
+    )
+    with pytest.raises(ValueError, match="exactly one baseline set"):
+        validate_certification_record_v2_semantics(duplicate)
 
 
 def test_release_index_accepts_closed_wheel_entries() -> None:
@@ -379,22 +444,19 @@ def test_runtime_protocol_schema_matches_implemented_messages() -> None:
             "alignment": "preserve_input_order",
             "records": [{"date": "2026-08-24", "code": "000001.SZ", "close": 1.0}],
         },
-        "output_fields": [
-            {
-                "name": "sma_2",
-                "dtype": "float64",
-            }
-        ],
+        "output_fields": {"sma_2": "float64"},
         "output_alignment": "preserve_input_order",
     }
     ok_response = {
         "status": "ok",
         "outputs": {"sma_2": [None, 1.5]},
         "repeated_outputs": {"sma_2": [None, 1.5]},
+        "auth": "hmac-sha256:" + "a" * 64,
     }
     error_response = {
         "status": "error",
         "code": "provider_import_failed",
+        "auth": "hmac-sha256:" + "b" * 64,
     }
 
     for message in (request, ok_response, error_response):
@@ -420,7 +482,7 @@ def test_runtime_protocol_schema_rejects_unimplemented_quant_panel_keys() -> Non
             "alignment": "preserve_input_order",
             "records": [{"timestamp": "2026-08-24", "asset": "000001.SZ", "close": 1.0}],
         },
-        "output_fields": [{"name": "sma_2", "dtype": "float64"}],
+        "output_fields": {"sma_2": "float64"},
         "output_alignment": "preserve_input_order",
     }
 
@@ -428,7 +490,7 @@ def test_runtime_protocol_schema_rejects_unimplemented_quant_panel_keys() -> Non
         Draft202012Validator(schema).validate(request)
 
 
-def test_runtime_protocol_schema_rejects_duplicate_output_fields() -> None:
+def test_runtime_protocol_schema_models_output_fields_by_name() -> None:
     schema = _schemas()["runtime_protocol"]
     request = {
         "implementation_artifact": "/tmp/provider.whl",
@@ -444,15 +506,43 @@ def test_runtime_protocol_schema_rejects_duplicate_output_fields() -> None:
             "alignment": "preserve_input_order",
             "records": [{"date": "2026-08-24", "code": "000001.SZ", "close": 1.0}],
         },
-        "output_fields": [
-            {"name": "sma_2", "dtype": "float64"},
-            {"name": "sma_2", "dtype": "float64"},
-        ],
+        "output_fields": {"sma_2": "float64"},
         "output_alignment": "preserve_input_order",
     }
 
+    Draft202012Validator(schema).validate(request)
+
     with pytest.raises(ValidationError):
-        Draft202012Validator(schema).validate(request)
+        Draft202012Validator(schema).validate(
+            {
+                **request,
+                "output_fields": [
+                    {"name": "sma_2", "dtype": "float64"},
+                    {"name": "sma_2", "dtype": "int64"},
+                ],
+            }
+        )
+
+
+def test_runtime_protocol_schema_requires_authenticated_responses() -> None:
+    schema = _schemas()["runtime_protocol"]
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(
+            {
+                "status": "ok",
+                "outputs": {"sma_2": [None, 1.5]},
+                "repeated_outputs": {"sma_2": [None, 1.5]},
+            }
+        )
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(
+            {
+                "status": "error",
+                "code": "provider_import_failed",
+            }
+        )
 
 
 def test_runtime_protocol_rejects_extra_output_field_properties() -> None:
@@ -471,7 +561,7 @@ def test_runtime_protocol_rejects_extra_output_field_properties() -> None:
             "alignment": "preserve_input_order",
             "records": [{"date": "2026-08-24", "code": "000001.SZ", "close": 1.0}],
         },
-        "output_fields": [{"name": "sma_2", "dtype": "float64", "extra": True}],
+        "output_fields": {"sma_2": {"dtype": "float64", "extra": True}},
         "output_alignment": "preserve_input_order",
     }
 

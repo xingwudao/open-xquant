@@ -24,7 +24,7 @@ def test_parse_exact_provider_requirement_accepts_only_exact_version() -> None:
         " equant-py==1.0.0",
         "equant-py ==1.0.0",
         "equant-py==1.0.0 ",
-        "EQuant-Py==1.0.0",
+        "equant_py==1.0.0",
         "equant-py==1.0.0+local",
     ],
 )

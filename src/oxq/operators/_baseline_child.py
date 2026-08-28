@@ -1134,18 +1134,16 @@ def _execute(
     output_descriptors = request["output_fields"]
     output_alignment = request["output_alignment"]
     try:
-        if not isinstance(output_descriptors, list) or not output_descriptors:
+        if not isinstance(output_descriptors, dict) or not output_descriptors:
             raise TypeError("output fields are invalid")
         output_fields = [
-            (descriptor["name"], descriptor["dtype"])
-            for descriptor in output_descriptors
-            if isinstance(descriptor, dict)
-            and set(descriptor) == {"name", "dtype"}
-            and isinstance(descriptor["name"], str)
-            and isinstance(descriptor["dtype"], str)
-            and descriptor["dtype"] in _OUTPUT_DTYPES
+            (name, dtype)
+            for name, dtype in output_descriptors.items()
+            if isinstance(name, str)
+            and isinstance(dtype, str)
+            and dtype in _OUTPUT_DTYPES
         ]
-        if len(output_fields) != len(output_descriptors) or len({name for name, _ in output_fields}) != len(output_fields):
+        if len(output_fields) != len(output_descriptors):
             raise TypeError("output fields are invalid")
     except (KeyError, TypeError):
         return {"status": "error", "code": "provider_execution_failed"}

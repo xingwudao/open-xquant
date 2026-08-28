@@ -444,7 +444,7 @@ def _run_child(
             "callable": manifest["callable"],
             "parameters": parameters,
             "input": case.input,
-            "output_fields": [{"name": name, "dtype": dtype} for name, dtype in output_fields],
+            "output_fields": {name: dtype for name, dtype in output_fields},
             "output_alignment": cast(Mapping[str, object], manifest["output"])["alignment"],
         }
         try:

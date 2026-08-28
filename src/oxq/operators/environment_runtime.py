@@ -113,7 +113,7 @@ def resolve_environment_operator(
                 "certified environment operator callable is unavailable",
                 operator_id,
             )
-        callable_state = _snapshot_callable_state(implementation, operator_id)
+        callable_state = _snapshot_callable_state(implementation, sources, operator_id)
         _verify_callable_owner(implementation, sources, operator_id)
         _TRUSTED_RUNTIME_CALLABLES[(module_name, callable_name)] = implementation
         protected_callable = _verified_callable(
@@ -305,7 +305,7 @@ def _verified_callable(
                     operator_id,
                 )
             _verify_callable_owner(certified_callable, sources, operator_id)
-            if _snapshot_callable_state(certified_callable, operator_id) != certified_callable_state:
+            if _snapshot_callable_state(certified_callable, sources, operator_id) != certified_callable_state:
                 raise _error(
                     "environment_operator_callable_unverified",
                     "certified environment operator callable owner is unverified",
@@ -531,6 +531,7 @@ def _verify_callable_owner(
 
 def _snapshot_callable_state(
     implementation: Callable[..., object],
+    sources: Mapping[str, _VerifiedModuleSource],
     operator_id: str,
     seen: frozenset[int] = frozenset(),
 ) -> _VerifiedCallableState:
@@ -544,14 +545,14 @@ def _snapshot_callable_state(
     next_seen = seen | {id(implementation)}
     return _VerifiedCallableState(
         code=implementation.__code__,
-        defaults=tuple(_state_token(value, operator_id, next_seen) for value in (implementation.__defaults__ or ())),
+        defaults=tuple(_state_token(value, sources, operator_id, next_seen) for value in (implementation.__defaults__ or ())),
         kwdefaults=tuple(
-            (name, _state_token(value, operator_id, next_seen))
+            (name, _state_token(value, sources, operator_id, next_seen))
             for name, value in sorted((implementation.__kwdefaults__ or {}).items())
         ),
-        closure=tuple(_state_token(cell.cell_contents, operator_id, next_seen) for cell in closure),
+        closure=tuple(_state_token(cell.cell_contents, sources, operator_id, next_seen) for cell in closure),
         globals=tuple(
-            (name, _state_token(implementation.__globals__[name], operator_id, next_seen))
+            (name, _state_token(implementation.__globals__[name], sources, operator_id, next_seen))
             for name in sorted(set(implementation.__code__.co_names))
             if name in implementation.__globals__ and not name.startswith("__")
         ),
@@ -560,14 +561,37 @@ def _snapshot_callable_state(
 
 def _state_token(
     value: object,
+    sources: Mapping[str, _VerifiedModuleSource],
     operator_id: str,
     seen: frozenset[int],
 ) -> object:
     if isinstance(value, FunctionType):
         if id(value) in seen:
             return ("function-recursive", value.__module__, value.__qualname__)
-        return ("function", value.__module__, value.__qualname__, _snapshot_callable_state(value, operator_id, seen))
+        return ("function", value.__module__, value.__qualname__, _snapshot_callable_state(value, sources, operator_id, seen))
     if isinstance(value, ModuleType):
+        source = sources.get(value.__name__)
+        if source is not None:
+            trusted = _TRUSTED_RUNTIME_MODULES.get(value.__name__)
+            if trusted is None or trusted[2] is not value:
+                raise _error(
+                    "environment_operator_callable_unverified",
+                    "certified environment operator callable owner is unverified",
+                    operator_id,
+                )
+            _verify_module_object(value, source.path, source.digest, operator_id)
+            next_seen = seen | {id(value)}
+            return (
+                "verified-module",
+                value.__name__,
+                tuple(
+                    (name, _state_token(item, sources, operator_id, next_seen))
+                    for name, item in sorted(value.__dict__.items())
+                    if not name.startswith("__")
+                    and id(item) not in seen
+                    and not isinstance(item, importlib.abc.Loader)
+                ),
+            )
         return ("module", value.__name__)
     return (type(value).__module__, type(value).__qualname__, repr(value))
 

@@ -853,7 +853,7 @@ def sma(frame, *, window):
     request_path = pathlib.Path(__file__).parents[4] / "request.json"
     request = json.loads(request_path.read_text(encoding="utf-8"))
     requested = request.get("output_fields")
-    field = request["output_field"] if requested is None else requested[0]["name"]
+    field = request["output_field"] if requested is None else next(iter(requested))
     return pd.DataFrame({field: [None, None, 2.0]}, index=frame.index)
 """
     candidate = _contract(tmp_path, source)

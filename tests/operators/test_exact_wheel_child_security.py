@@ -78,11 +78,11 @@ def test_child_imports_platform_runtime_only_from_exact_closure(tmp_path: Path) 
                     },
                 ],
             },
-            "output_fields": [
-                {"name": "closure_root", "dtype": "string"},
-                {"name": "numpy_origin", "dtype": "string"},
-                {"name": "pandas_origin", "dtype": "string"},
-            ],
+            "output_fields": {
+                "closure_root": "string",
+                "numpy_origin": "string",
+                "pandas_origin": "string",
+            },
             "output_alignment": "preserve_input_order",
         },
         [provider_wheel, *runtime_wheels],
@@ -129,11 +129,11 @@ def test_child_preserves_platform_runtime_from_exact_closure_without_test_paths(
                     },
                 ],
             },
-            "output_fields": [
-                {"name": "closure_root", "dtype": "string"},
-                {"name": "numpy_origin", "dtype": "string"},
-                {"name": "pandas_origin", "dtype": "string"},
-            ],
+            "output_fields": {
+                "closure_root": "string",
+                "numpy_origin": "string",
+                "pandas_origin": "string",
+            },
             "output_alignment": "preserve_input_order",
         },
         [provider_wheel, *runtime_wheels],

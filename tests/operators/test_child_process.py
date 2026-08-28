@@ -209,6 +209,86 @@ def test_linux_guardian_inserts_launcher_between_itself_and_provider(monkeypatch
     assert command[10:] == provider
 
 
+def test_posix_child_poll_does_not_scan_descendants_each_wait_iteration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    scans: list[int] = []
+
+    class FakeProcess:
+        pid = 123
+        returncode = 0
+        stdin = None
+        waits = 0
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            self.waits += 1
+            if self.waits <= 5:
+                raise subprocess.TimeoutExpired(["provider"], 1)
+            return self.returncode
+
+        def poll(self) -> int:
+            return self.returncode
+
+    monkeypatch.setattr(child_process, "_platform_name", lambda: "posix")
+    monkeypatch.setattr(child_process, "_posix_platform", lambda: "darwin")
+    monkeypatch.setattr(child_process.subprocess, "Popen", lambda *args, **kwargs: FakeProcess())
+    monkeypatch.setattr(child_process, "_contained_posix_command", lambda command: command)
+    monkeypatch.setattr(child_process, "_posix_descendant_pids", lambda pid: scans.append(pid) or set())
+
+    assert (
+        child_process.run_contained_child(
+            [sys.executable, "-I", "-S", "-c", "pass"],
+            timeout_seconds=5,
+            response_secret=None,
+            environment={},
+        )
+        == 0
+    )
+    assert len(scans) <= 1
+
+
+def test_posix_child_exception_cleans_process_tree(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    killed: list[tuple[int, tuple[int, ...]]] = []
+
+    class FakeProcess:
+        pid = 123
+        returncode = None
+        stdin = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            if timeout is None:
+                return 0
+            raise KeyboardInterrupt
+
+        def poll(self) -> None:
+            return None
+
+    process = FakeProcess()
+    monkeypatch.setattr(child_process, "_platform_name", lambda: "posix")
+    monkeypatch.setattr(child_process, "_posix_platform", lambda: "darwin")
+    monkeypatch.setattr(child_process.subprocess, "Popen", lambda *args, **kwargs: process)
+    monkeypatch.setattr(child_process, "_contained_posix_command", lambda command: command)
+    monkeypatch.setattr(child_process, "_posix_descendant_pids", lambda pid: {456})
+    monkeypatch.setattr(
+        child_process,
+        "_kill_process_tree",
+        lambda proc, descendants=None: killed.append((proc.pid, tuple(sorted(descendants or ())))),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        child_process.run_contained_child(
+            [sys.executable, "-I", "-S", "-c", "pass"],
+            timeout_seconds=5,
+            response_secret=None,
+            environment={},
+        )
+
+    assert killed == [(123, (456,))]
+
+
 def test_success_closes_windows_kill_on_close_job(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[tuple[str, int]] = []
 

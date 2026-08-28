@@ -185,9 +185,7 @@ def _run_child(
                         },
                     ],
                 },
-                "output_fields": [
-                    {"name": "sma_3", "dtype": "float64"},
-                ],
+                "output_fields": {"sma_3": "float64"},
                 "output_alignment": "preserve_input_order",
             }
     return run_exact_wheel_request(
