@@ -130,6 +130,68 @@ def test_certification_record_v2_rejects_nul_artifact_filename() -> None:
         Draft202012Validator(filename_schema).validate("provider\x00.whl")
 
 
+def test_certification_record_v2_requires_exactly_one_implementation_artifact() -> None:
+    schema = _schemas()["certification_record_v2"]
+    digest = "sha256:" + "a" * 64
+    artifact = {
+        "distribution": "equant-ttr",
+        "version": "1.0.0",
+        "filename": "equant_ttr-1.0.0-py3-none-any.whl",
+        "role": "runtime-dependency",
+        "build_identifier": "build",
+        "digest": digest,
+    }
+    record = {
+        "schema_version": 2,
+        "certifier": "open-xquant-local",
+        "certified_at": "2026-08-28T00:00:00Z",
+        "provider": "equant-py",
+        "release": "1.0.0",
+        "submission_commit": "git-sha1:" + "a" * 40,
+        "source_commit": "git-sha1:" + "b" * 40,
+        "state": "research-certified",
+        "target": {
+            "python_tag": "cp312",
+            "abi_tag": "cp312",
+            "platform_tag": "macosx_14_0_arm64",
+        },
+        "artifacts": [artifact],
+        "baseline_sets": [{"path": "baselines/equant.ttr.sma.json", "digest": digest}],
+        "operators": [
+            {
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "manifest_digest": digest,
+                "implementation_digest": digest,
+                "binding_digest": digest,
+                "baseline_cases": [
+                    {
+                        "case_id": "sma-2",
+                        "status": "passed",
+                        "baseline_path": "baselines/equant.ttr.sma.json",
+                        "case_index": 0,
+                        "case_digest": digest,
+                    }
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(record)
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(
+            {
+                **record,
+                "artifacts": [
+                    {**artifact, "role": "implementation"},
+                    {**artifact, "role": "implementation", "filename": "equant_core-1.0.0-py3-none-any.whl"},
+                ],
+            }
+        )
+
+
 def test_release_index_accepts_closed_wheel_entries() -> None:
     schema = _schemas()["operator_release"]
     digest = "sha256:" + "a" * 64
@@ -359,6 +421,33 @@ def test_runtime_protocol_schema_rejects_unimplemented_quant_panel_keys() -> Non
             "records": [{"timestamp": "2026-08-24", "asset": "000001.SZ", "close": 1.0}],
         },
         "output_fields": [{"name": "sma_2", "dtype": "float64"}],
+        "output_alignment": "preserve_input_order",
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(request)
+
+
+def test_runtime_protocol_schema_rejects_duplicate_output_fields() -> None:
+    schema = _schemas()["runtime_protocol"]
+    request = {
+        "implementation_artifact": "/tmp/provider.whl",
+        "dependency_artifacts": [],
+        "module": "ettr",
+        "callable": "sma",
+        "parameters": {},
+        "input": {
+            "schema_version": 1,
+            "primary_key": ["date", "code"],
+            "columns": [{"name": "close", "dtype": "float64", "required": True}],
+            "context": {"timezone": "Asia/Shanghai"},
+            "alignment": "preserve_input_order",
+            "records": [{"date": "2026-08-24", "code": "000001.SZ", "close": 1.0}],
+        },
+        "output_fields": [
+            {"name": "sma_2", "dtype": "float64"},
+            {"name": "sma_2", "dtype": "float64"},
+        ],
         "output_alignment": "preserve_input_order",
     }
 

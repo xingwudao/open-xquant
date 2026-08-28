@@ -237,6 +237,13 @@ def _validated_timeout(timeout_seconds: float) -> float:
 
 
 def _validate_python_isolation_flags(command: list[str]) -> None:
+    try:
+        executable = Path(command[0]).resolve(strict=True)
+        expected = Path(sys.executable).resolve(strict=True)
+    except (IndexError, OSError) as exc:
+        raise ValueError("contained child command must use the expected Python executable") from exc
+    if executable != expected:
+        raise ValueError("contained child command must use the expected Python executable")
     option_prefix: list[str] = []
     for argument in command[1:]:
         if argument in {"-c", "-m", "-"} or not argument.startswith("-"):

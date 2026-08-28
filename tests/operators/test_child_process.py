@@ -74,6 +74,24 @@ def test_rejects_child_command_with_python_startup_flags_after_script(
         )
 
 
+def test_rejects_child_command_without_expected_python_executable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_started(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        pytest.fail("child process started before executable validation")
+
+    monkeypatch.setattr(child_process.subprocess, "Popen", fail_if_started)
+
+    with pytest.raises(ValueError, match="expected Python executable"):
+        child_process.run_contained_child(
+            ["/bin/echo", "-I", "-S", "-c", "pass"],
+            timeout_seconds=5,
+            response_secret=None,
+            environment={},
+        )
+
+
 def test_discards_child_stdout_and_stderr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

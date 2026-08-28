@@ -39,9 +39,9 @@ EXPECTED_DIGESTS = {
     "candidate_build": "a289245a7e67a77fdb597d0c74835bfdd622ddb2df4f97b58fe7c84ad6c6828e",
     "numerical_baseline": "36b524b5d9df67b7bfa78882f6606815778d0edeb1a12b6778fd9fd9f4c11219",
     "certification_record": "a696a76b0b1d902067b8735ba797a3962ccb369b0e3eb2104648e7234c9ea2cd",
-    "certification_record_v2": "914675979dfbbe2be716fa934bb0f1dd983110bfaca86674757e8dfc1c46746c",
+    "certification_record_v2": "f3e1a5450fbf5af56095667ee0a31e0fc761ef051914df5b80be6fde85310f1d",
     "operator_release": "0877dfd1af51a604104465b2e90ea8d5912ba45bcbc30ad03cd8b205e4ef00f6",
-    "runtime_protocol": "dec7eaffc8ade875003e790d7bbcef2047ab2f82c7b1d7124a071502f3b57b9d",
+    "runtime_protocol": "e8a58bfd7deaceb06ae10ed40f8ed421bead30be3449b1bfa859322771f3c12d",
     "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
     "official_environment_providers": "e918420381426520b7d192020e5887dd291badf36b55ded832f80df946e17d7b",
 }
