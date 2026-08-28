@@ -18,6 +18,15 @@ from oxq.operators.environment_runtime import resolve_environment_operator
 from oxq.operators.errors import OperatorCertificationError
 
 
+@pytest.fixture(autouse=True)
+def clean_verified_runtime_modules() -> None:
+    _drop_runtime_modules("ettr")
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    yield
+    _drop_runtime_modules("ettr")
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+
+
 @pytest.fixture
 def fake_verified_provider(
     monkeypatch: pytest.MonkeyPatch,
@@ -456,6 +465,204 @@ def test_resolve_environment_operator_rejects_undeclared_provider_namespace_help
     assert caught.value.code == "environment_operator_module_unavailable"
 
 
+def test_resolve_environment_operator_rejects_preloaded_undeclared_provider_helper(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module_root = tmp_path / "site-packages"
+    package = module_root / "ettr"
+    package.mkdir(parents=True)
+    init_path = package / "__init__.py"
+    init_path.write_text(
+        "from .helper import value\n"
+        "def sma(frame, **parameters):\n"
+        "    return value\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(module_root))
+    sys.modules.pop("ettr", None)
+    helper = types.ModuleType("ettr.helper")
+    helper.__file__ = str(package / "helper.py")
+    helper.value = "preloaded-undeclared-helper"
+    monkeypatch.setitem(sys.modules, "ettr.helper", helper)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    provider = EnvironmentProvider(
+        provider="equant-py",
+        distribution="equant-ttr",
+        distributions=("equant-ttr",),
+        version="1.0.0",
+        certification_state="research-certified",
+        operators=(
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.sma",
+                operator_version="1.0.0",
+                manifest_path="manifests/equant.ttr.sma.operator.json",
+                baseline_paths=("numerical_baselines/equant.ttr.sma.json",),
+            ),
+        ),
+        manifest_digests={"manifests/equant.ttr.sma.operator.json": "sha256:" + "a" * 64},
+        baseline_digests={"numerical_baselines/equant.ttr.sma.json": "sha256:" + "b" * 64},
+        runtime_digests={
+            "ettr/__init__.py": _digest(init_path.read_bytes()),
+        },
+    )
+    installed = InstalledEnvironmentProvider(
+        provider=provider,
+        manifests={
+            "manifests/equant.ttr.sma.operator.json": {
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "certification_state": "research-certified",
+                "module": "ettr",
+                "callable": "sma",
+            },
+        },
+        baselines={"numerical_baselines/equant.ttr.sma.json": b'{"cases":[]}\n'},
+        runtime_files={
+            "ettr/__init__.py": VerifiedRuntimeFile(
+                package_path="ettr/__init__.py",
+                path=init_path,
+                digest=_digest(init_path.read_bytes()),
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        environment_runtime,
+        "verify_installed_provider",
+        lambda requirement: installed,
+    )
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_module_preloaded"
+
+
+def test_resolve_environment_operator_cleans_modules_after_failed_import(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module_root = tmp_path / "site-packages"
+    package = module_root / "ettr"
+    package.mkdir(parents=True)
+    init_path = package / "__init__.py"
+    trend_path = package / "trend.py"
+    init_path.write_text(
+        "from .trend import sma\n"
+        "raise RuntimeError('transient import failure')\n",
+        encoding="utf-8",
+    )
+    trend_path.write_text(
+        "def sma(frame, **parameters):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(module_root))
+    sys.modules.pop("ettr", None)
+    sys.modules.pop("ettr.trend", None)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    provider = EnvironmentProvider(
+        provider="equant-py",
+        distribution="equant-ttr",
+        distributions=("equant-ttr",),
+        version="1.0.0",
+        certification_state="research-certified",
+        operators=(
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.sma",
+                operator_version="1.0.0",
+                manifest_path="manifests/equant.ttr.sma.operator.json",
+                baseline_paths=("numerical_baselines/equant.ttr.sma.json",),
+            ),
+        ),
+        manifest_digests={"manifests/equant.ttr.sma.operator.json": "sha256:" + "a" * 64},
+        baseline_digests={"numerical_baselines/equant.ttr.sma.json": "sha256:" + "b" * 64},
+        runtime_digests={
+            "ettr/__init__.py": _digest(init_path.read_bytes()),
+            "ettr/trend.py": _digest(trend_path.read_bytes()),
+        },
+    )
+    installed = InstalledEnvironmentProvider(
+        provider=provider,
+        manifests={
+            "manifests/equant.ttr.sma.operator.json": {
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "certification_state": "research-certified",
+                "module": "ettr",
+                "callable": "sma",
+            },
+        },
+        baselines={"numerical_baselines/equant.ttr.sma.json": b'{"cases":[]}\n'},
+        runtime_files={
+            "ettr/__init__.py": VerifiedRuntimeFile(
+                package_path="ettr/__init__.py",
+                path=init_path,
+                digest=_digest(init_path.read_bytes()),
+            ),
+            "ettr/trend.py": VerifiedRuntimeFile(
+                package_path="ettr/trend.py",
+                path=trend_path,
+                digest=_digest(trend_path.read_bytes()),
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        environment_runtime,
+        "verify_installed_provider",
+        lambda requirement: installed,
+    )
+
+    with pytest.raises(OperatorCertificationError):
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert "ettr.trend" not in sys.modules
+
+    init_path.write_text("from .trend import sma\n", encoding="utf-8")
+    installed.runtime_files["ettr/__init__.py"] = VerifiedRuntimeFile(
+        package_path="ettr/__init__.py",
+        path=init_path,
+        digest=_digest(init_path.read_bytes()),
+    )
+    object.__setattr__(
+        provider,
+        "runtime_digests",
+        {
+            "ettr/__init__.py": _digest(init_path.read_bytes()),
+            "ettr/trend.py": _digest(trend_path.read_bytes()),
+        },
+    )
+
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert binding.callable({"verified": True}) == {"verified": True}
+
+
+def test_resolve_environment_operator_wraps_invalid_module_file(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    verified = next(iter(fake_verified_provider.runtime_files.values())).path
+    verified.write_text(
+        "__file__ = '/path/that/does/not/exist.py'\n"
+        "def sma(frame, **parameters):\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    digest = _digest(verified.read_bytes())
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=verified,
+        digest=digest,
+    )
+    sys.modules.pop("ettr", None)
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert caught.value.code == "environment_operator_module_unverified"
+
+
 def test_resolve_environment_operator_wraps_provider_import_runtime_failure(
     fake_verified_provider: InstalledEnvironmentProvider,
 ) -> None:
@@ -482,3 +689,9 @@ def _digest(raw: bytes) -> str:
     import hashlib
 
     return f"sha256:{hashlib.sha256(raw).hexdigest()}"
+
+
+def _drop_runtime_modules(root: str) -> None:
+    for module_name in tuple(sys.modules):
+        if module_name == root or module_name.startswith(f"{root}."):
+            sys.modules.pop(module_name, None)

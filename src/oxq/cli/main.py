@@ -177,8 +177,23 @@ def certify_provider_command(
 @click.argument("requirement")
 def operator_install_command(requirement: str) -> None:
     """Show provider package installation guidance."""
-    click.echo("Install provider package with:")
-    click.echo(f"pip install {requirement}")
+    from oxq.operators.environment_index import (
+        load_environment_provider,
+        parse_exact_provider_requirement,
+    )
+
+    try:
+        provider_name, version = parse_exact_provider_requirement(requirement)
+        provider = load_environment_provider(provider_name, version)
+    except ValueError as exc:
+        click.echo(f"Invalid provider requirement: {exc}")
+        raise click.exceptions.Exit(1) from None
+
+    distribution_requirements = " ".join(
+        f"{distribution}=={provider.version}" for distribution in provider.distributions
+    )
+    click.echo("Install provider distributions with:")
+    click.echo(f"pip install {distribution_requirements}")
     click.echo("Then run:")
     click.echo(f"oxq operator verify {requirement}")
     raise click.exceptions.Exit(1)

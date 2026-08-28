@@ -139,3 +139,12 @@ def test_operator_legacy_bundle_commands_are_not_exposed(
 
     assert result.exit_code == 2
     assert "No such command" in result.output
+
+
+def test_operator_install_prints_distribution_closure() -> None:
+    result = CliRunner().invoke(main, ["operator", "install", "equant-py==1.0.0"])
+
+    assert result.exit_code == 1
+    assert "Install provider distributions with:" in result.output
+    assert "pip install equant-core==1.0.0 equant-ttr==1.0.0" in result.output
+    assert "oxq operator verify equant-py==1.0.0" in result.output

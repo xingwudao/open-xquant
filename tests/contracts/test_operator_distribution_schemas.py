@@ -101,7 +101,17 @@ def test_shared_strict_formats_reject_ambiguous_json_and_paths() -> None:
 
 @pytest.mark.parametrize(
     "invalid",
-    ["", ".", "dir/.", "dir//file.json", "/absolute.json", "../escape.json", "one\\two.json", "trailing/"],
+    [
+        "",
+        ".",
+        "dir/.",
+        "dir//file.json",
+        "/absolute.json",
+        "../escape.json",
+        "one\\two.json",
+        "nul\x00.json",
+        "trailing/",
+    ],
 )
 def test_certification_record_v2_paths_are_canonical_posix_components(
     invalid: str,

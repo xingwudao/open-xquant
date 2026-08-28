@@ -191,12 +191,15 @@ def _reject_untrusted_preloaded_modules(
     sources: Mapping[str, _VerifiedModuleSource],
     operator_id: str,
 ) -> None:
-    for module_name, source in sources.items():
-        loaded = sys.modules.get(module_name)
+    provider_roots = _provider_runtime_roots(sources)
+    for module_name, loaded in tuple(sys.modules.items()):
         if loaded is None:
             continue
+        if module_name.partition(".")[0] not in provider_roots:
+            continue
+        source = sources.get(module_name)
         trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
-        if trusted is None or trusted[2] is not loaded:
+        if source is None or trusted is None or trusted[2] is not loaded:
             raise _error(
                 "environment_operator_module_preloaded",
                 "certified environment operator module is already loaded",
@@ -210,8 +213,13 @@ def _import_verified_module(
     sources: Mapping[str, _VerifiedModuleSource],
 ) -> ModuleType:
     _drop_trusted_runtime_modules(sources)
-    with _verified_runtime_importer(sources):
-        module = importlib.import_module(module_name)
+    modules_before = set(sys.modules)
+    try:
+        with _verified_runtime_importer(sources):
+            module = importlib.import_module(module_name)
+    except BaseException:
+        _cleanup_failed_provider_modules(modules_before, sources)
+        raise
     for name, source in sources.items():
         loaded_source = sys.modules.get(name)
         if loaded_source is not None:
@@ -228,6 +236,26 @@ def _drop_trusted_runtime_modules(
         if loaded is not None and trusted is not None and trusted[2] is loaded:
             sys.modules.pop(module_name, None)
             _TRUSTED_RUNTIME_MODULES.pop(module_name, None)
+
+
+def _cleanup_failed_provider_modules(
+    modules_before: set[str],
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> None:
+    provider_roots = _provider_runtime_roots(sources)
+    for module_name in tuple(sys.modules):
+        if module_name in modules_before:
+            continue
+        if module_name.partition(".")[0] not in provider_roots:
+            continue
+        sys.modules.pop(module_name, None)
+        _TRUSTED_RUNTIME_MODULES.pop(module_name, None)
+
+
+def _provider_runtime_roots(
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> frozenset[str]:
+    return frozenset(name.partition(".")[0] for name in sources)
 
 
 @contextmanager
@@ -248,7 +276,7 @@ def _verified_runtime_importer(
 class _VerifiedRuntimeFinder(importlib.abc.MetaPathFinder):
     def __init__(self, sources: Mapping[str, _VerifiedModuleSource]) -> None:
         self._sources = sources
-        self._provider_roots = frozenset(name.partition(".")[0] for name in sources)
+        self._provider_roots = _provider_runtime_roots(sources)
 
     def find_spec(
         self,
@@ -310,7 +338,21 @@ def _verify_module_object(
     operator_id: str,
 ) -> None:
     module_file = getattr(module, "__file__", None)
-    if not isinstance(module_file, str) or Path(module_file).resolve(strict=True) != origin:
+    if not isinstance(module_file, str):
+        raise _error(
+            "environment_operator_module_unverified",
+            "certified environment operator module origin is unverified",
+            operator_id,
+        )
+    try:
+        module_origin = Path(module_file).resolve(strict=True)
+    except OSError as exc:
+        raise _error(
+            "environment_operator_module_unverified",
+            "certified environment operator module origin is unverified",
+            operator_id,
+        ) from exc
+    if module_origin != origin:
         raise _error(
             "environment_operator_module_unverified",
             "certified environment operator module origin is unverified",
