@@ -300,7 +300,13 @@ def _load_archive(
     _materialize_commit(repository, source_commit, source_root)
 
     operators = _load_operators(compatibility_root, source_root, catalog_data)
-    baselines = _load_baselines(operators, schemas["numerical_baseline"], provider_name, release)
+    baselines = _load_baselines(
+        compatibility_root,
+        operators,
+        schemas["numerical_baseline"],
+        provider_name,
+        release,
+    )
     artifacts = _load_artifacts(build_data, artifact_dir)
     return ProviderSubmission(
         provider=provider_name,
@@ -351,6 +357,7 @@ def _validate_manifest_sources(source_root: Path, manifest_path: Path, operator_
 
 
 def _load_baselines(
+    compatibility_root: Path,
     operators: tuple[CatalogEntry, ...],
     schema: Mapping[str, object],
     provider: str,
@@ -411,9 +418,7 @@ def _load_baselines(
                     expected=_mapping(case["expected"], "baseline", error_operator_id),
                     tolerance=_mapping(case["tolerance"], "baseline", error_operator_id),
                     baseline_path=baseline_path,
-                    baseline_relative_path=baseline_path.relative_to(
-                        baseline_path.parents[1]
-                    ).as_posix(),
+                    baseline_relative_path=baseline_path.relative_to(compatibility_root).as_posix(),
                     case_index=case_index,
                     baseline_digest=baseline_digest,
                     case_digest=sha256_bytes(canonical_json_bytes(case)),

@@ -68,6 +68,8 @@ def verify_installed_provider(requirement: str) -> InstalledEnvironmentProvider:
         manifest["certification_state"] = provider.certification_state
         manifests[operator.manifest_path] = manifest
         for baseline_path in operator.baseline_paths:
+            if baseline_path in baselines:
+                continue
             baselines[baseline_path] = _read_declared_file(
                 distributions,
                 baseline_path,

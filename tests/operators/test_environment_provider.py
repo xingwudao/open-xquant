@@ -63,8 +63,8 @@ class FakeDistribution:
 def official_provider(monkeypatch: pytest.MonkeyPatch) -> EnvironmentProvider:
     provider = EnvironmentProvider(
         provider="equant-py",
-        distribution="equant-py",
-        distributions=("equant-py",),
+        distribution="equant-core",
+        distributions=("equant-core", "equant-ttr"),
         version="1.0.0",
         certification_state="research-certified",
         operators=(
@@ -230,6 +230,59 @@ def test_verify_installed_provider_reads_declared_files_from_distribution_closur
     assert installed.manifests[MANIFEST_PATH]["operator_id"] == "equant.ttr.sma"
     assert installed.baselines[BASELINE_PATH] == BASELINE_BYTES
     assert installed.runtime_files[RUNTIME_PATH].path == ttr_distribution.root / RUNTIME_PATH
+
+
+def test_verify_installed_provider_reads_shared_baseline_once(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    official_provider: EnvironmentProvider,
+) -> None:
+    object.__setattr__(
+        official_provider,
+        "operators",
+        (
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.sma",
+                operator_version="1.0.0",
+                manifest_path=MANIFEST_PATH,
+                baseline_paths=(BASELINE_PATH,),
+            ),
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.ema",
+                operator_version="1.0.0",
+                manifest_path=MANIFEST_PATH,
+                baseline_paths=(BASELINE_PATH,),
+            ),
+        ),
+    )
+    core_distribution = FakeDistribution(tmp_path / "core")
+    core_distribution.add_file(MANIFEST_PATH, MANIFEST_BYTES)
+    baseline_path = core_distribution.add_file(BASELINE_PATH, BASELINE_BYTES)
+    ttr_distribution = FakeDistribution(tmp_path / "ttr")
+    ttr_distribution.add_file(RUNTIME_PATH, RUNTIME_BYTES)
+    baseline_reads = 0
+    real_read_bytes = Path.read_bytes
+
+    def observed_read_bytes(path: Path) -> bytes:
+        nonlocal baseline_reads
+        if path == baseline_path:
+            baseline_reads += 1
+        return real_read_bytes(path)
+
+    def distribution(name: str) -> FakeDistribution:
+        if name == "equant-core":
+            return core_distribution
+        if name == "equant-ttr":
+            return ttr_distribution
+        raise importlib.metadata.PackageNotFoundError(name)
+
+    monkeypatch.setattr(importlib.metadata, "distribution", distribution)
+    monkeypatch.setattr(Path, "read_bytes", observed_read_bytes)
+
+    installed = verify_installed_provider("equant-py==1.0.0")
+
+    assert installed.baselines[BASELINE_PATH] == BASELINE_BYTES
+    assert baseline_reads == 1
 
 
 @pytest.mark.parametrize("artifact_kind", ["directory", "symlink"])

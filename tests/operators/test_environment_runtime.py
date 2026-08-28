@@ -46,8 +46,8 @@ def fake_verified_provider(
 
     provider = EnvironmentProvider(
         provider="equant-py",
-        distribution="equant-py",
-        distributions=("equant-py",),
+        distribution="equant-core",
+        distributions=("equant-core", "equant-ttr"),
         version="1.0.0",
         certification_state="research-certified",
         operators=(
@@ -340,8 +340,8 @@ def test_resolve_environment_operator_rejects_preloaded_reexport_owner_module(
     monkeypatch.setitem(sys.modules, "ettr.trend", malicious)
     provider = EnvironmentProvider(
         provider="equant-py",
-        distribution="equant-py",
-        distributions=("equant-py",),
+        distribution="equant-core",
+        distributions=("equant-core", "equant-ttr"),
         version="1.0.0",
         certification_state="research-certified",
         operators=(

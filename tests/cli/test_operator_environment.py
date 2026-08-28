@@ -19,8 +19,8 @@ def fake_verified_provider(monkeypatch: pytest.MonkeyPatch) -> InstalledEnvironm
     runtime_file = Path(__file__)
     provider = EnvironmentProvider(
         provider="equant-py",
-        distribution="equant-py",
-        distributions=("equant-py",),
+        distribution="equant-core",
+        distributions=("equant-core", "equant-ttr"),
         version="1.0.0",
         certification_state="research-certified",
         operators=(
