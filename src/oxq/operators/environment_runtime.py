@@ -80,13 +80,15 @@ def resolve_environment_operator(
         origin = _verified_module_origin(sources, module_name, operator_id)
         _reject_untrusted_preloaded_modules(sources, operator_id)
         try:
-            module = _import_verified_module(module_name, sources)
+            module = _import_verified_runtime_closure(module_name, sources)
         except ImportError as exc:
             raise _error(
                 "environment_operator_module_unavailable",
                 "certified environment operator module is unavailable",
                 operator_id,
             ) from exc
+        except OperatorCertificationError:
+            raise
         except Exception as exc:
             raise _error(
                 "environment_operator_module_unavailable",
@@ -215,7 +217,7 @@ def _reject_untrusted_preloaded_modules(
         _verify_module_object(loaded, source.path, source.digest, operator_id)
 
 
-def _import_verified_module(
+def _import_verified_runtime_closure(
     module_name: str,
     sources: Mapping[str, _VerifiedModuleSource],
 ) -> ModuleType:
@@ -223,14 +225,20 @@ def _import_verified_module(
     modules_before = set(sys.modules)
     try:
         with _verified_runtime_importer(sources):
-            module = importlib.import_module(module_name)
+            for name in sorted(sources, key=lambda item: (item.count("."), item)):
+                importlib.import_module(name)
     except BaseException:
         _cleanup_failed_provider_modules(modules_before, sources)
         raise
+    module = sys.modules.get(module_name)
+    if module is None:
+        raise ImportError(f"provider runtime module is not declared: {module_name}", name=module_name)
     for name, source in sources.items():
         loaded_source = sys.modules.get(name)
         if loaded_source is not None:
+            _verify_module_object(loaded_source, source.path, source.digest, name)
             _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
+    _freeze_provider_package_paths(sources)
     return module
 
 
@@ -244,7 +252,7 @@ def _verified_callable(
     def invoke(*args: object, **kwargs: object) -> object:
         with _RUNTIME_RESOLUTION_LOCK:
             _reject_untrusted_preloaded_modules(sources, operator_id)
-            module = _import_verified_module(module_name, sources)
+            module = _import_verified_runtime_closure(module_name, sources)
             _verify_module_object(module, origin, sources[module_name].digest, operator_id)
             implementation = getattr(module, callable_name, None)
             if not callable(implementation):
@@ -255,12 +263,11 @@ def _verified_callable(
                 )
             _verify_callable_owner(implementation, sources, operator_id)
             modules_before = set(sys.modules)
-            with _verified_runtime_importer(sources):
-                try:
-                    result = implementation(*args, **kwargs)
-                except BaseException:
-                    _cleanup_failed_provider_modules(modules_before, sources)
-                    raise
+            try:
+                result = implementation(*args, **kwargs)
+            except BaseException:
+                _cleanup_failed_provider_modules(modules_before, sources)
+                raise
             _record_trusted_runtime_modules(sources)
             return result
 
@@ -276,6 +283,18 @@ def _record_trusted_runtime_modules(
         loaded_source = sys.modules.get(name)
         if loaded_source is not None:
             _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
+    _freeze_provider_package_paths(sources)
+
+
+def _freeze_provider_package_paths(
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> None:
+    for name, source in sources.items():
+        if not source.is_package:
+            continue
+        module = sys.modules.get(name)
+        if module is not None and hasattr(module, "__path__"):
+            module.__path__ = []  # type: ignore[attr-defined]
 
 
 def _drop_trusted_runtime_modules(

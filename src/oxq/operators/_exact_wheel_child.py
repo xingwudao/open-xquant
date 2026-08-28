@@ -109,7 +109,7 @@ def _read_request(path: Path) -> dict[str, object]:
         "output_fields",
         "output_alignment",
     }
-    if set(value) != required and set(value) != required | {"test_runtime_paths"}:
+    if set(value) != required:
         raise ValueError("request fields are invalid")
     return value
 
@@ -1142,11 +1142,13 @@ def _execute(
     execution_root: Path,
 ) -> dict[str, object]:
     global _TEST_BOOTSTRAP_RUNTIME_ROOTS, _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS
-    test_runtime_paths = request.get("test_runtime_paths", [])
-    if not isinstance(test_runtime_paths, list) or not all(
-        isinstance(path, str) and Path(path).is_dir() for path in test_runtime_paths
-    ):
-        return {"status": "error", "code": "provider_execution_failed"}
+    test_runtime_paths: list[str] = []
+    if os.environ.pop("OXQ_EXACT_TEST_RUNTIME", None) == "1":
+        test_runtime_paths = [
+            path
+            for path in os.environ.pop("OXQ_EXACT_TEST_RUNTIME_PATHS", "").split(os.pathsep)
+            if path and Path(path).is_dir()
+        ]
     implementation_artifact = request["implementation_artifact"]
     dependency_artifacts = request["dependency_artifacts"]
     module_name = request["module"]

@@ -8,6 +8,7 @@ from types import TracebackType
 import pytest
 
 from oxq.operators import runtime_protocol
+from oxq.operators.runtime_protocol import run_exact_wheel_request
 
 
 def test_canonical_protocol_bytes_are_deterministic_and_reject_non_json() -> None:
@@ -45,3 +46,32 @@ def test_active_response_reader_bounds_oversized_reads(tmp_path: Path, monkeypat
         runtime_protocol._read_authenticated_response(response, 0, b"x" * 32)
 
     assert sizes == [1024 * 1024 + 1]
+
+
+def test_exact_wheel_request_rejects_test_runtime_paths_in_wire_payload(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "provider.whl"
+    wheel.write_bytes(b"placeholder")
+
+    def fail_if_child_starts(*args: object, **kwargs: object) -> int:
+        del args, kwargs
+        pytest.fail("test runtime paths from request payload reached the child")
+
+    monkeypatch.setattr(runtime_protocol, "run_contained_child", fail_if_child_starts)
+
+    with pytest.raises(ValueError, match="test_runtime_paths"):
+        run_exact_wheel_request(
+            {
+                "module": "provider",
+                "callable": "sma",
+                "parameters": {},
+                "input": {},
+                "output_fields": [],
+                "output_alignment": "preserve_input_order",
+                "test_runtime_paths": [],
+            },
+            [wheel],
+            timeout_seconds=1,
+        )

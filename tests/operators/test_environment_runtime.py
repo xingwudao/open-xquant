@@ -752,7 +752,7 @@ def test_resolved_environment_operator_blocks_lazy_undeclared_provider_import(
     )
     binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
 
-    with pytest.raises(ImportError, match="provider runtime module is not declared"):
+    with pytest.raises(ModuleNotFoundError, match="ettr.helper"):
         binding.callable({"verified": True})
 
 
@@ -829,6 +829,84 @@ def test_resolved_environment_operator_loads_lazy_declared_provider_import(
     assert binding.callable({"verified": True}) == "verified-lazy-helper"
 
 
+def test_resolved_environment_operator_does_not_keep_global_finder_during_call(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    module_root = tmp_path / "site-packages"
+    package = module_root / "ettr"
+    package.mkdir(parents=True)
+    init_path = package / "__init__.py"
+    helper_path = package / "helper.py"
+    init_path.write_text(
+        "def sma(frame, **parameters):\n"
+        "    from .helper import finder_is_active\n"
+        "    return finder_is_active()\n",
+        encoding="utf-8",
+    )
+    helper_path.write_text(
+        "import sys\n"
+        "def finder_is_active():\n"
+        "    return any(item.__class__.__name__ == '_VerifiedRuntimeFinder' for item in sys.meta_path)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.syspath_prepend(str(module_root))
+    provider = EnvironmentProvider(
+        provider="equant-py",
+        distribution="equant-ttr",
+        distributions=("equant-ttr",),
+        version="1.0.0",
+        certification_state="research-certified",
+        operators=(
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.sma",
+                operator_version="1.0.0",
+                manifest_path="manifests/equant.ttr.sma.operator.json",
+                baseline_paths=("numerical_baselines/equant.ttr.sma.json",),
+            ),
+        ),
+        manifest_digests={"manifests/equant.ttr.sma.operator.json": "sha256:" + "a" * 64},
+        baseline_digests={"numerical_baselines/equant.ttr.sma.json": "sha256:" + "b" * 64},
+        runtime_digests={
+            "ettr/__init__.py": _digest(init_path.read_bytes()),
+            "ettr/helper.py": _digest(helper_path.read_bytes()),
+        },
+    )
+    installed = InstalledEnvironmentProvider(
+        provider=provider,
+        manifests={
+            "manifests/equant.ttr.sma.operator.json": {
+                "operator_id": "equant.ttr.sma",
+                "operator_version": "1.0.0",
+                "certification_state": "research-certified",
+                "module": "ettr",
+                "callable": "sma",
+            },
+        },
+        baselines={"numerical_baselines/equant.ttr.sma.json": b'{"cases":[]}\n'},
+        runtime_files={
+            "ettr/__init__.py": VerifiedRuntimeFile(
+                package_path="ettr/__init__.py",
+                path=init_path,
+                digest=_digest(init_path.read_bytes()),
+            ),
+            "ettr/helper.py": VerifiedRuntimeFile(
+                package_path="ettr/helper.py",
+                path=helper_path,
+                digest=_digest(helper_path.read_bytes()),
+            ),
+        },
+    )
+    monkeypatch.setattr(
+        environment_runtime,
+        "verify_installed_provider",
+        lambda requirement: installed,
+    )
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    assert binding.callable({"verified": True}) is False
+
+
 def test_resolved_environment_operator_cleans_lazy_modules_after_failed_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -901,7 +979,8 @@ def test_resolved_environment_operator_cleans_lazy_modules_after_failed_call(
 
     with pytest.raises(RuntimeError, match="transient operator failure"):
         binding.callable({"verified": True})
-    assert "ettr.helper" not in sys.modules
+    assert "ettr.helper" in sys.modules
+    assert environment_runtime._TRUSTED_RUNTIME_MODULES["ettr.helper"][2] is sys.modules["ettr.helper"]
 
     init_path.write_text(
         "def sma(frame, **parameters):\n"

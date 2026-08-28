@@ -26,6 +26,8 @@ _CHILD_ENVIRONMENT_ALLOWLIST = frozenset(
         "TMP",
         "TZ",
         "WINDIR",
+        "OXQ_EXACT_TEST_RUNTIME",
+        "OXQ_EXACT_TEST_RUNTIME_PATHS",
     },
 )
 _DARWIN_SANDBOX_PROFILE = "(version 1) (allow default) (deny process-fork)"
@@ -131,7 +133,8 @@ def run_contained_child(
     environment: Mapping[str, str],
 ) -> int:
     """Run a Python child with platform containment and a scrubbed environment."""
-    assert "-I" in command and "-S" in command, "contained child commands must include -I and -S"
+    if "-I" not in command or "-S" not in command:
+        raise ValueError("contained child commands must include -I and -S")
     timeout_seconds = _validated_timeout(timeout_seconds)
     platform_name = _platform_name()
     provider_command = command

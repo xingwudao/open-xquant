@@ -42,6 +42,8 @@ def run_exact_wheel_request(
     paths = [str(Path(path).resolve(strict=True)) for path in wheel_snapshots]
     if not paths:
         raise ValueError("exact wheel closure is empty")
+    if "test_runtime_paths" in request:
+        raise ValueError("test_runtime_paths is not a production request field")
     payload = dict(request)
     payload["implementation_artifact"] = paths[0]
     payload["dependency_artifacts"] = paths[1:]
@@ -54,10 +56,10 @@ def run_exact_wheel_request(
         secret = secrets.token_bytes(32)
         environment = dict(os.environ)
         if _test_runtime_paths:
-            payload["test_runtime_paths"] = [
+            environment["OXQ_EXACT_TEST_RUNTIME"] = "1"
+            environment["OXQ_EXACT_TEST_RUNTIME_PATHS"] = os.pathsep.join(
                 str(Path(item).resolve(strict=True)) for item in _test_runtime_paths
-            ]
-            request_path.write_bytes(canonical_protocol_bytes(payload))
+            )
         returncode = run_contained_child(
             [sys.executable, "-I", "-S", str(_child_path()), str(request_path), str(response_path)],
             timeout_seconds=timeout_seconds,

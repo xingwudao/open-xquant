@@ -271,8 +271,11 @@ def test_runtime_protocol_schema_matches_implemented_messages() -> None:
         "code": "provider_import_failed",
     }
 
-    for message in (request, {**request, "test_runtime_paths": ["/tmp/runtime"]}, ok_response, error_response):
+    for message in (request, ok_response, error_response):
         validator.validate(message)
+
+    with pytest.raises(ValidationError):
+        validator.validate({**request, "test_runtime_paths": ["/tmp/runtime"]})
 
 
 def test_runtime_protocol_rejects_extra_output_field_properties() -> None:

@@ -47,7 +47,7 @@ def test_rejects_child_command_without_required_python_startup_flags(
     command: list[str],
 ) -> None:
     """Removing either isolation flag must prevent a provider from starting."""
-    with pytest.raises(AssertionError, match="-I and -S"):
+    with pytest.raises(ValueError, match="-I and -S"):
         child_process.run_contained_child(
             command,
             timeout_seconds=5,
