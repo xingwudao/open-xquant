@@ -35,6 +35,10 @@ _OUTPUT_ALIGNMENTS = {
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_MAX_WHEEL_MEMBERS = 50000
+_MAX_WHEEL_MEMBER_BYTES = 128 * 1024 * 1024
+_MAX_WHEEL_TOTAL_BYTES = 512 * 1024 * 1024
+_MAX_WHEEL_COMPRESSION_RATIO = 10000
 _PROVIDER_POLICY_VIOLATION_EXIT_CODE = 86
 _STATIC_RUNTIME_SOURCE_ROOTS = tuple(
     dict.fromkeys(
@@ -959,10 +963,15 @@ def _extract_wheel(
     written: set[Path],
 ) -> None:
     with zipfile.ZipFile(wheel_path) as wheel:
-        for member in wheel.infolist():
+        members = wheel.infolist()
+        if not members or len(members) > _MAX_WHEEL_MEMBERS:
+            raise ValueError("wheel member count is invalid")
+        total_size = 0
+        for member in members:
             mapped = _wheel_member_destination(member)
             if mapped is None:
                 continue
+            total_size = _validate_wheel_member_bounds(member, total_size)
             scheme, relative = mapped
             destination = library_destination if scheme == "library" else prefix_destination
             target = destination.joinpath(*relative.parts)
@@ -976,6 +985,23 @@ def _extract_wheel(
             target.write_bytes(wheel.read(member))
             mode = (member.external_attr >> 16) & 0o777
             target.chmod(mode or 0o644)
+
+
+def _validate_wheel_member_bounds(
+    member: zipfile.ZipInfo,
+    total_size: int,
+) -> int:
+    if member.flag_bits & 0x1:
+        raise ValueError("wheel member is encrypted")
+    if member.file_size > _MAX_WHEEL_MEMBER_BYTES:
+        raise ValueError("wheel member is too large")
+    compressed_size = max(1, member.compress_size)
+    if member.file_size > compressed_size * _MAX_WHEEL_COMPRESSION_RATIO:
+        raise ValueError("wheel member compression ratio is too large")
+    total_size += member.file_size
+    if total_size > _MAX_WHEEL_TOTAL_BYTES:
+        raise ValueError("wheel expanded size is too large")
+    return total_size
 
 
 def _wheel_member_destination(

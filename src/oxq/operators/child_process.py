@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 import signal
 import subprocess
@@ -131,6 +132,7 @@ def run_contained_child(
 ) -> int:
     """Run a Python child with platform containment and a scrubbed environment."""
     assert "-I" in command and "-S" in command, "contained child commands must include -I and -S"
+    timeout_seconds = _validated_timeout(timeout_seconds)
     platform_name = _platform_name()
     provider_command = command
     child_environment = _contained_environment(environment)
@@ -206,6 +208,15 @@ def run_contained_child(
         finally:
             if windows_gate_directory is not None:
                 windows_gate_directory.cleanup()
+
+
+def _validated_timeout(timeout_seconds: float) -> float:
+    if type(timeout_seconds) not in {int, float}:
+        raise TypeError("timeout is not numeric")
+    normalized = float(timeout_seconds)
+    if not math.isfinite(normalized) or normalized <= 0:
+        raise ValueError("timeout must be finite and positive")
+    return normalized
 
 
 def _contained_environment(environment: Mapping[str, str]) -> dict[str, str]:

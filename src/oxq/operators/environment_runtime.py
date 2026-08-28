@@ -254,8 +254,13 @@ def _verified_callable(
                     operator_id,
                 )
             _verify_callable_owner(implementation, sources, operator_id)
+            modules_before = set(sys.modules)
             with _verified_runtime_importer(sources):
-                result = implementation(*args, **kwargs)
+                try:
+                    result = implementation(*args, **kwargs)
+                except BaseException:
+                    _cleanup_failed_provider_modules(modules_before, sources)
+                    raise
             _record_trusted_runtime_modules(sources)
             return result
 

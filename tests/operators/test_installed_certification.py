@@ -41,7 +41,7 @@ EXPECTED_DIGESTS = {
     "certification_record": "a696a76b0b1d902067b8735ba797a3962ccb369b0e3eb2104648e7234c9ea2cd",
     "certification_record_v2": "011db6b9f4a645f7d3e6f62765bbaa079af2c3e83200b5c7ba0554f302a165c5",
     "operator_release": "4833d0d2d250052486af5ddaa048b1b8618b9dc533847db0bba8ee770887bc08",
-    "runtime_protocol": "95afaec3e53c10fef91eddfdd0a8ac96e7cdf869cdadd99baac066808ec668be",
+    "runtime_protocol": "c240316b6fafd340311f764a15940bebb7685b526fcc6f3d1a499a54ace0efb0",
     "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
     "official_environment_providers": "e918420381426520b7d192020e5887dd291badf36b55ded832f80df946e17d7b",
 }

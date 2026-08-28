@@ -53,6 +53,39 @@ def _write_dependency_wheel(path: Path) -> None:
         )
 
 
+def test_exact_child_rejects_oversized_wheel_member_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    member = zipfile.ZipInfo("baseline_provider/__init__.py")
+    member.file_size = _baseline_child._MAX_WHEEL_MEMBER_BYTES + 1
+    member.compress_size = 1
+
+    class OversizedWheel:
+        def __enter__(self) -> OversizedWheel:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def infolist(self) -> list[zipfile.ZipInfo]:
+            return [member]
+
+        def read(self, item: zipfile.ZipInfo) -> bytes:
+            del item
+            pytest.fail("oversized wheel member was read before validation")
+
+    monkeypatch.setattr(_baseline_child.zipfile, "ZipFile", lambda path: OversizedWheel())
+
+    with pytest.raises(ValueError, match="wheel member is too large"):
+        _baseline_child._extract_wheel(
+            tmp_path / "provider.whl",
+            tmp_path / "library",
+            tmp_path / "prefix",
+            set(),
+        )
+
+
 def _run_child(
     tmp_path: Path,
     provider_source: str,

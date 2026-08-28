@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import math
 import os
 import signal
 import subprocess
@@ -12,6 +13,26 @@ from pathlib import Path
 import pytest
 
 from oxq.operators import child_process
+
+
+@pytest.mark.parametrize("timeout_seconds", [0, -1, math.nan, math.inf])
+def test_rejects_non_positive_or_non_finite_child_timeouts(
+    monkeypatch: pytest.MonkeyPatch,
+    timeout_seconds: float,
+) -> None:
+    def fail_if_started(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        pytest.fail("child process started before timeout validation")
+
+    monkeypatch.setattr(child_process.subprocess, "Popen", fail_if_started)
+
+    with pytest.raises(ValueError, match="timeout must be finite and positive"):
+        child_process.run_contained_child(
+            [sys.executable, "-I", "-S", "-c", "pass"],
+            timeout_seconds=timeout_seconds,
+            response_secret=None,
+            environment={},
+        )
 
 
 @pytest.mark.parametrize(

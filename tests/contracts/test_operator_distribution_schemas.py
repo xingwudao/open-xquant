@@ -219,6 +219,30 @@ def test_runtime_protocol_schema_matches_implemented_messages() -> None:
         validator.validate(message)
 
 
+def test_runtime_protocol_rejects_extra_output_field_properties() -> None:
+    schema = _schemas()["runtime_protocol"]
+    request = {
+        "implementation_artifact": "/tmp/provider.whl",
+        "dependency_artifacts": [],
+        "module": "ettr",
+        "callable": "sma",
+        "parameters": {},
+        "input": {
+            "schema_version": 1,
+            "primary_key": ["date", "code"],
+            "columns": [{"name": "close", "dtype": "float64", "required": True}],
+            "context": {"timezone": "Asia/Shanghai"},
+            "alignment": "preserve_input_order",
+            "records": [{"date": "2026-08-24", "code": "000001.SZ", "close": 1.0}],
+        },
+        "output_fields": [{"name": "sma_2", "dtype": "float64", "extra": True}],
+        "output_alignment": "preserve_input_order",
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(request)
+
+
 def test_readme_certification_workflow_does_not_document_removed_output_dir() -> None:
     readme = Path(__file__).resolve().parents[2].joinpath("README.md").read_text(
         encoding="utf-8"
