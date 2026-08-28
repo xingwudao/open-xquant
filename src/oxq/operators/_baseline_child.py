@@ -67,6 +67,7 @@ class _PandasValidationPrimitives:
     numpy_scalar_type: type
     numpy_scalar_item: Callable[[object], object]
     series_tolist: Callable[[Any], list[object]]
+    index_tolist: Callable[[Any], list[object]]
     dataframe_getitem: Callable[[Any, object], Any]
 
 
@@ -197,13 +198,13 @@ def _extract_output(
     output_alignment: str,
     primitives: _PandasValidationPrimitives,
 ) -> list[object]:
-    input_keys = _frame_keys(frame)
+    input_keys = _frame_keys(frame, primitives)
     result_type = type(result)
     if issubclass(result_type, primitives.series_type):
         series = cast(Any, result)
         if series.name != output_field:
             raise KeyError("declared output field is missing")
-        output_keys = _index_keys(series.index)
+        output_keys = _index_keys(series.index, primitives)
         values = [_json_value(value, output_dtype, primitives) for value in _trusted_series_values(series, primitives)]
         return _align_output(values, output_keys, input_keys, output_alignment)
     if issubclass(result_type, primitives.dataframe_type):
@@ -214,9 +215,9 @@ def _extract_output(
         if key_columns and key_columns != {"date", "code"}:
             raise IndexError("partial key alignment cannot be proven")
         if key_columns:
-            output_keys = _frame_keys(output_frame)
+            output_keys = _frame_keys(output_frame, primitives)
         else:
-            output_keys = _index_keys(output_frame.index)
+            output_keys = _index_keys(output_frame.index, primitives)
         output_series = primitives.dataframe_getitem(output_frame, output_field)
         values = [_json_value(value, output_dtype, primitives) for value in _trusted_series_values(output_series, primitives)]
         return _align_output(values, output_keys, input_keys, output_alignment)
@@ -259,12 +260,53 @@ def _frame_fingerprint(
     )
 
 
-def _frame_keys(frame: Any) -> list[tuple[object, object]]:
-    return [(record["date"], record["code"]) for record in frame[["date", "code"]].to_dict("records")]
+def _invoke_provider_outside_verifier_stack(
+    implementation: Callable[..., object],
+    frame: Any,
+    parameters: Mapping[str, object],
+    thread_start: Callable[..., object] | None = None,
+) -> object:
+    results: list[object] = []
+    errors: list[BaseException] = []
+
+    def invoke() -> None:
+        try:
+            results.append(implementation(frame, **parameters))
+        except BaseException as exc:
+            errors.append(exc)
+
+    execution_thread = threading.Thread(
+        target=invoke,
+        name="oxq-provider-call",
+    )
+    if thread_start is None:
+        execution_thread.start()
+    else:
+        thread_start(execution_thread)
+    execution_thread.join()
+    if errors:
+        raise errors[0]
+    if len(results) != 1:
+        raise RuntimeError("provider call did not produce one result")
+    return results[0]
 
 
-def _index_keys(index: Any) -> list[tuple[object, object]]:
-    keys = list(index.tolist())
+def _frame_keys(
+    frame: Any,
+    primitives: _PandasValidationPrimitives,
+) -> list[tuple[object, object]]:
+    dates = primitives.series_tolist(primitives.dataframe_getitem(frame, "date"))
+    codes = primitives.series_tolist(primitives.dataframe_getitem(frame, "code"))
+    if len(dates) != len(codes):
+        raise IndexError("input keys are invalid")
+    return list(zip(dates, codes, strict=True))
+
+
+def _index_keys(
+    index: Any,
+    primitives: _PandasValidationPrimitives,
+) -> list[tuple[object, object]]:
+    keys = primitives.index_tolist(index)
     if not all(isinstance(key, tuple) and len(key) == 2 for key in keys):
         raise IndexError("output index does not identify panel keys")
     return [cast(tuple[object, object], key) for key in keys]
@@ -1203,6 +1245,7 @@ def _execute(
         numpy_scalar_type=np.generic,
         numpy_scalar_item=cast(Callable[[object], object], np.generic.item),
         series_tolist=pd.Series.tolist,
+        index_tolist=pd.Index.tolist,
         dataframe_getitem=pd.DataFrame.__getitem__,
     )
     sys.path[:] = [path for path in sys.path if path not in test_runtime_paths]
@@ -1269,7 +1312,12 @@ def _execute(
                 (frame, original, original_fingerprint),
                 (repeated_frame, repeated_original, repeated_original_fingerprint),
             ):
-                result = implementation(invocation_frame, **parameters)
+                result = _invoke_provider_outside_verifier_stack(
+                    implementation,
+                    invocation_frame,
+                    parameters,
+                    import_gate._original_thread_start,
+                )
                 try:
                     if _frame_fingerprint(invocation_frame, trusted_frame_to_json) != invocation_fingerprint:
                         raise AssertionError("provider mutated frame")

@@ -390,6 +390,108 @@ def test_resolved_environment_operator_rejects_mutated_helper_instance_state(
     assert caught.value.code == "environment_operator_callable_unverified"
 
 
+def test_resolved_environment_operator_rejects_mutated_helper_inside_container(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    verified = next(iter(fake_verified_provider.runtime_files.values())).path
+    verified.write_text(
+        "def calculate(frame):\n"
+        "    return frame\n"
+        "DISPATCH = {'calculate': calculate}\n"
+        "def sma(frame, **parameters):\n"
+        "    del parameters\n"
+        "    return DISPATCH['calculate'](frame)\n",
+        encoding="utf-8",
+    )
+    digest = _digest(verified.read_bytes())
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=verified,
+        digest=digest,
+    )
+    sys.modules.pop("ettr", None)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    helper = sys.modules["ettr"].DISPATCH["calculate"]
+    assert isinstance(helper, FunctionType)
+    replacement = compile(
+        "def replacement(frame):\n"
+        "    return 'mutated-container-helper-code'\n",
+        "<replacement>",
+        "exec",
+    )
+    namespace: dict[str, object] = {}
+    exec(replacement, namespace)
+    replacement_callable = namespace["replacement"]
+    assert isinstance(replacement_callable, FunctionType)
+    helper.__code__ = replacement_callable.__code__
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        binding.callable({"verified": True})
+
+    assert caught.value.code == "environment_operator_callable_unverified"
+
+
+def test_resolve_environment_operator_reloads_uncached_mutated_callable(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    verified = next(iter(fake_verified_provider.runtime_files.values())).path
+    verified.write_text(
+        "def sma(frame, **parameters):\n"
+        "    del parameters\n"
+        "    return frame\n"
+        "def ema(frame, **parameters):\n"
+        "    del parameters\n"
+        "    return frame\n",
+        encoding="utf-8",
+    )
+    digest = _digest(verified.read_bytes())
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    object.__setattr__(
+        fake_verified_provider.provider,
+        "operators",
+        (
+            *fake_verified_provider.provider.operators,
+            CertifiedOperatorRef(
+                operator_id="equant.ttr.ema",
+                operator_version="1.0.0",
+                manifest_path="manifests/equant.ttr.ema.operator.json",
+                baseline_paths=("numerical_baselines/equant.ttr.ema.json",),
+            ),
+        ),
+    )
+    fake_verified_provider.manifests["manifests/equant.ttr.ema.operator.json"] = {
+        "operator_id": "equant.ttr.ema",
+        "operator_version": "1.0.0",
+        "certification_state": "research-certified",
+        "module": "ettr",
+        "callable": "ema",
+    }
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=verified,
+        digest=digest,
+    )
+    sys.modules.pop("ettr", None)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
+    resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    exec(
+        "def replacement(frame, **parameters):\n"
+        "    del frame, parameters\n"
+        "    return 'mutated-uncached-callable'\n"
+        "ema = replacement\n",
+        sys.modules["ettr"].__dict__,
+    )
+
+    binding = resolve_environment_operator("equant.ttr.ema", "1.0.0", "equant-py==1.0.0")
+
+    assert binding.callable({"verified": True}) == {"verified": True}
+
+
 def test_resolve_environment_operator_reloads_mutated_callable_code(
     fake_verified_provider: InstalledEnvironmentProvider,
 ) -> None:

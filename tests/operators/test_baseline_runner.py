@@ -20,7 +20,7 @@ import pytest
 import oxq.operators.baseline_runner as baseline_runner
 import oxq.operators.certification as certification
 import oxq.operators.runtime_protocol as runtime_protocol
-from oxq.operators import _baseline_child
+from oxq.operators import _baseline_child, _exact_wheel_child
 from oxq.operators.baseline_runner import run_research_baselines
 from oxq.operators.certification import certify_provider, validate_provider_contract
 from oxq.operators.errors import OperatorCertificationError
@@ -1055,6 +1055,63 @@ def sma(frame, *, window):
 """
 
     _assert_failure(_contract(tmp_path, source), "provider_mutated_input")
+
+
+@pytest.mark.parametrize("child_module", [_baseline_child, _exact_wheel_child])
+def test_provider_call_cannot_reach_verifier_stack_locals(
+    child_module: object,
+) -> None:
+    verifier_secret = object()
+    assert verifier_secret is not None
+
+    def provider(frame: object, **parameters: object) -> str:
+        del frame, parameters
+        try:
+            raise RuntimeError("traceback access")
+        except RuntimeError as exc:
+            cursor = exc.__traceback__.tb_frame
+            while cursor is not None:
+                if "verifier_secret" in cursor.f_locals:
+                    return "leaked"
+                cursor = cursor.f_back
+        return "isolated"
+
+    assert child_module._invoke_provider_outside_verifier_stack(provider, object(), {}) == "isolated"
+
+
+def test_rejects_provider_that_spoofs_alignment_keys_with_mutated_pandas_methods(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+from baseline_dependency import rolling_mean
+
+class SpoofedKeyFrame(pd.DataFrame):
+    _metadata = ["_trusted_keys"]
+
+    def to_dict(self, *args, **kwargs):
+        del args, kwargs
+        return [
+            {"date": date, "code": code} for date, code in self._trusted_keys
+        ]
+
+def sma(frame, *, window):
+    output = SpoofedKeyFrame({
+        "date": list(reversed(frame["date"].tolist())),
+        "code": frame["code"].tolist(),
+        f"sma_{window}": rolling_mean(frame["close"].tolist(), window),
+    })
+    output._trusted_keys = list(frame.index)
+    return output
+"""
+
+    candidate = _contract(tmp_path, source)
+    with pytest.raises(OperatorCertificationError):
+        run_research_baselines(
+            candidate,
+            candidate.artifacts,
+            timeout_seconds=5,
+        )
 
 
 def test_rejects_undeclared_ambient_dependency(tmp_path: Path) -> None:

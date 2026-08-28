@@ -10,6 +10,8 @@ import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping
 from collections.abc import Mapping as MappingABC
+from collections.abc import Sequence as SequenceABC
+from collections.abc import Set as SetABC
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -257,6 +259,7 @@ def _import_verified_runtime_closure(
         if loaded_source is not None:
             _verify_module_object(loaded_source, source.path, source.digest, name)
             _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
+    _record_trusted_runtime_callables(sources)
     _freeze_provider_package_paths(sources)
     return module
 
@@ -277,8 +280,11 @@ def _loaded_trusted_runtime_closure(
         if trusted[0] != source.path or trusted[1] != source.digest:
             return None
         _verify_module_object(loaded_source, source.path, source.digest, name)
+    current_callable = getattr(module, callable_name, None)
     trusted_callable = _TRUSTED_RUNTIME_CALLABLES.get((module_name, callable_name))
-    if trusted_callable is not None and getattr(module, callable_name, None) is not trusted_callable:
+    if trusted_callable is None and callable(current_callable):
+        return None
+    if trusted_callable is not None and current_callable is not trusted_callable:
         return None
     _freeze_provider_package_paths(sources)
     return module
@@ -350,7 +356,23 @@ def _record_trusted_runtime_modules(
         loaded_source = sys.modules.get(name)
         if loaded_source is not None:
             _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
+    _record_trusted_runtime_callables(sources)
     _freeze_provider_package_paths(sources)
+
+
+def _record_trusted_runtime_callables(
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> None:
+    for module_name in sources:
+        loaded_source = sys.modules.get(module_name)
+        if not isinstance(loaded_source, ModuleType):
+            continue
+        for attr_name, value in loaded_source.__dict__.items():
+            if attr_name.startswith("__") or not callable(value):
+                continue
+            owner = inspect.getmodule(value)
+            if owner is loaded_source:
+                _TRUSTED_RUNTIME_CALLABLES[(module_name, attr_name)] = value
 
 
 def _freeze_provider_package_paths(
@@ -598,6 +620,44 @@ def _state_token(
                 ),
             )
         return ("module", value.__name__)
+    if isinstance(value, MappingABC):
+        if id(value) in seen:
+            return ("mapping-recursive", type(value).__module__, type(value).__qualname__)
+        next_seen = seen | {id(value)}
+        return (
+            "mapping",
+            type(value).__module__,
+            type(value).__qualname__,
+            tuple(
+                (_state_token(key, sources, operator_id, next_seen), _state_token(item, sources, operator_id, next_seen))
+                for key, item in sorted(value.items(), key=lambda pair: repr(pair[0]))
+            ),
+        )
+    if isinstance(value, tuple):
+        if id(value) in seen:
+            return ("tuple-recursive", type(value).__module__, type(value).__qualname__)
+        next_seen = seen | {id(value)}
+        return ("tuple", tuple(_state_token(item, sources, operator_id, next_seen) for item in value))
+    if isinstance(value, SequenceABC) and not isinstance(value, (str, bytes, bytearray)):
+        if id(value) in seen:
+            return ("sequence-recursive", type(value).__module__, type(value).__qualname__)
+        next_seen = seen | {id(value)}
+        return (
+            "sequence",
+            type(value).__module__,
+            type(value).__qualname__,
+            tuple(_state_token(item, sources, operator_id, next_seen) for item in value),
+        )
+    if isinstance(value, SetABC):
+        if id(value) in seen:
+            return ("set-recursive", type(value).__module__, type(value).__qualname__)
+        next_seen = seen | {id(value)}
+        return (
+            "set",
+            type(value).__module__,
+            type(value).__qualname__,
+            tuple(sorted((_state_token(item, sources, operator_id, next_seen) for item in value), key=repr)),
+        )
     value_type = type(value)
     if value_type.__module__ in sources:
         return _object_state_token(value, sources, operator_id, seen)
