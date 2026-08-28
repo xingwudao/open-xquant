@@ -243,6 +243,22 @@ def _extract_outputs(
     }
 
 
+def _frame_fingerprint(
+    frame: Any,
+    trusted_frame_to_json: Callable[..., str],
+) -> bytes:
+    return _encode_response(
+        {
+            "attrs": frame.attrs,
+            "frame": trusted_frame_to_json(
+                frame,
+                orient="split",
+                date_format="iso",
+            ),
+        }
+    )
+
+
 def _frame_keys(frame: Any) -> list[tuple[object, object]]:
     return [(record["date"], record["code"]) for record in frame[["date", "code"]].to_dict("records")]
 
@@ -1179,6 +1195,7 @@ def _execute(
         return {"status": "error", "code": "provider_execution_failed"}
     trusted_assert_frame_equal = pd.testing.assert_frame_equal
     trusted_frame_copy = pd.DataFrame.copy
+    trusted_frame_to_json = pd.DataFrame.to_json
     trusted_pandas_primitives = _PandasValidationPrimitives(
         series_type=pd.Series,
         dataframe_type=pd.DataFrame,
@@ -1203,6 +1220,8 @@ def _execute(
         original = trusted_frame_copy(frame, deep=True)
         repeated_frame = trusted_frame_copy(original, deep=True)
         repeated_original = trusted_frame_copy(original, deep=True)
+        original_fingerprint = _frame_fingerprint(original, trusted_frame_to_json)
+        repeated_original_fingerprint = _frame_fingerprint(repeated_original, trusted_frame_to_json)
     except BaseException:
         return {"status": "error", "code": "provider_execution_failed"}
 
@@ -1246,12 +1265,14 @@ def _execute(
 
         try:
             output_runs: list[dict[str, list[object]]] = []
-            for invocation_frame, invocation_original in (
-                (frame, original),
-                (repeated_frame, repeated_original),
+            for invocation_frame, invocation_original, invocation_fingerprint in (
+                (frame, original, original_fingerprint),
+                (repeated_frame, repeated_original, repeated_original_fingerprint),
             ):
                 result = implementation(invocation_frame, **parameters)
                 try:
+                    if _frame_fingerprint(invocation_frame, trusted_frame_to_json) != invocation_fingerprint:
+                        raise AssertionError("provider mutated frame")
                     trusted_assert_frame_equal(
                         invocation_frame,
                         invocation_original,

@@ -1004,6 +1004,59 @@ def sma(frame, *, window):
     _assert_failure(candidate, "provider_import_failed")
 
 
+def test_rejects_dependency_callable_reexported_with_spoofed_module(
+    tmp_path: Path,
+) -> None:
+    provider_source = """
+from baseline_dependency import sma
+sma.__module__ = "baseline_provider"
+"""
+    dependency_source = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(tmp_path, provider_source)
+    implementation, dependency = candidate.artifacts
+    dependency.wheel_path.write_bytes(
+        _wheel_bytes(
+            "baseline-dependency",
+            "baseline_dependency",
+            dependency_source,
+        )
+    )
+    dependency = replace(
+        dependency,
+        digest=_sha256(dependency.wheel_path.read_bytes()),
+    )
+    candidate = replace(candidate, artifacts=(implementation, dependency))
+
+    _assert_failure(candidate, "provider_import_failed")
+
+
+def test_rejects_provider_that_mutates_traceback_reachable_input_original(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    try:
+        raise RuntimeError("traceback access")
+    except RuntimeError as exc:
+        cursor = exc.__traceback__.tb_frame
+        while cursor is not None:
+            original = cursor.f_locals.get("invocation_original")
+            if original is not None:
+                original.loc[original.index[0], "close"] = 99.0
+            cursor = cursor.f_back
+    frame.loc[frame.index[0], "close"] = 99.0
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_mutated_input")
+
+
 def test_rejects_undeclared_ambient_dependency(tmp_path: Path) -> None:
     candidate = _contract(tmp_path, "import jsonschema\n" + SUCCESS_SOURCE)
 

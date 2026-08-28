@@ -9,6 +9,7 @@ import inspect
 import sys
 import threading
 from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Mapping as MappingABC
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -569,6 +570,10 @@ def _state_token(
         if id(value) in seen:
             return ("function-recursive", value.__module__, value.__qualname__)
         return ("function", value.__module__, value.__qualname__, _snapshot_callable_state(value, sources, operator_id, seen))
+    if isinstance(value, type):
+        if value.__module__ in sources:
+            return _object_state_token(value, sources, operator_id, seen)
+        return ("class", value.__module__, value.__qualname__)
     if isinstance(value, ModuleType):
         source = sources.get(value.__name__)
         if source is not None:
@@ -593,7 +598,38 @@ def _state_token(
                 ),
             )
         return ("module", value.__name__)
+    value_type = type(value)
+    if value_type.__module__ in sources:
+        return _object_state_token(value, sources, operator_id, seen)
     return (type(value).__module__, type(value).__qualname__, repr(value))
+
+
+def _object_state_token(
+    value: object,
+    sources: Mapping[str, _VerifiedModuleSource],
+    operator_id: str,
+    seen: frozenset[int],
+) -> object:
+    if id(value) in seen:
+        return ("object-recursive", type(value).__module__, type(value).__qualname__)
+    state = getattr(value, "__dict__", None)
+    if not isinstance(state, MappingABC):
+        raise _error(
+            "environment_operator_callable_unverified",
+            "certified environment operator callable owner is unverified",
+            operator_id,
+        )
+    next_seen = seen | {id(value)}
+    return (
+        "verified-object",
+        type(value).__module__,
+        type(value).__qualname__,
+        tuple(
+            (name, _state_token(item, sources, operator_id, next_seen))
+            for name, item in sorted(state.items())
+            if not name.startswith("__")
+        ),
+    )
 
 
 def _find_certified_operator(

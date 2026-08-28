@@ -354,6 +354,42 @@ def test_resolved_environment_operator_rejects_mutated_helper_module_attribute(
     assert caught.value.code == "environment_operator_callable_unverified"
 
 
+def test_resolved_environment_operator_rejects_mutated_helper_instance_state(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    verified = next(iter(fake_verified_provider.runtime_files.values())).path
+    verified.write_text(
+        "class Helper:\n"
+        "    def __init__(self):\n"
+        "        self.factor = 1\n"
+        "    def calculate(self, frame):\n"
+        "        return {'factor': self.factor, 'frame': frame}\n"
+        "helper = Helper()\n"
+        "def sma(frame, **parameters):\n"
+        "    del parameters\n"
+        "    return helper.calculate(frame)\n",
+        encoding="utf-8",
+    )
+    digest = _digest(verified.read_bytes())
+    object.__setattr__(fake_verified_provider.provider, "runtime_digests", {"ettr.py": digest})
+    fake_verified_provider.runtime_files["ettr.py"] = VerifiedRuntimeFile(
+        package_path="ettr.py",
+        path=verified,
+        digest=digest,
+    )
+    sys.modules.pop("ettr", None)
+    environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    sys.modules["ettr"].helper.factor = 99
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        binding.callable({"verified": True})
+
+    assert caught.value.code == "environment_operator_callable_unverified"
+
+
 def test_resolve_environment_operator_reloads_mutated_callable_code(
     fake_verified_provider: InstalledEnvironmentProvider,
 ) -> None:
