@@ -209,7 +209,7 @@ def test_accepts_target_when_each_wheel_has_any_compatible_tag(
 ) -> None:
     release = _release_index()
     wheel = release["targets"][0]["wheels"][0]  # type: ignore[index]
-    wheel["tags"] = ["py3-none-any", "cp311-cp311-manylinux_2_17_x86_64"]
+    wheel["tags"] = ["py3.py312-none-any", "cp311-cp311-manylinux_2_17_x86_64"]
     index = parse_release_index(_canonical_bytes(release))
     monkeypatch.setattr(
         "oxq.operators.release_index.tags.sys_tags",

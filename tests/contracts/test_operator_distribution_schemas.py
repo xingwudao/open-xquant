@@ -180,7 +180,23 @@ def test_runtime_protocol_schema_matches_implemented_messages() -> None:
         "module": "ettr",
         "callable": "sma",
         "parameters": {"n": 2},
-        "input": [{"close": 1.0}],
+        "input": {
+            "schema_version": 1,
+            "primary_key": ["date", "code"],
+            "columns": [{"name": "close", "dtype": "float64", "required": True}],
+            "context": {
+                "timezone": "Asia/Shanghai",
+                "calendar": "XSHG",
+                "frequency": "1d",
+                "timestamp_semantics": "bar_close",
+                "currency": "CNY",
+                "price_adjustment": "raw",
+                "data_version": "v1",
+                "source": "literal-test",
+            },
+            "alignment": "preserve_input_order",
+            "records": [{"date": "2026-08-24", "code": "000001.SZ", "close": 1.0}],
+        },
         "output_fields": [
             {
                 "name": "sma_2",
@@ -210,6 +226,15 @@ def test_readme_certification_workflow_does_not_document_removed_output_dir() ->
 
     assert "--output-dir" not in readme
     assert ".open-xquant/certifications/<provider>/<release>/" not in readme
+
+
+def test_environment_install_plan_uses_split_equant_distributions() -> None:
+    plan = Path(__file__).resolve().parents[2].joinpath(
+        "docs/superpowers/plans/2026-08-27-certified-operator-one-step-install.md"
+    ).read_text(encoding="utf-8")
+
+    assert "pip install equant-core==1.0.0 equant-ttr==1.0.0" in plan
+    assert "pip install equant-py==1.0.0" not in plan
 
 
 @pytest.mark.parametrize("invalid", ["1.2.3foo", "1.2.3.4"])

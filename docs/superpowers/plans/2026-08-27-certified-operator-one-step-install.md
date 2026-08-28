@@ -4,7 +4,7 @@
 
 **Goal:** Replace the self-managed operator install store with verification and loading of certified provider packages installed in the current Python environment.
 
-**Architecture:** `pip` or another environment manager installs `equant-py`; `open-xquant` discovers that installed distribution with `importlib.metadata`, validates packaged manifests and baselines against an official certification index, and exposes only verified certified operators. `open-xquant` no longer downloads, stores, or publishes provider wheels in its own install directory.
+**Architecture:** `pip` or another environment manager installs the certified `equant-py` distribution closure (`equant-core` and `equant-ttr`); `open-xquant` discovers those installed distributions with `importlib.metadata`, validates packaged manifests and baselines against an official certification index, and exposes only verified certified operators. `open-xquant` no longer downloads, stores, or publishes provider wheels in its own install directory.
 
 **Tech Stack:** Python 3.12, `importlib.metadata`, `importlib.resources`, Click, jsonschema Draft 2020-12, pytest.
 
@@ -21,7 +21,7 @@
 - Verification must require exact provider requirement syntax: `equant-py==1.0.0`.
 - Verification must reject missing packages, wrong versions, changed manifest bytes, and changed baseline bytes.
 - Certification state remains `research-certified`.
-- Normal Python environment installation is explicitly allowed: `pip install equant-py==1.0.0`.
+- Normal Python environment installation is explicitly allowed: `pip install equant-core==1.0.0 equant-ttr==1.0.0`.
 - Preserve existing certification/bundle code only where it supports evidence production or validation; do not use bundle import as the provider-code installation mechanism.
 - Follow TDD for every behavior: focused failing test, implementation, focused passing test, regression suite, commit.
 
@@ -55,7 +55,7 @@ Expected: no matches except lines explicitly saying those features are removed o
 Run:
 
 ```bash
-rg -n "pip install equant-py==1.0.0|operator verify equant-py==1.0.0|open-xquant.*not act as a package manager" docs/superpowers/specs/2026-08-27-certified-operator-install-design.md docs/superpowers/plans/2026-08-27-certified-operator-one-step-install.md
+rg -n "pip install equant-core==1.0.0 equant-ttr==1.0.0|operator verify equant-py==1.0.0|open-xquant.*not act as a package manager" docs/superpowers/specs/2026-08-27-certified-operator-install-design.md docs/superpowers/plans/2026-08-27-certified-operator-one-step-install.md
 ```
 
 Expected: matches in both design and plan.
@@ -103,7 +103,7 @@ Add to a CLI test:
 def test_operator_install_is_guidance_not_package_manager(cli_runner) -> None:
     result = cli_runner.invoke(app, ["operator", "install", "equant-py==1.0.0"])
     assert result.exit_code != 0
-    assert "pip install equant-py==1.0.0" in result.output
+    assert "pip install equant-core==1.0.0 equant-ttr==1.0.0" in result.output
     assert "oxq operator verify equant-py==1.0.0" in result.output
 ```
 
@@ -122,8 +122,8 @@ Expected: FAIL while installed-release resources or self-managed install behavio
 Delete `InstalledReleaseStore` and its tests. Remove any CLI path that publishes provider wheels into an `open-xquant` store. If `operator install` exists, make it a non-mutating guidance command that prints:
 
 ```text
-Install provider package with:
-pip install equant-py==1.0.0
+Install provider distributions with:
+pip install equant-core==1.0.0 equant-ttr==1.0.0
 Then run:
 oxq operator verify equant-py==1.0.0
 ```
@@ -439,7 +439,7 @@ Run in a temp directory:
 
 ```bash
 python -m venv .venv
-.venv/bin/python -m pip install /path/to/open-xquant /path/to/equant-py/dist/equant_py-1.0.0-*.whl
+.venv/bin/python -m pip install /path/to/open-xquant /path/to/equant-py/dist/equant_core-1.0.0-*.whl /path/to/equant-py/dist/equant_ttr-1.0.0-*.whl
 .venv/bin/oxq operator verify equant-py==1.0.0 --json
 ```
 

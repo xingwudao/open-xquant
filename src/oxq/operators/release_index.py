@@ -9,6 +9,7 @@ from typing import cast
 
 from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 from packaging import tags
+from packaging.tags import parse_tag
 
 from oxq.operators.formats import canonical_json_bytes, strict_json_object
 from oxq.operators.install_errors import OperatorInstallError, install_error
@@ -167,7 +168,7 @@ def select_release_target(index: OperatorReleaseIndex) -> ReleaseTarget:
             release=index.release,
         )
     target = matches[0]
-    if any(not set(wheel.tags).intersection(supported_tags) for wheel in target.wheels):
+    if any(not _expanded_wheel_tags(wheel).intersection(supported_tags) for wheel in target.wheels):
         raise install_error(
             "operator_release_invalid",
             "operator release target contains incompatible wheel tags",
@@ -176,6 +177,10 @@ def select_release_target(index: OperatorReleaseIndex) -> ReleaseTarget:
             release=index.release,
         )
     return target
+
+
+def _expanded_wheel_tags(wheel: ReleaseWheel) -> set[str]:
+    return {str(tag) for value in wheel.tags for tag in parse_tag(value)}
 
 
 def _release_validator() -> Draft202012Validator:

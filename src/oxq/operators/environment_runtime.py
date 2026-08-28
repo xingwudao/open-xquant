@@ -102,13 +102,20 @@ def resolve_environment_operator(
                 operator_id,
             )
         _verify_callable_owner(implementation, sources, operator_id)
+        protected_callable = _verified_callable(
+            module_name,
+            callable_name,
+            origin,
+            sources,
+            operator_id,
+        )
 
     return EnvironmentOperatorBinding(
         operator_id=operator_id,
         operator_version=operator_version,
         provider_requirement=provider_requirement,
         manifest=manifest,
-        callable=implementation,
+        callable=protected_callable,
     )
 
 
@@ -225,6 +232,45 @@ def _import_verified_module(
         if loaded_source is not None:
             _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
     return module
+
+
+def _verified_callable(
+    module_name: str,
+    callable_name: str,
+    origin: Path,
+    sources: Mapping[str, _VerifiedModuleSource],
+    operator_id: str,
+) -> Callable[..., object]:
+    def invoke(*args: object, **kwargs: object) -> object:
+        with _RUNTIME_RESOLUTION_LOCK:
+            _reject_untrusted_preloaded_modules(sources, operator_id)
+            module = _import_verified_module(module_name, sources)
+            _verify_module_object(module, origin, sources[module_name].digest, operator_id)
+            implementation = getattr(module, callable_name, None)
+            if not callable(implementation):
+                raise _error(
+                    "environment_operator_callable_missing",
+                    "certified environment operator callable is unavailable",
+                    operator_id,
+                )
+            _verify_callable_owner(implementation, sources, operator_id)
+            with _verified_runtime_importer(sources):
+                result = implementation(*args, **kwargs)
+            _record_trusted_runtime_modules(sources)
+            return result
+
+    invoke.__name__ = callable_name
+    invoke.__qualname__ = callable_name
+    return invoke
+
+
+def _record_trusted_runtime_modules(
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> None:
+    for name, source in sources.items():
+        loaded_source = sys.modules.get(name)
+        if loaded_source is not None:
+            _TRUSTED_RUNTIME_MODULES[name] = (source.path, source.digest, loaded_source)
 
 
 def _drop_trusted_runtime_modules(
