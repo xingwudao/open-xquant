@@ -18,9 +18,10 @@ import sys
 import sysconfig
 import threading
 import time
+import unicodedata
 import zipfile
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
 from types import CodeType, ModuleType
@@ -75,6 +76,13 @@ class _PandasValidationPrimitives:
     numpy_scalar_item: Callable[[object], object]
     series_tolist: Callable[[Any], list[object]]
     dataframe_getitem: Callable[[Any, object], Any]
+
+
+@dataclass
+class _WheelExtractionBudget:
+    member_count: int = 0
+    expanded_size: int = 0
+    written_targets: dict[str, Path] = field(default_factory=dict)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -947,11 +955,11 @@ def _materialize_wheels(
     prefix = root / "prefix"
     prefix.mkdir()
     roots: list[str] = []
-    written: set[Path] = set()
+    budget = _WheelExtractionBudget()
     for index, wheel_path in enumerate(wheel_paths):
         destination = libraries_root / str(index)
         destination.mkdir()
-        _extract_wheel(Path(wheel_path), destination, prefix, written)
+        _extract_wheel(Path(wheel_path), destination, prefix, budget)
         roots.append(str(destination))
     return roots, str(prefix)
 
@@ -960,27 +968,31 @@ def _extract_wheel(
     wheel_path: Path,
     library_destination: Path,
     prefix_destination: Path,
-    written: set[Path],
+    budget: _WheelExtractionBudget,
 ) -> None:
     with zipfile.ZipFile(wheel_path) as wheel:
         members = wheel.infolist()
-        if not members or len(members) > _MAX_WHEEL_MEMBERS:
+        if not members or budget.member_count + len(members) > _MAX_WHEEL_MEMBERS:
             raise ValueError("wheel member count is invalid")
+        budget.member_count += len(members)
         total_size = 0
         for member in members:
             mapped = _wheel_member_destination(member)
             if mapped is None:
                 continue
             total_size = _validate_wheel_member_bounds(member, total_size)
+            budget.expanded_size = _validate_wheel_member_bounds(member, budget.expanded_size)
             scheme, relative = mapped
             destination = library_destination if scheme == "library" else prefix_destination
             target = destination.joinpath(*relative.parts)
-            if target in written:
+            target_key = _filesystem_key(target)
+            existing_target = budget.written_targets.get(target_key)
+            if existing_target is not None:
                 content = wheel.read(member)
-                if target.read_bytes() == content:
+                if existing_target == target and target.read_bytes() == content:
                     continue
                 raise ValueError(f"wheel members map to the same destination: {target}")
-            written.add(target)
+            budget.written_targets[target_key] = target
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(wheel.read(member))
             mode = (member.external_attr >> 16) & 0o777
@@ -1002,6 +1014,10 @@ def _validate_wheel_member_bounds(
     if total_size > _MAX_WHEEL_TOTAL_BYTES:
         raise ValueError("wheel expanded size is too large")
     return total_size
+
+
+def _filesystem_key(path: Path) -> str:
+    return unicodedata.normalize("NFC", str(path)).casefold()
 
 
 def _wheel_member_destination(

@@ -252,7 +252,7 @@ def _verified_callable(
     def invoke(*args: object, **kwargs: object) -> object:
         with _RUNTIME_RESOLUTION_LOCK:
             _reject_untrusted_preloaded_modules(sources, operator_id)
-            module = _import_verified_runtime_closure(module_name, sources)
+            module = _loaded_verified_module(module_name, sources, operator_id)
             _verify_module_object(module, origin, sources[module_name].digest, operator_id)
             implementation = getattr(module, callable_name, None)
             if not callable(implementation):
@@ -274,6 +274,23 @@ def _verified_callable(
     invoke.__name__ = callable_name
     invoke.__qualname__ = callable_name
     return invoke
+
+
+def _loaded_verified_module(
+    module_name: str,
+    sources: Mapping[str, _VerifiedModuleSource],
+    operator_id: str,
+) -> ModuleType:
+    module = sys.modules.get(module_name)
+    trusted = _TRUSTED_RUNTIME_MODULES.get(module_name)
+    if module is None or trusted is None or trusted[2] is not module:
+        raise _error(
+            "environment_operator_module_unavailable",
+            "certified environment operator module is unavailable",
+            operator_id,
+        )
+    _verify_module_object(module, sources[module_name].path, sources[module_name].digest, operator_id)
+    return module
 
 
 def _record_trusted_runtime_modules(

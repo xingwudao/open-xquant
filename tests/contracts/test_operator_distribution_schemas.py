@@ -123,6 +123,13 @@ def test_certification_record_v2_paths_are_canonical_posix_components(
         Draft202012Validator(path_schema).validate(invalid)
 
 
+def test_certification_record_v2_rejects_nul_artifact_filename() -> None:
+    filename_schema = _schemas()["certification_record_v2"]["$defs"]["artifact"]["properties"]["filename"]
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(filename_schema).validate("provider\x00.whl")
+
+
 def test_release_index_accepts_closed_wheel_entries() -> None:
     schema = _schemas()["operator_release"]
     digest = "sha256:" + "a" * 64

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from pathlib import Path
 from types import TracebackType
 
@@ -75,3 +78,52 @@ def test_exact_wheel_request_rejects_test_runtime_paths_in_wire_payload(
             [wheel],
             timeout_seconds=1,
         )
+
+
+def test_exact_wheel_request_clears_inherited_test_runtime_environment(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "provider.whl"
+    wheel.write_bytes(b"placeholder")
+    monkeypatch.setenv("OXQ_EXACT_TEST_RUNTIME", "1")
+    monkeypatch.setenv("OXQ_EXACT_TEST_RUNTIME_PATHS", str(tmp_path))
+
+    def fake_child(
+        command: list[str],
+        *,
+        timeout_seconds: float,
+        response_secret: bytes | None,
+        environment: dict[str, str],
+    ) -> int:
+        del timeout_seconds
+        assert "OXQ_EXACT_TEST_RUNTIME" not in environment
+        assert "OXQ_EXACT_TEST_RUNTIME_PATHS" not in environment
+        assert response_secret is not None
+        response = {"status": "error", "code": "provider_import_failed"}
+        payload = {
+            **response,
+            "auth": "hmac-sha256:"
+            + hmac.new(
+                response_secret,
+                runtime_protocol.canonical_protocol_bytes(response),
+                hashlib.sha256,
+            ).hexdigest(),
+        }
+        Path(command[-1]).write_text(json.dumps(payload), encoding="utf-8")
+        return 0
+
+    monkeypatch.setattr(runtime_protocol, "run_contained_child", fake_child)
+
+    assert run_exact_wheel_request(
+        {
+            "module": "provider",
+            "callable": "sma",
+            "parameters": {},
+            "input": {},
+            "output_fields": [],
+            "output_alignment": "preserve_input_order",
+        },
+        [wheel],
+        timeout_seconds=1,
+    ) == {"status": "error", "code": "provider_import_failed"}

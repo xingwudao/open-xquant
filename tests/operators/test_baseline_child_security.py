@@ -82,7 +82,40 @@ def test_exact_child_rejects_oversized_wheel_member_before_read(
             tmp_path / "provider.whl",
             tmp_path / "library",
             tmp_path / "prefix",
-            set(),
+            _baseline_child._WheelExtractionBudget(),
+        )
+
+
+def test_exact_child_rejects_excessive_wheel_closure_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.whl"
+    second = tmp_path / "second.whl"
+    with zipfile.ZipFile(first, "w") as archive:
+        archive.writestr("first_pkg/__init__.py", b"x" * 6)
+    with zipfile.ZipFile(second, "w") as archive:
+        archive.writestr("second_pkg/__init__.py", b"y" * 6)
+    monkeypatch.setattr(_baseline_child, "_MAX_WHEEL_TOTAL_BYTES", 10)
+
+    with pytest.raises(ValueError, match="wheel expanded size is too large"):
+        _baseline_child._materialize_wheels([str(first), str(second)], tmp_path / "root")
+
+
+def test_exact_child_rejects_case_insensitive_extraction_collision(
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "provider.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("pkg/Foo.py", "VALUE = 1\n")
+        archive.writestr("pkg/foo.py", "VALUE = 2\n")
+
+    with pytest.raises(ValueError, match="wheel members map to the same destination"):
+        _baseline_child._extract_wheel(
+            wheel,
+            tmp_path / "library",
+            tmp_path / "prefix",
+            _baseline_child._WheelExtractionBudget(),
         )
 
 

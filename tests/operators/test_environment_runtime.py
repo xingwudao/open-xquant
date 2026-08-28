@@ -907,6 +907,22 @@ def test_resolved_environment_operator_does_not_keep_global_finder_during_call(
     assert binding.callable({"verified": True}) is False
 
 
+def test_resolved_environment_operator_does_not_reload_closure_during_call(
+    monkeypatch: pytest.MonkeyPatch,
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    del fake_verified_provider
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+
+    def fail_if_reloaded(sources: object) -> object:
+        del sources
+        pytest.fail("verified runtime importer was installed during operator invocation")
+
+    monkeypatch.setattr(environment_runtime, "_verified_runtime_importer", fail_if_reloaded)
+
+    assert binding.callable({"verified": True}) == {"verified": True}
+
+
 def test_resolved_environment_operator_cleans_lazy_modules_after_failed_call(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

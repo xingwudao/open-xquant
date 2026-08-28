@@ -55,6 +55,8 @@ def run_exact_wheel_request(
         request_path.write_bytes(canonical_protocol_bytes(payload))
         secret = secrets.token_bytes(32)
         environment = dict(os.environ)
+        environment.pop("OXQ_EXACT_TEST_RUNTIME", None)
+        environment.pop("OXQ_EXACT_TEST_RUNTIME_PATHS", None)
         if _test_runtime_paths:
             environment["OXQ_EXACT_TEST_RUNTIME"] = "1"
             environment["OXQ_EXACT_TEST_RUNTIME_PATHS"] = os.pathsep.join(
