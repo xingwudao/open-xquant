@@ -167,7 +167,7 @@ def select_release_target(index: OperatorReleaseIndex) -> ReleaseTarget:
             release=index.release,
         )
     target = matches[0]
-    if any(tag not in supported_tags for wheel in target.wheels for tag in wheel.tags):
+    if any(not set(wheel.tags).intersection(supported_tags) for wheel in target.wheels):
         raise install_error(
             "operator_release_invalid",
             "operator release target contains incompatible wheel tags",

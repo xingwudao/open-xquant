@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 from jsonschema import Draft202012Validator, ValidationError
@@ -161,6 +162,54 @@ def test_release_index_accepts_closed_wheel_entries() -> None:
     }
 
     Draft202012Validator(schema).validate(index)
+
+
+def test_release_index_accepts_compressed_wheel_tags() -> None:
+    tag_schema = _schemas()["operator_release"]["$defs"]["wheel"]["properties"]["tags"]["items"]
+
+    Draft202012Validator(tag_schema).validate("py3.py312-none-any")
+    Draft202012Validator(tag_schema).validate("py3-none-any.macosx_14_0_arm64")
+
+
+def test_runtime_protocol_schema_matches_implemented_messages() -> None:
+    schema = _schemas()["runtime_protocol"]
+    validator = Draft202012Validator(schema)
+    request = {
+        "implementation_artifact": "/tmp/provider.whl",
+        "dependency_artifacts": ["/tmp/dependency.whl"],
+        "module": "ettr",
+        "callable": "sma",
+        "parameters": {"n": 2},
+        "input": [{"close": 1.0}],
+        "output_fields": [
+            {
+                "name": "sma_2",
+                "dtype": "float64",
+            }
+        ],
+        "output_alignment": "preserve_input_order",
+    }
+    ok_response = {
+        "status": "ok",
+        "outputs": {"sma_2": [None, 1.5]},
+        "repeated_outputs": {"sma_2": [None, 1.5]},
+    }
+    error_response = {
+        "status": "error",
+        "code": "provider_import_failed",
+    }
+
+    for message in (request, {**request, "test_runtime_paths": ["/tmp/runtime"]}, ok_response, error_response):
+        validator.validate(message)
+
+
+def test_readme_certification_workflow_does_not_document_removed_output_dir() -> None:
+    readme = Path(__file__).resolve().parents[2].joinpath("README.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "--output-dir" not in readme
+    assert ".open-xquant/certifications/<provider>/<release>/" not in readme
 
 
 @pytest.mark.parametrize("invalid", ["1.2.3foo", "1.2.3.4"])

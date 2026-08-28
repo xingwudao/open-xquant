@@ -40,8 +40,8 @@ EXPECTED_DIGESTS = {
     "numerical_baseline": "36b524b5d9df67b7bfa78882f6606815778d0edeb1a12b6778fd9fd9f4c11219",
     "certification_record": "a696a76b0b1d902067b8735ba797a3962ccb369b0e3eb2104648e7234c9ea2cd",
     "certification_record_v2": "011db6b9f4a645f7d3e6f62765bbaa079af2c3e83200b5c7ba0554f302a165c5",
-    "operator_release": "0e98caac81ba70b2e37ff8d9d8d6b8ad1b628fea6ab821f51e8f0919659d6470",
-    "runtime_protocol": "0b65c7adba6497463c4143cde5b0786ae001e316dec78a62cacad42d77acd239",
+    "operator_release": "4833d0d2d250052486af5ddaa048b1b8618b9dc533847db0bba8ee770887bc08",
+    "runtime_protocol": "0d9ef99b00b42eca61fb049745e292eb29228300c62bc66f15fb7653ef338132",
     "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
     "official_environment_providers": "e918420381426520b7d192020e5887dd291badf36b55ded832f80df946e17d7b",
 }

@@ -204,10 +204,27 @@ def test_rejects_compatible_target_with_current_tag_mismatch(monkeypatch: pytest
     assert caught.value.code == "operator_release_invalid"
 
 
-def test_rejects_target_when_any_wheel_tag_is_incompatible(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_accepts_target_when_each_wheel_has_any_compatible_tag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     release = _release_index()
     wheel = release["targets"][0]["wheels"][0]  # type: ignore[index]
     wheel["tags"] = ["py3-none-any", "cp311-cp311-manylinux_2_17_x86_64"]
+    index = parse_release_index(_canonical_bytes(release))
+    monkeypatch.setattr(
+        "oxq.operators.release_index.tags.sys_tags",
+        lambda: iter((Tag("cp312", "cp312", "macosx_14_0_arm64"), Tag("py3", "none", "any"))),
+    )
+
+    assert select_release_target(index) == index.targets[0]
+
+
+def test_rejects_target_when_a_wheel_has_no_compatible_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release = _release_index()
+    wheel = release["targets"][0]["wheels"][0]  # type: ignore[index]
+    wheel["tags"] = ["cp311-cp311-manylinux_2_17_x86_64"]
     index = parse_release_index(_canonical_bytes(release))
     monkeypatch.setattr(
         "oxq.operators.release_index.tags.sys_tags",
