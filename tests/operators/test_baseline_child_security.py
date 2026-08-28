@@ -119,6 +119,34 @@ def test_exact_child_rejects_case_insensitive_extraction_collision(
         )
 
 
+def test_exact_child_rejects_library_path_collision_across_wheels(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.whl"
+    second = tmp_path / "second.whl"
+    with zipfile.ZipFile(first, "w") as archive:
+        archive.writestr("shared_pkg/__init__.py", "VALUE = 1\n")
+    with zipfile.ZipFile(second, "w") as archive:
+        archive.writestr("shared_pkg/__init__.py", "VALUE = 2\n")
+
+    with pytest.raises(ValueError, match="wheel members map to the same library path"):
+        _baseline_child._materialize_wheels([str(first), str(second)], tmp_path / "root")
+
+
+def test_exact_child_rejects_wrapped_manifest_callable(
+    tmp_path: Path,
+) -> None:
+    result = _run_child(
+        tmp_path,
+        "import functools\n"
+        "def _sma(frame, **parameters):\n"
+        "    return frame.assign(sma_3=frame['close'])\n"
+        "sma = functools.partial(_sma)\n",
+    )
+
+    assert result == {"status": "error", "code": "provider_import_failed"}
+
+
 def _run_child(
     tmp_path: Path,
     provider_source: str,

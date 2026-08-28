@@ -1001,7 +1001,7 @@ def sma(frame, *, window):
         artifacts=(shadow_dependency, implementation),
     )
 
-    _assert_failure(candidate, "baseline_mismatch")
+    _assert_failure(candidate, "provider_import_failed")
 
 
 def test_rejects_undeclared_ambient_dependency(tmp_path: Path) -> None:

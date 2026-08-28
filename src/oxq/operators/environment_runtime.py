@@ -38,6 +38,7 @@ class _VerifiedModuleSource:
 
 
 _TRUSTED_RUNTIME_MODULES: dict[str, tuple[Path, str, ModuleType]] = {}
+_TRUSTED_RUNTIME_CALLABLES: dict[tuple[str, str], Callable[..., object]] = {}
 _RUNTIME_RESOLUTION_LOCK = threading.RLock()
 
 
@@ -80,7 +81,7 @@ def resolve_environment_operator(
         origin = _verified_module_origin(sources, module_name, operator_id)
         _reject_untrusted_preloaded_modules(sources, operator_id)
         try:
-            module = _import_verified_runtime_closure(module_name, sources)
+            module = _import_verified_runtime_closure(module_name, callable_name, sources)
         except ImportError as exc:
             raise _error(
                 "environment_operator_module_unavailable",
@@ -104,9 +105,11 @@ def resolve_environment_operator(
                 operator_id,
             )
         _verify_callable_owner(implementation, sources, operator_id)
+        _TRUSTED_RUNTIME_CALLABLES[(module_name, callable_name)] = implementation
         protected_callable = _verified_callable(
             module_name,
             callable_name,
+            implementation,
             origin,
             sources,
             operator_id,
@@ -219,8 +222,12 @@ def _reject_untrusted_preloaded_modules(
 
 def _import_verified_runtime_closure(
     module_name: str,
+    callable_name: str,
     sources: Mapping[str, _VerifiedModuleSource],
 ) -> ModuleType:
+    cached = _loaded_trusted_runtime_closure(module_name, callable_name, sources)
+    if cached is not None:
+        return cached
     _drop_trusted_runtime_modules(sources)
     modules_before = set(sys.modules)
     try:
@@ -242,9 +249,33 @@ def _import_verified_runtime_closure(
     return module
 
 
+def _loaded_trusted_runtime_closure(
+    module_name: str,
+    callable_name: str,
+    sources: Mapping[str, _VerifiedModuleSource],
+) -> ModuleType | None:
+    module = sys.modules.get(module_name)
+    if not isinstance(module, ModuleType):
+        return None
+    for name, source in sources.items():
+        loaded_source = sys.modules.get(name)
+        trusted = _TRUSTED_RUNTIME_MODULES.get(name)
+        if not isinstance(loaded_source, ModuleType) or trusted is None or trusted[2] is not loaded_source:
+            return None
+        if trusted[0] != source.path or trusted[1] != source.digest:
+            return None
+        _verify_module_object(loaded_source, source.path, source.digest, name)
+    trusted_callable = _TRUSTED_RUNTIME_CALLABLES.get((module_name, callable_name))
+    if trusted_callable is not None and getattr(module, callable_name, None) is not trusted_callable:
+        return None
+    _freeze_provider_package_paths(sources)
+    return module
+
+
 def _verified_callable(
     module_name: str,
     callable_name: str,
+    certified_callable: Callable[..., object],
     origin: Path,
     sources: Mapping[str, _VerifiedModuleSource],
     operator_id: str,
@@ -261,10 +292,10 @@ def _verified_callable(
                     "certified environment operator callable is unavailable",
                     operator_id,
                 )
-            _verify_callable_owner(implementation, sources, operator_id)
+            _verify_callable_owner(certified_callable, sources, operator_id)
             modules_before = set(sys.modules)
             try:
-                result = implementation(*args, **kwargs)
+                result = certified_callable(*args, **kwargs)
             except BaseException:
                 _cleanup_failed_provider_modules(modules_before, sources)
                 raise
@@ -323,6 +354,9 @@ def _drop_trusted_runtime_modules(
         if loaded is not None and trusted is not None and trusted[2] is loaded:
             sys.modules.pop(module_name, None)
             _TRUSTED_RUNTIME_MODULES.pop(module_name, None)
+            for key in tuple(_TRUSTED_RUNTIME_CALLABLES):
+                if key[0] == module_name:
+                    _TRUSTED_RUNTIME_CALLABLES.pop(key, None)
 
 
 def _cleanup_failed_provider_modules(
@@ -337,6 +371,9 @@ def _cleanup_failed_provider_modules(
             continue
         sys.modules.pop(module_name, None)
         _TRUSTED_RUNTIME_MODULES.pop(module_name, None)
+        for key in tuple(_TRUSTED_RUNTIME_CALLABLES):
+            if key[0] == module_name:
+                _TRUSTED_RUNTIME_CALLABLES.pop(key, None)
 
 
 def _provider_runtime_roots(

@@ -40,7 +40,7 @@ EXPECTED_DIGESTS = {
     "numerical_baseline": "36b524b5d9df67b7bfa78882f6606815778d0edeb1a12b6778fd9fd9f4c11219",
     "certification_record": "a696a76b0b1d902067b8735ba797a3962ccb369b0e3eb2104648e7234c9ea2cd",
     "certification_record_v2": "914675979dfbbe2be716fa934bb0f1dd983110bfaca86674757e8dfc1c46746c",
-    "operator_release": "33ee5ba64ffed7049354ce1c0b986f6d44daf3ed718ee1908b8b9299ba41e1e1",
+    "operator_release": "0877dfd1af51a604104465b2e90ea8d5912ba45bcbc30ad03cd8b205e4ef00f6",
     "runtime_protocol": "47da83f476d1b1a8f82e3d8e0f38c2bc63a1400e20f8303286ac546168e419a0",
     "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
     "official_environment_providers": "e918420381426520b7d192020e5887dd291badf36b55ded832f80df946e17d7b",

@@ -22,9 +22,11 @@ from oxq.operators.errors import OperatorCertificationError
 def clean_verified_runtime_modules() -> None:
     _drop_runtime_modules("ettr")
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
     yield
     _drop_runtime_modules("ettr")
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
 
 
 @pytest.fixture
@@ -43,6 +45,7 @@ def fake_verified_provider(
     monkeypatch.syspath_prepend(str(module_root))
     sys.modules.pop("ettr", None)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
 
     provider = EnvironmentProvider(
         provider="equant-py",
@@ -177,6 +180,22 @@ def test_resolve_environment_operator_reloads_mutated_cached_callable(
     assert binding.callable({"verified": True}) == {"verified": True}
 
 
+def test_resolved_environment_operator_preserves_in_memory_callable_identity(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    del fake_verified_provider
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    loaded = sys.modules["ettr"]
+    exec(
+        "def replacement(frame, **parameters):\n"
+        "    return 'replacement-callable'\n"
+        "sma = replacement\n",
+        loaded.__dict__,
+    )
+
+    assert binding.callable({"verified": True}) == {"verified": True}
+
+
 def test_resolve_environment_operator_reloads_mutated_callable_code(
     fake_verified_provider: InstalledEnvironmentProvider,
 ) -> None:
@@ -216,6 +235,7 @@ def test_resolve_environment_operator_serializes_first_verified_import(
     )
     sys.modules.pop("ettr", None)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
     barrier = threading.Barrier(2)
     errors: list[BaseException] = []
 
@@ -416,6 +436,7 @@ def test_resolve_environment_operator_rejects_undeclared_provider_namespace_help
     sys.modules.pop("ettr", None)
     sys.modules.pop("ettr.helper", None)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
     provider = EnvironmentProvider(
         provider="equant-py",
         distribution="equant-ttr",
@@ -489,6 +510,7 @@ def test_resolve_environment_operator_rejects_preloaded_undeclared_provider_help
     helper.value = "preloaded-undeclared-helper"
     monkeypatch.setitem(sys.modules, "ettr.helper", helper)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
     provider = EnvironmentProvider(
         provider="equant-py",
         distribution="equant-ttr",
@@ -564,6 +586,7 @@ def test_resolve_environment_operator_cleans_modules_after_failed_import(
     sys.modules.pop("ettr", None)
     sys.modules.pop("ettr.trend", None)
     environment_runtime._TRUSTED_RUNTIME_MODULES.clear()
+    environment_runtime._TRUSTED_RUNTIME_CALLABLES.clear()
     provider = EnvironmentProvider(
         provider="equant-py",
         distribution="equant-ttr",

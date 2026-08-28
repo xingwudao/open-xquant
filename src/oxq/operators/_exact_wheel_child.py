@@ -8,6 +8,7 @@ import hashlib
 import hmac
 import importlib
 import importlib.util
+import inspect
 import json
 import math
 import os
@@ -83,6 +84,7 @@ class _WheelExtractionBudget:
     member_count: int = 0
     expanded_size: int = 0
     written_targets: dict[str, Path] = field(default_factory=dict)
+    library_targets: set[str] = field(default_factory=set)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -360,6 +362,14 @@ def _module_is_from_archives(
 ) -> bool:
     locations = _module_locations(module)
     return bool(locations) and any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
+
+
+def _callable_is_from_archives(
+    implementation: Callable[..., object],
+    archives: list[str],
+) -> bool:
+    owner = inspect.getmodule(implementation)
+    return isinstance(owner, ModuleType) and _module_is_from_archives(owner, archives)
 
 
 def _module_is_allowed_verified_closure(
@@ -992,6 +1002,11 @@ def _extract_wheel(
                 if existing_target == target and target.read_bytes() == content:
                     continue
                 raise ValueError(f"wheel members map to the same destination: {target}")
+            if scheme == "library":
+                relative_key = _filesystem_key(Path(*relative.parts))
+                if relative_key in budget.library_targets:
+                    raise ValueError(f"wheel members map to the same library path: {relative}")
+                budget.library_targets.add(relative_key)
             budget.written_targets[target_key] = target
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(wheel.read(member))
@@ -1279,6 +1294,8 @@ def _execute(
             implementation = getattr(module, callable_name)
             if not callable(implementation):
                 raise ImportError("manifest callable is not callable")
+            if not _callable_is_from_archives(implementation, [verified_archives[0]]):
+                raise ImportError("manifest callable is not from implementation artifact")
             if (
                 import_gate.violation
                 or not _new_modules_are_allowed(

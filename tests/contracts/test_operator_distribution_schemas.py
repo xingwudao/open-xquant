@@ -171,6 +171,63 @@ def test_release_index_accepts_closed_wheel_entries() -> None:
     Draft202012Validator(schema).validate(index)
 
 
+def test_release_index_requires_exactly_one_implementation_wheel_per_target() -> None:
+    schema = _schemas()["operator_release"]
+    digest = "sha256:" + "a" * 64
+    asset = {
+        "filename": "bundle.zip",
+        "url": "https://github.com/xingwudao/equant-py/releases/download/v1.0.0/bundle.zip",
+        "size_bytes": 1,
+        "digest": digest,
+    }
+    wheel = {
+        **asset,
+        "filename": "equant_ttr-1.0.0-py3-none-any.whl",
+        "distribution": "equant-ttr",
+        "version": "1.0.0",
+        "role": "runtime-dependency",
+        "tags": ["py3-none-any"],
+    }
+    index = {
+        "schema_version": 1,
+        "release_type": "open-xquant-operator-release",
+        "provider": "equant-py",
+        "release": "1.0.0",
+        "submission_commit": "git-sha1:" + "a" * 40,
+        "source_commit": "git-sha1:" + "b" * 40,
+        "certification_state": "research-certified",
+        "operator_count": 1,
+        "targets": [
+            {
+                "python_tag": "cp312",
+                "abi_tag": "cp312",
+                "platform_tag": "macosx_14_0_arm64",
+                "bundle": asset,
+                "wheels": [wheel],
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(index)
+
+    duplicate_implementation = {
+        **index,
+        "targets": [
+            {
+                **index["targets"][0],
+                "wheels": [
+                    {**wheel, "role": "implementation"},
+                    {**wheel, "filename": "equant_core-1.0.0-py3-none-any.whl", "role": "implementation"},
+                ],
+            }
+        ],
+    }
+
+    with pytest.raises(ValidationError):
+        Draft202012Validator(schema).validate(duplicate_implementation)
+
+
 @pytest.mark.parametrize(
     ("path", "filename"),
     [
