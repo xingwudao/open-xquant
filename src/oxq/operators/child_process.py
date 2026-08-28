@@ -44,6 +44,21 @@ if returncode < 0:
     os.kill(os.getpid(), -returncode)
 raise SystemExit(returncode)
 """
+_WINDOWS_JOB_GATE_SCRIPT = r"""
+import os
+import pathlib
+import subprocess
+import sys
+import time
+
+gate = pathlib.Path(os.environ["OXQ_BASELINE_WINDOWS_JOB_GATE"])
+deadline = time.monotonic() + 30
+while not gate.exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit(124)
+    time.sleep(0.01)
+raise SystemExit(subprocess.call(sys.argv[1:]))
+"""
 _LINUX_SUBREAPER_SCRIPT = r"""
 import ctypes
 import os
@@ -133,8 +148,7 @@ def run_contained_child(
     environment: Mapping[str, str],
 ) -> int:
     """Run a Python child with platform containment and a scrubbed environment."""
-    if "-I" not in command or "-S" not in command:
-        raise ValueError("contained child commands must include -I and -S")
+    _validate_python_isolation_flags(command)
     timeout_seconds = _validated_timeout(timeout_seconds)
     platform_name = _platform_name()
     provider_command = command
@@ -147,7 +161,7 @@ def run_contained_child(
         child_environment["OXQ_BASELINE_WINDOWS_JOB_GATE"] = str(gate_path)
         try:
             process = subprocess.Popen(
-                command,
+                _contained_windows_command(command),
                 stdin=(subprocess.PIPE if response_secret is not None else subprocess.DEVNULL),
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -222,6 +236,16 @@ def _validated_timeout(timeout_seconds: float) -> float:
     return normalized
 
 
+def _validate_python_isolation_flags(command: list[str]) -> None:
+    option_prefix: list[str] = []
+    for argument in command[1:]:
+        if argument in {"-c", "-m", "-"} or not argument.startswith("-"):
+            break
+        option_prefix.append(argument)
+    if "-I" not in option_prefix or "-S" not in option_prefix:
+        raise ValueError("contained child commands must include -I and -S in the interpreter-option prefix")
+
+
 def _contained_environment(environment: Mapping[str, str]) -> dict[str, str]:
     return {name: value for name, value in environment.items() if name in _CHILD_ENVIRONMENT_ALLOWLIST}
 
@@ -274,6 +298,10 @@ def _platform_name() -> str:
 
 def _posix_platform() -> str:
     return sys.platform
+
+
+def _contained_windows_command(command: list[str]) -> list[str]:
+    return [sys.executable, "-I", "-S", "-c", _WINDOWS_JOB_GATE_SCRIPT, *command]
 
 
 def _contained_posix_command(command: list[str]) -> list[str]:
@@ -371,8 +399,7 @@ def _open_windows_kill_on_close_job(process: subprocess.Popen[bytes]) -> int:
         raise _windows_error()
     try:
         information = ExtendedLimitInformation()
-        information.BasicLimitInformation.LimitFlags = 0x00002000 | 0x00000008
-        information.BasicLimitInformation.ActiveProcessLimit = 1
+        information.BasicLimitInformation.LimitFlags = 0x00002000
         if not kernel32.SetInformationJobObject(job, 9, ctypes.byref(information), ctypes.sizeof(information)):
             raise _windows_error()
         process_handle = getattr(process, "_handle", None)

@@ -8,6 +8,7 @@ import types
 from importlib import _bootstrap_external
 from importlib.util import cache_from_source
 from pathlib import Path
+from types import FunctionType
 
 import pytest
 
@@ -194,6 +195,31 @@ def test_resolved_environment_operator_preserves_in_memory_callable_identity(
     )
 
     assert binding.callable({"verified": True}) == {"verified": True}
+
+
+def test_resolved_environment_operator_rejects_mutated_callable_code(
+    fake_verified_provider: InstalledEnvironmentProvider,
+) -> None:
+    del fake_verified_provider
+    binding = resolve_environment_operator("equant.ttr.sma", "1.0.0", "equant-py==1.0.0")
+    implementation = sys.modules["ettr"].sma
+    assert isinstance(implementation, FunctionType)
+    replacement = compile(
+        "def replacement(frame, **parameters):\n"
+        "    return 'mutated-callable-code'\n",
+        "<replacement>",
+        "exec",
+    )
+    namespace: dict[str, object] = {}
+    exec(replacement, namespace)
+    replacement_callable = namespace["replacement"]
+    assert isinstance(replacement_callable, FunctionType)
+    implementation.__code__ = replacement_callable.__code__
+
+    with pytest.raises(OperatorCertificationError) as caught:
+        binding.callable({"verified": True})
+
+    assert caught.value.code == "environment_operator_callable_unverified"
 
 
 def test_resolve_environment_operator_reloads_mutated_callable_code(

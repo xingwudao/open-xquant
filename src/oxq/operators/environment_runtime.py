@@ -12,7 +12,7 @@ from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from types import ModuleType
+from types import FunctionType, ModuleType
 
 from oxq.operators.environment_index import CertifiedOperatorRef
 from oxq.operators.environment_provider import InstalledEnvironmentProvider, verify_installed_provider
@@ -35,6 +35,15 @@ class _VerifiedModuleSource:
     path: Path
     digest: str
     is_package: bool
+
+
+@dataclass(frozen=True)
+class _VerifiedCallableState:
+    code: object
+    defaults: tuple[object, ...]
+    kwdefaults: tuple[tuple[str, object], ...]
+    closure: tuple[object, ...]
+    globals: tuple[tuple[str, object], ...]
 
 
 _TRUSTED_RUNTIME_MODULES: dict[str, tuple[Path, str, ModuleType]] = {}
@@ -104,12 +113,14 @@ def resolve_environment_operator(
                 "certified environment operator callable is unavailable",
                 operator_id,
             )
+        callable_state = _snapshot_callable_state(implementation, operator_id)
         _verify_callable_owner(implementation, sources, operator_id)
         _TRUSTED_RUNTIME_CALLABLES[(module_name, callable_name)] = implementation
         protected_callable = _verified_callable(
             module_name,
             callable_name,
             implementation,
+            callable_state,
             origin,
             sources,
             operator_id,
@@ -276,6 +287,7 @@ def _verified_callable(
     module_name: str,
     callable_name: str,
     certified_callable: Callable[..., object],
+    certified_callable_state: _VerifiedCallableState,
     origin: Path,
     sources: Mapping[str, _VerifiedModuleSource],
     operator_id: str,
@@ -293,6 +305,12 @@ def _verified_callable(
                     operator_id,
                 )
             _verify_callable_owner(certified_callable, sources, operator_id)
+            if _snapshot_callable_state(certified_callable, operator_id) != certified_callable_state:
+                raise _error(
+                    "environment_operator_callable_unverified",
+                    "certified environment operator callable owner is unverified",
+                    operator_id,
+                )
             modules_before = set(sys.modules)
             try:
                 result = certified_callable(*args, **kwargs)
@@ -509,6 +527,39 @@ def _verify_callable_owner(
             operator_id,
         )
     _verify_module_object(owner, source.path, source.digest, operator_id)
+
+
+def _snapshot_callable_state(
+    implementation: Callable[..., object],
+    operator_id: str,
+) -> _VerifiedCallableState:
+    if not isinstance(implementation, FunctionType):
+        raise _error(
+            "environment_operator_callable_unverified",
+            "certified environment operator callable owner is unverified",
+            operator_id,
+        )
+    closure = implementation.__closure__ or ()
+    return _VerifiedCallableState(
+        code=implementation.__code__,
+        defaults=tuple(_state_token(value) for value in (implementation.__defaults__ or ())),
+        kwdefaults=tuple(
+            (name, _state_token(value))
+            for name, value in sorted((implementation.__kwdefaults__ or {}).items())
+        ),
+        closure=tuple(_state_token(cell.cell_contents) for cell in closure),
+        globals=tuple(
+            (name, _state_token(implementation.__globals__[name]))
+            for name in sorted(set(implementation.__code__.co_names))
+            if name in implementation.__globals__ and not name.startswith("__")
+        ),
+    )
+
+
+def _state_token(value: object) -> object:
+    if isinstance(value, ModuleType):
+        return ("module", value.__name__)
+    return (type(value).__module__, type(value).__qualname__, repr(value))
 
 
 def _find_certified_operator(

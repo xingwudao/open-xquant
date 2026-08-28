@@ -56,6 +56,24 @@ def test_rejects_child_command_without_required_python_startup_flags(
         )
 
 
+def test_rejects_child_command_with_python_startup_flags_after_script(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_if_started(*args: object, **kwargs: object) -> None:
+        del args, kwargs
+        pytest.fail("child process started before interpreter flag ordering validation")
+
+    monkeypatch.setattr(child_process.subprocess, "Popen", fail_if_started)
+
+    with pytest.raises(ValueError, match="interpreter-option prefix"):
+        child_process.run_contained_child(
+            [sys.executable, "-c", "pass", "-I", "-S"],
+            timeout_seconds=5,
+            response_secret=None,
+            environment={},
+        )
+
+
 def test_discards_child_stdout_and_stderr(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -200,6 +218,53 @@ def test_success_closes_windows_kill_on_close_job(monkeypatch: pytest.MonkeyPatc
         == 0
     )
     assert events == [("open", 123), ("wait", 123), ("close", 456)]
+
+
+def test_windows_launch_uses_controller_job_gate_wrapper(monkeypatch: pytest.MonkeyPatch) -> None:
+    observed: dict[str, object] = {}
+    events: list[str] = []
+
+    class FakeProcess:
+        pid = 123
+        returncode = 0
+        stdin = None
+
+        def wait(self, timeout: float | None = None) -> int:
+            del timeout
+            return self.returncode
+
+        def poll(self) -> int:
+            return self.returncode
+
+    def recording_popen(command: list[str], **kwargs: object) -> FakeProcess:
+        observed["command"] = command
+        observed["env"] = kwargs["env"]
+        return FakeProcess()
+
+    monkeypatch.setattr(child_process, "_platform_name", lambda: "nt")
+    monkeypatch.setattr(child_process.subprocess, "Popen", recording_popen)
+    monkeypatch.setattr(child_process, "_open_windows_kill_on_close_job", lambda process: events.append("job") or 456)
+    monkeypatch.setattr(child_process, "_close_windows_job", lambda handle: events.append(f"close:{handle}"))
+
+    assert (
+        child_process.run_contained_child(
+            [sys.executable, "-I", "-S", "-c", "pass"],
+            timeout_seconds=5,
+            response_secret=None,
+            environment={},
+        )
+        == 0
+    )
+
+    command = observed["command"]
+    assert isinstance(command, list)
+    assert command[:4] == [sys.executable, "-I", "-S", "-c"]
+    assert command[4] == child_process._WINDOWS_JOB_GATE_SCRIPT
+    assert command[5:] == [sys.executable, "-I", "-S", "-c", "pass"]
+    env = observed["env"]
+    assert isinstance(env, dict)
+    assert "OXQ_BASELINE_WINDOWS_JOB_GATE" in env
+    assert events == ["job", "close:456"]
 
 
 def test_process_tree_cleanup_expands_collected_descendant_subtrees(monkeypatch: pytest.MonkeyPatch) -> None:

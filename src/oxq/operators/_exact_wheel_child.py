@@ -25,7 +25,7 @@ from collections.abc import Callable, Iterator, Mapping, MutableMapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
-from types import CodeType, ModuleType
+from types import CodeType, FunctionType, ModuleType
 from typing import Any, cast
 
 _OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
@@ -368,6 +368,8 @@ def _callable_is_from_archives(
     implementation: Callable[..., object],
     archives: list[str],
 ) -> bool:
+    if not isinstance(implementation, FunctionType):
+        return False
     owner = inspect.getmodule(implementation)
     return isinstance(owner, ModuleType) and _module_is_from_archives(owner, archives)
 
