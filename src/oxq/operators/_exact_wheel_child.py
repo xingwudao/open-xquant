@@ -18,15 +18,15 @@ import sys
 import sysconfig
 import threading
 import time
+import unicodedata
 import zipfile
 from collections.abc import Callable, Iterator, Mapping, MutableMapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path, PurePosixPath
-from types import CodeType, ModuleType
+from types import CodeType, FunctionType, ModuleType
 from typing import Any, cast
 
-_PLATFORM_RUNTIME_ROOTS = {"numpy", "pandas"}
 _OUTPUT_DTYPES = {"boolean", "int64", "float64", "string", "date", "datetime"}
 _OUTPUT_ALIGNMENTS = {
     "preserve_input_order",
@@ -36,6 +36,10 @@ _OUTPUT_ALIGNMENTS = {
 _INT64_MIN = -(2**63)
 _INT64_MAX = 2**63 - 1
 _FILE_HASH_CHUNK_BYTES = 1024 * 1024
+_MAX_WHEEL_MEMBERS = 50000
+_MAX_WHEEL_MEMBER_BYTES = 128 * 1024 * 1024
+_MAX_WHEEL_TOTAL_BYTES = 512 * 1024 * 1024
+_MAX_WHEEL_COMPRESSION_RATIO = 10000
 _PROVIDER_POLICY_VIOLATION_EXIT_CODE = 86
 _STATIC_RUNTIME_SOURCE_ROOTS = tuple(
     dict.fromkeys(
@@ -53,6 +57,10 @@ _HIDDEN_PROVIDER_SYS_ATTRIBUTES = {
     "argv",
     "orig_argv",
 }
+# Only the legacy certification fixtures set this during bootstrap.  Production
+# requests start with an empty set and therefore never admit ambient modules.
+_TEST_BOOTSTRAP_RUNTIME_ROOTS: set[str] = set()
+_VERIFIED_BOOTSTRAP_RUNTIME_ROOTS: set[str] = set()
 
 
 class _OutputTypeError(TypeError):
@@ -69,6 +77,14 @@ class _PandasValidationPrimitives:
     series_tolist: Callable[[Any], list[object]]
     index_tolist: Callable[[Any], list[object]]
     dataframe_getitem: Callable[[Any, object], Any]
+
+
+@dataclass
+class _WheelExtractionBudget:
+    member_count: int = 0
+    expanded_size: int = 0
+    written_targets: dict[str, Path] = field(default_factory=dict)
+    library_targets: set[str] = field(default_factory=set)
 
 
 def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -93,7 +109,7 @@ def _read_request(path: Path) -> dict[str, object]:
     )
     if not isinstance(value, dict):
         raise ValueError("request is not an object")
-    if set(value) != {
+    required = {
         "implementation_artifact",
         "dependency_artifacts",
         "module",
@@ -102,7 +118,8 @@ def _read_request(path: Path) -> dict[str, object]:
         "input",
         "output_fields",
         "output_alignment",
-    }:
+    }
+    if set(value) != required:
         raise ValueError("request fields are invalid")
     return value
 
@@ -366,27 +383,22 @@ def _location_is_in_static_runtime_source(location: str) -> bool:
     return any(_location_is_in_archive(location, root) for root in _STATIC_RUNTIME_SOURCE_ROOTS)
 
 
-def _location_is_in_platform_runtime_source(location: str) -> bool:
-    if not location:
-        return False
-    for root in _PLATFORM_RUNTIME_ROOTS:
+def _location_is_in_test_bootstrap_runtime(location: str) -> bool:
+    """Permit lazy imports only for approved numerical bootstrap modules."""
+    for root in _bootstrap_runtime_roots():
         module = sys.modules.get(root)
         if not isinstance(module, ModuleType):
             continue
-        search_locations = getattr(
-            getattr(module, "__spec__", None),
-            "submodule_search_locations",
-            None,
-        )
-        roots: list[str] = []
-        if search_locations is not None:
-            roots.extend(str(path) for path in search_locations if isinstance(path, str))
-        module_file = getattr(module, "__file__", None)
-        if isinstance(module_file, str):
-            roots.append(str(Path(module_file).parent))
-        if any(_location_is_in_archive(location, package_root) for package_root in roots):
+        roots = [str(Path(item).parent) for item in _module_locations(module)]
+        if _module_is_from_archives(module, roots) and any(
+            _location_is_in_archive(location, item) for item in roots
+        ):
             return True
     return False
+
+
+def _bootstrap_runtime_roots() -> set[str]:
+    return _TEST_BOOTSTRAP_RUNTIME_ROOTS | _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS
 
 
 def _static_runtime_source_digest(location: str) -> str | None:
@@ -409,6 +421,22 @@ def _module_is_from_archives(
     return bool(locations) and any(_location_is_in_archive(location, archive) for location in locations for archive in archives)
 
 
+def _callable_is_from_archives(
+    implementation: Callable[..., object],
+    archives: list[str],
+) -> bool:
+    if not isinstance(implementation, FunctionType):
+        return False
+    code_location = implementation.__code__.co_filename
+    globals_file = implementation.__globals__.get("__file__")
+    return (
+        isinstance(code_location, str)
+        and _location_is_in_archive(code_location, archives[0])
+        and isinstance(globals_file, str)
+        and _location_is_in_archive(globals_file, archives[0])
+    )
+
+
 def _module_is_allowed_verified_closure(
     module: ModuleType,
     root: str,
@@ -419,8 +447,7 @@ def _module_is_allowed_verified_closure(
     root_module = sys.modules.get(root)
     if not isinstance(root_module, ModuleType) or root_module is module or not _module_is_from_archives(root_module, archives):
         return False
-    module_name = getattr(module, "__name__", "")
-    if isinstance(module_name, str) and module_name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS:
+    if root in _bootstrap_runtime_roots():
         return True
     locations = _module_locations(module)
     return not locations or all(_location_is_in_static_runtime_source(location) for location in locations)
@@ -435,7 +462,7 @@ def _new_modules_are_allowed(
         if not isinstance(module, ModuleType):
             return False
         root = name.partition(".")[0]
-        if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
+        if root in sys.stdlib_module_names or root in _bootstrap_runtime_roots():
             continue
         if not _module_is_allowed_verified_closure(
             module,
@@ -451,7 +478,7 @@ def _visible_modules(verified_roots: list[str]) -> Mapping[str, object]:
         name: module
         for name, module in sys.modules.items()
         if name.partition(".")[0] in sys.stdlib_module_names
-        or name.partition(".")[0] in _PLATFORM_RUNTIME_ROOTS
+        or name.partition(".")[0] in _bootstrap_runtime_roots()
         or (isinstance(module, ModuleType) and _module_is_from_archives(module, verified_roots))
     }
 
@@ -462,7 +489,7 @@ class _RestrictedModules(MutableMapping[str, object]):
 
     def _is_visible(self, name: str, module: object) -> bool:
         root = name.partition(".")[0]
-        if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
+        if root in sys.stdlib_module_names or root in _bootstrap_runtime_roots():
             return True
         return isinstance(module, ModuleType) and _module_is_allowed_verified_closure(
             module,
@@ -619,7 +646,7 @@ class _ProviderImportGate:
             and not self._compile_is_static_runtime_generated(
                 args,
             )
-            and not self._compile_matches_platform_runtime_source(args)
+            and not self._compile_is_test_bootstrap_runtime(args)
         ):
             self._reject_provider_dynamic_code("compile")
         compiled = self._original_compile(*args, **kwargs)
@@ -632,12 +659,10 @@ class _ProviderImportGate:
             not self._code_is_from_verified_source(
                 args,
             )
-            and not self._code_is_from_platform_runtime_source(
-                args,
-            )
             and not self._exec_is_static_runtime_generated(
                 args,
             )
+            and not self._code_is_from_test_bootstrap_runtime(args)
             and not self._exec_is_verified_dependency_generated(args)
         ):
             self._reject_provider_dynamic_code("exec")
@@ -709,12 +734,6 @@ class _ProviderImportGate:
         finally:
             del caller
 
-    def _compile_matches_platform_runtime_source(
-        self,
-        args: tuple[object, ...],
-    ) -> bool:
-        return len(args) >= 2 and isinstance(args[1], str) and _location_is_in_platform_runtime_source(args[1])
-
     def _compile_matches_verified_source(self, args: tuple[object, ...]) -> bool:
         if len(args) < 2 or not isinstance(args[1], str):
             return False
@@ -729,6 +748,9 @@ class _ProviderImportGate:
         digest = f"sha256:{hashlib.sha256(source_bytes).hexdigest()}"
         return expected == digest or _static_runtime_source_digest(args[1]) == digest
 
+    def _compile_is_test_bootstrap_runtime(self, args: tuple[object, ...]) -> bool:
+        return len(args) >= 2 and isinstance(args[1], str) and _location_is_in_test_bootstrap_runtime(args[1])
+
     def _code_is_from_verified_source(self, args: tuple[object, ...]) -> bool:
         if not args or not isinstance(args[0], CodeType):
             return False
@@ -737,13 +759,8 @@ class _ProviderImportGate:
             _location_is_in_static_runtime_source(code.co_filename) and self._exec_is_from_importlib_runtime_loader()
         )
 
-    def _code_is_from_platform_runtime_source(
-        self,
-        args: tuple[object, ...],
-    ) -> bool:
-        if not args or not isinstance(args[0], CodeType):
-            return False
-        return _location_is_in_platform_runtime_source(args[0].co_filename)
+    def _code_is_from_test_bootstrap_runtime(self, args: tuple[object, ...]) -> bool:
+        return bool(args) and isinstance(args[0], CodeType) and _location_is_in_test_bootstrap_runtime(args[0].co_filename)
 
     def _exec_is_static_runtime_generated(self, args: tuple[object, ...]) -> bool:
         if not args or not isinstance(args[0], str):
@@ -971,7 +988,7 @@ class _ProviderImportGate:
 
     def _provider_import_is_allowed(self, absolute_name: str) -> bool:
         root = absolute_name.partition(".")[0]
-        if root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS:
+        if root in sys.stdlib_module_names or root in _bootstrap_runtime_roots():
             return True
         module = sys.modules.get(absolute_name)
         if not isinstance(module, ModuleType):
@@ -1013,11 +1030,11 @@ def _materialize_wheels(
     prefix = root / "prefix"
     prefix.mkdir()
     roots: list[str] = []
-    written: set[Path] = set()
+    budget = _WheelExtractionBudget()
     for index, wheel_path in enumerate(wheel_paths):
         destination = libraries_root / str(index)
         destination.mkdir()
-        _extract_wheel(Path(wheel_path), destination, prefix, written)
+        _extract_wheel(Path(wheel_path), destination, prefix, budget)
         roots.append(str(destination))
     return roots, str(prefix)
 
@@ -1026,26 +1043,61 @@ def _extract_wheel(
     wheel_path: Path,
     library_destination: Path,
     prefix_destination: Path,
-    written: set[Path],
+    budget: _WheelExtractionBudget,
 ) -> None:
     with zipfile.ZipFile(wheel_path) as wheel:
-        for member in wheel.infolist():
+        members = wheel.infolist()
+        if not members or budget.member_count + len(members) > _MAX_WHEEL_MEMBERS:
+            raise ValueError("wheel member count is invalid")
+        budget.member_count += len(members)
+        total_size = 0
+        for member in members:
             mapped = _wheel_member_destination(member)
             if mapped is None:
                 continue
+            total_size = _validate_wheel_member_bounds(member, total_size)
+            budget.expanded_size = _validate_wheel_member_bounds(member, budget.expanded_size)
             scheme, relative = mapped
             destination = library_destination if scheme == "library" else prefix_destination
             target = destination.joinpath(*relative.parts)
-            if target in written:
+            target_key = _filesystem_key(target)
+            existing_target = budget.written_targets.get(target_key)
+            if existing_target is not None:
                 content = wheel.read(member)
-                if target.read_bytes() == content:
+                if existing_target == target and target.read_bytes() == content:
                     continue
                 raise ValueError(f"wheel members map to the same destination: {target}")
-            written.add(target)
+            if scheme == "library":
+                relative_key = _filesystem_key(Path(*relative.parts))
+                if relative_key in budget.library_targets:
+                    raise ValueError(f"wheel members map to the same library path: {relative}")
+                budget.library_targets.add(relative_key)
+            budget.written_targets[target_key] = target
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(wheel.read(member))
             mode = (member.external_attr >> 16) & 0o777
             target.chmod(mode or 0o644)
+
+
+def _validate_wheel_member_bounds(
+    member: zipfile.ZipInfo,
+    total_size: int,
+) -> int:
+    if member.flag_bits & 0x1:
+        raise ValueError("wheel member is encrypted")
+    if member.file_size > _MAX_WHEEL_MEMBER_BYTES:
+        raise ValueError("wheel member is too large")
+    compressed_size = max(1, member.compress_size)
+    if member.file_size > compressed_size * _MAX_WHEEL_COMPRESSION_RATIO:
+        raise ValueError("wheel member compression ratio is too large")
+    total_size += member.file_size
+    if total_size > _MAX_WHEEL_TOTAL_BYTES:
+        raise ValueError("wheel expanded size is too large")
+    return total_size
+
+
+def _filesystem_key(path: Path) -> str:
+    return unicodedata.normalize("NFC", str(path)).casefold()
 
 
 def _wheel_member_destination(
@@ -1080,7 +1132,12 @@ def _hide_ambient_modules() -> None:
     for name, module in tuple(sys.modules.items()):
         root = name.partition(".")[0]
         origin = getattr(getattr(module, "__spec__", None), "origin", None)
-        if name == "__main__" or root in sys.stdlib_module_names or root in _PLATFORM_RUNTIME_ROOTS or origin in {"built-in", "frozen"}:
+        if (
+            name == "__main__"
+            or root in sys.stdlib_module_names
+            or root in _bootstrap_runtime_roots()
+            or origin in {"built-in", "frozen"}
+        ):
             continue
         sys.modules.pop(name, None)
 
@@ -1180,9 +1237,14 @@ def _execute(
     request: dict[str, object],
     execution_root: Path,
 ) -> dict[str, object]:
+    global _TEST_BOOTSTRAP_RUNTIME_ROOTS, _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS
     test_runtime_paths: list[str] = []
-    if os.environ.pop("OXQ_BASELINE_TEST_RUNTIME", None) == "1":
-        test_runtime_paths = os.environ.pop("OXQ_BASELINE_TEST_RUNTIME_PATHS", "").split(os.pathsep)
+    if os.environ.pop("OXQ_EXACT_TEST_RUNTIME", None) == "1":
+        test_runtime_paths = [
+            path
+            for path in os.environ.pop("OXQ_EXACT_TEST_RUNTIME_PATHS", "").split(os.pathsep)
+            if path and Path(path).is_dir()
+        ]
     implementation_artifact = request["implementation_artifact"]
     dependency_artifacts = request["dependency_artifacts"]
     module_name = request["module"]
@@ -1235,6 +1297,14 @@ def _execute(
         import pandas as pd
     except BaseException:
         return {"status": "error", "code": "provider_execution_failed"}
+    if test_runtime_paths:
+        _TEST_BOOTSTRAP_RUNTIME_ROOTS = {"numpy", "pandas"}
+    _VERIFIED_BOOTSTRAP_RUNTIME_ROOTS = {
+        name
+        for name in ("numpy", "pandas")
+        if isinstance(sys.modules.get(name), ModuleType)
+        and _module_is_from_archives(cast(ModuleType, sys.modules[name]), verified_archives)
+    }
     trusted_assert_frame_equal = pd.testing.assert_frame_equal
     trusted_frame_copy = pd.DataFrame.copy
     trusted_frame_to_json = pd.DataFrame.to_json
@@ -1291,6 +1361,8 @@ def _execute(
             implementation = getattr(module, callable_name)
             if not callable(implementation):
                 raise ImportError("manifest callable is not callable")
+            if not _callable_is_from_archives(implementation, [verified_archives[0]]):
+                raise ImportError("manifest callable is not from implementation artifact")
             if (
                 import_gate.violation
                 or not _new_modules_are_allowed(

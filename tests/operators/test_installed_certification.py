@@ -15,15 +15,19 @@ _SMOKE_SCRIPT = r"""
 import hashlib
 import json
 import sys
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import oxq
 from click.testing import CliRunner
+import oxq.operators.baseline_runner as baseline_runner
+from oxq.operators import runtime_protocol
 from oxq.cli.main import main
-from oxq.operators.registry import CertificationRegistry
 from oxq.operators.resources import (
     materialize_certification_profile,
     materialize_contract_surface,
+    materialize_operator_distribution_profile,
+    materialize_operator_install_profile,
 )
 
 EXPECTED_DIGESTS = {
@@ -32,9 +36,14 @@ EXPECTED_DIGESTS = {
     "operator_binding_schema": "1d0e3ed12acde2a2d0c1fe2309f9a090ea7b0f8193bc0f3f6fd659c178047de6",
     "reference_validator": "33528a97f6405809ead8a9f542c1c2dae9d89cb6c966943def6ca80097e8f67a",
     "provider_catalog": "701ff89a33dd71cb7c2f019904ce2ffcc203237734d1719a6188e386b920689c",
-    "candidate_build": "451263b139890885c85790d82a17ebd510d54aa8cc2429e02cdd6ef6762674bb",
+    "candidate_build": "a289245a7e67a77fdb597d0c74835bfdd622ddb2df4f97b58fe7c84ad6c6828e",
     "numerical_baseline": "36b524b5d9df67b7bfa78882f6606815778d0edeb1a12b6778fd9fd9f4c11219",
-    "certification_record": "9e25b4d1a11a77dd7fa7c4fe5757911b4b7c5db9614a04c899f32e404cf5fba9",
+    "certification_record": "a696a76b0b1d902067b8735ba797a3962ccb369b0e3eb2104648e7234c9ea2cd",
+    "certification_record_v2": "f3e1a5450fbf5af56095667ee0a31e0fc761ef051914df5b80be6fde85310f1d",
+    "operator_release": "0877dfd1af51a604104465b2e90ea8d5912ba45bcbc30ad03cd8b205e4ef00f6",
+    "runtime_protocol": "b56ac73f71ac428d90fd9b7a9c4cbd4e4b63006cb299f42d42a8865380630111",
+    "official_providers": "95494c6e56e7b6a611019cacdba2497fd511c731b194adf4ad1084000345c626",
+    "official_environment_providers": "e918420381426520b7d192020e5887dd291badf36b55ded832f80df946e17d7b",
 }
 
 provider_repo = Path(sys.argv[1])
@@ -49,12 +58,34 @@ assert not module_path.is_relative_to(checkout), module_path
 
 with materialize_contract_surface() as surface:
     with materialize_certification_profile() as profile:
-        paths = {**surface, **profile}
-        actual = {
-            name: hashlib.sha256(path.read_bytes()).hexdigest()
-            for name, path in paths.items()
-        }
+        with materialize_operator_distribution_profile() as distribution:
+            with materialize_operator_install_profile() as install:
+                paths = {**surface, **profile, **distribution, **install}
+    actual = {
+        name: hashlib.sha256(path.read_bytes()).hexdigest()
+        for name, path in paths.items()
+    }
 assert actual == EXPECTED_DIGESTS
+assert "installed_release" not in actual
+
+runtime_paths = [
+    path for path in sys.path if "site-packages" in Path(path).parts
+]
+
+def run_fixture_request(
+    request: Mapping[str, object],
+    wheel_snapshots: Sequence[str | Path],
+    *,
+    timeout_seconds: float,
+) -> dict[str, object]:
+    return runtime_protocol.run_exact_wheel_request(
+        request,
+        wheel_snapshots,
+        timeout_seconds=timeout_seconds,
+        _test_runtime_paths=runtime_paths,
+    )
+
+baseline_runner.run_exact_wheel_request = run_fixture_request
 
 completed = CliRunner().invoke(
     main,
@@ -67,25 +98,20 @@ completed = CliRunner().invoke(
         provider_commit,
         "--artifact-dir",
         str(artifact_dir),
-        "--output-dir",
-        str(output_dir),
         "--trust-provider-code",
         "--json",
     ],
 )
 assert completed.exit_code == 0, (completed.output, completed.exception)
 payload = json.loads(completed.output)
-binding = CertificationRegistry(output_dir).get("equant.ttr.sma", "1.0.0")
-assert binding is not None
+assert not output_dir.exists()
 result = {
     "cli_status": payload["status"],
     "module": str(module_path),
     "operator_count": payload["operator_count"],
-    "output": payload["output"],
     "provider": payload["provider"],
     "release": payload["release"],
     "resource_count": len(actual),
-    "state": binding["certification_state"],
 }
 print(json.dumps(result, sort_keys=True))
 """
@@ -193,9 +219,7 @@ def test_installed_wheel_certifies_without_source_checkout(tmp_path: Path) -> No
             (Path(installed_site_packages) / "oxq" / "__init__.py").resolve()
         ),
         "operator_count": 1,
-        "output": str((output_dir / "equant-py" / "1.0.0").resolve()),
         "provider": "equant-py",
         "release": "1.0.0",
-        "resource_count": 8,
-        "state": "research-certified",
+        "resource_count": 13,
     }

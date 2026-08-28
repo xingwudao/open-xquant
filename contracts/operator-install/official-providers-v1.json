@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "providers": {
+    "equant-py": {
+      "repository": "xingwudao/equant-py",
+      "release_asset": "operator-release-v1.json"
+    }
+  }
+}

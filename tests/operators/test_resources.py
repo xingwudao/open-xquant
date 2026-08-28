@@ -12,6 +12,8 @@ from jsonschema import Draft202012Validator, FormatChecker, ValidationError
 from oxq.operators.resources import (
     materialize_certification_profile,
     materialize_contract_surface,
+    materialize_operator_distribution_profile,
+    materialize_operator_install_profile,
 )
 
 EXPECTED_SURFACE_DIGESTS = {
@@ -240,6 +242,27 @@ def test_certification_profile_schemas_are_valid_draft_2020_12() -> None:
         for schema in schemas.values():
             Draft202012Validator.check_schema(schema)
         _validate_profile_schemas(schemas)
+
+
+def test_operator_distribution_and_install_profiles_are_packaged() -> None:
+    with materialize_operator_distribution_profile() as distribution:
+        with materialize_operator_install_profile() as install:
+            paths = {**distribution, **install}
+
+    assert set(paths) == {
+        "certification_record_v2",
+        "operator_release",
+        "runtime_protocol",
+        "official_providers",
+        "official_environment_providers",
+    }
+    for path in paths.values():
+        assert path.is_file()
+
+
+def test_environment_install_phase_does_not_package_installed_release_schema() -> None:
+    with materialize_operator_install_profile() as paths:
+        assert "installed_release" not in paths
 
 
 def test_catalog_uses_operator_identity_version_keys() -> None:

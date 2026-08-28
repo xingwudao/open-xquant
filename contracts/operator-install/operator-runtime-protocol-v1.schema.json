@@ -1,0 +1,21 @@
+{
+  "$schema":"https://json-schema.org/draft/2020-12/schema",
+  "$id":"https://open-xquant.dev/contracts/operator-install/operator-runtime-protocol-v1.schema.json",
+  "title":"Operator runtime protocol v1",
+  "type":"object",
+  "additionalProperties":false,
+  "properties":{"implementation_artifact":true,"dependency_artifacts":true,"module":true,"callable":true,"parameters":true,"input":true,"output_fields":true,"output_alignment":true,"status":true,"outputs":true,"repeated_outputs":true,"code":true,"auth":true},
+  "oneOf":[{"$ref":"#/$defs/request"},{"$ref":"#/$defs/okResponse"},{"$ref":"#/$defs/errorResponse"}],
+  "$defs":{
+    "jsonValue":{"type":["null","boolean","number","string","array","object"]},
+    "jsonObject":{"type":"object","maxProperties":4096,"additionalProperties":{"$ref":"#/$defs/jsonValue"}},
+    "path":{"type":"string","minLength":1,"maxLength":4096},
+    "columnField":{"type":"object","additionalProperties":true,"required":["name","dtype"],"properties":{"name":{"type":"string","minLength":1,"maxLength":128},"dtype":{"enum":["boolean","int64","float64","string","date","datetime"]}}},
+    "outputFields":{"type":"object","minProperties":1,"maxProperties":256,"propertyNames":{"type":"string","minLength":1,"maxLength":128},"additionalProperties":{"enum":["boolean","int64","float64","string","date","datetime"]}},
+    "quantPanel":{"type":"object","additionalProperties":true,"required":["schema_version","primary_key","columns","context","alignment","records"],"properties":{"schema_version":{"const":1},"primary_key":{"type":"array","minItems":2,"maxItems":2,"prefixItems":[{"const":"date"},{"const":"code"}],"items":false},"columns":{"type":"array","minItems":1,"maxItems":1024,"items":{"$ref":"#/$defs/columnField"}},"context":{"$ref":"#/$defs/jsonObject"},"alignment":{"enum":["preserve_input_order","canonical_order","explicit_keyed_output"]},"records":{"type":"array","maxItems":1000000,"items":{"allOf":[{"$ref":"#/$defs/jsonObject"},{"required":["date","code"]}]}}}},
+    "request":{"type":"object","additionalProperties":false,"required":["implementation_artifact","dependency_artifacts","module","callable","parameters","input","output_fields","output_alignment"],"properties":{"implementation_artifact":{"$ref":"#/$defs/path"},"dependency_artifacts":{"type":"array","maxItems":128,"items":{"$ref":"#/$defs/path"}},"module":{"type":"string","minLength":1,"maxLength":256},"callable":{"type":"string","minLength":1,"maxLength":128},"parameters":{"$ref":"#/$defs/jsonObject"},"input":{"$ref":"#/$defs/quantPanel"},"output_fields":{"$ref":"#/$defs/outputFields"},"output_alignment":{"enum":["preserve_input_order","canonical_order","explicit_keyed_output"]}}},
+    "okResponse":{"type":"object","additionalProperties":false,"required":["status","outputs","repeated_outputs","auth"],"properties":{"status":{"const":"ok"},"outputs":{"$ref":"#/$defs/jsonObject"},"repeated_outputs":{"$ref":"#/$defs/jsonObject"},"auth":{"$ref":"#/$defs/auth"}}},
+    "errorResponse":{"type":"object","additionalProperties":false,"required":["status","code","auth"],"properties":{"status":{"const":"error"},"code":{"type":"string","minLength":1,"maxLength":128},"auth":{"$ref":"#/$defs/auth"}}},
+    "auth":{"type":"string","pattern":"^hmac-sha256:[0-9a-f]{64}$"}
+  }
+}

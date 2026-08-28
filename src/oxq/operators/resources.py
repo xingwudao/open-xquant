@@ -17,6 +17,15 @@ _CERTIFICATION_PROFILE = {
     "numerical_baseline": "numerical-baseline-v1.schema.json",
     "certification_record": "certification-record-v1.schema.json",
 }
+_DISTRIBUTION_PROFILE = {
+    "certification_record_v2": "certification-record-v2.schema.json",
+}
+_INSTALL_PROFILE = {
+    "operator_release": "operator-release-v1.schema.json",
+    "runtime_protocol": "operator-runtime-protocol-v1.schema.json",
+    "official_providers": "official-providers-v1.json",
+    "official_environment_providers": "official-environment-providers-v1.json",
+}
 
 
 def _source_contract_directory(name: str) -> Path:
@@ -58,5 +67,35 @@ def materialize_certification_profile() -> Iterator[dict[str, Path]]:
         "certification_profile/v1",
         "operator-certification",
         _CERTIFICATION_PROFILE,
+    ) as paths:
+        yield paths
+
+
+@contextmanager
+def materialize_operator_distribution_profile() -> Iterator[dict[str, Path]]:
+    """Yield local paths for distribution certification schemas."""
+    package = files("oxq.operators")
+    packaged = {
+        "certification_record_v2": package.joinpath(
+            "distribution_profile/v1/certification-record-v2.schema.json"
+        ),
+    }
+    if all(path.is_file() for path in packaged.values()):
+        with ExitStack() as stack:
+            yield {name: Path(stack.enter_context(as_file(path))) for name, path in packaged.items()}
+        return
+    yield {
+        "certification_record_v2": _source_contract_directory("operator-certification")
+        / "certification-record-v2.schema.json",
+    }
+
+
+@contextmanager
+def materialize_operator_install_profile() -> Iterator[dict[str, Path]]:
+    """Yield local paths for operator installation contracts."""
+    with _materialize_resources(
+        "install_profile/v1",
+        "operator-install",
+        _INSTALL_PROFILE,
     ) as paths:
         yield paths

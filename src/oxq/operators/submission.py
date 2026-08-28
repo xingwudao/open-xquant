@@ -24,6 +24,7 @@ from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel
 from packaging.version import InvalidVersion, Version
 
 from oxq.operators.errors import OperatorCertificationError
+from oxq.operators.formats import canonical_json_bytes, sha256_bytes
 from oxq.operators.models import (
     BaselineCase,
     BuildArtifact,
@@ -299,7 +300,13 @@ def _load_archive(
     _materialize_commit(repository, source_commit, source_root)
 
     operators = _load_operators(compatibility_root, source_root, catalog_data)
-    baselines = _load_baselines(operators, schemas["numerical_baseline"], provider_name, release)
+    baselines = _load_baselines(
+        compatibility_root,
+        operators,
+        schemas["numerical_baseline"],
+        provider_name,
+        release,
+    )
     artifacts = _load_artifacts(build_data, artifact_dir)
     return ProviderSubmission(
         provider=provider_name,
@@ -350,6 +357,7 @@ def _validate_manifest_sources(source_root: Path, manifest_path: Path, operator_
 
 
 def _load_baselines(
+    compatibility_root: Path,
     operators: tuple[CatalogEntry, ...],
     schema: Mapping[str, object],
     provider: str,
@@ -365,6 +373,16 @@ def _load_baselines(
         referenced_identities = {(entry.operator_id, entry.operator_version) for entry in entries}
         covered_identities: set[tuple[str, str]] = set()
         baseline = _read_json(baseline_path, error_operator_id)
+        try:
+            baseline_bytes = baseline_path.read_bytes()
+        except OSError as exc:
+            raise _error(
+                "submission_json_invalid",
+                f"invalid JSON: {baseline_path.name}",
+                "json",
+                error_operator_id,
+            ) from exc
+        baseline_digest = sha256_bytes(baseline_bytes)
         _validate_schema(baseline, schema, "baseline", error_operator_id)
         baseline_data = _mapping(baseline, "baseline", error_operator_id)
         if baseline_data["provider"] != provider or baseline_data["release"] != release:
@@ -374,7 +392,7 @@ def _load_baselines(
                 "baseline",
                 error_operator_id,
             )
-        for raw_case in cast(list[object], baseline_data["cases"]):
+        for case_index, raw_case in enumerate(cast(list[object], baseline_data["cases"])):
             case = _mapping(raw_case, "baseline", error_operator_id)
             case_id = _string(case["case_id"], "baseline", error_operator_id)
             operator_id = _string(case["operator_id"], "baseline", error_operator_id)
@@ -399,6 +417,11 @@ def _load_baselines(
                     input=_mapping(case["input"], "baseline", error_operator_id),
                     expected=_mapping(case["expected"], "baseline", error_operator_id),
                     tolerance=_mapping(case["tolerance"], "baseline", error_operator_id),
+                    baseline_path=baseline_path,
+                    baseline_relative_path=baseline_path.relative_to(compatibility_root).as_posix(),
+                    case_index=case_index,
+                    baseline_digest=baseline_digest,
+                    case_digest=sha256_bytes(canonical_json_bytes(case)),
                 )
             )
         if covered_identities != referenced_identities:

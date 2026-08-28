@@ -125,9 +125,9 @@ oxq operator certify-provider \
 源码提交，并且该提交必须是 submission commit 的祖先。固定入口是
 `compat/open_xquant/operator_catalog.json`；catalog 引用的 build record、
 manifest 和 baseline 路径都相对 `compat/open_xquant/`。默认从
-`<provider-repo>/dist` 读取已构建 wheel，默认输出到当前目录的
-`.open-xquant/certifications/<provider>/<release>/`。可分别用
-`--artifact-dir` 和 `--output-dir` 覆盖。
+`<provider-repo>/dist` 读取已构建 wheel；可用 `--artifact-dir` 覆盖。
+命令只在当前环境中验证 provider，成功时报告 `research-certified` 状态，
+不会在仓库中发布认证结果目录。
 
 当前命令只接受已存在的本地 Git 目录和完整的 40 位小写 SHA；不接受 GitHub
 URL。certifier 自身不会 clone、fetch、download、install 或 build，也不会主动
@@ -441,9 +441,10 @@ manifests, baselines, and build record. The build record's `source_commit`
 selects the earlier implementation commit and must be its ancestor. The fixed
 entry point is `compat/open_xquant/operator_catalog.json`; catalog build-record,
 manifest, and baseline paths are relative to `compat/open_xquant/`. Wheels are
-read from `<provider-repo>/dist` by default. Results are published below
-`.open-xquant/certifications/<provider>/<release>/` in the current directory.
-Use `--artifact-dir` and `--output-dir` to override those defaults.
+read from `<provider-repo>/dist` by default; use `--artifact-dir` to override
+that default. The command verifies the provider in the current environment and
+reports `research-certified` on success; it does not publish a certification
+result directory into the repository.
 
 This command accepts only an existing local Git directory and a full lowercase
 40-character SHA. It does not accept a GitHub URL. Certifier-owned code does

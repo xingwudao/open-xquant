@@ -11,6 +11,7 @@ from pathlib import Path
 BUILD_IDENTIFIER = "build-20260826-equant-ttr"
 COMPATIBILITY_ROOT = Path("compat/open_xquant")
 CATALOG_NAME = "operator_catalog.json"
+BASELINE_RELATIVE_PATH = "numerical_baselines/technical-v1.json"
 
 
 def sha256(value: bytes) -> str:
@@ -63,7 +64,7 @@ def write_provider_repository(
         ),
     )
     _write_json(
-        compatibility_root / "numerical_baselines" / "technical-v1.json",
+        compatibility_root / BASELINE_RELATIVE_PATH,
         _baseline(),
     )
     _write_json(

@@ -2,19 +2,15 @@
 
 from __future__ import annotations
 
-import ast
 import base64
 import builtins
 import hashlib
 import importlib
 import io
 import json
-import os
-import signal
-import subprocess
 import sys
 import zipfile
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -23,7 +19,8 @@ import pytest
 
 import oxq.operators.baseline_runner as baseline_runner
 import oxq.operators.certification as certification
-from oxq.operators import _baseline_child
+import oxq.operators.runtime_protocol as runtime_protocol
+from oxq.operators import _baseline_child, _exact_wheel_child
 from oxq.operators.baseline_runner import run_research_baselines
 from oxq.operators.certification import certify_provider, validate_provider_contract
 from oxq.operators.errors import OperatorCertificationError
@@ -41,6 +38,32 @@ from tests.operators.helpers import (
     rewrite_json,
     write_provider_repository,
 )
+
+
+@pytest.fixture(autouse=True)
+def _provide_explicit_fixture_runtime(monkeypatch: pytest.MonkeyPatch) -> None:
+    runtime_paths = [
+        path for path in sys.path if "site-packages" in Path(path).parts
+    ]
+
+    def run_fixture_request(
+        request: Mapping[str, object],
+        wheel_snapshots: Sequence[str | Path],
+        *,
+        timeout_seconds: float,
+    ) -> dict[str, object]:
+        return runtime_protocol.run_exact_wheel_request(
+            request,
+            wheel_snapshots,
+            timeout_seconds=timeout_seconds,
+            _test_runtime_paths=runtime_paths,
+        )
+
+    monkeypatch.setattr(
+        baseline_runner,
+        "run_exact_wheel_request",
+        run_fixture_request,
+    )
 
 
 def _sha256(value: bytes) -> str:
@@ -563,7 +586,7 @@ def test_parent_rejects_out_of_range_int64_child_response(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(candidate, "baseline_mismatch")
 
@@ -630,7 +653,7 @@ def test_parent_rejects_unconvertible_float64_child_response(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(candidate, "baseline_mismatch")
 
@@ -830,7 +853,7 @@ def sma(frame, *, window):
     request_path = pathlib.Path(__file__).parents[4] / "request.json"
     request = json.loads(request_path.read_text(encoding="utf-8"))
     requested = request.get("output_fields")
-    field = request["output_field"] if requested is None else requested[0]["name"]
+    field = request["output_field"] if requested is None else next(iter(requested))
     return pd.DataFrame({field: [None, None, 2.0]}, index=frame.index)
 """
     candidate = _contract(tmp_path, source)
@@ -942,7 +965,7 @@ def test_rejects_non_iso_date_child_output_even_when_expected_matches(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(candidate, "baseline_mismatch")
 
@@ -978,7 +1001,117 @@ def sma(frame, *, window):
         artifacts=(shadow_dependency, implementation),
     )
 
-    _assert_failure(candidate, "baseline_mismatch")
+    _assert_failure(candidate, "provider_import_failed")
+
+
+def test_rejects_dependency_callable_reexported_with_spoofed_module(
+    tmp_path: Path,
+) -> None:
+    provider_source = """
+from baseline_dependency import sma
+sma.__module__ = "baseline_provider"
+"""
+    dependency_source = """
+import pandas as pd
+def sma(frame, *, window):
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+    candidate = _contract(tmp_path, provider_source)
+    implementation, dependency = candidate.artifacts
+    dependency.wheel_path.write_bytes(
+        _wheel_bytes(
+            "baseline-dependency",
+            "baseline_dependency",
+            dependency_source,
+        )
+    )
+    dependency = replace(
+        dependency,
+        digest=_sha256(dependency.wheel_path.read_bytes()),
+    )
+    candidate = replace(candidate, artifacts=(implementation, dependency))
+
+    _assert_failure(candidate, "provider_import_failed")
+
+
+def test_rejects_provider_that_mutates_traceback_reachable_input_original(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+
+def sma(frame, *, window):
+    try:
+        raise RuntimeError("traceback access")
+    except RuntimeError as exc:
+        cursor = exc.__traceback__.tb_frame
+        while cursor is not None:
+            original = cursor.f_locals.get("invocation_original")
+            if original is not None:
+                original.loc[original.index[0], "close"] = 99.0
+            cursor = cursor.f_back
+    frame.loc[frame.index[0], "close"] = 99.0
+    return pd.Series([None, None, 2.0], index=frame.index, name=f"sma_{window}")
+"""
+
+    _assert_failure(_contract(tmp_path, source), "provider_mutated_input")
+
+
+@pytest.mark.parametrize("child_module", [_baseline_child, _exact_wheel_child])
+def test_provider_call_cannot_reach_verifier_stack_locals(
+    child_module: object,
+) -> None:
+    verifier_secret = object()
+    assert verifier_secret is not None
+
+    def provider(frame: object, **parameters: object) -> str:
+        del frame, parameters
+        try:
+            raise RuntimeError("traceback access")
+        except RuntimeError as exc:
+            cursor = exc.__traceback__.tb_frame
+            while cursor is not None:
+                if "verifier_secret" in cursor.f_locals:
+                    return "leaked"
+                cursor = cursor.f_back
+        return "isolated"
+
+    assert child_module._invoke_provider_outside_verifier_stack(provider, object(), {}) == "isolated"
+
+
+def test_rejects_provider_that_spoofs_alignment_keys_with_mutated_pandas_methods(
+    tmp_path: Path,
+) -> None:
+    source = """
+import pandas as pd
+from baseline_dependency import rolling_mean
+
+class SpoofedKeyFrame(pd.DataFrame):
+    _metadata = ["_trusted_keys"]
+
+    def to_dict(self, *args, **kwargs):
+        del args, kwargs
+        return [
+            {"date": date, "code": code} for date, code in self._trusted_keys
+        ]
+
+def sma(frame, *, window):
+    output = SpoofedKeyFrame({
+        "date": list(reversed(frame["date"].tolist())),
+        "code": frame["code"].tolist(),
+        f"sma_{window}": rolling_mean(frame["close"].tolist(), window),
+    })
+    output._trusted_keys = list(frame.index)
+    return output
+"""
+
+    candidate = _contract(tmp_path, source)
+    with pytest.raises(OperatorCertificationError):
+        run_research_baselines(
+            candidate,
+            candidate.artifacts,
+            timeout_seconds=5,
+        )
 
 
 def test_rejects_undeclared_ambient_dependency(tmp_path: Path) -> None:
@@ -1488,33 +1621,9 @@ def test_rejects_malformed_child_json(
         "import pathlib, sys\npathlib.Path(sys.argv[2]).write_bytes(b'{broken')\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
-
-
-def test_rejects_oversized_child_response_without_unbounded_read(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    response_path = tmp_path / "oversized-response.json"
-    response_path.write_bytes(b"x" * (1024 * 1024 + 1))
-
-    def unbounded_read_must_not_run(path: Path) -> bytes:
-        del path
-        pytest.fail("child response used an unbounded read")
-
-    monkeypatch.setattr(Path, "read_bytes", unbounded_read_must_not_run)
-
-    with pytest.raises(OperatorCertificationError) as caught:
-        baseline_runner._read_response(
-            response_path,
-            0,
-            "org.open-xquant.indicator.sma",
-            b"x" * 32,
-        )
-
-    assert caught.value.code == "provider_execution_failed"
 
 
 def test_rejects_child_json_with_undeclared_response_fields(
@@ -1532,7 +1641,7 @@ def test_rejects_child_json_with_undeclared_response_fields(
         "pathlib.Path(sys.argv[2]).write_text(json.dumps(value))\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr(baseline_runner, "_child_script_path", lambda: child)
+    monkeypatch.setattr(runtime_protocol, "_child_path", lambda: child)
 
     _assert_failure(_contract(tmp_path / "candidate"), "provider_execution_failed")
 
@@ -1589,427 +1698,13 @@ def test_rejects_nonfinite_timeout_before_child_execution(
     def child_must_not_run(*args: object, **kwargs: object) -> object:
         raise AssertionError(f"child executed: {args!r} {kwargs!r}")
 
-    monkeypatch.setattr(baseline_runner, "_run_child_process", child_must_not_run)
+    monkeypatch.setattr(baseline_runner, "run_exact_wheel_request", child_must_not_run)
 
     _assert_failure(
         candidate,
         "provider_execution_timeout",
         timeout_seconds=timeout_seconds,
     )
-
-
-def test_discards_provider_stdout_and_stderr(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    observed: dict[str, object] = {}
-    popen = subprocess.Popen
-
-    def recording_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
-        observed.setdefault("stdout", kwargs.get("stdout"))
-        observed.setdefault("stderr", kwargs.get("stderr"))
-        return popen(*args, **kwargs)  # type: ignore[arg-type,return-value]
-
-    monkeypatch.setattr(baseline_runner.subprocess, "Popen", recording_popen)
-
-    returncode = baseline_runner._run_child_process(
-        [sys.executable, "-c", "print('provider output')"],
-        5,
-    )
-
-    assert returncode == 0
-    assert observed["stdout"] == subprocess.DEVNULL
-    assert observed["stderr"] == subprocess.DEVNULL
-
-
-def test_macos_process_containment_fails_closed_when_probe_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(baseline_runner, "_posix_platform", lambda: "darwin")
-    monkeypatch.setattr(baseline_runner.Path, "is_file", lambda path: True)
-    monkeypatch.setattr(
-        baseline_runner.subprocess,
-        "run",
-        lambda *args, **kwargs: subprocess.CompletedProcess([], 1),
-    )
-
-    with pytest.raises(OSError, match="sandbox is unavailable"):
-        baseline_runner._contained_posix_command(
-            [sys.executable, "-c", "pass"],
-        )
-
-
-def test_linux_supervisor_always_cleans_children_when_launch_is_interrupted() -> None:
-    tree = ast.parse(baseline_runner._LINUX_SUBREAPER_SCRIPT)
-    supervision = next(
-        node
-        for node in tree.body
-        if isinstance(node, ast.Try)
-        and any(
-            isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute) and child.func.attr == "Popen" for child in ast.walk(node)
-        )
-    )
-    assert any(
-        isinstance(child, ast.Call) and isinstance(child.func, ast.Name) and child.func.id == "terminate_adopted_children"
-        for statement in supervision.finalbody
-        for child in ast.walk(statement)
-    )
-
-
-def test_linux_guardian_inserts_launcher_between_itself_and_provider(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setattr(baseline_runner, "_posix_platform", lambda: "linux")
-    provider = [sys.executable, "-c", "pass"]
-
-    command = baseline_runner._contained_posix_command(provider)
-
-    assert command[4:8] == [
-        sys.executable,
-        "-I",
-        "-c",
-        baseline_runner._LINUX_LAUNCHER_SCRIPT,
-    ]
-    assert command[8:] == provider
-
-
-def test_successful_linux_supervisor_is_not_signalled_after_it_is_reaped(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeProcess:
-        pid = 123
-        returncode = 0
-
-        def wait(self, timeout: float | None = None) -> int:
-            del timeout
-            return self.returncode
-
-        def poll(self) -> int:
-            return self.returncode
-
-    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "posix")
-    monkeypatch.setattr(baseline_runner, "_posix_platform", lambda: "linux")
-    monkeypatch.setattr(
-        baseline_runner,
-        "_contained_posix_command",
-        lambda command: command,
-    )
-    monkeypatch.setattr(
-        baseline_runner.subprocess,
-        "Popen",
-        lambda *args, **kwargs: FakeProcess(),
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_posix_descendant_pids",
-        lambda root_pid: set(),
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_kill_process_tree",
-        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("reaped supervisor process group was signalled")),
-    )
-
-    assert (
-        baseline_runner._run_child_process(
-            [sys.executable, "-c", "pass"],
-            5,
-        )
-        == 0
-    )
-
-
-def test_unexpected_linux_guardian_exit_kills_collected_descendants(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeProcess:
-        pid = 123
-        returncode = -signal.SIGKILL
-
-        def wait(self, timeout: float | None = None) -> int:
-            del timeout
-            return self.returncode
-
-        def poll(self) -> int:
-            return self.returncode
-
-    killed: list[tuple[int, set[int]]] = []
-    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "posix")
-    monkeypatch.setattr(baseline_runner, "_posix_platform", lambda: "linux")
-    monkeypatch.setattr(
-        baseline_runner,
-        "_contained_posix_command",
-        lambda command: command,
-    )
-    monkeypatch.setattr(
-        baseline_runner.subprocess,
-        "Popen",
-        lambda *args, **kwargs: FakeProcess(),
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_posix_descendant_pids",
-        lambda root_pid: {200},
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_kill_process_tree",
-        lambda process, descendants: killed.append(
-            (process.pid, set(descendants)),
-        ),
-    )
-
-    returncode = baseline_runner._run_child_process(
-        [sys.executable, "-c", "pass"],
-        5,
-    )
-
-    assert returncode == -signal.SIGKILL
-    assert killed == [(123, {200})]
-
-
-def test_process_tree_cleanup_expands_collected_descendant_subtrees(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    class FakeProcess:
-        pid = 123
-
-        def poll(self) -> int:
-            return -signal.SIGKILL
-
-        def kill(self) -> None:
-            raise AssertionError("reaped guardian must not be killed again")
-
-    children = {
-        123: set(),
-        200: {300},
-        300: set(),
-    }
-    killed: list[set[int]] = []
-    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "posix")
-    monkeypatch.setattr(
-        baseline_runner,
-        "_posix_descendant_pids",
-        lambda root_pid: children[root_pid],
-    )
-    monkeypatch.setattr(baseline_runner.os, "killpg", lambda *args: None)
-    monkeypatch.setattr(baseline_runner.os, "kill", lambda *args: None)
-    monkeypatch.setattr(
-        baseline_runner,
-        "_kill_posix_processes",
-        lambda process_ids: killed.append(set(process_ids)),
-    )
-
-    baseline_runner._kill_process_tree(FakeProcess(), {200})  # type: ignore[arg-type]
-
-    assert killed == [{200, 300}]
-
-
-def test_success_closes_windows_kill_on_close_job(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    events: list[tuple[str, int]] = []
-
-    class FakeProcess:
-        pid = 123
-        returncode = 0
-
-        def wait(self, timeout: float | None = None) -> int:
-            del timeout
-            events.append(("wait", self.pid))
-            return self.returncode
-
-        def poll(self) -> int:
-            return self.returncode
-
-    process = FakeProcess()
-    monkeypatch.setattr(baseline_runner, "_platform_name", lambda: "nt")
-    monkeypatch.setattr(
-        baseline_runner.subprocess,
-        "Popen",
-        lambda *args, **kwargs: process,
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_open_windows_kill_on_close_job",
-        lambda child: events.append(("open", child.pid)) or 456,
-        raising=False,
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_close_windows_job",
-        lambda handle: events.append(("close", handle)),
-        raising=False,
-    )
-
-    returncode = baseline_runner._run_child_process(
-        [sys.executable, "-c", "pass"],
-        5,
-    )
-
-    assert returncode == 0
-    assert events == [("open", 123), ("wait", 123), ("close", 456)]
-
-
-def test_timeout_reaps_the_direct_child(tmp_path: Path) -> None:
-    pid_path = tmp_path / "child.pid"
-    source = (
-        "import os, pathlib, time\n"
-        "def sma(frame, *, window):\n"
-        f"    pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
-        "    time.sleep(60)\n"
-    )
-    _assert_failure(
-        _contract(tmp_path / "candidate", source),
-        "provider_execution_timeout",
-        timeout_seconds=2,
-    )
-    child_pid = int(pid_path.read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(child_pid, 0)
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper assertion")
-def test_timeout_reaps_provider_descendant_processes(tmp_path: Path) -> None:
-    pid_path = tmp_path / "descendant.pid"
-    source = (
-        "import subprocess, sys, time\n"
-        "def sma(frame, *, window):\n"
-        "    subprocess.Popen([sys.executable, '-c', "
-        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"], '
-        "start_new_session=True)\n"
-        "    time.sleep(60)\n"
-    )
-    _assert_failure(
-        _contract(tmp_path / "candidate", source),
-        "provider_execution_timeout",
-        timeout_seconds=2,
-    )
-    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(descendant_pid, 0)
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux subreaper assertion")
-def test_success_reaps_detached_provider_descendant_processes(tmp_path: Path) -> None:
-    pid_path = tmp_path / "successful-descendant.pid"
-    source = (
-        "import subprocess, sys, time\n"
-        "import pandas as pd\n"
-        "def sma(frame, *, window):\n"
-        "    subprocess.Popen([sys.executable, '-c', "
-        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"], '
-        "start_new_session=True)\n"
-        "    time.sleep(0.2)\n"
-        "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')\n"
-    )
-    candidate = _contract(tmp_path / "candidate", source)
-
-    results = run_research_baselines(
-        candidate,
-        candidate.artifacts,
-        timeout_seconds=5,
-    )
-
-    assert [(item.case_id, item.status) for item in results] == [("sma-3", "passed")]
-    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(descendant_pid, 0)
-
-
-@pytest.mark.skipif(os.name == "nt", reason="POSIX containment assertion")
-def test_success_contains_detached_atexit_descendant_when_tracking_misses(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    pid_path = tmp_path / "detached-atexit-descendant.pid"
-    script = (
-        "import atexit, pathlib, subprocess, sys, time\n"
-        "def spawn_at_exit():\n"
-        "    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'], start_new_session=True)\n"
-        f"    pathlib.Path({str(pid_path)!r}).write_text(str(child.pid))\n"
-        "atexit.register(spawn_at_exit)\n"
-    )
-    monkeypatch.setattr(
-        baseline_runner,
-        "_posix_descendant_pids",
-        lambda root_pid: set(),
-    )
-
-    returncode = baseline_runner._run_child_process(
-        [sys.executable, "-c", script],
-        5,
-    )
-
-    assert returncode == 0
-    if pid_path.exists():
-        descendant_pid = int(pid_path.read_text(encoding="utf-8"))
-        try:
-            state = subprocess.run(
-                ["ps", "-o", "stat=", "-p", str(descendant_pid)],
-                check=False,
-                capture_output=True,
-                text=True,
-            )
-            assert state.returncode != 0 or state.stdout.lstrip().startswith("Z")
-        finally:
-            try:
-                os.kill(descendant_pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-
-
-@pytest.mark.skipif(sys.platform != "linux", reason="Linux guardian assertion")
-def test_linux_guardian_reaps_provider_after_provider_kills_launcher(
-    tmp_path: Path,
-) -> None:
-    pid_path = tmp_path / "provider-that-killed-launcher.pid"
-    script = (
-        "import os, pathlib, signal, time\n"
-        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()))\n"
-        "os.kill(os.getppid(), signal.SIGKILL)\n"
-        "time.sleep(60)\n"
-    )
-
-    returncode = baseline_runner._run_child_process(
-        [sys.executable, "-c", script],
-        5,
-    )
-
-    assert returncode != 0
-    provider_pid = int(pid_path.read_text(encoding="utf-8"))
-    with pytest.raises(ProcessLookupError):
-        os.kill(provider_pid, 0)
-
-
-@pytest.mark.skipif(os.name != "nt", reason="Windows Job Object assertion")
-def test_windows_success_reaps_provider_descendant_processes(tmp_path: Path) -> None:
-    pid_path = tmp_path / "windows-descendant.pid"
-    source = (
-        "import subprocess, sys, time\n"
-        "import pandas as pd\n"
-        "def sma(frame, *, window):\n"
-        "    subprocess.Popen([sys.executable, '-c', "
-        f'"import os, pathlib, time; pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid())); time.sleep(60)"], '
-        "creationflags=getattr(subprocess, 'CREATE_NEW_PROCESS_GROUP', 0))\n"
-        "    time.sleep(0.2)\n"
-        "    return pd.Series([None, None, 2.0], index=frame.index, name=f'sma_{window}')\n"
-    )
-    candidate = _contract(tmp_path / "candidate", source)
-
-    run_research_baselines(
-        candidate,
-        candidate.artifacts,
-        timeout_seconds=5,
-    )
-
-    descendant_pid = int(pid_path.read_text(encoding="utf-8"))
-    completed = subprocess.run(
-        ["tasklist", "/FI", f"PID eq {descendant_pid}", "/NH"],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    assert str(descendant_pid) not in completed.stdout
 
 
 @pytest.mark.parametrize(

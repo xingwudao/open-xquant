@@ -3,14 +3,10 @@
 from __future__ import annotations
 
 import builtins
-import hashlib
-import hmac
 import importlib.util
-import json
 import marshal
 import operator
 import os
-import subprocess
 import sys
 import types
 import zipfile
@@ -19,7 +15,8 @@ from typing import cast
 
 import pytest
 
-from oxq.operators import _baseline_child
+from oxq.operators import _exact_wheel_child as _baseline_child
+from oxq.operators.runtime_protocol import run_exact_wheel_request
 
 
 def _module_from_file(name: str, origin: Path) -> types.ModuleType:
@@ -56,6 +53,100 @@ def _write_dependency_wheel(path: Path) -> None:
         )
 
 
+def test_exact_child_rejects_oversized_wheel_member_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    member = zipfile.ZipInfo("baseline_provider/__init__.py")
+    member.file_size = _baseline_child._MAX_WHEEL_MEMBER_BYTES + 1
+    member.compress_size = 1
+
+    class OversizedWheel:
+        def __enter__(self) -> OversizedWheel:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            del args
+
+        def infolist(self) -> list[zipfile.ZipInfo]:
+            return [member]
+
+        def read(self, item: zipfile.ZipInfo) -> bytes:
+            del item
+            pytest.fail("oversized wheel member was read before validation")
+
+    monkeypatch.setattr(_baseline_child.zipfile, "ZipFile", lambda path: OversizedWheel())
+
+    with pytest.raises(ValueError, match="wheel member is too large"):
+        _baseline_child._extract_wheel(
+            tmp_path / "provider.whl",
+            tmp_path / "library",
+            tmp_path / "prefix",
+            _baseline_child._WheelExtractionBudget(),
+        )
+
+
+def test_exact_child_rejects_excessive_wheel_closure_size(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.whl"
+    second = tmp_path / "second.whl"
+    with zipfile.ZipFile(first, "w") as archive:
+        archive.writestr("first_pkg/__init__.py", b"x" * 6)
+    with zipfile.ZipFile(second, "w") as archive:
+        archive.writestr("second_pkg/__init__.py", b"y" * 6)
+    monkeypatch.setattr(_baseline_child, "_MAX_WHEEL_TOTAL_BYTES", 10)
+
+    with pytest.raises(ValueError, match="wheel expanded size is too large"):
+        _baseline_child._materialize_wheels([str(first), str(second)], tmp_path / "root")
+
+
+def test_exact_child_rejects_case_insensitive_extraction_collision(
+    tmp_path: Path,
+) -> None:
+    wheel = tmp_path / "provider.whl"
+    with zipfile.ZipFile(wheel, "w") as archive:
+        archive.writestr("pkg/Foo.py", "VALUE = 1\n")
+        archive.writestr("pkg/foo.py", "VALUE = 2\n")
+
+    with pytest.raises(ValueError, match="wheel members map to the same destination"):
+        _baseline_child._extract_wheel(
+            wheel,
+            tmp_path / "library",
+            tmp_path / "prefix",
+            _baseline_child._WheelExtractionBudget(),
+        )
+
+
+def test_exact_child_rejects_library_path_collision_across_wheels(
+    tmp_path: Path,
+) -> None:
+    first = tmp_path / "first.whl"
+    second = tmp_path / "second.whl"
+    with zipfile.ZipFile(first, "w") as archive:
+        archive.writestr("shared_pkg/__init__.py", "VALUE = 1\n")
+    with zipfile.ZipFile(second, "w") as archive:
+        archive.writestr("shared_pkg/__init__.py", "VALUE = 2\n")
+
+    with pytest.raises(ValueError, match="wheel members map to the same library path"):
+        _baseline_child._materialize_wheels([str(first), str(second)], tmp_path / "root")
+
+
+def test_exact_child_rejects_wrapped_manifest_callable(
+    tmp_path: Path,
+) -> None:
+    result = _run_child(
+        tmp_path,
+        "import functools\n"
+        "def _sma(frame, **parameters):\n"
+        "    return frame.assign(sma_3=frame['close'])\n"
+        "sma = functools.partial(_sma)\n",
+    )
+
+    assert result == {"status": "error", "code": "provider_import_failed"}
+
+
 def _run_child(
     tmp_path: Path,
     provider_source: str,
@@ -64,14 +155,10 @@ def _run_child(
 ) -> dict[str, object]:
     wheel_path = tmp_path / "baseline_provider-1.0.0-py3-none-any.whl"
     dependency_path = tmp_path / "baseline_dependency-1.0.0-py3-none-any.whl"
-    request_path = tmp_path / "request.json"
-    response_path = tmp_path / "response.json"
     _write_provider_wheel(wheel_path, provider_source)
     if with_dependency:
         _write_dependency_wheel(dependency_path)
-    request_path.write_text(
-        json.dumps(
-            {
+    request = {
                 "implementation_artifact": str(wheel_path),
                 "dependency_artifacts": ([str(dependency_path)] if with_dependency else []),
                 "module": "baseline_provider",
@@ -98,61 +185,15 @@ def _run_child(
                         },
                     ],
                 },
-                "output_fields": [
-                    {"name": "sma_3", "dtype": "float64"},
-                ],
+                "output_fields": {"sma_3": "float64"},
                 "output_alignment": "preserve_input_order",
-            },
-            allow_nan=False,
-        ),
-        encoding="utf-8",
+            }
+    return run_exact_wheel_request(
+        request,
+        [wheel_path, *([dependency_path] if with_dependency else [])],
+        timeout_seconds=10,
+        _test_runtime_paths=[item for item in sys.path if "site-packages" in Path(item).parts],
     )
-    child_path = Path(_baseline_child.__file__).resolve()
-    response_secret = b"baseline-child-security-test-key"
-
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "-I",
-            str(child_path),
-            str(request_path),
-            str(response_path),
-        ],
-        check=False,
-        capture_output=True,
-        input=response_secret.hex() + "\n",
-        text=True,
-        timeout=10,
-    )
-
-    if completed.returncode == getattr(
-        _baseline_child,
-        "_PROVIDER_POLICY_VIOLATION_EXIT_CODE",
-        -999,
-    ):
-        return {"status": "error", "code": "provider_import_failed"}
-    assert completed.returncode == 0, completed.stderr
-    response = cast(
-        dict[str, object],
-        json.loads(response_path.read_text(encoding="utf-8")),
-    )
-    auth = response.pop("auth")
-    payload = json.dumps(
-        response,
-        allow_nan=False,
-        separators=(",", ":"),
-        sort_keys=True,
-    ).encode("utf-8")
-    expected_auth = (
-        "hmac-sha256:"
-        + hmac.new(
-            response_secret,
-            payload,
-            hashlib.sha256,
-        ).hexdigest()
-    )
-    assert hmac.compare_digest(cast(str, auth), expected_auth)
-    return response
 
 
 def test_dynamic_code_gate_allows_trusted_callers_and_restores_builtins() -> None:
