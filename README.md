@@ -146,6 +146,15 @@ URL。certifier 自身不会 clone、fetch、download、install 或 build，也�
 - **量化策略研究者**：专注于策略逻辑本身，框架负责验证、审计、报告
 - **AI 应用开发者**：构建基于 LLM 的自动化量化研究 Agent
 
+## 入门书稿
+
+如果你还没有量化交易基础，建议先阅读：
+
+[人人都是量化交易员：XQuant Beginner 量化交易入门](https://github.com/xingwudao/xquant-beginner)
+
+这本开源书面向量化交易入门和自学读者，先用 AI 与 Python 跑通
+数据获取、策略回测、风险评估和因子研究，再逐步过渡到 open-xquant。
+
 ## 通过示例学习
 
 `examples/` 目录提供了由浅入深的学习路径。
