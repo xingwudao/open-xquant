@@ -1,0 +1,19 @@
+{
+  "name": "open-xquant-docs",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22 <23"
+  },
+  "scripts": {
+    "docs:generate": "cd .. && uv run python -m website.scripts.generate",
+    "docs:check": "cd .. && uv run python -m website.scripts.generate --check",
+    "docs:dev": "npm run docs:generate && vitepress dev .",
+    "docs:build": "npm run docs:generate && vitepress build .",
+    "docs:preview": "vitepress preview .",
+    "docs:validate": "cd .. && uv run python -m website.scripts.validate_site website/.vitepress/dist"
+  },
+  "devDependencies": {
+    "vitepress": "1.6.4"
+  }
+}
