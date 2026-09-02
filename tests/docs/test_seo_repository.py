@@ -49,3 +49,15 @@ def test_baseline_records_reproducible_observations() -> None:
         "## Measurement Rules",
     ):
         assert heading in text
+
+
+def test_release_runbook_contains_exact_external_contract() -> None:
+    text = (ROOT / "docs/seo/release-runbook.md").read_text(encoding="utf-8")
+    assert "https://xingwudao.github.io/open-xquant/" in text
+    assert (
+        "AI 量化研究框架：AI Agent 驱动策略回测、因子研究、稳健性检验、"
+        "审计报告与实盘交易 | Agentic Quant Research Kernel"
+    ) in text
+    assert "sitemap.xml" in text
+    assert "Google Search Console" in text
+    assert "gh repo view xingwudao/open-xquant" in text
