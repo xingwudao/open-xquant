@@ -1,0 +1,564 @@
+open-xquant:
+  title_zh: open-xquant AI 量化研究路由
+  summary_zh: 根据量化研究请求选择正确的工作流，并在运行确定性工具前完成边界检查。
+  group: 研究治理
+  use_cases_zh:
+    - 用户提出策略、回测、因子、审计、稳健性、报告或实盘研究请求。
+  inputs_zh:
+    - 用户目标、研究目录和当前版本状态。
+  outputs_zh:
+    - 明确的下一阶段 Skill 路由和前置条件。
+  constraints_zh:
+    - 路由完成前不运行 CLI、SDK 或报告脚本。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/strategy-backtest
+
+govern-research-workspace:
+  title_zh: 量化研究工作区治理
+  summary_zh: 检查版本化研究工作区的路径边界、阶段产物位置和跨产物血缘一致性。
+  group: 研究治理
+  use_cases_zh:
+    - 研究目录出现根目录阶段产物、交接前需要布局检查，或比较、迁移、最终选择前需要治理审计。
+  inputs_zh:
+    - "`.open-xquant/workspace.yaml`、`current.json`、`lineage.json`、版本目录、比较目录和最终选择目录。"
+  outputs_zh:
+    - "`<governance_dir>/workspace_audit.json` 和 `<governance_dir>/workspace_audit.md`。"
+  constraints_zh:
+    - 只报告治理发现；不修复、移动或迁移被检查文件，也不编辑策略、审计、运行、指标或报告产物。
+    - 所有版本根、阶段路径和治理输出路径都必须是安全的工作区相对路径，并通过规范化与符号链接逃逸检查。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+manage-strategy-version:
+  title_zh: 量化策略版本管理
+  summary_zh: 判断当前研究应继续现有版本、创建新策略版本，还是追加同一策略的运行尝试。
+  group: 研究治理
+  use_cases_zh:
+    - 量化研究对话开始、恢复、语义发生变化，或阶段产物通过后需要更新版本治理状态。
+  inputs_zh:
+    - 用户请求、`workflow_manifest.json`、`current.json`、`lineage.json`、版本清单和当前阶段产物。
+  outputs_zh:
+    - 版本清单、阶段状态、`lineage.json`、`current.json` 和治理事务日志。
+  constraints_zh:
+    - 不运行 `oxq`，不写策略 SPEC、审计或报告文件，也不选择最终版本。
+    - 新版本发布必须先创建受控阶段目录和匹配清单，最后发布 `current.json`。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+compare-strategy-versions:
+  title_zh: 量化策略版本比较
+  summary_zh: 在版本化工作区中比较运行或策略版本，并区分同版本可复现性与跨版本策略证据。
+  group: 研究治理
+  use_cases_zh:
+    - 用户要求比较策略版本、在版本化工作区比较实验，或最终选择需要选择绑定的比较证据。
+  inputs_zh:
+    - 候选运行包、实验登记、候选版本清单、候选集、选择策略、血缘审计和可选比较范围。
+  outputs_zh:
+    - 比较清单、可比性审计、SPEC 差异、指标比较、比较报告和图形产物。
+  constraints_zh:
+    - 不修改运行产物，不隐藏不可比假设，不选择最终版本。
+    - 最终选择比较必须使用同一选择 ID、策略引用和候选集引用；不能发现、替换或重排候选。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/strategy-backtest
+
+select-final-version:
+  title_zh: 量化策略最终版本选择
+  summary_zh: 只从满足审计、报告、血缘和用户确认策略门槛的候选中发布最终研究候选。
+  group: 研究治理
+  use_cases_zh:
+    - 用户要求选择、确认、提升或标记最终 open-xquant 策略版本。
+  inputs_zh:
+    - 候选版本和运行、报告与审阅修订、血缘审计、比较证据、选择策略和协调器确认事件。
+  outputs_zh:
+    - 选择策略、候选集、比较引用账本、`final_decision.json` 和 `current_final.json`。
+  constraints_zh:
+    - 不运行回测，不修改运行、报告、指标、审计或比较产物，也不把结果称为可投资或实盘就绪。
+    - 必须验证协调器拥有的确认日志事件；不能接受复制、陈旧、跨版本或路径推断的证据。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+compare-experiments:
+  title_zh: 量化实验结果比较
+  summary_zh: 在非版本化 legacy 工作区中比较两个已完成实验运行的 SPEC、审计和指标差异。
+  group: 研究治理
+  use_cases_zh:
+    - 用户在 legacy 工作区要求比较两个已完成 open-xquant 实验运行。
+  inputs_zh:
+    - 两个运行目录中的策略 SPEC、指标、净值曲线、执行假设、研究偏差审计和可复现性审计。
+  outputs_zh:
+    - "`<comparisons_dir>/<comparison_id>/` 下的 SPEC 差异、指标比较、比较报告、图形和登记摘要。"
+  constraints_zh:
+    - 不在版本化工作区使用；版本化工作区必须路由到 `compare-strategy-versions`。
+    - 不修改任一运行产物，不把未审计假设当作可比，也不脱离上下文命名单一赢家。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/strategy-backtest
+
+brainstorm-strategy-idea:
+  title_zh: 量化策略想法梳理
+  summary_zh: 按固定阶段引导用户补全策略想法，并在 SPEC 编写前产出有用户证据的想法简报。
+  group: 策略与审计
+  use_cases_zh:
+    - 用户有新策略想法、要求设计策略，或试图在想法简报完成前直接进入 SPEC 创建。
+  inputs_zh:
+    - 用户逐阶段确认的研究假设、市场与标的、数据、指标、信号、组合、执行、成本、风控和决策政策。
+  outputs_zh:
+    - "`<phase_paths.01_brainstorm>/strategy_idea_brief.json`。"
+  constraints_zh:
+    - 不运行 `oxq`，不导入 SDK，不导出组件目录，也不写或审计 `strategy_spec.yaml`。
+    - 默认值、候选值和示例值必须由用户明确确认；不能让用户跳过最早未完成阶段。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/strategy-backtest
+
+audit-strategy-idea:
+  title_zh: 量化策略想法审计
+  summary_zh: 审计策略想法简报和原始对话，确认每个已确认值都有用户证据后才允许构建 SPEC。
+  group: 策略与审计
+  use_cases_zh:
+    - "`brainstorm-strategy-idea` 已写入 `strategy_idea_brief.json`，且下一步准备构建策略 SPEC。"
+  inputs_zh:
+    - "`strategy_idea_brief.json` 和协调器提供的精确原始对话文本 `CONVERSATION_HISTORY_RAW`。"
+  outputs_zh:
+    - "`<phase_paths.02_idea_audit>/strategy_idea_audit.json`。"
+  constraints_zh:
+    - 不读取、写入或修复 `strategy_spec.yaml`，不运行 `oxq`，不补全缺失值，也不调用 SPEC 构建。
+    - 缺失、摘要化、占位或哈希不匹配的原始对话必须阻塞审计。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+build-strategy-spec:
+  title_zh: 量化策略规格构建
+  summary_zh: 从已通过想法审计的简报构建并验证 `strategy_spec.yaml`，同时记录字段映射和构建结果。
+  group: 策略与审计
+  use_cases_zh:
+    - 想法简报和想法审计均通过后，需要把策略描述转成可验证的 open-xquant SPEC。
+  inputs_zh:
+    - 想法简报、想法审计、组件目录、配方目录、数据检查结果和需要修复的 SPEC 审计反馈。
+  outputs_zh:
+    - "`strategy_spec.yaml`、`component_catalog.json`、构建说明、映射说明、映射契约和 `builder_phase_result.json`。"
+  constraints_zh:
+    - 想法审计通过前不运行目录导出、`oxq spec init` 或 SPEC 写入；初始化必须显式写入 `04_spec_build`。
+    - 不读取市场数据文件，不运行编译、回测、监控、审计或报告阶段。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/strategy-backtest
+
+audit-strategy-spec:
+  title_zh: 量化策略规格审计
+  summary_zh: 审计 SPEC 字段来源、默认值、组件选择和用户确认状态，阻止未批准假设进入回测。
+  group: 策略与审计
+  use_cases_zh:
+    - SPEC 已由构建阶段验证，且任何正式回测前需要确认字段来源和有效运行值。
+  inputs_zh:
+    - 策略 SPEC、想法简报与审计、构建结果、映射文件、组件目录、数据检查结果和原始对话。
+  outputs_zh:
+    - "`<phase_paths.06_spec_audit>/spec_audit.json`、`audit_notes.md` 和必要时的 `spec_confirmation_table.md`。"
+  constraints_zh:
+    - 只读构建阶段产物；不能修复、重写或规范化 `strategy_spec.yaml`。
+    - 所有默认、未确认、矛盾或 Agent 添加的有效字段都会阻塞，直到用户确认或返回构建阶段修复。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+audit-runtime-semantics:
+  title_zh: 量化运行语义审计
+  summary_zh: 编译策略预览并审计 `compiled_plan.json` 是否保留 SPEC 的关键执行语义。
+  group: 策略与审计
+  use_cases_zh:
+    - 用户确认完整 SPEC 表后，正式回测前需要验证编译后的运行计划与 SPEC 一致。
+  inputs_zh:
+    - 策略 SPEC、已确认的 SPEC 审计、组件目录、正式运行输入和可选既有编译预览。
+  outputs_zh:
+    - 编译预览产物、`strategy.py`、`spec_hash.txt` 和 `<phase_paths.08_runtime_audit>/runtime_audit.json`。
+  constraints_zh:
+    - 未通过严格确认验证的 SPEC 审计不能用于编译、运行语义审计或回测授权。
+    - 不编辑 SPEC，不运行正式回测，不监控运行，也不写报告。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/strategy-backtest
+
+audit-artifact-lineage:
+  title_zh: 量化产物血缘审计
+  summary_zh: 重新计算版本、运行、报告、比较和最终选择之间的路径与哈希绑定，验证候选证据当前有效。
+  group: 策略与审计
+  use_cases_zh:
+    - 比较、报告审阅、迁移或最终选择前，需要检查 open-xquant 产物的版本、运行和最终选择可追溯性。
+  inputs_zh:
+    - 工作流清单、当前状态、血缘、版本清单、运行清单、比较清单和最终选择产物。
+  outputs_zh:
+    - "`<governance_dir>/lineage_audit_<timestamp>.json` 和对应 Markdown 审计报告。"
+  constraints_zh:
+    - 不重写哈希，不比较策略表现，不选择最终版本，也不推断缺失审计已通过。
+    - 历史候选必须通过其自身版本清单解析，不能用当前 active 版本默认路径替代。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+explore-data:
+  title_zh: 量化数据探索
+  summary_zh: 检查、下载和验证本地市场、宏观与财务数据，为回测或因子研究确认数据可用性。
+  group: 数据与因子
+  use_cases_zh:
+    - 回测、因子研究或任何依赖本地 parquet 数据的任务需要确认数据覆盖和质量。
+  inputs_zh:
+    - 数据目录、符号列表、时间范围、数据提供商、字段要求和工作区版本状态。
+  outputs_zh:
+    - "`<phase_paths.05_data_inspection>/data_inspection_result.json` 和 `data_availability_report.md`。"
+  constraints_zh:
+    - 不在未知或缺失数据上运行正式回测，也不把 mock 或演示下载当作生产研究证据。
+    - 一个运行中混用数据提供商需要用户批准并在报告中披露。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/factor-evaluation
+
+build-universe:
+  title_zh: 量化标的池构建
+  summary_zh: 定义策略可交易标的池，并说明静态、指数快照和存活偏差约束。
+  group: 数据与因子
+  use_cases_zh:
+    - 用户选择 symbols、指数、动态过滤器或可交易池，需要明确 universe 设计。
+  inputs_zh:
+    - 市场、symbols、指数元数据、本地成分股快照、基准和数据目录。
+  outputs_zh:
+    - 可进入 SPEC 或 SDK 的 universe 配置，以及数据和存活偏差检查结果。
+  constraints_zh:
+    - 不承诺点时指数成员，除非数据源能证明；不隐藏存活偏差警告。
+    - 指数 universe 仍需本地 `symbols` 快照；不能由 Agent 发明成分股。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+evaluate-factor:
+  title_zh: 量化因子评估
+  summary_zh: 根据因子问题类型路由到横截面或时间序列评估，并先确认定义、样本和对齐方式。
+  group: 数据与因子
+  use_cases_zh:
+    - 用户询问一个因子是否预测未来收益，或需要判断应采用 IC 还是择时评估。
+  inputs_zh:
+    - 因子定义、symbols、日期范围、forward return horizons、研究目标、数据源和缺失值处理。
+  outputs_zh:
+    - 横截面或时间序列评估路由，以及必要的数据对齐和样本量前置要求。
+  constraints_zh:
+    - 不在缺少未来收益对齐时评估因子，不只跑单一 horizon 支撑研究结论。
+    - 低样本量和高换手不能被隐藏。
+  related_workflows:
+    - /workflows/factor-evaluation
+
+evaluate-cross-sectional:
+  title_zh: 横截面因子评估
+  summary_zh: 用 IC、Rank IC、ICIR、decay 和 turnover 评估同日多资产排序因子。
+  group: 数据与因子
+  use_cases_zh:
+    - 因子在每个日期对多资产排序，目标是选股或多资产横截面排名。
+  inputs_zh:
+    - 多资产 factor DataFrame、价格 DataFrame、forward returns、horizons、symbols 和日期范围。
+  outputs_zh:
+    - IC 均值、IC 标准差、ICIR、Rank IC、decay、turnover 和带限制的结论。
+  constraints_zh:
+    - 少于 10 个 symbols 时不能把横截面 IC 作为主要证据。
+    - 不报告缺少 IC 标准差或 ICIR 的 IC 均值，也不忽略 turnover 与 decay。
+  related_workflows:
+    - /workflows/factor-evaluation
+
+evaluate-time-series:
+  title_zh: 时间序列因子评估
+  summary_zh: 用命中率、盈亏比、decay 曲线、空仓行为和 tearsheet 评估择时或轮动因子。
+  group: 数据与因子
+  use_cases_zh:
+    - 因子预测单资产或小规模轮动集合的时间方向。
+  inputs_zh:
+    - factor series、价格数据、forward periods、输出目录和可用图表依赖。
+  outputs_zh:
+    - 时间序列 tearsheet、命中率、盈亏比、decay 和空仓期解释。
+  constraints_zh:
+    - 不只报告命中率，不跳过 T+1 对齐，也不把 tearsheet 图片当作审计。
+  related_workflows:
+    - /workflows/factor-evaluation
+
+screen-factors:
+  title_zh: 量化因子筛选
+  summary_zh: 基于价格、财务和自定义因子筛选候选标的，但不把筛选结果等同于回测验证。
+  group: 数据与因子
+  use_cases_zh:
+    - 用户需要价值、质量、动量或多因子候选列表。
+  inputs_zh:
+    - 市场与 symbols、因子定义、再平衡日期或区间、阈值或排序规则、数据提供商和缺失值策略。
+  outputs_zh:
+    - 候选列表、因子得分、可用字段说明和缺失值处理记录。
+  constraints_zh:
+    - 不把筛选列表称为已验证策略，不忽略缺失因子值，不使用未来财报发布日期。
+    - 混用 A 股和美股数据提供商时必须说明影响。
+  related_workflows:
+    - /workflows/factor-evaluation
+
+tune-parameters:
+  title_zh: 量化参数调优
+  summary_zh: 用网格搜索、walk-forward、时间序列交叉验证和过拟合信号检查调参结果。
+  group: 数据与因子
+  use_cases_zh:
+    - 用户要求优化策略参数，或比较参数组合表现。
+  inputs_zh:
+    - 已验证的基础策略或 SPEC、训练与 OOS 数据、用户批准的指标和参数搜索范围。
+  outputs_zh:
+    - 参数搜索结果、walk-forward 或 CV 结果、OOS 退化情况和过拟合风险解释。
+  constraints_zh:
+    - 不在没有 OOS 验证时报告“最佳参数”，不为拯救 OOS 结果而事后扩大搜索范围。
+    - 不在最终测试期上调参；超过 100 个组合时要提示搜索规模风险。
+  related_workflows:
+    - /guide/agentic-quant-research
+
+create-component:
+  title_zh: 量化组件创建
+  summary_zh: 在确认需要修改 open-xquant 框架内置组件时，检查注册表并路由到具体组件创建 Skill。
+  group: 组件开发
+  use_cases_zh:
+    - 用户明确要求修改 open-xquant 源码或新增内置 Indicator、Signal、Rule 或 PortfolioOptimizer。
+  inputs_zh:
+    - 组件行为描述、期望名称、用户约束和当前组件注册表。
+  outputs_zh:
+    - 一个具体组件类型路由，或发现现有组件已满足需求后的停止说明。
+  constraints_zh:
+    - 不在导航 Skill 中写组件代码，不跳过注册表检查，不因同义词差异创建新组件。
+    - 请求可能属于多种组件类型时必须澄清，不能同时路由多个创建 Skill。
+  related_workflows:
+    - /workflows/component-development
+
+author-component:
+  title_zh: 量化组件实现
+  summary_zh: 在工作区本地实现自定义组件、测试、清理缓存并发布带哈希的组件清单和目录。
+  group: 组件开发
+  use_cases_zh:
+    - 组件目录和配方目录无法满足研究需要，需要工作区本地自定义 Indicator、Signal 或 PortfolioOptimizer。
+  inputs_zh:
+    - "`component_request.json`、`component_catalog.json`、对话上下文、确认记录和组件根路径。"
+  outputs_zh:
+    - 工作区组件 bundle、`component_manifest.json`、`component_catalog.json`、测试结果和阶段 `result.json`。
+  constraints_zh:
+    - 不修改安装的 SDK bundle 或 open-xquant 源码，除非用户明确要求框架开发。
+    - 工作区本地 Rule 默认阻塞；不能跳过测试、导入、注册可见性或 manifest hash 失败。
+  related_workflows:
+    - /workflows/component-development
+
+create-indicator:
+  title_zh: 量化指标创建
+  summary_zh: 为 open-xquant 创建纯数值时间序列 Indicator，并补齐测试、导出和注册表接线。
+  group: 组件开发
+  use_cases_zh:
+    - "`create-component` 已确认没有现有 Indicator 满足用户请求。"
+  inputs_zh:
+    - 公式、输入列、参数默认值、输出单位和符号、NaN 行为、常价行为和依赖要求。
+  outputs_zh:
+    - "`src/oxq/indicators/{snake_name}.py`、对应测试、包导出和注册表更新。"
+  constraints_zh:
+    - 先写手算期望的测试并确认缺失实现失败；测试通过前不注册。
+    - 不从实现复制期望值，不加入 I/O、随机性或可变全局状态。
+  related_workflows:
+    - /workflows/component-development
+
+create-rule:
+  title_zh: 量化规则创建
+  summary_zh: 为 open-xquant 创建 bar-by-bar 风控、持有、权重覆盖或退出 Rule，并用组合状态测试验证。
+  group: 组件开发
+  use_cases_zh:
+    - "`create-component` 已确认没有现有 Rule 满足请求的风险或退出逻辑。"
+  inputs_zh:
+    - pre-trade 或 post-trade 分类、触发条件、`RuleResult` 字段、参数、状态和 reset 语义。
+  outputs_zh:
+    - "`src/oxq/rules/{snake_name}.py`、对应测试、包导出和注册表更新。"
+  constraints_zh:
+    - 不把 `RuleResult.constraints` 用于执行关键行为，除非引擎支持已实现并测试。
+    - "`evaluate()` 不得修改 `Portfolio`，必须覆盖无触发场景，测试通过前不注册。"
+  related_workflows:
+    - /workflows/component-development
+
+build-rule:
+  title_zh: 量化规则实现
+  summary_zh: 配置和解释交易规则、退出、风控 hold 与再平衡限制，并明确当前 SPEC 支持边界。
+  group: 组件开发
+  use_cases_zh:
+    - 用户要求止损、止盈、回撤保护、持仓限制、再平衡规则或规则组件。
+  inputs_zh:
+    - 规则类型、阈值、触发条件、执行阶段、组合约束、SDK 或 SPEC 使用路径。
+  outputs_zh:
+    - 受审计 SPEC 支持的 `portfolio.rules` 或 `execution.rebalance` 配置，或 SDK/新组件路由。
+  constraints_zh:
+    - 不把未支持的 YAML `rules:` 记录为 CLI 可用，也不声称 `constraints` 会影响执行，除非已验证代码路径。
+    - 风控规则不能替代研究审计。
+  related_workflows:
+    - /guide/agentic-quant-research
+    - /workflows/component-development
+
+create-signal:
+  title_zh: 量化信号创建
+  summary_zh: 创建确定性的 boolean 或 categorical 交易意图 Signal，并验证输出域和因果行为。
+  group: 组件开发
+  use_cases_zh:
+    - "`create-component` 已确认没有现有 Signal 满足请求的交易意图逻辑。"
+  inputs_zh:
+    - 触发条件、参数和默认值、输出类型、每个输出值含义、NaN 与边界行为、因果性说明。
+  outputs_zh:
+    - "`src/oxq/signals/{snake_name}.py`、对应测试、包导出和注册表更新。"
+  constraints_zh:
+    - 不返回未声明的浮点信号，不引入未说明的未来数据偏差。
+    - categorical trading intent 必须使用如 `BUY`、`SELL`、`HOLD` 的大写标签，测试通过前不注册。
+  related_workflows:
+    - /workflows/component-development
+
+create-portfolio-optimizer:
+  title_zh: 量化组合优化器创建
+  summary_zh: 创建返回目标权重的 PortfolioOptimizer，并用权重和 fallback 不变量测试验证。
+  group: 组件开发
+  use_cases_zh:
+    - "`create-component` 已确认没有现有 PortfolioOptimizer 满足分配逻辑。"
+  inputs_zh:
+    - 分配公式、构造参数、signals 或 indicators 输入、所需列、CASH fallback、权重限制和状态行为。
+  outputs_zh:
+    - "`src/oxq/portfolio/{snake_name}.py` 或维护者要求的模块、对应测试、导出和注册表更新。"
+  constraints_zh:
+    - 每条路径必须返回非空权重字典且权重和为 `1.0`。
+    - "无效输入要回落到 `{\"CASH\": 1.0}` 或明确排除；测试通过前不注册。"
+  related_workflows:
+    - /workflows/component-development
+
+plot-indicators:
+  title_zh: 量化指标可视化
+  summary_zh: 绘制 open-xquant 运行图表和指标叠加，用于视觉检查而不是替代验证或审计。
+  group: 组件开发
+  use_cases_zh:
+    - 用户要求可视化价格、指标、信号或运行图表产物。
+  inputs_zh:
+    - run id、symbol、指标列、overlay 选择和可用 chart 依赖。
+  outputs_zh:
+    - 指标图表结果、输出路径检查和视觉解释限制。
+  constraints_zh:
+    - 不把图表当作盈利证明，不用其他列掩盖缺失列，也不从视觉重合推断因果。
+  related_workflows:
+    - /workflows/component-development
+
+run-authorized-backtest:
+  title_zh: 授权量化回测执行
+  summary_zh: 在 SPEC、SPEC 审计、运行语义审计和授权文件都通过后执行正式回测。
+  group: 执行与报告
+  use_cases_zh:
+    - 已产生通过的构建、SPEC 审计和运行语义审计产物，且调用方写入 `backtest_authorization.json`。
+  inputs_zh:
+    - 回测授权、策略 SPEC、SPEC 审计、运行语义审计、组件目录、组件 manifest 和获批数据目录。
+  outputs_zh:
+    - "`<phase_paths.09_backtests>/<run_id>/` 下的标准运行包和 `runner_result.json`。"
+  constraints_zh:
+    - 不编辑 SPEC、审计、运行语义审计或报告文件，不导出注册表，不继续执行失败授权或失败命令之后的阶段。
+    - 不运行可复现性、研究偏差、稳健性、实验登记或报告命令；这些属于监控阶段。
+  related_workflows:
+    - /workflows/strategy-backtest
+
+review-performance:
+  title_zh: 量化绩效复核
+  summary_zh: 按审计、执行假设、稳健性、OOS 覆盖和指标顺序解释回测表现与限制。
+  group: 执行与报告
+  use_cases_zh:
+    - 用户询问策略是否有效，或需要解释回测、审计、报告与比较结果。
+  inputs_zh:
+    - 运行目录、指标、交易和净值、审计、稳健性、实验登记和可选研究报告。
+  outputs_zh:
+    - 保守的研究结论标签、关键指标解释、审计风险、可比性说明和后续动作。
+  constraints_zh:
+    - 不解释掉负 Sharpe 或严重回撤，不对不同数据或成本假设的策略做无条件排名。
+    - 不给投资建议；只报告研究证据和限制。
+  related_workflows:
+    - /workflows/strategy-backtest
+
+build-report-charts:
+  title_zh: 量化报告图表构建
+  summary_zh: 为研究报告构建默认专业图表包，登记图形、脚本和 manifest 哈希后交给报告写作。
+  group: 执行与报告
+  use_cases_zh:
+    - 报告需要 chart assets、figures、visual evidence、绘图脚本或 notebook-like 资产。
+  inputs_zh:
+    - 运行包、报告修订 ID、图表决策、metrics、曲线、交易、订单、持仓、target weights 和稳健性产物。
+  outputs_zh:
+    - revision-scoped `report_assets/manifest.json`、figures、scripts 和 `chart_build_result.json`。
+  constraints_zh:
+    - 不发明图表数据，不编辑回测产物，不把图表当作盈利证明。
+    - 默认报告模式自动构建默认专业图表包；缺失单张图只能用封闭 skip reason 记录，不能让整份报告无图。
+  related_workflows:
+    - /workflows/strategy-backtest
+
+write-research-report:
+  title_zh: 量化研究报告撰写
+  summary_zh: 基于指标、审计、稳健性和已登记图表资产撰写最终人类可读研究报告并渲染 HTML。
+  group: 执行与报告
+  use_cases_zh:
+    - 需要写入或编辑 `research_report.md`、`research_report.html` 或最终实验报告。
+  inputs_zh:
+    - 策略 SPEC、审计、metrics、执行假设、compiled plan、data manifest、监控产物、报告资产和 facts API 输出。
+  outputs_zh:
+    - revision-scoped `research_report.md`、`research_report.html`、`writer_result.json` 和 sealed candidate manifest。
+  constraints_zh:
+    - 不发明证据，不修改指标、审计、稳健性或回测产物，不隐藏负面证据。
+    - 默认语言为中文；没有已登记的必需图表资产时写 blocked 结果并交给 `build-report-charts`。
+  related_workflows:
+    - /workflows/strategy-backtest
+
+review-research-report:
+  title_zh: 量化研究报告审阅
+  summary_zh: 审阅已完成报告的决策一致性、证据忠实度、审计解释、图表叙事和语义问题。
+  group: 执行与报告
+  use_cases_zh:
+    - 报告写作完成、HTML 已从同一 Markdown 渲染，并且确定性报告 QA 已针对同一 candidate directory 运行。
+  inputs_zh:
+    - 报告 Markdown/HTML、writer result、candidate manifest、SPEC、审计、runtime、metrics、监控产物、图表资产和 QA 输出。
+  outputs_zh:
+    - "`<phase_paths.10_reports>/<run_id>/reviews/<review_revision_id>/report_review.json`。"
+  constraints_zh:
+    - 不编辑 Markdown 或 HTML；需要改报告时返回阻塞发现给写作阶段。
+    - 不批准与决策政策冲突、隐藏重大风险、遗漏未解决 SPEC 审计 blocker 或依赖图表美观的报告。
+  related_workflows:
+    - /workflows/strategy-backtest
+
+configure-trade-execution:
+  title_zh: 量化交易执行配置
+  summary_zh: 配置信号时间、成交时间、价格模式、费用、滑点、手数、现金收益和交易日历假设。
+  group: 执行与报告
+  use_cases_zh:
+    - 用户讨论交易成本、订单执行、成交价格、手数、手续费、滑点或 broker 假设。
+  inputs_zh:
+    - 信号时间、交易时间、fill price mode、order timing、费用税率、滑点、lot size、现金和日历。
+  outputs_zh:
+    - 可用于受审计 CLI 回测的 execution/cost 配置或 SDK broker 配置。
+  constraints_zh:
+    - 不允许同 bar close 信号和 close 成交进入受审计研究。
+    - 不在用户未确认时静默选择零费用或零滑点；比较不同执行、成本、日历、手数或现金假设时必须突出差异。
+  related_workflows:
+    - /workflows/strategy-backtest
+
+manage-live-trading:
+  title_zh: 量化实盘交易管理
+  summary_zh: 在严格安全门槛下连接 Alpaca 纸面或实盘交易，执行账户检查、行情读取或订单提交。
+  group: 执行与报告
+  use_cases_zh:
+    - 用户明确要求 broker 连接、账户检查、实时数据、纸面交易、实盘交易或订单提交。
+  inputs_zh:
+    - live 依赖、Alpaca 凭据、paper/live 模式、账户、行情、订单参数和风险确认。
+  outputs_zh:
+    - 账户或持仓检查、行情样本、经确认的订单提交结果，或 LiveBroker 集成状态。
+  constraints_zh:
+    - 默认 `paper=True`；实盘端点和任何 live 订单都需要用户明确要求并确认风险。
+    - 不在文件中保存 API keys，不批量下单除非用户审阅完整列表，不把回测信号直接变成订单。
+  related_workflows:
+    - /workflows/live-trading
+
+monitor-strategy-run:
+  title_zh: 量化策略运行监控
+  summary_zh: 对已完成运行执行可复现性、研究偏差、稳健性和实验登记，并保持运行包完整性。
+  group: 执行与报告
+  use_cases_zh:
+    - 正式回测完成后，需要发布 post-run 审计、稳健性结果、实验日志并移交报告写作。
+  inputs_zh:
+    - 受控运行目录、canonical SPEC 审计、runtime audit、运行标准产物、实验登记路径和 robustness 输出。
+  outputs_zh:
+    - 运行包内的 `reproducibility_audit.json`、`research_bias_audit.json`、`robustness.json`、实验登记和监控结果。
+  constraints_zh:
+    - 不编辑产物来让审计通过，不把失败审计概括为“基本可以”，不只登记成功实验。
+    - 监控发布顺序固定；不得用 shell 重定向生成 governed audit 产物。
+  related_workflows:
+    - /workflows/strategy-backtest

@@ -1,0 +1,35 @@
+---
+title: 量化规则实现
+description: 配置和解释交易规则、退出、风控 hold 与再平衡限制，并明确当前 SPEC 支持边界。
+outline: deep
+---
+
+# 量化规则实现
+
+配置和解释交易规则、退出、风控 hold 与再平衡限制，并明确当前 SPEC 支持边界。
+
+## 适用场景
+
+- 用户要求止损、止盈、回撤保护、持仓限制、再平衡规则或规则组件。
+
+## 输入
+
+- 规则类型、阈值、触发条件、执行阶段、组合约束、SDK 或 SPEC 使用路径。
+
+## 输出
+
+- 受审计 SPEC 支持的 `portfolio.rules` 或 `execution.rebalance` 配置，或 SDK/新组件路由。
+
+## 约束
+
+- 不把未支持的 YAML `rules:` 记录为 CLI 可用，也不声称 `constraints` 会影响执行，除非已验证代码路径。
+- 风控规则不能替代研究审计。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+- [AI 量化组件开发](/workflows/component-development)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/build-rule/SKILL.md)

@@ -1,0 +1,34 @@
+---
+title: 量化绩效复核
+description: 按审计、执行假设、稳健性、OOS 覆盖和指标顺序解释回测表现与限制。
+outline: deep
+---
+
+# 量化绩效复核
+
+按审计、执行假设、稳健性、OOS 覆盖和指标顺序解释回测表现与限制。
+
+## 适用场景
+
+- 用户询问策略是否有效，或需要解释回测、审计、报告与比较结果。
+
+## 输入
+
+- 运行目录、指标、交易和净值、审计、稳健性、实验登记和可选研究报告。
+
+## 输出
+
+- 保守的研究结论标签、关键指标解释、审计风险、可比性说明和后续动作。
+
+## 约束
+
+- 不解释掉负 Sharpe 或严重回撤，不对不同数据或成本假设的策略做无条件排名。
+- 不给投资建议；只报告研究证据和限制。
+
+## 关联工作流
+
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/review-performance/SKILL.md)

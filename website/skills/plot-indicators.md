@@ -1,0 +1,33 @@
+---
+title: 量化指标可视化
+description: 绘制 open-xquant 运行图表和指标叠加，用于视觉检查而不是替代验证或审计。
+outline: deep
+---
+
+# 量化指标可视化
+
+绘制 open-xquant 运行图表和指标叠加，用于视觉检查而不是替代验证或审计。
+
+## 适用场景
+
+- 用户要求可视化价格、指标、信号或运行图表产物。
+
+## 输入
+
+- run id、symbol、指标列、overlay 选择和可用 chart 依赖。
+
+## 输出
+
+- 指标图表结果、输出路径检查和视觉解释限制。
+
+## 约束
+
+- 不把图表当作盈利证明，不用其他列掩盖缺失列，也不从视觉重合推断因果。
+
+## 关联工作流
+
+- [AI 量化组件开发](/workflows/component-development)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/plot-indicators/SKILL.md)

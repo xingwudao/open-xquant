@@ -1,0 +1,34 @@
+---
+title: 量化策略想法审计
+description: 审计策略想法简报和原始对话，确认每个已确认值都有用户证据后才允许构建 SPEC。
+outline: deep
+---
+
+# 量化策略想法审计
+
+审计策略想法简报和原始对话，确认每个已确认值都有用户证据后才允许构建 SPEC。
+
+## 适用场景
+
+- `brainstorm-strategy-idea` 已写入 `strategy_idea_brief.json`，且下一步准备构建策略 SPEC。
+
+## 输入
+
+- `strategy_idea_brief.json` 和协调器提供的精确原始对话文本 `CONVERSATION_HISTORY_RAW`。
+
+## 输出
+
+- `<phase_paths.02_idea_audit>/strategy_idea_audit.json`。
+
+## 约束
+
+- 不读取、写入或修复 `strategy_spec.yaml`，不运行 `oxq`，不补全缺失值，也不调用 SPEC 构建。
+- 缺失、摘要化、占位或哈希不匹配的原始对话必须阻塞审计。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/audit-strategy-idea/SKILL.md)

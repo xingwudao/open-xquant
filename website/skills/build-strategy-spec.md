@@ -1,0 +1,35 @@
+---
+title: 量化策略规格构建
+description: 从已通过想法审计的简报构建并验证 `strategy_spec.yaml`，同时记录字段映射和构建结果。
+outline: deep
+---
+
+# 量化策略规格构建
+
+从已通过想法审计的简报构建并验证 `strategy_spec.yaml`，同时记录字段映射和构建结果。
+
+## 适用场景
+
+- 想法简报和想法审计均通过后，需要把策略描述转成可验证的 open-xquant SPEC。
+
+## 输入
+
+- 想法简报、想法审计、组件目录、配方目录、数据检查结果和需要修复的 SPEC 审计反馈。
+
+## 输出
+
+- `strategy_spec.yaml`、`component_catalog.json`、构建说明、映射说明、映射契约和 `builder_phase_result.json`。
+
+## 约束
+
+- 想法审计通过前不运行目录导出、`oxq spec init` 或 SPEC 写入；初始化必须显式写入 `04_spec_build`。
+- 不读取市场数据文件，不运行编译、回测、监控、审计或报告阶段。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/build-strategy-spec/SKILL.md)

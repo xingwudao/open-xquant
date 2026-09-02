@@ -1,0 +1,34 @@
+---
+title: 横截面因子评估
+description: 用 IC、Rank IC、ICIR、decay 和 turnover 评估同日多资产排序因子。
+outline: deep
+---
+
+# 横截面因子评估
+
+用 IC、Rank IC、ICIR、decay 和 turnover 评估同日多资产排序因子。
+
+## 适用场景
+
+- 因子在每个日期对多资产排序，目标是选股或多资产横截面排名。
+
+## 输入
+
+- 多资产 factor DataFrame、价格 DataFrame、forward returns、horizons、symbols 和日期范围。
+
+## 输出
+
+- IC 均值、IC 标准差、ICIR、Rank IC、decay、turnover 和带限制的结论。
+
+## 约束
+
+- 少于 10 个 symbols 时不能把横截面 IC 作为主要证据。
+- 不报告缺少 IC 标准差或 ICIR 的 IC 均值，也不忽略 turnover 与 decay。
+
+## 关联工作流
+
+- [AI 因子评估](/workflows/factor-evaluation)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/evaluate-cross-sectional/SKILL.md)

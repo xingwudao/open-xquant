@@ -1,0 +1,35 @@
+---
+title: 量化数据探索
+description: 检查、下载和验证本地市场、宏观与财务数据，为回测或因子研究确认数据可用性。
+outline: deep
+---
+
+# 量化数据探索
+
+检查、下载和验证本地市场、宏观与财务数据，为回测或因子研究确认数据可用性。
+
+## 适用场景
+
+- 回测、因子研究或任何依赖本地 parquet 数据的任务需要确认数据覆盖和质量。
+
+## 输入
+
+- 数据目录、符号列表、时间范围、数据提供商、字段要求和工作区版本状态。
+
+## 输出
+
+- `<phase_paths.05_data_inspection>/data_inspection_result.json` 和 `data_availability_report.md`。
+
+## 约束
+
+- 不在未知或缺失数据上运行正式回测，也不把 mock 或演示下载当作生产研究证据。
+- 一个运行中混用数据提供商需要用户批准并在报告中披露。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+- [AI 因子评估](/workflows/factor-evaluation)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/explore-data/SKILL.md)

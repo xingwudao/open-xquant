@@ -1,0 +1,34 @@
+---
+title: 量化标的池构建
+description: 定义策略可交易标的池，并说明静态、指数快照和存活偏差约束。
+outline: deep
+---
+
+# 量化标的池构建
+
+定义策略可交易标的池，并说明静态、指数快照和存活偏差约束。
+
+## 适用场景
+
+- 用户选择 symbols、指数、动态过滤器或可交易池，需要明确 universe 设计。
+
+## 输入
+
+- 市场、symbols、指数元数据、本地成分股快照、基准和数据目录。
+
+## 输出
+
+- 可进入 SPEC 或 SDK 的 universe 配置，以及数据和存活偏差检查结果。
+
+## 约束
+
+- 不承诺点时指数成员，除非数据源能证明；不隐藏存活偏差警告。
+- 指数 universe 仍需本地 `symbols` 快照；不能由 Agent 发明成分股。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/build-universe/SKILL.md)

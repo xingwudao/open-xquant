@@ -1,0 +1,34 @@
+---
+title: 量化产物血缘审计
+description: 重新计算版本、运行、报告、比较和最终选择之间的路径与哈希绑定，验证候选证据当前有效。
+outline: deep
+---
+
+# 量化产物血缘审计
+
+重新计算版本、运行、报告、比较和最终选择之间的路径与哈希绑定，验证候选证据当前有效。
+
+## 适用场景
+
+- 比较、报告审阅、迁移或最终选择前，需要检查 open-xquant 产物的版本、运行和最终选择可追溯性。
+
+## 输入
+
+- 工作流清单、当前状态、血缘、版本清单、运行清单、比较清单和最终选择产物。
+
+## 输出
+
+- `<governance_dir>/lineage_audit_<timestamp>.json` 和对应 Markdown 审计报告。
+
+## 约束
+
+- 不重写哈希，不比较策略表现，不选择最终版本，也不推断缺失审计已通过。
+- 历史候选必须通过其自身版本清单解析，不能用当前 active 版本默认路径替代。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/audit-artifact-lineage/SKILL.md)

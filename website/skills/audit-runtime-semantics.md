@@ -1,0 +1,35 @@
+---
+title: 量化运行语义审计
+description: 编译策略预览并审计 `compiled_plan.json` 是否保留 SPEC 的关键执行语义。
+outline: deep
+---
+
+# 量化运行语义审计
+
+编译策略预览并审计 `compiled_plan.json` 是否保留 SPEC 的关键执行语义。
+
+## 适用场景
+
+- 用户确认完整 SPEC 表后，正式回测前需要验证编译后的运行计划与 SPEC 一致。
+
+## 输入
+
+- 策略 SPEC、已确认的 SPEC 审计、组件目录、正式运行输入和可选既有编译预览。
+
+## 输出
+
+- 编译预览产物、`strategy.py`、`spec_hash.txt` 和 `<phase_paths.08_runtime_audit>/runtime_audit.json`。
+
+## 约束
+
+- 未通过严格确认验证的 SPEC 审计不能用于编译、运行语义审计或回测授权。
+- 不编辑 SPEC，不运行正式回测，不监控运行，也不写报告。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/audit-runtime-semantics/SKILL.md)

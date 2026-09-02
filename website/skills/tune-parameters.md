@@ -1,0 +1,34 @@
+---
+title: 量化参数调优
+description: 用网格搜索、walk-forward、时间序列交叉验证和过拟合信号检查调参结果。
+outline: deep
+---
+
+# 量化参数调优
+
+用网格搜索、walk-forward、时间序列交叉验证和过拟合信号检查调参结果。
+
+## 适用场景
+
+- 用户要求优化策略参数，或比较参数组合表现。
+
+## 输入
+
+- 已验证的基础策略或 SPEC、训练与 OOS 数据、用户批准的指标和参数搜索范围。
+
+## 输出
+
+- 参数搜索结果、walk-forward 或 CV 结果、OOS 退化情况和过拟合风险解释。
+
+## 约束
+
+- 不在没有 OOS 验证时报告“最佳参数”，不为拯救 OOS 结果而事后扩大搜索范围。
+- 不在最终测试期上调参；超过 100 个组合时要提示搜索规模风险。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/tune-parameters/SKILL.md)
