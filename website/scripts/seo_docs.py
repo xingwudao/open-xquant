@@ -91,7 +91,7 @@ def load_skill_sources(repo_root: Path) -> tuple[SkillSource, ...]:
 
 
 def load_skill_extensions(path: Path) -> dict[str, SkillExtension]:
-    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    payload = _safe_load_unique_mapping_keys(path) or {}
     records = _extract_extension_records(payload, path)
     extensions: dict[str, SkillExtension] = {}
     for name, raw_extension in records:
@@ -126,6 +126,8 @@ def collect_leaf_commands(root: click.Command) -> tuple[tuple[str, str], ...]:
     leaves: list[tuple[str, str]] = []
 
     def visit(command: click.Command, prefix: tuple[str, ...]) -> None:
+        if command.hidden:
+            return
         if isinstance(command, click.Group):
             for name, child in command.commands.items():
                 visit(child, (*prefix, name))
@@ -172,7 +174,7 @@ def check_outputs(repo_root: Path, outputs: dict[Path, str]) -> None:
         if relative_path.is_absolute():
             raise ContentError(f"generated output path must be repo-relative: {relative_path}")
         target = repo_root / relative_path
-        expected_bytes = _normalize_text(text).encode("utf-8")
+        expected_bytes = text.encode("utf-8")
         if not target.exists():
             messages.append(f"missing generated file: {relative_path.as_posix()}")
             continue
@@ -210,6 +212,45 @@ def _extract_extension_records(
     if isinstance(payload, list):
         return tuple(_extension_record_from_list_item(item, path) for item in payload)
     raise ContentError(f"{path} must contain Skill extension records")
+
+
+class _UniqueKeyLoader(yaml.SafeLoader):  # type: ignore[misc]
+    pass
+
+
+def _safe_load_unique_mapping_keys(path: Path) -> object:
+    return yaml.load(path.read_text(encoding="utf-8"), Loader=_UniqueKeyLoader)
+
+
+def _construct_unique_mapping(
+    loader: _UniqueKeyLoader,
+    node: object,
+    deep: bool = False,
+) -> dict[object, object]:
+    if not isinstance(node, yaml.MappingNode):
+        raise ContentError("YAML mapping node expected")
+
+    seen: set[object] = set()
+    for key_node, _value_node in node.value:
+        key = loader.construct_object(key_node, deep=deep)
+        try:
+            duplicate = key in seen
+        except TypeError as exc:
+            raise ContentError(f"unhashable Chinese extension key: {key}") from exc
+        if duplicate:
+            raise ContentError(f"duplicate Chinese extension: {key}")
+        seen.add(key)
+
+    mapping = loader.construct_mapping(node, deep=deep)
+    if not isinstance(mapping, dict):
+        raise ContentError("YAML mapping constructor did not return a mapping")
+    return mapping
+
+
+_UniqueKeyLoader.add_constructor(
+    yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,
+    _construct_unique_mapping,
+)
 
 
 def _extension_record_from_mapping_item(
