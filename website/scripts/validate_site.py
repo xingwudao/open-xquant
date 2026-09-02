@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from html.parser import HTMLParser
@@ -25,8 +26,15 @@ class PageSignals:
     og_title: str
     og_description: str
     og_url: str
+    og_site_name: str
     og_image: str
+    og_image_alt: str
+    twitter_card: str
+    twitter_title: str
+    twitter_description: str
+    twitter_image: str
     json_ld_count: int
+    json_ld_types: tuple[str, ...]
 
 
 class _PageParser(HTMLParser):
@@ -40,11 +48,20 @@ class _PageParser(HTMLParser):
         self.og_title = ""
         self.og_description = ""
         self.og_url = ""
+        self.og_site_name = ""
         self.og_image = ""
+        self.og_image_alt = ""
+        self.twitter_card = ""
+        self.twitter_title = ""
+        self.twitter_description = ""
+        self.twitter_image = ""
         self.json_ld_count = 0
+        self.json_ld_types: list[str] = []
         self.body_has_content = False
         self._in_title = False
         self._in_body = False
+        self._in_json_ld = False
+        self._json_ld_parts: list[str] = []
         self._content_stack: list[str] = []
 
     def handle_starttag(
@@ -71,8 +88,20 @@ class _PageParser(HTMLParser):
                 self.og_description = content
             elif prop == "og:url":
                 self.og_url = content
+            elif prop == "og:site_name":
+                self.og_site_name = content
             elif prop == "og:image":
                 self.og_image = content
+            elif prop == "og:image:alt":
+                self.og_image_alt = content
+            elif name == "twitter:card":
+                self.twitter_card = content
+            elif name == "twitter:title":
+                self.twitter_title = content
+            elif name == "twitter:description":
+                self.twitter_description = content
+            elif name == "twitter:image":
+                self.twitter_image = content
         elif tag == "link":
             rel = {value.lower() for value in attr_map.get("rel", "").split()}
             if "canonical" in rel:
@@ -81,6 +110,7 @@ class _PageParser(HTMLParser):
             script_type = attr_map.get("type", "").lower()
             if script_type == "application/ld+json":
                 self.json_ld_count += 1
+                self._in_json_ld = True
 
         if self._in_body:
             self._content_stack.append(tag)
@@ -91,6 +121,10 @@ class _PageParser(HTMLParser):
         tag = tag.lower()
         if tag == "title":
             self._in_title = False
+        elif tag == "script" and self._in_json_ld:
+            self._in_json_ld = False
+            self._record_json_ld_types("".join(self._json_ld_parts))
+            self._json_ld_parts.clear()
         elif tag == "body":
             self._in_body = False
 
@@ -103,6 +137,8 @@ class _PageParser(HTMLParser):
     def handle_data(self, data: str) -> None:
         if self._in_title:
             self.title_parts.append(data)
+        if self._in_json_ld:
+            self._json_ld_parts.append(data)
         if self._in_body and data.strip() and not self._is_in_ignored_body_tag():
             self.body_has_content = True
 
@@ -119,12 +155,26 @@ class _PageParser(HTMLParser):
             og_title=self.og_title,
             og_description=self.og_description,
             og_url=self.og_url,
+            og_site_name=self.og_site_name,
             og_image=self.og_image,
+            og_image_alt=self.og_image_alt,
+            twitter_card=self.twitter_card,
+            twitter_title=self.twitter_title,
+            twitter_description=self.twitter_description,
+            twitter_image=self.twitter_image,
             json_ld_count=self.json_ld_count,
+            json_ld_types=tuple(sorted(set(self.json_ld_types))),
         )
 
+    def _record_json_ld_types(self, raw_json: str) -> None:
+        try:
+            payload = json.loads(raw_json)
+        except json.JSONDecodeError as exc:
+            raise SiteValidationError(f"{self.path}: invalid JSON-LD: {exc}") from exc
+        self.json_ld_types.extend(_json_ld_types(payload))
 
-def inspect_page(path: Path) -> PageSignals:
+
+def inspect_page(path: Path, dist: Path | None = None) -> PageSignals:
     parser = _PageParser(path)
     parser.feed(path.read_text(encoding="utf-8"))
     parser.close()
@@ -139,7 +189,13 @@ def inspect_page(path: Path) -> PageSignals:
             ("og:title", signals.og_title),
             ("og:description", signals.og_description),
             ("og:url", signals.og_url),
+            ("og:site_name", signals.og_site_name),
             ("og:image", signals.og_image),
+            ("og:image:alt", signals.og_image_alt),
+            ("twitter:card", signals.twitter_card),
+            ("twitter:title", signals.twitter_title),
+            ("twitter:description", signals.twitter_description),
+            ("twitter:image", signals.twitter_image),
         )
         if not value
     ]
@@ -147,6 +203,9 @@ def inspect_page(path: Path) -> PageSignals:
         raise SiteValidationError(f"{path}: missing {', '.join(missing)}")
     if signals.json_ld_count == 0:
         raise SiteValidationError(f"{path}: missing JSON-LD")
+    is_home_page = dist is not None and path == dist / "index.html"
+    if is_home_page and "SoftwareApplication" not in signals.json_ld_types:
+        raise SiteValidationError(f"{path}: missing SoftwareApplication JSON-LD")
     is_not_found_page = path.name == "404.html"
     if not is_not_found_page and signals.h1_count != 1:
         raise SiteValidationError(
@@ -167,7 +226,7 @@ def validate_site(dist: Path) -> tuple[PageSignals, ...]:
     if not html_paths:
         raise SiteValidationError(f"{dist}: no HTML files found")
 
-    pages = tuple(inspect_page(path) for path in html_paths)
+    pages = tuple(inspect_page(path, dist) for path in html_paths)
     indexable_pages = tuple(page for page in pages if page.path.name != "404.html")
     _validate_unique_metadata(indexable_pages, "title")
     _validate_unique_metadata(indexable_pages, "description")
@@ -236,6 +295,23 @@ def _read_sitemap_urls(path: Path) -> set[str]:
 
 def _local_name(tag: str) -> str:
     return tag.rsplit("}", 1)[-1]
+
+
+def _json_ld_types(payload: object) -> list[str]:
+    if isinstance(payload, list):
+        values: list[str] = []
+        for item in payload:
+            values.extend(_json_ld_types(item))
+        return values
+    if not isinstance(payload, dict):
+        return []
+    raw_type = payload.get("@type")
+    values = [raw_type] if isinstance(raw_type, str) else []
+    graph = payload.get("@graph")
+    if isinstance(graph, list):
+        for item in graph:
+            values.extend(_json_ld_types(item))
+    return values
 
 
 def main(argv: Sequence[str] | None = None) -> int:

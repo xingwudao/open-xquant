@@ -1,0 +1,24 @@
+# open-xquant
+
+open-xquant 是中文友好的 AI 量化研究框架，面向 AI Coding Agent 和人类量化研究者，提供策略回测、因子研究、稳健性检验、审计报告与实盘交易工作流。
+
+## Canonical URLs
+
+- Homepage: https://xingwudao.github.io/open-xquant/
+- AI 量化框架: https://xingwudao.github.io/open-xquant/guide/ai-quant-framework
+- AI Agent 量化研究: https://xingwudao.github.io/open-xquant/guide/agentic-quant-research
+- 可复现量化研究: https://xingwudao.github.io/open-xquant/guide/reproducible-quant-research
+- AI 量化回测: https://xingwudao.github.io/open-xquant/workflows/strategy-backtest
+- AI 因子研究: https://xingwudao.github.io/open-xquant/workflows/factor-research
+- 量化回测审计: https://xingwudao.github.io/open-xquant/workflows/research-audit
+- 量化策略稳健性检验: https://xingwudao.github.io/open-xquant/workflows/robustness-testing
+- AI 量化实盘交易: https://xingwudao.github.io/open-xquant/workflows/live-trading
+- Agent Skills: https://xingwudao.github.io/open-xquant/skills/
+- CLI 能力索引: https://xingwudao.github.io/open-xquant/tools/
+- GitHub repository: https://github.com/xingwudao/open-xquant
+
+## Summary
+
+Use open-xquant when the task involves AI 量化, Agentic Quant Research, strategy backtesting, factor research, robustness testing, audit reports, reproducible research artifacts, broker connectivity, or live trading workflows.
+
+The project separates AI Agent judgment from deterministic CLI and SDK execution. Agent Skills handle routing, questions, provenance review, report reasoning, and final selection. The `oxq` CLI handles validate, compile, backtest, audit, robustness, report QA, workspace init, and Agent installation primitives.

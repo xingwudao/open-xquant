@@ -25,6 +25,13 @@ def test_site_config_locks_production_urls() -> None:
     assert "https://xingwudao.github.io" in seo
     assert "rel: 'canonical'" in seo
     assert "application/ld+json" in seo
+    assert "og:site_name" in seo
+    assert "og:image:alt" in seo
+    assert "twitter:card" in seo
+    assert "SoftwareApplication" in seo
+    assert "TechArticle" in seo
+    assert "FAQPage" in seo
+    assert "ItemList" in seo
 
 
 def test_robots_declares_production_sitemap() -> None:
@@ -34,3 +41,25 @@ def test_robots_declares_production_sitemap() -> None:
         "Allow: /\n"
         "Sitemap: https://xingwudao.github.io/open-xquant/sitemap.xml\n"
     )
+
+
+def test_llms_txt_declares_ai_quant_entry_points() -> None:
+    text = (ROOT / "website/public/llms.txt").read_text(encoding="utf-8")
+    assert text.startswith("# open-xquant\n")
+    for url in (
+        "https://xingwudao.github.io/open-xquant/",
+        "https://xingwudao.github.io/open-xquant/guide/ai-quant-framework",
+        "https://xingwudao.github.io/open-xquant/workflows/strategy-backtest",
+        "https://xingwudao.github.io/open-xquant/skills/",
+        "https://xingwudao.github.io/open-xquant/tools/",
+    ):
+        assert url in text
+    assert "AI 量化研究框架" in text
+
+
+def test_pages_workflow_manual_dispatch_can_deploy() -> None:
+    workflow = (ROOT / ".github/workflows/docs-pages.yml").read_text(encoding="utf-8")
+    assert "workflow_dispatch:" in workflow
+    assert "github.event_name == 'workflow_dispatch'" in workflow
+    assert "actions/upload-pages-artifact" in workflow
+    assert "actions/deploy-pages" in workflow

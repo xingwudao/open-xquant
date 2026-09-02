@@ -13,8 +13,14 @@ VALID_HTML = """<!doctype html>
 <meta property="og:title" content="AI 量化框架 | open-xquant">
 <meta property="og:description" content="中文友好的 AI 量化研究框架，覆盖回测、因子、审计和稳健性工作流。">
 <meta property="og:url" content="https://xingwudao.github.io/open-xquant/">
+<meta property="og:site_name" content="open-xquant">
 <meta property="og:image" content="https://xingwudao.github.io/open-xquant/images/open-xquant-subagent-collaboration.png">
-<script type="application/ld+json">{"@type":"WebSite"}</script>
+<meta property="og:image:alt" content="open-xquant AI 量化研究框架架构图">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="AI 量化框架 | open-xquant">
+<meta name="twitter:description" content="中文友好的 AI 量化研究框架，覆盖回测、因子、审计和稳健性工作流。">
+<meta name="twitter:image" content="https://xingwudao.github.io/open-xquant/images/open-xquant-subagent-collaboration.png">
+<script type="application/ld+json">[{"@type":"WebSite"},{"@type":"SoftwareApplication"}]</script>
 </head><body><h1>AI 量化研究框架</h1></body></html>"""
 
 
@@ -53,3 +59,53 @@ def test_validate_site_rejects_duplicate_titles(tmp_path: Path) -> None:
     (nested / "duplicate.html").write_text(VALID_HTML, encoding="utf-8")
     with pytest.raises(SiteValidationError, match="duplicate title"):
         validate_site(dist)
+
+
+def test_validate_site_rejects_missing_twitter_card(tmp_path: Path) -> None:
+    html = VALID_HTML.replace(
+        '<meta name="twitter:card" content="summary_large_image">\n',
+        "",
+    )
+    with pytest.raises(SiteValidationError, match="twitter:card"):
+        validate_site(_write_site(tmp_path, html))
+
+
+def test_validate_site_rejects_homepage_without_software_json_ld(tmp_path: Path) -> None:
+    html = VALID_HTML.replace(
+        '<script type="application/ld+json">[{"@type":"WebSite"},{"@type":"SoftwareApplication"}]</script>',
+        '<script type="application/ld+json">{"@type":"WebSite"}</script>',
+    )
+    with pytest.raises(SiteValidationError, match="SoftwareApplication"):
+        validate_site(_write_site(tmp_path, html))
+
+
+def test_validate_site_allows_nested_index_without_software_json_ld(tmp_path: Path) -> None:
+    dist = _write_site(tmp_path, VALID_HTML)
+    nested = dist / "examples"
+    nested.mkdir()
+    nested_html = VALID_HTML.replace(
+        "<title>AI 量化框架 | open-xquant</title>",
+        "<title>量化研究示例 | open-xquant</title>",
+    ).replace(
+        'content="AI 量化框架 | open-xquant"',
+        'content="量化研究示例 | open-xquant"',
+    ).replace(
+        "中文友好的 AI 量化研究框架，覆盖回测、因子、审计和稳健性工作流。",
+        "汇总 open-xquant 仓库中的回测、审计、因子和实盘示例。",
+    ).replace(
+        "https://xingwudao.github.io/open-xquant/",
+        "https://xingwudao.github.io/open-xquant/examples/",
+    ).replace(
+        '<script type="application/ld+json">[{"@type":"WebSite"},{"@type":"SoftwareApplication"}]</script>',
+        '<script type="application/ld+json">{"@type":"TechArticle"}</script>',
+    )
+    (nested / "index.html").write_text(nested_html, encoding="utf-8")
+    (dist / "sitemap.xml").write_text(
+        "<urlset>"
+        "<url><loc>https://xingwudao.github.io/open-xquant/</loc></url>"
+        "<url><loc>https://xingwudao.github.io/open-xquant/examples/</loc></url>"
+        "</urlset>",
+        encoding="utf-8",
+    )
+
+    validate_site(dist)
