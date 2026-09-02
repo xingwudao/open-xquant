@@ -156,6 +156,17 @@ def test_check_outputs_reports_generated_drift(tmp_path: Path) -> None:
         check_outputs(tmp_path, {Path("website/skills/index.md"): "current\n"})
 
 
+def test_check_outputs_reports_unexpected_generated_skill_page(tmp_path: Path) -> None:
+    outputs = build_outputs(ROOT)
+    stale_path = Path("website/skills/open-xquant.md")
+    target = tmp_path / stale_path
+    target.parent.mkdir(parents=True)
+    target.write_text(outputs[stale_path], encoding="utf-8")
+
+    with pytest.raises(ContentError, match="unexpected generated file: website/skills/open-xquant.md"):
+        check_outputs(tmp_path, {})
+
+
 def test_check_outputs_compares_expected_text_bytes_exactly(tmp_path: Path) -> None:
     target = tmp_path / "website" / "skills" / "index.md"
     target.parent.mkdir(parents=True)

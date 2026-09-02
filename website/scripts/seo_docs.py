@@ -367,6 +367,7 @@ def _render_skill_page(skill: SkillRecord) -> str:
         f"description: {extension.summary_zh}",
         "outline: deep",
         "---",
+        GENERATED_NOTICE,
         "",
         f"# {extension.title_zh}",
         "",
