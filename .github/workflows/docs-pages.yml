@@ -1,0 +1,71 @@
+name: Docs and GitHub Pages
+
+on:
+  pull_request:
+    paths:
+      - "README.md"
+      - "pyproject.toml"
+      - "agent/skills/**"
+      - "website/**"
+      - "tests/docs/**"
+      - ".github/workflows/docs-pages.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "README.md"
+      - "pyproject.toml"
+      - "agent/skills/**"
+      - "website/**"
+      - "tests/docs/**"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9 # v9.0.0
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v6
+        with:
+          node-version-file: website/.node-version
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: uv sync --extra dev
+      - run: npm ci --prefix website
+      - run: uv run pytest tests/docs tests/contracts/test_brand_naming.py -v
+      - run: npm --prefix website run docs:check
+      - run: npm --prefix website run docs:build
+      - run: npm --prefix website run docs:validate
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/configure-pages@v5
+      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: website/.vitepress/dist
+
+  deploy:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

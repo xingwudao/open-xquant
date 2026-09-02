@@ -3,7 +3,6 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-
 ROOT = Path(__file__).parents[2]
 POSITIONING = (
     "open-xquant 是中文友好的 AI 量化研究框架，面向 AI Coding Agent "

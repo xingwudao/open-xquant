@@ -4,7 +4,6 @@ from pathlib import Path
 
 import yaml
 
-
 ROOT = Path(__file__).parents[2]
 PAGES = {
     "website/index.md": ("AI 量化框架 | open-xquant", "AI 量化研究框架"),
