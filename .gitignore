@@ -40,7 +40,8 @@ Thumbs.db
 *.h5
 *.hdf5
 docs/plans/
-docs/superpowers/plans/
+docs/infographic/
+docs/superpowers/
 docs/guide-rules.md
 
 # Local research and testing
