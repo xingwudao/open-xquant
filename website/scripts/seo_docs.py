@@ -401,22 +401,32 @@ def _render_skill_page(skill: SkillRecord) -> str:
 
 def _render_tools_index(commands: tuple[CommandRecord, ...]) -> str:
     lines = [
+        "---",
+        "title: open-xquant CLI 能力索引",
+        "description: 可验证的 open-xquant 公开 CLI 叶子命令，覆盖策略规格、回测、审计、稳健性、报告和研究治理。",
+        "---",
         GENERATED_NOTICE,
-        "# CLI 工具索引",
         "",
-        "这些命令来自 `oxq.cli.main.main` 的公开 Click 叶子命令树。",
+        "# open-xquant CLI 能力索引",
+        "",
+        "本页从当前 Click 命令树生成。统计对象是公开 CLI 叶子命令，命令组本身不计入。",
         "",
     ]
     if not commands:
         lines.append("暂无 CLI 叶子命令。")
         return "\n".join(lines)
 
+    current_group: str | None = None
     for command in commands:
+        group = command.path.split(" ", 1)[0]
+        if group != current_group:
+            current_group = group
+            lines.extend([f"## {group}", ""])
         lines.extend(
             [
-                f"## `oxq {command.path}`",
+                f"### `oxq {command.path}`",
                 "",
-                command.summary or "暂无命令说明。",
+                _normalize_help_paragraph(command.summary) or "暂无命令说明。",
                 "",
             ]
         )
@@ -443,6 +453,10 @@ def _normalize_text(text: str) -> str:
     return text.rstrip("\n") + "\n"
 
 
+def _normalize_help_paragraph(text: str) -> str:
+    return " ".join(text.split())
+
+
 def _find_generated_markdown(repo_root: Path) -> tuple[Path, ...]:
     roots = (repo_root / "website" / "skills", repo_root / "website" / "tools")
     generated: list[Path] = []
@@ -451,9 +465,26 @@ def _find_generated_markdown(repo_root: Path) -> tuple[Path, ...]:
             continue
         for path in sorted(root.glob("*.md")):
             try:
-                first_line = path.read_text(encoding="utf-8").splitlines()[0]
+                lines = path.read_text(encoding="utf-8").splitlines()
             except IndexError:
                 continue
-            if first_line == GENERATED_NOTICE:
+            if _has_generated_notice(lines):
                 generated.append(path.relative_to(repo_root))
     return tuple(generated)
+
+
+def _has_generated_notice(lines: list[str]) -> bool:
+    if not lines:
+        return False
+    if lines[0] == GENERATED_NOTICE:
+        return True
+    if lines[0] != "---":
+        return False
+    try:
+        closing_index = lines.index("---", 1)
+    except ValueError:
+        return False
+    return (
+        closing_index + 1 < len(lines)
+        and lines[closing_index + 1] == GENERATED_NOTICE
+    )

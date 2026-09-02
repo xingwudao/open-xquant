@@ -4,6 +4,7 @@ from pathlib import Path
 
 import click
 import pytest
+from oxq.cli.main import main as oxq_main
 from website.scripts.generate import build_outputs
 from website.scripts.seo_docs import (
     ContentError,
@@ -124,6 +125,26 @@ def test_collect_leaf_commands_skips_hidden_commands_and_groups() -> None:
         pass
 
     assert collect_leaf_commands(root) == (("public", "Public command."),)
+
+
+def test_production_cli_inventory_contains_only_leaf_commands() -> None:
+    rows = collect_leaf_commands(oxq_main)
+    paths = {path for path, _summary in rows}
+    assert "audit" not in paths
+    assert "backtest" not in paths
+    assert "spec" not in paths
+    assert "audit research" in paths
+    assert "backtest run" in paths
+    assert "spec validate" in paths
+    assert all(summary.strip() for _path, summary in rows)
+
+
+def test_tool_index_avoids_unstable_marketing_counts() -> None:
+    outputs = build_outputs(ROOT)
+    text = outputs[Path("website/tools/index.md")]
+    assert "# open-xquant CLI 能力索引" in text
+    assert "70 个工具" not in text
+    assert "公开 CLI 叶子命令" in text
 
 
 def test_check_outputs_reports_generated_drift(tmp_path: Path) -> None:
