@@ -4,18 +4,19 @@ from pathlib import Path
 
 import click
 import pytest
-from oxq.cli.main import main as oxq_main
 from website.scripts.generate import build_outputs
 from website.scripts.seo_docs import (
     ContentError,
     check_outputs,
     collect_leaf_commands,
-    load_skill_sources,
     load_skill_extensions,
+    load_skill_sources,
     merge_skill_records,
     parse_skill_source,
     render_outputs,
 )
+
+from oxq.cli.main import main as oxq_main
 
 ROOT = Path(__file__).parents[2]
 

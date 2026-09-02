@@ -51,3 +51,6 @@ scripts/
 docs/reference/
 /.baoyu-skills/baoyu-infographic/
 .superpowers/
+website/node_modules/
+website/.vitepress/cache/
+website/.vitepress/dist/
