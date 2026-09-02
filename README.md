@@ -21,6 +21,10 @@ spec 来源追溯这类需要综合判断的任务，交给已安装的 Agent sk
 → **[Human Guide](docs/human-guide.md)**（用 Agent 使用 open-xquant）
 → **[Agent Guide](docs/agent-guide.md)**（给 AI Agent 看的安装指南）
 → **[中文文档站](https://xingwudao.github.io/open-xquant/)**（AI 量化工作流与 Agent Skills）
+→ **[AI 量化框架](https://xingwudao.github.io/open-xquant/guide/ai-quant-framework)**
+→ **[AI 量化回测](https://xingwudao.github.io/open-xquant/workflows/strategy-backtest)**
+→ **[AI 因子研究](https://xingwudao.github.io/open-xquant/workflows/factor-research)**
+→ **[量化回测审计](https://xingwudao.github.io/open-xquant/workflows/research-audit)**
 
 [English](#english) | [中文](#为什么需要-open-xquant)
 

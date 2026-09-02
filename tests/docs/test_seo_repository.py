@@ -38,26 +38,7 @@ def test_python_project_metadata_matches_positioning() -> None:
     assert set(project["keywords"]) == PROJECT_KEYWORDS
 
 
-def test_baseline_records_reproducible_observations() -> None:
-    text = (ROOT / "docs/seo/baseline-2026-09-02.md").read_text(
-        encoding="utf-8"
-    )
-    for heading in (
-        "## Repository Metadata",
-        "## Search Samples",
-        "## Inventory",
-        "## Measurement Rules",
-    ):
-        assert heading in text
-
-
-def test_release_runbook_contains_exact_external_contract() -> None:
-    text = (ROOT / "docs/seo/release-runbook.md").read_text(encoding="utf-8")
-    assert "https://xingwudao.github.io/open-xquant/" in text
-    assert (
-        "AI 量化研究框架：AI Agent 驱动策略回测、因子研究、稳健性检验、"
-        "审计报告与实盘交易 | Agentic Quant Research Kernel"
-    ) in text
-    assert "sitemap.xml" in text
-    assert "Google Search Console" in text
-    assert "gh repo view xingwudao/open-xquant" in text
+def test_internal_seo_artifacts_are_not_versioned() -> None:
+    assert not (ROOT / "docs/seo").exists()
+    gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "docs/seo/" in gitignore.splitlines()

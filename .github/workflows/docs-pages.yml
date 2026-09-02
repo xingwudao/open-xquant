@@ -47,15 +47,15 @@ jobs:
       - run: npm --prefix website run docs:check
       - run: npm --prefix website run docs:build
       - run: npm --prefix website run docs:validate
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: actions/configure-pages@v5
-      - if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
         uses: actions/upload-pages-artifact@v4
         with:
           path: website/.vitepress/dist
 
   deploy:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
     permissions:
