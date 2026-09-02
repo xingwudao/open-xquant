@@ -5,14 +5,22 @@ build-backend = "hatchling.build"
 [project]
 name = "open-xquant"
 version = "0.1.0"
-description = "Agentic Quant Research Kernel — declarative, deterministic, auditable research runtime for AI coding agents"
+description = "AI 量化研究框架 | Agentic Quant Research Kernel for reproducible and auditable research"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
 authors = [
     { name = "open-xquant contributors" },
 ]
-keywords = ["quant", "trading", "backtest", "agent", "research"]
+keywords = [
+    "ai-quant",
+    "quantitative-finance",
+    "quant-research",
+    "ai-agents",
+    "backtesting",
+    "factor-research",
+    "algorithmic-trading",
+]
 classifiers = [
     "Development Status :: 2 - Pre-Alpha",
     "Intended Audience :: Financial and Insurance Industry",
