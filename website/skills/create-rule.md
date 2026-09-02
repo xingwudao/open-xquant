@@ -1,0 +1,34 @@
+---
+title: 量化规则创建
+description: 为 open-xquant 创建 bar-by-bar 风控、持有、权重覆盖或退出 Rule，并用组合状态测试验证。
+outline: deep
+---
+
+# 量化规则创建
+
+为 open-xquant 创建 bar-by-bar 风控、持有、权重覆盖或退出 Rule，并用组合状态测试验证。
+
+## 适用场景
+
+- `create-component` 已确认没有现有 Rule 满足请求的风险或退出逻辑。
+
+## 输入
+
+- pre-trade 或 post-trade 分类、触发条件、`RuleResult` 字段、参数、状态和 reset 语义。
+
+## 输出
+
+- `src/oxq/rules/{snake_name}.py`、对应测试、包导出和注册表更新。
+
+## 约束
+
+- 不把 `RuleResult.constraints` 用于执行关键行为，除非引擎支持已实现并测试。
+- `evaluate()` 不得修改 `Portfolio`，必须覆盖无触发场景，测试通过前不注册。
+
+## 关联工作流
+
+- [AI 量化组件开发](/workflows/component-development)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/create-rule/SKILL.md)

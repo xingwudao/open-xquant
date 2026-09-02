@@ -1,0 +1,35 @@
+---
+title: 量化策略版本比较
+description: 在版本化工作区中比较运行或策略版本，并区分同版本可复现性与跨版本策略证据。
+outline: deep
+---
+
+# 量化策略版本比较
+
+在版本化工作区中比较运行或策略版本，并区分同版本可复现性与跨版本策略证据。
+
+## 适用场景
+
+- 用户要求比较策略版本、在版本化工作区比较实验，或最终选择需要选择绑定的比较证据。
+
+## 输入
+
+- 候选运行包、实验登记、候选版本清单、候选集、选择策略、血缘审计和可选比较范围。
+
+## 输出
+
+- 比较清单、可比性审计、SPEC 差异、指标比较、比较报告和图形产物。
+
+## 约束
+
+- 不修改运行产物，不隐藏不可比假设，不选择最终版本。
+- 最终选择比较必须使用同一选择 ID、策略引用和候选集引用；不能发现、替换或重排候选。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/compare-strategy-versions/SKILL.md)

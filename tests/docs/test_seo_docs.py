@@ -4,10 +4,12 @@ from pathlib import Path
 
 import click
 import pytest
+from website.scripts.generate import build_outputs
 from website.scripts.seo_docs import (
     ContentError,
     check_outputs,
     collect_leaf_commands,
+    load_skill_sources,
     load_skill_extensions,
     merge_skill_records,
     parse_skill_source,
@@ -15,6 +17,44 @@ from website.scripts.seo_docs import (
 )
 
 ROOT = Path(__file__).parents[2]
+
+EXPECTED_SKILLS = {
+    "audit-artifact-lineage",
+    "audit-runtime-semantics",
+    "audit-strategy-idea",
+    "audit-strategy-spec",
+    "author-component",
+    "brainstorm-strategy-idea",
+    "build-report-charts",
+    "build-rule",
+    "build-strategy-spec",
+    "build-universe",
+    "compare-experiments",
+    "compare-strategy-versions",
+    "configure-trade-execution",
+    "create-component",
+    "create-indicator",
+    "create-portfolio-optimizer",
+    "create-rule",
+    "create-signal",
+    "evaluate-cross-sectional",
+    "evaluate-factor",
+    "evaluate-time-series",
+    "explore-data",
+    "govern-research-workspace",
+    "manage-live-trading",
+    "manage-strategy-version",
+    "monitor-strategy-run",
+    "open-xquant",
+    "plot-indicators",
+    "review-performance",
+    "review-research-report",
+    "run-authorized-backtest",
+    "screen-factors",
+    "select-final-version",
+    "tune-parameters",
+    "write-research-report",
+}
 
 
 def _write_skill(root: Path, name: str, description: str) -> Path:
@@ -125,6 +165,49 @@ def test_load_skill_extensions_rejects_duplicate_mapping_keys(tmp_path: Path) ->
     )
     with pytest.raises(ContentError, match="duplicate Chinese extension"):
         load_skill_extensions(path)
+
+
+def test_production_skill_extensions_cover_sources_exactly() -> None:
+    sources = load_skill_sources(ROOT)
+    extensions = load_skill_extensions(ROOT / "website/data/skills.zh.yaml")
+    assert {source.name for source in sources} == EXPECTED_SKILLS
+    assert set(extensions) == EXPECTED_SKILLS
+    assert len(merge_skill_records(sources, extensions)) == len(EXPECTED_SKILLS)
+
+
+def test_every_skill_page_has_search_and_evidence_sections() -> None:
+    outputs = build_outputs(ROOT)
+    skill_pages = {
+        path: text
+        for path, text in outputs.items()
+        if path.parent == Path("website/skills") and path.name != "index.md"
+    }
+    assert len(skill_pages) == len(EXPECTED_SKILLS)
+    for path, text in skill_pages.items():
+        assert "description:" in text, path
+        assert "# " in text, path
+        assert "## 适用场景" in text, path
+        assert "## 输入" in text, path
+        assert "## 输出" in text, path
+        assert "## 约束" in text, path
+        assert "## 源文件" in text, path
+
+
+def test_skills_index_uses_required_group_order() -> None:
+    outputs = build_outputs(ROOT)
+    text = outputs[Path("website/skills/index.md")]
+    headings = [
+        line.removeprefix("## ")
+        for line in text.splitlines()
+        if line.startswith("## ")
+    ]
+    assert headings == [
+        "研究治理",
+        "策略与审计",
+        "数据与因子",
+        "组件开发",
+        "执行与报告",
+    ]
 
 
 def test_render_outputs_returns_repo_relative_paths() -> None:

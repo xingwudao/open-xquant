@@ -1,0 +1,34 @@
+---
+title: 量化研究工作区治理
+description: 检查版本化研究工作区的路径边界、阶段产物位置和跨产物血缘一致性。
+outline: deep
+---
+
+# 量化研究工作区治理
+
+检查版本化研究工作区的路径边界、阶段产物位置和跨产物血缘一致性。
+
+## 适用场景
+
+- 研究目录出现根目录阶段产物、交接前需要布局检查，或比较、迁移、最终选择前需要治理审计。
+
+## 输入
+
+- `.open-xquant/workspace.yaml`、`current.json`、`lineage.json`、版本目录、比较目录和最终选择目录。
+
+## 输出
+
+- `<governance_dir>/workspace_audit.json` 和 `<governance_dir>/workspace_audit.md`。
+
+## 约束
+
+- 只报告治理发现；不修复、移动或迁移被检查文件，也不编辑策略、审计、运行、指标或报告产物。
+- 所有版本根、阶段路径和治理输出路径都必须是安全的工作区相对路径，并通过规范化与符号链接逃逸检查。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/govern-research-workspace/SKILL.md)

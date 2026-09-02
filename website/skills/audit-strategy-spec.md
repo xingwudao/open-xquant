@@ -1,0 +1,34 @@
+---
+title: 量化策略规格审计
+description: 审计 SPEC 字段来源、默认值、组件选择和用户确认状态，阻止未批准假设进入回测。
+outline: deep
+---
+
+# 量化策略规格审计
+
+审计 SPEC 字段来源、默认值、组件选择和用户确认状态，阻止未批准假设进入回测。
+
+## 适用场景
+
+- SPEC 已由构建阶段验证，且任何正式回测前需要确认字段来源和有效运行值。
+
+## 输入
+
+- 策略 SPEC、想法简报与审计、构建结果、映射文件、组件目录、数据检查结果和原始对话。
+
+## 输出
+
+- `<phase_paths.06_spec_audit>/spec_audit.json`、`audit_notes.md` 和必要时的 `spec_confirmation_table.md`。
+
+## 约束
+
+- 只读构建阶段产物；不能修复、重写或规范化 `strategy_spec.yaml`。
+- 所有默认、未确认、矛盾或 Agent 添加的有效字段都会阻塞，直到用户确认或返回构建阶段修复。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/audit-strategy-spec/SKILL.md)

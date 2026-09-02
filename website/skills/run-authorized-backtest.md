@@ -1,0 +1,34 @@
+---
+title: 授权量化回测执行
+description: 在 SPEC、SPEC 审计、运行语义审计和授权文件都通过后执行正式回测。
+outline: deep
+---
+
+# 授权量化回测执行
+
+在 SPEC、SPEC 审计、运行语义审计和授权文件都通过后执行正式回测。
+
+## 适用场景
+
+- 已产生通过的构建、SPEC 审计和运行语义审计产物，且调用方写入 `backtest_authorization.json`。
+
+## 输入
+
+- 回测授权、策略 SPEC、SPEC 审计、运行语义审计、组件目录、组件 manifest 和获批数据目录。
+
+## 输出
+
+- `<phase_paths.09_backtests>/<run_id>/` 下的标准运行包和 `runner_result.json`。
+
+## 约束
+
+- 不编辑 SPEC、审计、运行语义审计或报告文件，不导出注册表，不继续执行失败授权或失败命令之后的阶段。
+- 不运行可复现性、研究偏差、稳健性、实验登记或报告命令；这些属于监控阶段。
+
+## 关联工作流
+
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/run-authorized-backtest/SKILL.md)

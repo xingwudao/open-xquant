@@ -1,0 +1,34 @@
+---
+title: 量化研究报告审阅
+description: 审阅已完成报告的决策一致性、证据忠实度、审计解释、图表叙事和语义问题。
+outline: deep
+---
+
+# 量化研究报告审阅
+
+审阅已完成报告的决策一致性、证据忠实度、审计解释、图表叙事和语义问题。
+
+## 适用场景
+
+- 报告写作完成、HTML 已从同一 Markdown 渲染，并且确定性报告 QA 已针对同一 candidate directory 运行。
+
+## 输入
+
+- 报告 Markdown/HTML、writer result、candidate manifest、SPEC、审计、runtime、metrics、监控产物、图表资产和 QA 输出。
+
+## 输出
+
+- `<phase_paths.10_reports>/<run_id>/reviews/<review_revision_id>/report_review.json`。
+
+## 约束
+
+- 不编辑 Markdown 或 HTML；需要改报告时返回阻塞发现给写作阶段。
+- 不批准与决策政策冲突、隐藏重大风险、遗漏未解决 SPEC 审计 blocker 或依赖图表美观的报告。
+
+## 关联工作流
+
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/review-research-report/SKILL.md)

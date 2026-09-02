@@ -1,0 +1,35 @@
+---
+title: 量化策略想法梳理
+description: 按固定阶段引导用户补全策略想法，并在 SPEC 编写前产出有用户证据的想法简报。
+outline: deep
+---
+
+# 量化策略想法梳理
+
+按固定阶段引导用户补全策略想法，并在 SPEC 编写前产出有用户证据的想法简报。
+
+## 适用场景
+
+- 用户有新策略想法、要求设计策略，或试图在想法简报完成前直接进入 SPEC 创建。
+
+## 输入
+
+- 用户逐阶段确认的研究假设、市场与标的、数据、指标、信号、组合、执行、成本、风控和决策政策。
+
+## 输出
+
+- `<phase_paths.01_brainstorm>/strategy_idea_brief.json`。
+
+## 约束
+
+- 不运行 `oxq`，不导入 SDK，不导出组件目录，也不写或审计 `strategy_spec.yaml`。
+- 默认值、候选值和示例值必须由用户明确确认；不能让用户跳过最早未完成阶段。
+
+## 关联工作流
+
+- [AI Agent 量化研究](/guide/agentic-quant-research)
+- [AI 量化回测](/workflows/strategy-backtest)
+
+## 源文件
+
+[查看 canonical Skill 定义](https://github.com/xingwudao/open-xquant/blob/main/agent/skills/brainstorm-strategy-idea/SKILL.md)
