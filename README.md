@@ -1,6 +1,8 @@
 # open-xquant
 
-open-xquant 是面向 AI Coding Agent 和人类量化研究者的 **Agentic Quant Research Kernel**。
+open-xquant 是中文友好的 AI 量化研究框架，面向 AI Coding Agent 和人类量化研究者，提供策略回测、因子研究、稳健性检验、审计报告与实盘交易工作流。
+
+它是面向 AI Agent 的 Agentic Quant Research Kernel：用声明式规格、确定性执行和可审计产物，把交易想法转化为可复现的量化研究流程。
 
 > 本框架源于 [xquant.shop](https://xquant.shop) 量化研究平台的实践沉淀。
 
@@ -18,6 +20,7 @@ spec 来源追溯这类需要综合判断的任务，交给已安装的 Agent sk
 
 → **[Human Guide](docs/human-guide.md)**（用 Agent 使用 open-xquant）
 → **[Agent Guide](docs/agent-guide.md)**（给 AI Agent 看的安装指南）
+→ **[中文文档站](https://xingwudao.github.io/open-xquant/)**（AI 量化工作流与 Agent Skills）
 
 [English](#english) | [中文](#为什么需要-open-xquant)
 
