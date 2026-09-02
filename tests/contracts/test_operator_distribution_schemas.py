@@ -578,9 +578,9 @@ def test_readme_certification_workflow_does_not_document_removed_output_dir() ->
     assert ".open-xquant/certifications/<provider>/<release>/" not in readme
 
 
-def test_environment_install_plan_uses_split_equant_distributions() -> None:
+def test_environment_install_docs_use_split_equant_distributions() -> None:
     plan = Path(__file__).resolve().parents[2].joinpath(
-        "docs/superpowers/plans/2026-08-27-certified-operator-one-step-install.md"
+        "contracts/operator-certification/README.md"
     ).read_text(encoding="utf-8")
 
     assert "pip install equant-core==1.0.0 equant-ttr==1.0.0" in plan

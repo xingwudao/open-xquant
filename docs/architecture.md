@@ -996,7 +996,7 @@ oxq experiment add <phase_paths.09_backtests>/<run_id>/
 > open-xquant 的官方量化计算层，同时保持 open-xquant 对研究语义、
 > 因果执行、审计、机器学习和 Agent 工作流的控制权。
 
-![open-xquant 与 equant-py 整合架构信息图](infographic/equant-integration-architecture/infographic.png)
+![open-xquant 与 equant-py 整合架构信息图](images/equant-integration-architecture.png)
 
 ### 18.1 结论
 
