@@ -176,6 +176,7 @@ class ExecutionSection:
     lot_size_config: LotSizeConfig = field(default_factory=LotSizeConfig)
     cash_annual_return: float = 0.0
     initial_cash: float = 100_000.0
+    insufficient_cash_policy: str = "scale_down"
     _fill_price_mode_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
 
     def normalize_lot_size_config(self) -> None:
@@ -309,6 +310,10 @@ class StrategySpec:
         canonical_obj = _dataclass_to_canonical_dict(self)
         if self.metrics == MetricsSection():
             canonical_obj.pop("metrics", None)
+        if self.execution.insufficient_cash_policy == "scale_down":
+            # Added after 0.1.0: keep the default out of the hash so run
+            # directories written before the field existed still audit clean.
+            canonical_obj["execution"].pop("insufficient_cash_policy", None)
         if (
             any((self.execution.order_timing, self.execution.price_bar, self.execution.price_type))
             and self.execution.fill_price_mode == "next_open"
@@ -581,6 +586,9 @@ def _parse_execution(raw: dict) -> ExecutionSection:
         lot_size_config=_parse_lot_size_config(raw.get("lot_size_config"), lot_size),
         cash_annual_return=_parse_float(raw.get("cash_annual_return", 0.0), "execution.cash_annual_return"),
         initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),
+        insufficient_cash_policy=_parse_str(
+            raw.get("insufficient_cash_policy", "scale_down"), "execution.insufficient_cash_policy"
+        ),
         _fill_price_mode_explicit="fill_price_mode" in raw,
     )
 

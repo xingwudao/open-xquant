@@ -116,15 +116,39 @@ def test_xquant_metrics_profile_only_serializes_effective_defaults(tmp_path: Pat
     assert reparsed.compute_hash() == spec.compute_hash()
 
 
-def test_default_metrics_do_not_change_legacy_spec_hash() -> None:
-    spec = StrategySpec.template(strategy_id="legacy_hash", hypothesis="default metrics should preserve legacy hash")
+def _legacy_hash(spec: StrategySpec) -> str:
+    """Hash of the canonical dict as it looked before post-0.1 default fields existed."""
     spec.execution.normalize_lot_size_config()
     legacy_canonical = _dataclass_to_canonical_dict(spec)
     legacy_canonical.pop("metrics", None)
+    legacy_canonical["execution"].pop("insufficient_cash_policy", None)
     canonical = json.dumps(legacy_canonical, sort_keys=True, default=str)
-    legacy_hash = f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
+    return f"sha256:{hashlib.sha256(canonical.encode()).hexdigest()[:16]}"
 
-    assert spec.compute_hash() == legacy_hash
+
+def test_default_metrics_do_not_change_legacy_spec_hash() -> None:
+    spec = StrategySpec.template(strategy_id="legacy_hash", hypothesis="default metrics should preserve legacy hash")
+
+    assert spec.compute_hash() == _legacy_hash(spec)
+
+
+def test_default_insufficient_cash_policy_does_not_change_legacy_spec_hash() -> None:
+    # Runs written before the field existed must keep passing the reproducibility audit.
+    spec = StrategySpec.from_dict(
+        StrategySpec.template(strategy_id="legacy_cash_hash", hypothesis="default cash policy keeps hash").to_dict()
+    )
+    spec.execution.insufficient_cash_policy = "scale_down"
+
+    assert spec.compute_hash() == _legacy_hash(spec)
+    assert spec.to_effective_dict()["execution"]["insufficient_cash_policy"] == "scale_down"
+
+
+def test_explicit_reject_insufficient_cash_policy_changes_spec_hash() -> None:
+    default_spec = StrategySpec.template(strategy_id="cash_policy_hash", hypothesis="reject policy is material")
+    reject_spec = StrategySpec.template(strategy_id="cash_policy_hash", hypothesis="reject policy is material")
+    reject_spec.execution.insufficient_cash_policy = "reject"
+
+    assert reject_spec.compute_hash() != default_spec.compute_hash()
 
 
 def test_parse_execution_cash_return_and_lot_size_config(tmp_path: Path) -> None:

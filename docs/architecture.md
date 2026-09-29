@@ -356,6 +356,7 @@ execution:
   price_type: "open"
   initial_cash: 100000
   cash_annual_return: 0.0
+  insufficient_cash_policy: "scale_down"   # or "reject": all-or-nothing BUY fills
   lot_size_config:
     default: 1
     by_symbol: {}

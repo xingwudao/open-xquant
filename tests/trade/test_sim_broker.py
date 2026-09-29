@@ -877,3 +877,117 @@ class TestNaNAndInfinityPrices:
         broker.process_pending_orders(mktdata, dates[0])
         assert len(broker.get_fills()) == 0
         assert len(broker.get_open_orders()) == 1
+
+
+# ---------------------------------------------------------------------------
+# Insufficient-cash policy
+# ---------------------------------------------------------------------------
+
+
+def _close_bar(symbol: str, close: float) -> tuple[dict[str, pd.DataFrame], pd.Timestamp]:
+    dates = pd.bdate_range("2024-01-01", periods=1)
+    return {symbol: pd.DataFrame({"close": [close]}, index=dates)}, dates[0]
+
+
+class TestInsufficientCashPolicy:
+    def test_default_policy_scales_buy_down_to_available_cash(self) -> None:
+        # cash 1000 at close 15: 100 shares need 1500, floor(1000 / 15) = 66 shares.
+        broker = SimBroker()
+        mktdata, date = _close_bar("AAA", 15.0)
+        broker.set_available_cash(Decimal("1000"))
+        broker.submit_order(Order(symbol="AAA", side="BUY", shares=100))
+
+        broker.fill_market_orders(mktdata, date)
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].order.shares == 66
+        assert fills[0].filled_price == Decimal("15")
+        managed = broker.get_all_orders()[0]
+        assert managed.status == "filled"
+        assert managed.status_reason == "scaled_to_available_cash"
+        assert managed.order.shares == 100
+        assert managed.filled_shares == 66
+
+    def test_scaled_buy_rounds_down_to_lot_size(self) -> None:
+        # cash 1000 at close 3: floor(1000 / 3) = 333 shares -> 300 with lot size 100.
+        broker = SimBroker()
+        broker.set_lot_size(100)
+        mktdata, date = _close_bar("AAA", 3.0)
+        broker.set_available_cash(Decimal("1000"))
+        broker.submit_order(Order(symbol="AAA", side="BUY", shares=500))
+
+        broker.fill_market_orders(mktdata, date)
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].order.shares == 300
+
+    def test_scaled_buy_leaves_room_for_fees(self) -> None:
+        # 1% fee, no minimum. 100 shares at 10 cost 1000 + 10 fee > 1000;
+        # 99 shares cost 990 + 9.9 fee = 999.9 <= 1000.
+        broker = SimBroker(fee_model=PercentageFee(rate=Decimal("0.01"), min_fee=Decimal("0")))
+        mktdata, date = _close_bar("AAA", 10.0)
+        broker.set_available_cash(Decimal("1000"))
+        broker.submit_order(Order(symbol="AAA", side="BUY", shares=100))
+
+        broker.fill_market_orders(mktdata, date)
+
+        fills = broker.get_fills()
+        assert len(fills) == 1
+        assert fills[0].order.shares == 99
+        assert fills[0].fee == Decimal("9.90")
+
+    def test_scaled_buy_rejects_when_not_even_one_lot_is_affordable(self) -> None:
+        # One lot of 100 at 20 costs 2000 > 1000 cash.
+        broker = SimBroker()
+        broker.set_lot_size(100)
+        mktdata, date = _close_bar("AAA", 20.0)
+        broker.set_available_cash(Decimal("1000"))
+        broker.submit_order(Order(symbol="AAA", side="BUY", shares=200))
+
+        broker.fill_market_orders(mktdata, date)
+
+        assert broker.get_fills() == []
+        managed = broker.get_all_orders()[0]
+        assert managed.status == "rejected"
+        assert managed.status_reason == "insufficient_cash"
+
+    def test_later_buy_in_same_batch_scales_to_remaining_cash(self) -> None:
+        # cash 1000: AAA 50 x 10 = 500 fills in full, BBB 60 x 10 = 600 scales to 50.
+        broker = SimBroker()
+        dates = pd.bdate_range("2024-01-01", periods=1)
+        mktdata = {
+            "AAA": pd.DataFrame({"close": [10.0]}, index=dates),
+            "BBB": pd.DataFrame({"close": [10.0]}, index=dates),
+        }
+        broker.set_available_cash(Decimal("1000"))
+        broker.submit_order(Order(symbol="AAA", side="BUY", shares=50))
+        broker.submit_order(Order(symbol="BBB", side="BUY", shares=60))
+
+        broker.fill_market_orders(mktdata, dates[0])
+
+        shares = {fill.order.symbol: fill.order.shares for fill in broker.get_fills()}
+        assert shares == {"AAA": 50, "BBB": 50}
+
+    def test_reject_policy_keeps_all_or_nothing_behavior(self) -> None:
+        broker = SimBroker(insufficient_cash_policy="reject")
+        mktdata, date = _close_bar("AAA", 15.0)
+        broker.set_available_cash(Decimal("1000"))
+        broker.submit_order(Order(symbol="AAA", side="BUY", shares=100))
+
+        broker.fill_market_orders(mktdata, date)
+
+        assert broker.get_fills() == []
+        managed = broker.get_all_orders()[0]
+        assert managed.status == "rejected"
+        assert managed.status_reason == "insufficient_cash"
+
+    def test_invalid_policy_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="insufficient_cash_policy"):
+            SimBroker(insufficient_cash_policy="borrow")
+
+    def test_invalid_lot_size_is_rejected(self) -> None:
+        broker = SimBroker()
+        with pytest.raises(ValueError, match="lot_size"):
+            broker.set_lot_size(0)

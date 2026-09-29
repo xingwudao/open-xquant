@@ -633,6 +633,7 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert script_plan["strategy"]["strategy_id"] == "compiled_plan"
     assert script_plan["data"]["provider"] == "local"
     assert script_plan["broker"]["fill_price_mode"] == "next_open"
+    assert script_plan["broker"]["insufficient_cash_policy"] == "scale_down"
     assert script_plan["metrics"]["profile"] == "open_xquant_default"
     assert description["universe"]["review_note"].startswith("This run evaluates")
     assert description["indicators"]["roc_1"]["type"] == "ROC"
@@ -1657,6 +1658,53 @@ def test_compile_run_explicit_next_session_modes_instantiate_matching_broker(
         compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
 
 
+@pytest.mark.parametrize("policy", ["scale_down", "reject"])
+def test_compile_run_passes_insufficient_cash_policy_to_broker(tmp_path, monkeypatch, policy) -> None:
+    spec = StrategySpec.template(strategy_id=f"cash_policy_{policy}", hypothesis="cash policy reaches broker")
+    spec.execution.insufficient_cash_policy = policy
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+
+    class BrokerProbe:
+        def __init__(self, *args, **kwargs) -> None:
+            assert kwargs["insufficient_cash_policy"] == policy
+            raise RuntimeError("broker probe complete")
+
+    monkeypatch.setattr(compiler, "SimBroker", BrokerProbe)
+
+    with pytest.raises(RuntimeError, match="broker probe complete"):
+        compile_run(spec, data_dir=str(data_dir), out_dir=tmp_path / "runs")
+
+
+def test_compile_plan_records_insufficient_cash_policy() -> None:
+    spec = StrategySpec.template(strategy_id="cash_policy_plan", hypothesis="cash policy is part of the plan")
+    spec.execution.insufficient_cash_policy = "reject"
+
+    plan = compile_plan(spec)
+
+    assert plan["execution"]["insufficient_cash_policy"] == "reject"
+
+
+def test_legacy_compiled_plan_without_cash_policy_matches_default_plan() -> None:
+    # compiled_plan.json files written before the field existed must keep auditing clean.
+    spec = StrategySpec.template(strategy_id="legacy_cash_plan", hypothesis="legacy plans omit cash policy")
+    expected = compile_plan(spec)
+    legacy = json.loads(json.dumps(expected))
+    del legacy["execution"]["insufficient_cash_policy"]
+
+    assert compiler._compiled_plan_material_differences(legacy, expected) == []
+
+
+def test_legacy_compiled_plan_does_not_match_explicit_reject_plan() -> None:
+    spec = StrategySpec.template(strategy_id="legacy_reject_plan", hypothesis="reject is material")
+    spec.execution.insufficient_cash_policy = "reject"
+    expected = compile_plan(spec)
+    legacy = json.loads(json.dumps(expected))
+    del legacy["execution"]["insufficient_cash_policy"]
+
+    assert compiler._compiled_plan_material_differences(legacy, expected) == ["execution"]
+
+
 def test_compile_run_passes_cash_annual_return_to_engine(tmp_path, monkeypatch) -> None:
     spec = StrategySpec.template(strategy_id="cash_return", hypothesis="cash return reaches runtime")
     spec.execution.cash_annual_return = 0.025
@@ -1744,6 +1792,7 @@ def test_compile_run_writes_execution_assumptions_artifact(tmp_path) -> None:
             "default": 100,
             "by_symbol": {},
         },
+        "insufficient_cash_policy": "scale_down",
         "rebalance": {
             "frequency": "daily",
             "interval_days": 1,

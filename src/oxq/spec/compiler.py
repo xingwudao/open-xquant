@@ -526,6 +526,7 @@ def compile_run(
         slippage_model=slippage_model,
         fill_price_mode=fill_mode,
         market_calendar=runtime_calendar,
+        insufficient_cash_policy=spec.execution.insufficient_cash_policy,
     )
 
     # Determine date range
@@ -808,6 +809,7 @@ def _build_execution_assumptions(spec: StrategySpec) -> dict[str, Any]:
             "default": spec.execution.lot_size_config.default,
             "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
         },
+        "insufficient_cash_policy": spec.execution.insufficient_cash_policy,
         "rebalance": {
             "frequency": spec.execution.rebalance.frequency,
             "interval_days": rebalance_interval,
@@ -989,6 +991,7 @@ def _build_compiled_plan(
                 "default": spec.execution.lot_size_config.default,
                 "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
             },
+            "insufficient_cash_policy": spec.execution.insufficient_cash_policy,
             "rebalance": {
                 "frequency": spec.execution.rebalance.frequency,
                 "interval_days": rebalance_interval,
@@ -1121,6 +1124,7 @@ def _build_compiled_plan_from_spec_metadata(
                 "default": spec.execution.lot_size_config.default,
                 "by_symbol": dict(spec.execution.lot_size_config.by_symbol),
             },
+            "insufficient_cash_policy": spec.execution.insufficient_cash_policy,
             "rebalance": {
                 "frequency": spec.execution.rebalance.frequency,
                 "interval_days": rebalance_interval,
@@ -1254,6 +1258,9 @@ def _normalize_compiled_plan_material_fields(plan: dict[str, Any]) -> dict[str, 
         filters = data.get("filters")
         if isinstance(filters, dict):
             filters.setdefault("suspension_policy", "none")
+    execution = normalized.get("execution")
+    if isinstance(execution, dict):
+        execution.setdefault("insufficient_cash_policy", "scale_down")
     signals = normalized.get("signals")
     if isinstance(signals, dict):
         indicators = signals.get("indicators")
@@ -1531,6 +1538,7 @@ def _build_strategy_py_artifact(
         "        ),",
         "        fill_price_mode=FillPriceMode(execution.get('fill_price_mode', 'close')),",
         "        market_calendar=market.get('runtime_calendar'),",
+        "        insufficient_cash_policy=execution.get('insufficient_cash_policy', 'scale_down'),",
         "    )",
         "",
         "",
@@ -1541,6 +1549,7 @@ def _build_strategy_py_artifact(
         "    cost = plan.get('cost', {})",
         "    return {",
         "        'fill_price_mode': execution.get('fill_price_mode'),",
+        "        'insufficient_cash_policy': execution.get('insufficient_cash_policy'),",
         "        'order_timing': execution.get('order_timing'),",
         "        'price_bar': execution.get('price_bar'),",
         "        'price_type': execution.get('price_type'),",

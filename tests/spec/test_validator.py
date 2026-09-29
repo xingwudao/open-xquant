@@ -1027,6 +1027,40 @@ def test_validate_accepts_valid_cash_annual_return(cash_annual_return: float) ->
     assert "cash_annual_return_invalid" not in {error["check"] for error in result.errors}
 
 
+def test_execution_insufficient_cash_policy_defaults_to_scale_down() -> None:
+    spec = StrategySpec.from_dict({"execution": {}})
+
+    assert spec.execution.insufficient_cash_policy == "scale_down"
+    assert spec.to_effective_dict()["execution"]["insufficient_cash_policy"] == "scale_down"
+
+
+def test_execution_insufficient_cash_policy_is_parsed() -> None:
+    spec = StrategySpec.from_dict({"execution": {"insufficient_cash_policy": "reject"}})
+
+    assert spec.execution.insufficient_cash_policy == "reject"
+
+
+@pytest.mark.parametrize("policy", ["scale_down", "reject"])
+def test_validate_accepts_valid_insufficient_cash_policy(policy: str) -> None:
+    spec = StrategySpec.template(strategy_id="valid_cash_policy", hypothesis="cash policy accepts known values")
+    spec.execution.insufficient_cash_policy = policy
+
+    result = validate(spec)
+
+    assert "insufficient_cash_policy_invalid" not in {error["check"] for error in result.errors}
+
+
+def test_validate_rejects_unknown_insufficient_cash_policy() -> None:
+    spec = StrategySpec.template(strategy_id="bad_cash_policy", hypothesis="cash policy must be known")
+    spec.execution.insufficient_cash_policy = "borrow"
+
+    result = validate(spec)
+
+    assert result.status == "fail"
+    error = _finding(result.errors, "insufficient_cash_policy_invalid")
+    assert error["dimensions"] == ["executable"]
+
+
 def test_validate_rejects_rebalance_frequency_when_interval_is_omitted(tmp_path) -> None:
     spec_path = tmp_path / "strategy_spec.yaml"
     spec_path.write_text(

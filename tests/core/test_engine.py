@@ -2000,8 +2000,8 @@ def test_engine_next_open_fills_on_next_bar_before_optimization() -> None:
     assert buy_trades[0].filled_at == dates[1].isoformat()
 
 
-def test_engine_rejects_next_open_buy_when_gap_up_exceeds_cash() -> None:
-    """A next-open gap up should not create negative cash."""
+def _next_open_gap_up_run(broker: SimBroker, lot_size: int = 1):
+    """Day 1 close 10 sizes a 10-share buy from 100 cash; day 2 opens at 20."""
     dates = pd.bdate_range("2024-01-01", periods=2, tz="UTC")
     data = {
         "AAA": pd.DataFrame(
@@ -2021,14 +2021,25 @@ def test_engine_rejects_next_open_buy_when_gap_up_exceeds_cash() -> None:
         signals={},
         portfolio=AlwaysBuyOptimizer(),
     )
-
-    result = Engine().run(
+    return Engine().run(
         strategy,
         market=FakeMarketDataProvider(data),
-        broker=SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS"),
+        broker=broker,
         start="2024-01-01",
         end="2024-01-02",
         initial_cash=100.0,
+        lot_size=lot_size,
+    )
+
+
+def test_engine_rejects_next_open_buy_when_gap_up_exceeds_cash() -> None:
+    """With the reject policy, a next-open gap up leaves the buy unfilled."""
+    result = _next_open_gap_up_run(
+        SimBroker(
+            fill_price_mode=FillPriceMode.NEXT_OPEN,
+            market_calendar="XNYS",
+            insufficient_cash_policy="reject",
+        )
     )
 
     assert result.trades == []
@@ -2038,6 +2049,35 @@ def test_engine_rejects_next_open_buy_when_gap_up_exceeds_cash() -> None:
     assert len(rejected_orders) == 1
     assert rejected_orders[0].status_reason == "insufficient_cash"
     assert rejected_orders[0].order.symbol == "AAA"
+
+
+def test_engine_scales_next_open_buy_when_gap_up_exceeds_cash_by_default() -> None:
+    """Default policy buys what the cash affords: floor(100 / 20) = 5 shares."""
+    result = _next_open_gap_up_run(
+        SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS")
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].order.shares == 5
+    assert result.trades[0].filled_price == Decimal("20")
+    assert result.portfolio.positions["AAA"].shares == 5
+    assert result.portfolio.cash == Decimal("0")
+    scaled = [order for order in result.orders if order.status_reason == "scaled_to_available_cash"]
+    assert len(scaled) == 1
+    assert scaled[0].order.shares == 10
+    assert scaled[0].filled_shares == 5
+
+
+def test_engine_passes_lot_size_to_broker_for_scaled_buys() -> None:
+    """Lot size 2 (engine config) rounds 5 affordable shares down to 4."""
+    result = _next_open_gap_up_run(
+        SimBroker(fill_price_mode=FillPriceMode.NEXT_OPEN, market_calendar="XNYS"),
+        lot_size=2,
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].order.shares == 4
+    assert result.portfolio.cash == Decimal("20")
 
 
 def test_engine_cancels_pending_next_open_buy_when_limit_up() -> None:

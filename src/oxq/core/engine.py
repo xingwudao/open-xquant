@@ -302,6 +302,9 @@ class Engine:
         set_current_date = getattr(broker, "set_current_date", None)
         if callable(set_current_date):
             set_current_date(date)
+        set_lot_size = getattr(broker, "set_lot_size", None)
+        if callable(set_lot_size):
+            set_lot_size(self._lot_size)
 
         # Fill previously submitted next-bar market orders before optimizing
         # for the new bar, so target generation sees the actual portfolio.

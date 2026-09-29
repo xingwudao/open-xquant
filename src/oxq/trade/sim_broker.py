@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 from enum import Enum
 
@@ -36,6 +37,8 @@ _NEXT_SESSION_FILL_MODES = {
     FillPriceMode.NEXT_HL2,
 }
 
+INSUFFICIENT_CASH_POLICIES = ("scale_down", "reject")
+
 
 class SimBroker:
     """Simulated broker with order book, fee and slippage models.
@@ -52,6 +55,16 @@ class SimBroker:
         Fee calculation model. If None, no fees are charged.
     slippage_model : SlippageModel or None
         Slippage simulation model. If None, orders fill at raw price.
+    insufficient_cash_policy : str
+        What to do when a market BUY costs more than the available cash at
+        fill time. ``"scale_down"`` (default) fills the largest whole-lot
+        quantity the cash affords and rejects only when not even one lot is
+        affordable. ``"reject"`` rejects the whole order.
+
+        Orders are sized from the signal bar's close but fill at a later
+        price, so a fully invested rebalance can fall a few units short of
+        cash at fill time; rejecting the whole buy there leaves the target
+        position empty until the next rebalance.
 
     Examples
     --------
@@ -68,7 +81,13 @@ class SimBroker:
         slippage_model: SlippageModel | None = None,
         fill_price_mode: FillPriceMode = FillPriceMode.CLOSE,
         market_calendar: str | None = None,
+        insufficient_cash_policy: str = "scale_down",
     ) -> None:
+        if insufficient_cash_policy not in INSUFFICIENT_CASH_POLICIES:
+            valid = ", ".join(INSUFFICIENT_CASH_POLICIES)
+            raise ValueError(
+                f"Unknown insufficient_cash_policy '{insufficient_cash_policy}'. Valid: {valid}"
+            )
         if fill_price_mode in {FillPriceMode.NEXT_HIGH, FillPriceMode.NEXT_LOW}:
             raise ValueError(f"{fill_price_mode.name} is not supported for causal market-order backtests")
         if fill_price_mode in _NEXT_SESSION_FILL_MODES and market_calendar is None:
@@ -82,6 +101,8 @@ class SimBroker:
         self._fills: list[Fill] = []
         self._current_date: pd.Timestamp | None = None
         self._available_cash: Decimal | None = None
+        self._insufficient_cash_policy = insufficient_cash_policy
+        self._lot_size = 1
 
     # -- Broker lifecycle hooks -----------------------------------------------
 
@@ -136,6 +157,12 @@ class SimBroker:
     def set_available_cash(self, cash: Decimal) -> None:
         """Set cash available for simulated BUY fills."""
         self._available_cash = cash
+
+    def set_lot_size(self, lot_size: int) -> None:
+        """Set the trade unit that scaled-down BUY fills are rounded to."""
+        if isinstance(lot_size, bool) or not isinstance(lot_size, int) or lot_size <= 0:
+            raise ValueError(f"lot_size must be a positive integer, got {lot_size!r}")
+        self._lot_size = lot_size
 
     # -- Order Processing -----------------------------------------------------
 
@@ -230,19 +257,27 @@ class SimBroker:
                 still_pending.append(managed)
                 continue
             fill_price = self._apply_slippage(order, raw_price)
+            fill_shares = order.shares
             fee = self._calc_fee(order, fill_price)
             cash_delta = fill_price * order.shares
             if order.side == "BUY":
                 required_cash = cash_delta + fee
                 if self._available_cash is not None and required_cash > self._available_cash:
-                    managed.status = "rejected"
-                    managed.status_reason = "insufficient_cash"
-                    continue
+                    fill_shares = self._affordable_buy_shares(order, fill_price, self._available_cash)
+                    if fill_shares <= 0:
+                        managed.status = "rejected"
+                        managed.status_reason = "insufficient_cash"
+                        continue
+                    scaled = replace(order, shares=fill_shares)
+                    fee = self._calc_fee(scaled, fill_price)
+                    required_cash = fill_price * fill_shares + fee
                 if self._available_cash is not None:
                     self._available_cash -= required_cash
             elif self._available_cash is not None:
                 self._available_cash += cash_delta - fee
-            fill = self._order_book.fill(managed, fill_price, date.isoformat(), fee)
+            fill = self._order_book.fill(managed, fill_price, date.isoformat(), fee, shares=fill_shares)
+            if fill_shares != order.shares:
+                managed.status_reason = "scaled_to_available_cash"
             self._fills.append(fill)
         self._pending_market = still_pending
 
@@ -482,6 +517,31 @@ class SimBroker:
         if self._fee_model:
             return self._fee_model.calculate(order, fill_price)
         return Decimal("0")
+
+    def _affordable_buy_shares(self, order: Order, fill_price: Decimal, cash: Decimal) -> int:
+        """Largest whole-lot BUY quantity (at most ``order.shares``) that ``cash`` covers.
+
+        Returns 0 under the ``reject`` policy, or when not even one lot is affordable.
+        """
+        if self._insufficient_cash_policy == "reject" or fill_price <= 0:
+            return 0
+        lot = self._lot_size
+
+        def affordable(lots: int) -> bool:
+            shares = lots * lot
+            candidate = replace(order, shares=shares)
+            return fill_price * shares + self._calc_fee(candidate, fill_price) <= cash
+
+        # Price-only upper bound; fees can only lower it. Cost is monotonic in
+        # shares, so binary-search the largest affordable lot count.
+        low, high = 0, min(order.shares, int(cash / fill_price)) // lot
+        while low < high:
+            mid = (low + high + 1) // 2
+            if affordable(mid):
+                low = mid
+            else:
+                high = mid - 1
+        return low * lot
 
     @staticmethod
     def _check_stop(order: Order, close: Decimal) -> bool:

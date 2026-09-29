@@ -11,6 +11,7 @@ import pandas as pd
 from oxq.market_calendar import is_supported_market_calendar
 from oxq.spec.execution import derive_execution_semantics
 from oxq.spec.schema import StrategySpec
+from oxq.trade.sim_broker import INSUFFICIENT_CASH_POLICIES
 
 
 @dataclass
@@ -1196,6 +1197,15 @@ def validate(spec: StrategySpec) -> ValidationResult:
                 "fatal",
                 "cash_annual_return_invalid",
                 "execution.cash_annual_return must be a non-negative finite number",
+                ["executable"],
+            )
+        )
+    if spec.execution.insufficient_cash_policy not in INSUFFICIENT_CASH_POLICIES:
+        errors.append(
+            _err(
+                "fatal",
+                "insufficient_cash_policy_invalid",
+                "execution.insufficient_cash_policy must be one of: " + ", ".join(INSUFFICIENT_CASH_POLICIES),
                 ["executable"],
             )
         )

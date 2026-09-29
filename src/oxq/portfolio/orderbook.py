@@ -186,6 +186,7 @@ class OrderBook:
         price: Decimal,
         date: str,
         fee: Decimal = Decimal("0"),
+        shares: int | None = None,
     ) -> Fill:
         """Mark an order as filled and return the Fill.
 
@@ -199,18 +200,25 @@ class OrderBook:
             Fill date.
         fee : Decimal
             Transaction fee.
+        shares : int or None
+            Shares actually filled when fewer than requested (e.g. a BUY
+            scaled down to available cash). The managed order keeps the
+            requested quantity; the returned Fill carries the filled one.
 
         Returns
         -------
         Fill
             The completed fill.
         """
+        filled_order = managed_order.order
+        if shares is not None and shares != filled_order.shares:
+            filled_order = replace(filled_order, shares=shares)
         managed_order.status = "filled"
         managed_order.filled_at = date
         managed_order.filled_price = price
-        managed_order.filled_shares = managed_order.order.shares
+        managed_order.filled_shares = filled_order.shares
         return Fill(
-            order=managed_order.order,
+            order=filled_order,
             filled_price=price,
             filled_at=date,
             fee=fee,

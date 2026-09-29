@@ -30,6 +30,7 @@ execution:
     default: 1
     by_symbol: {}
   cash_annual_return: 0.0
+  insufficient_cash_policy: scale_down
   rebalance:
     frequency: daily
     interval_days: 1
@@ -74,6 +75,12 @@ Validator constraints:
   until by-symbol sizing is supported.
 - `initial_cash` must be positive and finite.
 - `cash_annual_return` must be non-negative and finite.
+- `insufficient_cash_policy` is `scale_down` (default) or `reject`. Orders are
+  sized from the signal bar's close but fill at a later price, so a fully
+  invested rebalance can be a few units short of cash at fill time.
+  `scale_down` fills the largest whole-lot quantity the cash affords (the fill
+  is marked `scaled_to_available_cash`); `reject` drops the whole BUY and
+  leaves that target position empty until the next rebalance.
 - `execution.rebalance.frequency=daily` uses `interval_days`.
 - `frequency=weekly` requires `schedule: week_start`.
 - `frequency=monthly` requires `schedule: month_start`.
