@@ -31,7 +31,7 @@ def make_strategy_id(description: str, max_length: int = 50) -> str:
     slug = description.lower()
     slug = re.sub(r"[^a-z0-9_-]+", "_", slug)
     slug = re.sub(r"_+", "_", slug).strip("_-")
-    return (slug[:max_length].rstrip("_-") or "strategy")
+    return slug[:max_length].rstrip("_-") or "strategy"
 
 
 @dataclass
@@ -178,10 +178,21 @@ class ExecutionSection:
     initial_cash: float = 100_000.0
     insufficient_cash_policy: str = "scale_down"
     _fill_price_mode_explicit: bool = field(default=False, repr=False, compare=False, metadata={"serialize": False})
+    _insufficient_cash_policy_explicit: bool = field(
+        default=True,
+        repr=False,
+        compare=False,
+        metadata={"serialize": False},
+    )
 
     def normalize_lot_size_config(self) -> None:
         if self.lot_size_config.default is None:
             self.lot_size_config.default = self.lot_size
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if name == "insufficient_cash_policy" and hasattr(self, "_insufficient_cash_policy_explicit"):
+            object.__setattr__(self, "_insufficient_cash_policy_explicit", True)
 
 
 @dataclass
@@ -310,9 +321,9 @@ class StrategySpec:
         canonical_obj = _dataclass_to_canonical_dict(self)
         if self.metrics == MetricsSection():
             canonical_obj.pop("metrics", None)
-        if self.execution.insufficient_cash_policy == "scale_down":
-            # Added after 0.1.0: keep the default out of the hash so run
-            # directories written before the field existed still audit clean.
+        if not self.execution._insufficient_cash_policy_explicit:
+            # Specs written before this field existed used reject semantics.
+            # Preserve their historical hash while hashing every new explicit policy.
             canonical_obj["execution"].pop("insufficient_cash_policy", None)
         if (
             any((self.execution.order_timing, self.execution.price_bar, self.execution.price_type))
@@ -389,6 +400,8 @@ class StrategySpec:
                     fill_price_mode="next_open",
                     lot_size=100,
                     lot_size_config=LotSizeConfig(default=100),
+                    insufficient_cash_policy="scale_down",
+                    _insufficient_cash_policy_explicit=True,
                 ),
                 cost=CostSection(fee_rate=0.0003, slippage_rate=0.001),
                 benchmark=BenchmarkSection(symbols=["000300.SH"]),
@@ -411,7 +424,12 @@ class StrategySpec:
             data=DataSection(price_adjustment="adjusted"),
             signal=SignalSection(signal_time="close_t"),
             portfolio=PortfolioSection(type="EqualWeight"),
-            execution=ExecutionSection(trade_time="next_open", fill_price_mode="next_open"),
+            execution=ExecutionSection(
+                trade_time="next_open",
+                fill_price_mode="next_open",
+                insufficient_cash_policy="scale_down",
+                _insufficient_cash_policy_explicit=True,
+            ),
             cost=CostSection(fee_rate=0.001, slippage_rate=0.001),
             benchmark=BenchmarkSection(symbols=["SPY"]),
             validation=ValidationSection(
@@ -586,10 +604,9 @@ def _parse_execution(raw: dict) -> ExecutionSection:
         lot_size_config=_parse_lot_size_config(raw.get("lot_size_config"), lot_size),
         cash_annual_return=_parse_float(raw.get("cash_annual_return", 0.0), "execution.cash_annual_return"),
         initial_cash=_parse_float(raw.get("initial_cash", 100_000.0), "execution.initial_cash"),
-        insufficient_cash_policy=_parse_str(
-            raw.get("insufficient_cash_policy", "scale_down"), "execution.insufficient_cash_policy"
-        ),
+        insufficient_cash_policy=_parse_str(raw.get("insufficient_cash_policy", "reject"), "execution.insufficient_cash_policy"),
         _fill_price_mode_explicit="fill_price_mode" in raw,
+        _insufficient_cash_policy_explicit="insufficient_cash_policy" in raw,
     )
 
 
@@ -602,10 +619,7 @@ def _parse_lot_size_config(raw: object, fallback_lot_size: int) -> LotSizeConfig
     by_symbol_raw = raw.get("by_symbol", {})
     if not isinstance(by_symbol_raw, dict):
         raise ValueError("execution.lot_size_config.by_symbol must be a mapping")
-    by_symbol = {
-        str(symbol): _parse_int(value, f"execution.lot_size_config.by_symbol.{symbol}")
-        for symbol, value in by_symbol_raw.items()
-    }
+    by_symbol = {str(symbol): _parse_int(value, f"execution.lot_size_config.by_symbol.{symbol}") for symbol, value in by_symbol_raw.items()}
     return LotSizeConfig(default=default, by_symbol=by_symbol)
 
 
@@ -805,16 +819,18 @@ def _dataclass_to_dict(obj: Any) -> Any:
         for f in fields(obj):
             if f.metadata.get("serialize") is False:
                 continue
+            if isinstance(obj, ExecutionSection) and f.name == "insufficient_cash_policy" and not obj._insufficient_cash_policy_explicit:
+                continue
             value = getattr(obj, f.name)
             if value is not None:
                 preserve_explicit_rebalance = (
-                    (isinstance(obj, ExecutionSection) and f.name == "rebalance" and getattr(value, "_interval_days_explicit", False))
-                    or (isinstance(obj, RebalanceDef) and f.name == "interval_days" and obj._interval_days_explicit)
-                )
+                    isinstance(obj, ExecutionSection) and f.name == "rebalance" and getattr(value, "_interval_days_explicit", False)
+                ) or (isinstance(obj, RebalanceDef) and f.name == "interval_days" and obj._interval_days_explicit)
                 preserve_explicit_fill_price_mode = (
-                    isinstance(obj, ExecutionSection)
-                    and f.name == "fill_price_mode"
-                    and obj._fill_price_mode_explicit
+                    isinstance(obj, ExecutionSection) and f.name == "fill_price_mode" and obj._fill_price_mode_explicit
+                )
+                preserve_explicit_cash_policy = (
+                    isinstance(obj, ExecutionSection) and f.name == "insufficient_cash_policy" and obj._insufficient_cash_policy_explicit
                 )
                 preserve_core_version = isinstance(obj, StrategySpec) and f.name in {
                     "schema_version",
@@ -825,6 +841,7 @@ def _dataclass_to_dict(obj: Any) -> Any:
                     and value == f.default
                     and not preserve_explicit_rebalance
                     and not preserve_explicit_fill_price_mode
+                    and not preserve_explicit_cash_policy
                     and not preserve_core_version
                 ):
                     continue
@@ -834,6 +851,7 @@ def _dataclass_to_dict(obj: Any) -> Any:
                             value == f.default_factory()
                             and not preserve_explicit_rebalance
                             and not preserve_explicit_fill_price_mode
+                            and not preserve_explicit_cash_policy
                             and not preserve_core_version
                         ):
                             continue
@@ -899,13 +917,7 @@ def _effective_metrics_dict(obj: MetricsSection) -> dict[str, Any]:
         "profile": obj.profile,
         "risk_free_rate": obj.risk_free_rate if "risk_free_rate" in explicit_fields else defaults["risk_free_rate"],
         "return_type": obj.return_type if "return_type" in explicit_fields else defaults["return_type"],
-        "annualization_days": obj.annualization_days
-        if "annualization_days" in explicit_fields
-        else defaults["annualization_days"],
-        "calmar_denominator": obj.calmar_denominator
-        if "calmar_denominator" in explicit_fields
-        else defaults["calmar_denominator"],
-        "evaluation_window": obj.evaluation_window
-        if "evaluation_window" in explicit_fields
-        else defaults["evaluation_window"],
+        "annualization_days": obj.annualization_days if "annualization_days" in explicit_fields else defaults["annualization_days"],
+        "calmar_denominator": obj.calmar_denominator if "calmar_denominator" in explicit_fields else defaults["calmar_denominator"],
+        "evaluation_window": obj.evaluation_window if "evaluation_window" in explicit_fields else defaults["evaluation_window"],
     }

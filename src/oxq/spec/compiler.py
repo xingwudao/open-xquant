@@ -77,9 +77,7 @@ def _resolve_portfolio_optimizer(name: str) -> type:
     """Look up a portfolio optimizer class by name from the registry."""
     cls = _PORTFOLIO_OPTIMIZER_REGISTRY.get(name)
     if cls is None:
-        raise ValueError(
-            f"Unknown portfolio optimizer: '{name}'. Available: {sorted(_PORTFOLIO_OPTIMIZER_REGISTRY.keys())}"
-        )
+        raise ValueError(f"Unknown portfolio optimizer: '{name}'. Available: {sorted(_PORTFOLIO_OPTIMIZER_REGISTRY.keys())}")
     return cls
 
 
@@ -122,10 +120,7 @@ class _LaggedIndicator:
     def compute_cross_section(self, mktdata: dict[str, pd.DataFrame], **params: Any) -> dict[str, pd.Series]:
         compute_cross_section = getattr(self._base, "compute_cross_section", None)
         if not callable(compute_cross_section):
-            return {
-                symbol: self._base.compute(frame, **params).shift(self._lag_bars)
-                for symbol, frame in mktdata.items()
-            }
+            return {symbol: self._base.compute(frame, **params).shift(self._lag_bars) for symbol, frame in mktdata.items()}
         outputs = compute_cross_section(mktdata, **params)
         return {symbol: series.shift(self._lag_bars) for symbol, series in outputs.items()}
 
@@ -157,11 +152,7 @@ def _apply_portfolio_constraints(spec: StrategySpec, optimizer: PortfolioOptimiz
 
 
 def _runtime_max_holdings(spec: StrategySpec) -> int | None:
-    caps = [
-        rule.params.get("max_holdings")
-        for rule in spec.portfolio.rules.values()
-        if rule.type == "MaxHoldingsRule"
-    ]
+    caps = [rule.params.get("max_holdings") for rule in spec.portfolio.rules.values() if rule.type == "MaxHoldingsRule"]
     valid_caps = [cap for cap in caps if isinstance(cap, int) and not isinstance(cap, bool) and cap > 0]
     return min(valid_caps) if valid_caps else None
 
@@ -171,9 +162,7 @@ def _effective_portfolio_constraints(spec: StrategySpec) -> Any:
     runtime_max_holdings = _runtime_max_holdings(spec)
     if runtime_max_holdings is not None:
         constraints.max_holdings = (
-            runtime_max_holdings
-            if constraints.max_holdings is None
-            else min(constraints.max_holdings, runtime_max_holdings)
+            runtime_max_holdings if constraints.max_holdings is None else min(constraints.max_holdings, runtime_max_holdings)
         )
     return constraints
 
@@ -231,9 +220,7 @@ class _ConstrainedPortfolioOptimizer:
             )
         constrained: dict[str, float] = {}
         for symbol, weight in items:
-            if self._constraints.min_weight is not None and _below_min_weight(
-                weight, self._constraints.min_weight
-            ):
+            if self._constraints.min_weight is not None and _below_min_weight(weight, self._constraints.min_weight):
                 cash += weight
                 continue
             if self._constraints.max_weight is not None and weight > self._constraints.max_weight:
@@ -307,18 +294,12 @@ def _effective_rebalance(spec: StrategySpec) -> tuple[int, str]:
         raise ValueError("portfolio.rules.rebalance must use RebalanceFrequencyRule")
     unsupported_params = sorted(set(rebalance_rule.params) - {"interval_days"})
     if unsupported_params:
-        raise ValueError(
-            "portfolio.rules.rebalance.params contains unsupported keys: "
-            + ", ".join(unsupported_params)
-        )
+        raise ValueError("portfolio.rules.rebalance.params contains unsupported keys: " + ", ".join(unsupported_params))
     interval = rebalance_rule.params.get("interval_days")
     if not isinstance(interval, int) or isinstance(interval, bool) or interval <= 0:
         raise ValueError("portfolio.rules.rebalance.params.interval_days must be a positive integer")
     if getattr(spec.execution.rebalance, "_interval_days_explicit", False) and execution_interval != interval:
-        raise ValueError(
-            "portfolio.rules.rebalance.params.interval_days conflicts with "
-            "execution.rebalance.interval_days"
-        )
+        raise ValueError("portfolio.rules.rebalance.params.interval_days conflicts with execution.rebalance.interval_days")
     if spec.execution.rebalance.schedule and interval > 1:
         raise ValueError("calendar schedule cannot be combined with interval_days > 1")
     return interval, "portfolio.rules.rebalance"
@@ -578,9 +559,7 @@ def _write_artifacts(
 
     # strategy_spec.yaml
     spec_path = run_dir / "strategy_spec.yaml"
-    spec_path.write_text(
-        yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False), encoding="utf-8"
-    )
+    spec_path.write_text(yaml.dump(spec.to_dict(), sort_keys=False, allow_unicode=True, default_flow_style=False), encoding="utf-8")
     serialized_spec = StrategySpec.from_yaml(spec_path)
     serialized_spec_hash = serialized_spec.compute_hash()
 
@@ -626,14 +605,18 @@ def _write_artifacts(
         symbols=symbols,
     )
     symbol_ranges = _compute_symbol_ranges(result.mktdata) if result.mktdata else {}
-    data_fingerprints = _compute_data_fingerprints(
-        result.mktdata,
-        spec.data.required_columns,
-        calendar=spec.market.calendar,
-        start=manifest_start,
-        end=manifest_end,
-        symbols=symbols,
-    ) if result.mktdata else {}
+    data_fingerprints = (
+        _compute_data_fingerprints(
+            result.mktdata,
+            spec.data.required_columns,
+            calendar=spec.market.calendar,
+            start=manifest_start,
+            end=manifest_end,
+            symbols=symbols,
+        )
+        if result.mktdata
+        else {}
+    )
     manifest = {
         "schema_version": 1,
         "provider": spec.data.provider,
@@ -699,10 +682,7 @@ def _write_artifacts(
     pd.DataFrame(trade_rows).to_csv(run_dir / "trades.csv", index=False)
 
     # positions.csv — last snapshot
-    pos_rows = [
-        {"symbol": sym, "shares": pos.shares, "avg_cost": float(pos.avg_cost)}
-        for sym, pos in result.portfolio.positions.items()
-    ]
+    pos_rows = [{"symbol": sym, "shares": pos.shares, "avg_cost": float(pos.avg_cost)} for sym, pos in result.portfolio.positions.items()]
     pd.DataFrame(pos_rows).to_csv(run_dir / "positions.csv", index=False)
 
     # orders.csv
@@ -1194,21 +1174,15 @@ def _manifest_component_class_ref(component_manifests: list[dict[str, Any]], kin
             raise ValueError(f"component_manifests[{manifest_index}].components must be a list")
         for component_index, component in enumerate(components):
             if not isinstance(component, dict):
-                raise ValueError(
-                    f"component_manifests[{manifest_index}].components[{component_index}] must be an object"
-                )
+                raise ValueError(f"component_manifests[{manifest_index}].components[{component_index}] must be an object")
             if component.get("kind") != kind or component.get("name") != name:
                 continue
             module_name = component.get("module")
             class_name = component.get("class")
             if not isinstance(module_name, str) or not module_name:
-                raise ValueError(
-                    f"component_manifests[{manifest_index}].components[{component_index}].module is required"
-                )
+                raise ValueError(f"component_manifests[{manifest_index}].components[{component_index}].module is required")
             if not isinstance(class_name, str) or not class_name:
-                raise ValueError(
-                    f"component_manifests[{manifest_index}].components[{component_index}].class is required"
-                )
+                raise ValueError(f"component_manifests[{manifest_index}].components[{component_index}].class is required")
             return f"{module_name}.{class_name}"
     return None
 
@@ -1260,7 +1234,7 @@ def _normalize_compiled_plan_material_fields(plan: dict[str, Any]) -> dict[str, 
             filters.setdefault("suspension_policy", "none")
     execution = normalized.get("execution")
     if isinstance(execution, dict):
-        execution.setdefault("insufficient_cash_policy", "scale_down")
+        execution.setdefault("insufficient_cash_policy", "reject")
     signals = normalized.get("signals")
     if isinstance(signals, dict):
         indicators = signals.get("indicators")
@@ -1443,7 +1417,7 @@ def _build_strategy_py_artifact(
         "    universe = deepcopy(load_compiled_plan().get('universe', {}))",
         "    universe_symbols = universe.get('symbols', [])",
         "    universe['review_note'] = (",
-        "        f\"This run evaluates {len(universe_symbols)} symbols; \"",
+        '        f"This run evaluates {len(universe_symbols)} symbols; "',
         "        'change the run universe to test the same strategy elsewhere.'",
         "    )",
         "    return universe",
@@ -1538,7 +1512,7 @@ def _build_strategy_py_artifact(
         "        ),",
         "        fill_price_mode=FillPriceMode(execution.get('fill_price_mode', 'close')),",
         "        market_calendar=market.get('runtime_calendar'),",
-        "        insufficient_cash_policy=execution.get('insufficient_cash_policy', 'scale_down'),",
+        "        insufficient_cash_policy=execution.get('insufficient_cash_policy', 'reject'),",
         "    )",
         "",
         "",
@@ -1549,7 +1523,7 @@ def _build_strategy_py_artifact(
         "    cost = plan.get('cost', {})",
         "    return {",
         "        'fill_price_mode': execution.get('fill_price_mode'),",
-        "        'insufficient_cash_policy': execution.get('insufficient_cash_policy'),",
+        "        'insufficient_cash_policy': execution.get('insufficient_cash_policy', 'reject'),",
         "        'order_timing': execution.get('order_timing'),",
         "        'price_bar': execution.get('price_bar'),",
         "        'price_type': execution.get('price_type'),",
@@ -1622,11 +1596,11 @@ def _build_strategy_py_artifact(
         "    trade_count = metrics.get('trade_count')",
         "    if trade_count is None:",
         "        trade_count = len(result.trades)",
-        "    print(f\"Total Return:     {total_return:.2%}\")",
-        "    print(f\"Annualized Ret:   {annualized_return:.2%}\")",
-        "    print(f\"Sharpe Ratio:     {sharpe_ratio:.2f}\")",
-        "    print(f\"Max Drawdown:     {max_drawdown:.2%}\")",
-        "    print(f\"Trades:           {trade_count}\")",
+        '    print(f"Total Return:     {total_return:.2%}")',
+        '    print(f"Annualized Ret:   {annualized_return:.2%}")',
+        '    print(f"Sharpe Ratio:     {sharpe_ratio:.2f}")',
+        '    print(f"Max Drawdown:     {max_drawdown:.2%}")',
+        '    print(f"Trades:           {trade_count}")',
         "",
         "",
         "def simulate_trading_flow() -> list[dict]:",
@@ -2032,11 +2006,7 @@ def _build_target_weight_rows(result: RunResult) -> list[dict[str, Any]]:
                 if raw_weight != adjusted_weight:
                     reason = "target_adjusted_by_runtime_policy"
                 else:
-                    reason = (
-                        "target_changed"
-                        if adjusted_weight != previous_adjusted.get(symbol, 0.0)
-                        else "target_unchanged"
-                    )
+                    reason = "target_changed" if adjusted_weight != previous_adjusted.get(symbol, 0.0) else "target_unchanged"
             rows.append(
                 {
                     "date": str(snapshot.date),
@@ -2122,8 +2092,7 @@ def _terminal_signal_names(spec: StrategySpec) -> list[str]:
     terminal = [name for name in spec.signal.rules if name not in referenced]
     if len(terminal) != 1:
         raise ValueError(
-            "Exactly one terminal signal rule is required for EqualWeight specs with signal.rules; "
-            f"found {terminal or 'none'}"
+            f"Exactly one terminal signal rule is required for EqualWeight specs with signal.rules; found {terminal or 'none'}"
         )
     return terminal
 
@@ -2147,9 +2116,7 @@ def _effective_signal_type(spec: StrategySpec, signal_name: str, seen: set[str] 
     has_event = any(child_type in _EVENT_SIGNAL_TYPES for child_type in child_types)
     has_level = any(child_type not in _EVENT_SIGNAL_TYPES for child_type in child_types)
     if rule_def.params.get("logic", "and") == "or" and has_event and has_level:
-        raise ValueError(
-            f"Composite signal '{signal_name}' with logic='or' cannot mix event and level signals"
-        )
+        raise ValueError(f"Composite signal '{signal_name}' with logic='or' cannot mix event and level signals")
     if has_event:
         return "Crossover"
     return rule_def.type
@@ -2191,13 +2158,15 @@ def _build_metrics(spec: StrategySpec, result: RunResult, run_id: str) -> dict[s
     if metric_diagnostics:
         _clear_top_level_profile_metrics(base)
         base["metric_diagnostics"] = metric_diagnostics
-    base.update({
-        "strategy_id": spec.strategy_id,
-        "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
-        "trade_count": len(activity_trades),
-        "cost_paid": float(sum(float(f.fee) for f in activity_trades)),
-        "slippage_paid": None,  # Not measurable without raw-vs-slipped fill price tracking
-    })
+    base.update(
+        {
+            "strategy_id": spec.strategy_id,
+            "turnover": result.turnover() if hasattr(result, "turnover") else 0.0,
+            "trade_count": len(activity_trades),
+            "cost_paid": float(sum(float(f.fee) for f in activity_trades)),
+            "slippage_paid": None,  # Not measurable without raw-vs-slipped fill price tracking
+        }
+    )
 
     # Compute OOS-only metrics when test_period is defined
     train = spec.validation.train_period

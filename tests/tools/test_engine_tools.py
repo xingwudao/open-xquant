@@ -32,11 +32,11 @@ def sample_data_dir(tmp_path):
     dates = pd.bdate_range("2024-01-01", periods=n, tz="UTC")
     closes: list[float] = []
     for i in range(50):
-        closes.append(200 - i * 2)       # 200 -> 102
+        closes.append(200 - i * 2)  # 200 -> 102
     for i in range(40):
-        closes.append(102 + i * 2)       # 102 -> 180
+        closes.append(102 + i * 2)  # 102 -> 180
     for i in range(30):
-        closes.append(180 - i * 2)       # 180 -> 122
+        closes.append(180 - i * 2)  # 180 -> 122
 
     df = pd.DataFrame(
         {
@@ -72,7 +72,9 @@ def _build_strategy(
     )
     # Add signal with its required indicators
     strategy_add_signal(
-        strategy=name, name="cross_up", type="Crossover",
+        strategy=name,
+        name="cross_up",
+        type="Crossover",
         params={"fast": "sma_10", "slow": "sma_50"},
         indicators={
             "sma_10": {"type": "SMA", "params": {"column": "close", "period": 10}},
@@ -121,8 +123,10 @@ def test_engine_run_symbols_override_does_not_mutate_strategy(sample_data_dir) -
 
 def test_engine_run_missing_strategy() -> None:
     result = engine_run(
-        strategy="nonexistent", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="nonexistent",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
     )
     assert "error" in result
 
@@ -196,6 +200,38 @@ def test_engine_run_passes_market_calendar_to_provider_and_broker(monkeypatch, s
     assert captured == {"provider_calendar": "XHKG", "broker_calendar": "XHKG"}
 
 
+def test_engine_run_passes_insufficient_cash_policy_to_broker(monkeypatch, sample_data_dir) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeBroker:
+        def __init__(self, **kwargs) -> None:
+            captured["insufficient_cash_policy"] = kwargs.get("insufficient_cash_policy")
+
+    def fake_run(self, *args, **kwargs) -> RunResult:
+        return RunResult(
+            portfolio=Portfolio(cash=Decimal("100000")),
+            trades=[],
+            equity_curve=[],
+            mktdata={},
+        )
+
+    monkeypatch.setattr(engine_tools, "SimBroker", FakeBroker)
+    monkeypatch.setattr(engine_tools.Engine, "run", fake_run)
+    _build_full_strategy()
+
+    result = engine_run(
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
+        data_dir=str(sample_data_dir),
+        insufficient_cash_policy="reject",
+    )
+
+    assert "error" not in result
+    assert captured == {"insufficient_cash_policy": "reject"}
+
+
 @pytest.mark.parametrize(
     ("fill_price_mode", "expected"),
     [
@@ -266,8 +302,10 @@ def test_engine_run_through_indicator(sample_data_dir) -> None:
 def test_engine_results(sample_data_dir) -> None:
     _build_full_strategy()
     run = engine_run(
-        strategy="sma_cross", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     run_id = run["run_id"]
@@ -283,8 +321,10 @@ def test_engine_results(sample_data_dir) -> None:
 def test_engine_results_objectives_check(sample_data_dir) -> None:
     _build_full_strategy()
     run = engine_run(
-        strategy="sma_cross", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     run_id = run["run_id"]
@@ -306,8 +346,10 @@ def test_engine_results_drawdown_pass_when_better(sample_data_dir) -> None:
     """Drawdown -8% with max -99% should pass (abs(actual) < abs(max))."""
     _build_strategy("dd_pass", objectives={"max_drawdown": {"max": -0.99}})
     run = engine_run(
-        strategy="dd_pass", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="dd_pass",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     result = engine_results(run["run_id"])
@@ -319,8 +361,10 @@ def test_engine_results_drawdown_fail_when_worse(sample_data_dir) -> None:
     """Drawdown exceeding tight limit should fail."""
     _build_strategy("dd_fail", objectives={"max_drawdown": {"max": -0.001}})
     run = engine_run(
-        strategy="dd_fail", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="dd_fail",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     result = engine_results(run["run_id"])
@@ -332,8 +376,10 @@ def test_engine_results_drawdown_exact_boundary(sample_data_dir) -> None:
     """Drawdown exactly at boundary should pass (abs(actual) == abs(max))."""
     _build_strategy("dd_exact", objectives={"max_drawdown": {"max": -0.99}})
     run = engine_run(
-        strategy="dd_exact", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="dd_exact",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     actual_dd = engine_results(run["run_id"])["metrics"]["max_drawdown"]
@@ -342,14 +388,13 @@ def test_engine_results_drawdown_exact_boundary(sample_data_dir) -> None:
     session.clear()
     _build_strategy("dd_exact", objectives={"max_drawdown": {"max": actual_dd}})
     run2 = engine_run(
-        strategy="dd_exact", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="dd_exact",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
-    dd_check = next(
-        c for c in engine_results(run2["run_id"])["objectives_check"]
-        if c["metric"] == "max_drawdown"
-    )
+    dd_check = next(c for c in engine_results(run2["run_id"])["objectives_check"] if c["metric"] == "max_drawdown")
     assert dd_check["pass"] is True
 
 
@@ -357,8 +402,10 @@ def test_engine_results_volatility_uses_normal_comparison(sample_data_dir) -> No
     """Non-drawdown metrics like volatility use normal <= comparison."""
     _build_strategy("vol_check", objectives={"annualized_volatility": {"max": 0.001}})
     run = engine_run(
-        strategy="vol_check", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="vol_check",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     result = engine_results(run["run_id"])
@@ -368,19 +415,21 @@ def test_engine_results_volatility_uses_normal_comparison(sample_data_dir) -> No
 
 def test_engine_results_mixed_objectives(sample_data_dir) -> None:
     """Multiple objectives: drawdown uses abs comparison, others use normal."""
-    _build_strategy("mixed", objectives={
-        "total_return": {"min": -10.0},
-        "max_drawdown": {"max": -0.99},
-    })
+    _build_strategy(
+        "mixed",
+        objectives={
+            "total_return": {"min": -10.0},
+            "max_drawdown": {"max": -0.99},
+        },
+    )
     run = engine_run(
-        strategy="mixed", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="mixed",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
-    checks = {
-        c["metric"]: c["pass"]
-        for c in engine_results(run["run_id"])["objectives_check"]
-    }
+    checks = {c["metric"]: c["pass"] for c in engine_results(run["run_id"])["objectives_check"]}
     assert checks["total_return"] is True
     assert checks["max_drawdown"] is True
 
@@ -393,8 +442,10 @@ def test_engine_results_mixed_objectives(sample_data_dir) -> None:
 def test_engine_trade_list(sample_data_dir) -> None:
     _build_full_strategy()
     run = engine_run(
-        strategy="sma_cross", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     run_id = run["run_id"]
@@ -414,8 +465,10 @@ def test_engine_trade_list(sample_data_dir) -> None:
 def test_engine_trade_list_includes_order_type_and_fee(sample_data_dir) -> None:
     _build_full_strategy()
     run = engine_run(
-        strategy="sma_cross", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="sma_cross",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
     )
     result = engine_trade_list(run["run_id"])
@@ -440,8 +493,10 @@ def test_engine_trade_list_not_found() -> None:
 def test_engine_run_with_fee(sample_data_dir) -> None:
     _build_strategy("fee_test")
     run = engine_run(
-        strategy="fee_test", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="fee_test",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
         fee_rate=0.001,
         fee_min=5.0,
@@ -452,8 +507,10 @@ def test_engine_run_with_fee(sample_data_dir) -> None:
 def test_engine_run_with_slippage(sample_data_dir) -> None:
     _build_strategy("with_slip")
     run_with = engine_run(
-        strategy="with_slip", symbols=["AAPL"],
-        start="2024-01-01", end="2024-12-31",
+        strategy="with_slip",
+        symbols=["AAPL"],
+        start="2024-01-01",
+        end="2024-12-31",
         data_dir=str(sample_data_dir),
         slippage_rate=0.01,
     )

@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from oxq.data.loaders import resolve_data_dir
 from oxq.data.market import LocalMarketDataProvider
@@ -48,8 +48,10 @@ def _broker_factory(
     fee_rate: float | None,
     fee_min: float | None,
     slippage_rate: float | None,
+    insufficient_cash_policy: Literal["scale_down", "reject"],
 ) -> Callable[[], SimBroker]:
     """Return a factory that creates fresh SimBroker instances."""
+
     def factory() -> SimBroker:
         fee_model = None
         if fee_rate is not None:
@@ -60,7 +62,12 @@ def _broker_factory(
         slippage_model = None
         if slippage_rate is not None:
             slippage_model = PercentageSlippage(rate=Decimal(str(slippage_rate)))
-        return SimBroker(fee_model=fee_model, slippage_model=slippage_model)
+        return SimBroker(
+            fee_model=fee_model,
+            slippage_model=slippage_model,
+            insufficient_cash_policy=insufficient_cash_policy,
+        )
+
     return factory
 
 
@@ -129,9 +136,7 @@ def paramset_create(
                 if rule_name:
                     known.add(rule_name)
 
-            unmatched = [
-                p["component"] for p in params if p["component"] not in known
-            ]
+            unmatched = [p["component"] for p in params if p["component"] not in known]
             if unmatched:
                 return {
                     "error": (
@@ -173,12 +178,14 @@ def paramset_list() -> dict[str, Any]:
     """Return names and summaries of all parameter sets in session state."""
     items = []
     for name, ps in sorted(session._paramsets.items()):
-        items.append({
-            "name": name,
-            "distributions": len(ps.distributions),
-            "constraints": len(ps.constraints),
-            "total_combinations": ps.total_combinations(),
-        })
+        items.append(
+            {
+                "name": name,
+                "distributions": len(ps.distributions),
+                "constraints": len(ps.constraints),
+                "total_combinations": ps.total_combinations(),
+            }
+        )
     return {"paramsets": items}
 
 
@@ -197,10 +204,7 @@ def paramset_inspect(name: str) -> dict[str, Any]:
         "name": ps.name,
         "total_combinations": ps.total_combinations,
         "valid_combinations": len(grid),
-        "distributions": [
-            {"component": d.component, "param": d.param, "values": list(d.values)}
-            for d in ps.distributions
-        ],
+        "distributions": [{"component": d.component, "param": d.param, "values": list(d.values)} for d in ps.distributions],
         "constraints": [c.expr for c in ps.constraints],
         "sample_combinations": grid[:5],
     }
@@ -232,6 +236,7 @@ def grid_search(
     cash_annual_return: float = 0.0,
     data_start: str | None = None,
     top_n: int = 5,
+    insufficient_cash_policy: Literal["scale_down", "reject"] = "scale_down",
 ) -> dict[str, Any]:
     """Run GridSearch and return top results."""
     strat = session._strategies.get(strategy)
@@ -250,7 +255,7 @@ def grid_search(
 
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     market = LocalMarketDataProvider(path)
-    factory = _broker_factory(fee_rate, fee_min, slippage_rate)
+    factory = _broker_factory(fee_rate, fee_min, slippage_rate, insufficient_cash_policy)
 
     # Collect pending rules from strategy
     rules = getattr(strat, "rules", getattr(strat, "_pending_rules", [])) or []
@@ -281,12 +286,14 @@ def grid_search(
     top = result.top_n(top_n)
     ranked = []
     for i, trial in enumerate(top, 1):
-        ranked.append({
-            "rank": i,
-            "params": trial.params,
-            "metric_value": round(trial.metric_value, 6),
-            "metrics": _metrics_dict(trial.run_result),
-        })
+        ranked.append(
+            {
+                "rank": i,
+                "params": trial.params,
+                "metric_value": round(trial.metric_value, 6),
+                "metrics": _metrics_dict(trial.run_result),
+            }
+        )
 
     return {
         "search_id": search_id,
@@ -323,6 +330,7 @@ def walk_forward(
     fee_rate: float | None = None,
     fee_min: float | None = None,
     slippage_rate: float | None = None,
+    insufficient_cash_policy: Literal["scale_down", "reject"] = "scale_down",
 ) -> dict[str, Any]:
     """Run walk-forward analysis and return per-window + aggregate results."""
     strat = session._strategies.get(strategy)
@@ -336,7 +344,7 @@ def walk_forward(
     run_universe = StaticUniverse(tuple(symbols))
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     market = LocalMarketDataProvider(path)
-    factory = _broker_factory(fee_rate, fee_min, slippage_rate)
+    factory = _broker_factory(fee_rate, fee_min, slippage_rate, insufficient_cash_policy)
 
     try:
         wf = WalkForward(ps, train_period, test_period, step=step, anchored=anchored)
@@ -360,14 +368,16 @@ def walk_forward(
 
     windows = []
     for i, w in enumerate(result.windows, 1):
-        windows.append({
-            "window": i,
-            "train": f"{w.train_start} ~ {w.train_end}",
-            "test": f"{w.test_start} ~ {w.test_end}",
-            "best_params": w.best_params,
-            "in_sample_metric": round(w.in_sample_metric, 6),
-            "oos_metrics": _metrics_dict(w.oos_result),
-        })
+        windows.append(
+            {
+                "window": i,
+                "train": f"{w.train_start} ~ {w.train_end}",
+                "test": f"{w.test_start} ~ {w.test_end}",
+                "best_params": w.best_params,
+                "in_sample_metric": round(w.in_sample_metric, 6),
+                "oos_metrics": _metrics_dict(w.oos_result),
+            }
+        )
 
     return {
         "wf_id": wf_id,
@@ -408,6 +418,7 @@ def cross_validate(
     fee_rate: float | None = None,
     fee_min: float | None = None,
     slippage_rate: float | None = None,
+    insufficient_cash_policy: Literal["scale_down", "reject"] = "scale_down",
 ) -> dict[str, Any]:
     """Run time-series cross-validation and return per-fold results."""
     strat = session._strategies.get(strategy)
@@ -423,7 +434,7 @@ def cross_validate(
     run_universe = StaticUniverse(tuple(symbols))
     path = resolve_data_dir(Path(data_dir) if data_dir else None)
     market = LocalMarketDataProvider(path)
-    factory = _broker_factory(fee_rate, fee_min, slippage_rate)
+    factory = _broker_factory(fee_rate, fee_min, slippage_rate, insufficient_cash_policy)
 
     try:
         cv = TimeSeriesCV(n_splits=n_splits, embargo_days=embargo_days, expanding=expanding)
@@ -557,10 +568,7 @@ def overfit_analysis(
         if cv_result is None:
             return {"error": f"CV result '{cv_id}' not found"}
 
-        oos_metrics = [
-            _extract_metric(sr.oos_result, cv_result.metric)
-            for sr in cv_result.splits
-        ]
+        oos_metrics = [_extract_metric(sr.oos_result, cv_result.metric) for sr in cv_result.splits]
         report["cross_validation"] = {
             "n_splits": len(cv_result.splits),
             "mean_oos_metric": round(cv_result.mean_oos_metric(), 6),

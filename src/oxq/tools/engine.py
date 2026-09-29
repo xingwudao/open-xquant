@@ -38,6 +38,7 @@ def engine_run(
     data_start: str | None = None,
     fill_price_mode: Literal["close", "mid", "next_avg", "next_close", "next_hl2", "next_mid", "next_open"] | None = None,
     market_calendar: str | None = "XNYS",
+    insufficient_cash_policy: Literal["scale_down", "reject"] = "scale_down",
 ) -> dict[str, Any]:
     """Run a strategy through the engine and store the result."""
     strat = session._strategies.get(strategy)
@@ -76,7 +77,7 @@ def engine_run(
     if slippage_rate is not None:
         slippage_model = PercentageSlippage(rate=Decimal(str(slippage_rate)))
 
-    broker_kwargs: dict[str, Any] = {}
+    broker_kwargs: dict[str, Any] = {"insufficient_cash_policy": insufficient_cash_policy}
     if fee_model is not None:
         broker_kwargs["fee_model"] = fee_model
     if slippage_model is not None:
@@ -155,13 +156,15 @@ def run_list() -> dict[str, Any]:
     """Return run IDs with summary metrics for all runs in session state."""
     runs = []
     for run_id, result in sorted(session._run_results.items()):
-        runs.append({
-            "run_id": run_id,
-            "total_return": round(result.total_return(), 4),
-            "sharpe_ratio": round(result.sharpe_ratio(), 4),
-            "max_drawdown": round(result.max_drawdown(), 4),
-            "total_trades": len(result.trades),
-        })
+        runs.append(
+            {
+                "run_id": run_id,
+                "total_return": round(result.total_return(), 4),
+                "sharpe_ratio": round(result.sharpe_ratio(), 4),
+                "max_drawdown": round(result.max_drawdown(), 4),
+                "total_trades": len(result.trades),
+            }
+        )
     return {"runs": runs}
 
 

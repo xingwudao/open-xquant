@@ -222,9 +222,7 @@ def test_validate_accepts_cross_sectional_rps_indicator_dry_run() -> None:
         hypothesis="cross-sectional indicators must validate through compute_cross_section",
     )
     spec.universe.symbols = ["AAA", "BBB"]
-    spec.signal.indicators = {
-        "rps_1": IndicatorDef(type="RPS", params={"column": "close", "period": 1, "min_symbols": 1})
-    }
+    spec.signal.indicators = {"rps_1": IndicatorDef(type="RPS", params={"column": "close", "period": 1, "min_symbols": 1})}
     spec.portfolio.type = "TopNRanking"
     spec.portfolio.params = {"score_col": "rps_1", "n": 1}
 
@@ -239,9 +237,7 @@ def test_validate_rejects_cross_sectional_rps_non_positive_period() -> None:
         hypothesis="cross-sectional indicators must not look ahead",
     )
     spec.universe.symbols = ["AAA", "BBB"]
-    spec.signal.indicators = {
-        "rps_bad": IndicatorDef(type="RPS", params={"column": "close", "period": -1, "min_symbols": 1})
-    }
+    spec.signal.indicators = {"rps_bad": IndicatorDef(type="RPS", params={"column": "close", "period": -1, "min_symbols": 1})}
     spec.portfolio.type = "TopNRanking"
     spec.portfolio.params = {"score_col": "rps_bad", "n": 1}
 
@@ -249,8 +245,7 @@ def test_validate_rejects_cross_sectional_rps_non_positive_period() -> None:
 
     assert result.status == "fail"
     assert any(
-        error["check"] == "compute_dry_run_failed" and "period must be a positive integer" in error["message"]
-        for error in result.errors
+        error["check"] == "compute_dry_run_failed" and "period must be a positive integer" in error["message"] for error in result.errors
     )
 
 
@@ -261,9 +256,7 @@ def test_validate_rejects_cross_sectional_rps_non_finite_scale(scale: float) -> 
         hypothesis="cross-sectional ranks require a finite scale",
     )
     spec.universe.symbols = ["AAA", "BBB"]
-    spec.signal.indicators = {
-        "rps_bad": IndicatorDef(type="RPS", params={"column": "close", "period": 1, "scale": scale})
-    }
+    spec.signal.indicators = {"rps_bad": IndicatorDef(type="RPS", params={"column": "close", "period": 1, "scale": scale})}
     spec.portfolio.type = "TopNRanking"
     spec.portfolio.params = {"score_col": "rps_bad", "n": 1}
 
@@ -271,8 +264,7 @@ def test_validate_rejects_cross_sectional_rps_non_finite_scale(scale: float) -> 
 
     assert result.status == "fail"
     assert any(
-        error["check"] == "compute_dry_run_failed"
-        and "scale must be a positive finite real number" in error["message"]
+        error["check"] == "compute_dry_run_failed" and "scale must be a positive finite real number" in error["message"]
         for error in result.errors
     )
 
@@ -1027,11 +1019,18 @@ def test_validate_accepts_valid_cash_annual_return(cash_annual_return: float) ->
     assert "cash_annual_return_invalid" not in {error["check"] for error in result.errors}
 
 
-def test_execution_insufficient_cash_policy_defaults_to_scale_down() -> None:
+def test_legacy_execution_without_insufficient_cash_policy_defaults_to_reject() -> None:
     spec = StrategySpec.from_dict({"execution": {}})
 
+    assert spec.execution.insufficient_cash_policy == "reject"
+    assert spec.to_effective_dict()["execution"]["insufficient_cash_policy"] == "reject"
+
+
+def test_new_template_explicitly_defaults_insufficient_cash_policy_to_scale_down() -> None:
+    spec = StrategySpec.template(strategy_id="cash_policy_default", hypothesis="new default is explicit")
+
     assert spec.execution.insufficient_cash_policy == "scale_down"
-    assert spec.to_effective_dict()["execution"]["insufficient_cash_policy"] == "scale_down"
+    assert spec.to_dict()["execution"]["insufficient_cash_policy"] == "scale_down"
 
 
 def test_execution_insufficient_cash_policy_is_parsed() -> None:
@@ -1804,9 +1803,7 @@ def test_validate_rejects_invalid_top_n_ranking_params() -> None:
 def test_validate_accepts_top_n_pre_filter_signal() -> None:
     spec = StrategySpec.template(strategy_id="topn_prefilter", hypothesis="positive momentum can pre-filter ranking")
     spec.signal.indicators = {"score": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 20})}
-    spec.signal.rules = {
-        "positive": SignalRuleDef(type="Threshold", params={"column": "score", "threshold": 0.0, "relationship": "gt"})
-    }
+    spec.signal.rules = {"positive": SignalRuleDef(type="Threshold", params={"column": "score", "threshold": 0.0, "relationship": "gt"})}
     spec.portfolio.type = "TopNRanking"
     spec.portfolio.params = {
         "score_col": "score",
@@ -2007,9 +2004,7 @@ def test_signal_to_position_accepts_signal_rules() -> None:
         hypothesis="ROC timing maps categorical signals to positions",
     )
     spec.universe.symbols = ["CSI300"]
-    spec.signal.indicators = {
-        "roc_120": IndicatorDef(type="ROC", params={"column": "close", "period": 120})
-    }
+    spec.signal.indicators = {"roc_120": IndicatorDef(type="ROC", params={"column": "close", "period": 120})}
     spec.signal.rules = {
         "timing": SignalRuleDef(
             type="ROCTiming",
@@ -2047,8 +2042,7 @@ def test_signal_to_position_requires_declared_signal_rule() -> None:
 
     assert result.status == "fail"
     assert any(
-        error["check"] == "optimizer_param_invalid"
-        and "portfolio.params.signal must reference a signal rule" in error["message"]
+        error["check"] == "optimizer_param_invalid" and "portfolio.params.signal must reference a signal rule" in error["message"]
         for error in result.errors
     )
 
@@ -2058,20 +2052,14 @@ def test_signal_to_position_rejects_non_categorical_signal_rule() -> None:
         strategy_id="signal_to_position_boolean",
         hypothesis="SignalToPosition must consume categorical signals",
     )
-    spec.signal.rules = {
-        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})
-    }
+    spec.signal.rules = {"entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})}
     spec.portfolio.type = "SignalToPosition"
     spec.portfolio.params = {"signal": "entry"}
 
     result = validate(spec)
 
     assert result.status == "fail"
-    assert any(
-        error["check"] == "optimizer_param_invalid"
-        and "BUY/SELL/HOLD" in error["message"]
-        for error in result.errors
-    )
+    assert any(error["check"] == "optimizer_param_invalid" and "BUY/SELL/HOLD" in error["message"] for error in result.errors)
 
 
 def test_equal_weight_rejects_categorical_signal_rule() -> None:
@@ -2079,9 +2067,7 @@ def test_equal_weight_rejects_categorical_signal_rule() -> None:
         strategy_id="equal_weight_categorical",
         hypothesis="Categorical trading-intent labels require an explicit position mapper",
     )
-    spec.signal.indicators = {
-        "roc_120": IndicatorDef(type="ROC", params={"column": "close", "period": 120})
-    }
+    spec.signal.indicators = {"roc_120": IndicatorDef(type="ROC", params={"column": "close", "period": 120})}
     spec.signal.rules = {
         "timing": SignalRuleDef(
             type="ROCTiming",
@@ -2107,9 +2093,7 @@ def test_equal_weight_rejects_partial_trading_intent_output_domain(monkeypatch) 
         strategy_id="equal_weight_partial_intent_domain",
         hypothesis="Any trading-intent label domain requires an explicit position mapper",
     )
-    spec.signal.rules = {
-        "timing": SignalRuleDef(type=BuySellOnlySignal.name, output_domain=["BUY", "SELL"])
-    }
+    spec.signal.rules = {"timing": SignalRuleDef(type=BuySellOnlySignal.name, output_domain=["BUY", "SELL"])}
 
     result = validate(spec)
 
@@ -2129,9 +2113,7 @@ def test_signal_to_position_rejects_unsupported_output_domain_labels(monkeypatch
         strategy_id="signal_to_position_unsupported_domain",
         hypothesis="SignalToPosition should reject non BUY/SELL/HOLD labels",
     )
-    spec.signal.rules = {
-        "timing": SignalRuleDef(type=BuyFlatSignal.name, output_domain=["BUY", "FLAT"])
-    }
+    spec.signal.rules = {"timing": SignalRuleDef(type=BuyFlatSignal.name, output_domain=["BUY", "FLAT"])}
     spec.portfolio.type = "SignalToPosition"
     spec.portfolio.params = {"signal": "timing"}
 
@@ -2139,9 +2121,7 @@ def test_signal_to_position_rejects_unsupported_output_domain_labels(monkeypatch
 
     assert result.status == "fail"
     assert any(
-        error["check"] == "optimizer_param_invalid"
-        and "unsupported labels" in error["message"]
-        and "FLAT" in error["message"]
+        error["check"] == "optimizer_param_invalid" and "unsupported labels" in error["message"] and "FLAT" in error["message"]
         for error in result.errors
     )
 
@@ -2192,8 +2172,7 @@ benchmark:
     assert "output_domain" not in spec.signal.rules["timing"].params
     assert result.status == "fail"
     assert any(
-        error["check"] == "signal_output_domain_mismatch"
-        and "does not match declared output_domain" in error["message"]
+        error["check"] == "signal_output_domain_mismatch" and "does not match declared output_domain" in error["message"]
         for error in result.errors
     )
 
@@ -2211,9 +2190,7 @@ def test_custom_categorical_signal_can_declare_output_domain(monkeypatch) -> Non
         hypothesis="custom categorical signals can drive position latching",
     )
     spec.universe.symbols = ["AAA"]
-    spec.signal.rules = {
-        "timing": SignalRuleDef(type=CustomTimingSignal.name, output_domain=["BUY", "SELL", "HOLD"])
-    }
+    spec.signal.rules = {"timing": SignalRuleDef(type=CustomTimingSignal.name, output_domain=["BUY", "SELL", "HOLD"])}
     spec.portfolio.type = "SignalToPosition"
     spec.portfolio.params = {"signal": "timing"}
     spec.validation.train_period = ["2020-01-01", "2022-12-31"]
@@ -2232,9 +2209,7 @@ def test_empty_signal_output_domain_is_not_part_of_canonical_hash_input() -> Non
         strategy_id="empty_output_domain_hash",
         hypothesis="default signal metadata should not change historical hashes",
     )
-    spec.signal.rules = {
-        "entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})
-    }
+    spec.signal.rules = {"entry": SignalRuleDef(type="Threshold", params={"column": "close", "threshold": 1.0})}
 
     canonical = _dataclass_to_canonical_dict(spec)
 
@@ -2268,7 +2243,5 @@ def test_roc_timing_fixed_thresholds_must_not_overlap() -> None:
 
     assert result.status == "fail"
     assert any(
-        error["check"] == "signal_threshold_invalid"
-        and "bottom must be less than top" in error["message"]
-        for error in result.errors
+        error["check"] == "signal_threshold_invalid" and "bottom must be less than top" in error["message"] for error in result.errors
     )

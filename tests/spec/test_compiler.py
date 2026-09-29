@@ -511,9 +511,7 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     spec.execution.order_timing = "next_session_open"
     spec.execution.price_bar = "next_session"
     spec.execution.price_type = "open"
-    spec.signal.indicators = {
-        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
-    }
+    spec.signal.indicators = {"roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})}
     spec.signal.rules = {
         "positive": SignalRuleDef(
             type="Threshold",
@@ -601,11 +599,9 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert "def main(dry_run: bool = False)" in strategy_py
     assert "def simulate_trading_flow() -> list[dict]:" in strategy_py
     assert "def build_strategy(spec: StrategySpec | None = None):" in strategy_py
-    assert "if __name__ == \"__main__\":" in strategy_py
+    assert 'if __name__ == "__main__":' in strategy_py
     assert "Audit data appendix" not in strategy_py
-    assert strategy_py.index("def load_strategy_spec() -> StrategySpec:") < strategy_py.index(
-        "def define_strategy() -> StrategySpec:"
-    )
+    assert strategy_py.index("def load_strategy_spec() -> StrategySpec:") < strategy_py.index("def define_strategy() -> StrategySpec:")
     assert strategy_py.index("def load_compiled_plan() -> dict[str, Any]:") < strategy_py.index(
         "def prepare_data(spec: StrategySpec) -> LocalMarketDataProvider:"
     )
@@ -641,6 +637,22 @@ def test_write_artifacts_persists_compiled_plan(tmp_path) -> None:
     assert "compiled_plan.json" in hashes
     assert "strategy.py" in hashes
     assert audit_reproducibility(run_dir)["status"] == "pass"
+
+    # A plan written before insufficient_cash_policy existed must retain
+    # the historical all-or-nothing BUY behavior in the generated runner.
+    del plan["execution"]["insufficient_cash_policy"]
+    plan["execution"]["fill_price_mode"] = "close"
+    (run_dir / "compiled_plan.json").write_text(json.dumps(plan), encoding="utf-8")
+    assert module.describe_broker()["insufficient_cash_policy"] == "reject"
+    broker = module.define_broker()
+    broker.set_available_cash(Decimal("100"))
+    broker.submit_order(Order(symbol="SPY", side="BUY", shares=10))
+    broker.fill_market_orders(
+        {"SPY": pd.DataFrame({"close": [20.0]}, index=[dates[0]])},
+        dates[0],
+    )
+    assert broker.get_fills() == []
+    assert broker.get_all_orders()[0].status_reason == "insufficient_cash"
 
 
 def test_strategy_py_rejects_stale_compiled_plan_before_main(tmp_path) -> None:
@@ -1685,9 +1697,10 @@ def test_compile_plan_records_insufficient_cash_policy() -> None:
     assert plan["execution"]["insufficient_cash_policy"] == "reject"
 
 
-def test_legacy_compiled_plan_without_cash_policy_matches_default_plan() -> None:
-    # compiled_plan.json files written before the field existed must keep auditing clean.
+def test_legacy_compiled_plan_without_cash_policy_matches_reject_plan() -> None:
+    # compiled_plan.json files written before the field existed used reject semantics.
     spec = StrategySpec.template(strategy_id="legacy_cash_plan", hypothesis="legacy plans omit cash policy")
+    spec.execution.insufficient_cash_policy = "reject"
     expected = compile_plan(spec)
     legacy = json.loads(json.dumps(expected))
     del legacy["execution"]["insufficient_cash_policy"]
@@ -1695,9 +1708,8 @@ def test_legacy_compiled_plan_without_cash_policy_matches_default_plan() -> None
     assert compiler._compiled_plan_material_differences(legacy, expected) == []
 
 
-def test_legacy_compiled_plan_does_not_match_explicit_reject_plan() -> None:
-    spec = StrategySpec.template(strategy_id="legacy_reject_plan", hypothesis="reject is material")
-    spec.execution.insufficient_cash_policy = "reject"
+def test_legacy_compiled_plan_does_not_match_scale_down_plan() -> None:
+    spec = StrategySpec.template(strategy_id="legacy_scale_down_plan", hypothesis="scale down is material")
     expected = compile_plan(spec)
     legacy = json.loads(json.dumps(expected))
     del legacy["execution"]["insufficient_cash_policy"]
@@ -1920,10 +1932,7 @@ def test_compile_run_max_holdings_caps_simultaneous_equal_weight_buy_batch(tmp_p
     buy_symbols = [fill.order.symbol for fill in result.trades if fill.order.side == "BUY"]
     assert buy_symbols == ["AAA"]
     assert set(result.portfolio.positions) == {"AAA"}
-    assert max(
-        sum(position.shares > 0 for position in snapshot.positions.values())
-        for snapshot in result.snapshots
-    ) == 1
+    assert max(sum(position.shares > 0 for position in snapshot.positions.values()) for snapshot in result.snapshots) == 1
 
 
 def test_compile_plan_rejects_unsupported_rebalance_rule_params() -> None:
@@ -2030,9 +2039,7 @@ def test_compile_run_applies_side_aware_sell_fee_to_sell_fills(tmp_path) -> None
         hypothesis="compiled backtests must apply sell-side taxes to SELL fills",
     )
     spec.universe.symbols = ["CSI300"]
-    spec.signal.indicators = {
-        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
-    }
+    spec.signal.indicators = {"roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})}
     spec.signal.rules = {
         "timing": SignalRuleDef(
             type="ROCTiming",
@@ -2103,9 +2110,7 @@ def test_compile_plan_records_indicator_lag_and_tradability_policy() -> None:
         strategy_id="lag_and_tradability",
         hypothesis="indicator lags and tradability policies must survive compile plan",
     )
-    spec.signal.indicators = {
-        "mom_20": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 20}, lag_bars=1)
-    }
+    spec.signal.indicators = {"mom_20": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 20}, lag_bars=1)}
     spec.portfolio.type = "TopNRanking"
     spec.portfolio.params = {"score_col": "mom_20", "n": 1}
     spec.data.required_columns.append("is_suspended")
@@ -2141,9 +2146,7 @@ def test_compile_run_applies_indicator_lag_bars(tmp_path) -> None:
     spec.universe.symbols = ["AAA"]
     spec.universe.point_in_time = True
     spec.benchmark.symbols = []
-    spec.signal.indicators = {
-        "mom_1": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 1}, lag_bars=1)
-    }
+    spec.signal.indicators = {"mom_1": IndicatorDef(type="NdayReturn", params={"column": "close", "period": 1}, lag_bars=1)}
     spec.portfolio.type = "TopNRanking"
     spec.portfolio.params = {"score_col": "mom_1", "n": 1, "filter_negative": False}
     spec.validation.train_period = []
@@ -2513,9 +2516,7 @@ def test_metrics_json_records_profile_assumptions() -> None:
         "evaluation_window": "full",
     }
     assert metrics["annualized_return"] == pytest.approx(float(np.mean(log_returns) * 252))
-    assert metrics["sharpe_ratio"] == pytest.approx(
-        float((np.mean(log_returns) - 0.02 / 252) / np.std(log_returns) * np.sqrt(252))
-    )
+    assert metrics["sharpe_ratio"] == pytest.approx(float((np.mean(log_returns) - 0.02 / 252) / np.std(log_returns) * np.sqrt(252)))
 
 
 def test_metrics_evaluation_window_oos_uses_oos_top_level_values() -> None:
@@ -3267,10 +3268,12 @@ def test_reproducibility_audit_rejects_non_object_environment_json(tmp_path) -> 
         portfolio=Portfolio(cash=Decimal("100000")),
         trades=[],
         equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
-        mktdata={"SPY": pd.DataFrame(
-            {"open": [1.0, 1.0, 1.0], "high": [1.0, 1.0, 1.0], "low": [1.0, 1.0, 1.0], "close": [1.0, 1.0, 1.0], "volume": [1, 1, 1]},
-            index=dates,
-        )},
+        mktdata={
+            "SPY": pd.DataFrame(
+                {"open": [1.0, 1.0, 1.0], "high": [1.0, 1.0, 1.0], "low": [1.0, 1.0, 1.0], "close": [1.0, 1.0, 1.0], "volume": [1, 1, 1]},
+                index=dates,
+            )
+        },
     )
     _write_artifacts(spec, result, tmp_path, Engine())
     (tmp_path / "environment.json").write_text("[]", encoding="utf-8")
@@ -3288,10 +3291,12 @@ def test_reproducibility_audit_rejects_non_object_data_manifest_json(tmp_path) -
         portfolio=Portfolio(cash=Decimal("100000")),
         trades=[],
         equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
-        mktdata={"SPY": pd.DataFrame(
-            {"open": [1.0, 1.0, 1.0], "high": [1.0, 1.0, 1.0], "low": [1.0, 1.0, 1.0], "close": [1.0, 1.0, 1.0], "volume": [1, 1, 1]},
-            index=dates,
-        )},
+        mktdata={
+            "SPY": pd.DataFrame(
+                {"open": [1.0, 1.0, 1.0], "high": [1.0, 1.0, 1.0], "low": [1.0, 1.0, 1.0], "close": [1.0, 1.0, 1.0], "volume": [1, 1, 1]},
+                index=dates,
+            )
+        },
     )
     _write_artifacts(spec, result, tmp_path, Engine())
     (tmp_path / "data_manifest.json").write_text("[]", encoding="utf-8")
@@ -3309,10 +3314,12 @@ def test_reproducibility_audit_rejects_invalid_manifest_symbols(tmp_path) -> Non
         portfolio=Portfolio(cash=Decimal("100000")),
         trades=[],
         equity_curve=[(dates[0], 100000.0), (dates[1], 100001.0), (dates[2], 100003.0)],
-        mktdata={"SPY": pd.DataFrame(
-            {"open": [1.0, 1.0, 1.0], "high": [1.0, 1.0, 1.0], "low": [1.0, 1.0, 1.0], "close": [1.0, 1.0, 1.0], "volume": [1, 1, 1]},
-            index=dates,
-        )},
+        mktdata={
+            "SPY": pd.DataFrame(
+                {"open": [1.0, 1.0, 1.0], "high": [1.0, 1.0, 1.0], "low": [1.0, 1.0, 1.0], "close": [1.0, 1.0, 1.0], "volume": [1, 1, 1]},
+                index=dates,
+            )
+        },
     )
     _write_artifacts(spec, result, tmp_path, Engine())
     manifest = json.loads((tmp_path / "data_manifest.json").read_text(encoding="utf-8"))
@@ -3737,9 +3744,7 @@ def test_roc_timing_signal_to_position_compiles_and_writes_target_weights(tmp_pa
         hypothesis="ROC timing target positions are auditable",
     )
     spec.universe.symbols = ["CSI300"]
-    spec.signal.indicators = {
-        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
-    }
+    spec.signal.indicators = {"roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})}
     spec.signal.rules = {
         "timing": SignalRuleDef(
             type="ROCTiming",
@@ -3764,11 +3769,7 @@ def test_roc_timing_signal_to_position_compiles_and_writes_target_weights(tmp_pa
 
 def _adjusted_weight_sequence(weights: pd.DataFrame, symbol: str) -> list[float]:
     dates = weights["date"].drop_duplicates().tolist()
-    by_date = (
-        weights[weights["symbol"] == symbol]
-        .set_index("date")["adjusted_target_weight"]
-        .to_dict()
-    )
+    by_date = weights[weights["symbol"] == symbol].set_index("date")["adjusted_target_weight"].to_dict()
     return [float(by_date.get(date, 0.0)) for date in dates]
 
 
@@ -3792,9 +3793,7 @@ def test_roc_timing_fixed_threshold_target_weight_sequence(tmp_path) -> None:
         hypothesis="fixed ROC timing target weights match expected state transitions",
     )
     spec.universe.symbols = ["CSI300"]
-    spec.signal.indicators = {
-        "roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})
-    }
+    spec.signal.indicators = {"roc_1": IndicatorDef(type="ROC", params={"column": "close", "period": 1})}
     spec.signal.rules = {
         "timing": SignalRuleDef(
             type="ROCTiming",

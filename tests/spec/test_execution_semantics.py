@@ -127,20 +127,45 @@ def _legacy_hash(spec: StrategySpec) -> str:
 
 
 def test_default_metrics_do_not_change_legacy_spec_hash() -> None:
-    spec = StrategySpec.template(strategy_id="legacy_hash", hypothesis="default metrics should preserve legacy hash")
+    raw = StrategySpec.template(strategy_id="legacy_hash", hypothesis="default metrics should preserve legacy hash").to_dict()
+    raw["execution"].pop("insufficient_cash_policy")
+    spec = StrategySpec.from_dict(raw)
 
     assert spec.compute_hash() == _legacy_hash(spec)
 
 
-def test_default_insufficient_cash_policy_does_not_change_legacy_spec_hash() -> None:
-    # Runs written before the field existed must keep passing the reproducibility audit.
-    spec = StrategySpec.from_dict(
-        StrategySpec.template(strategy_id="legacy_cash_hash", hypothesis="default cash policy keeps hash").to_dict()
-    )
-    spec.execution.insufficient_cash_policy = "scale_down"
+def test_missing_insufficient_cash_policy_preserves_legacy_reject_semantics_and_hash() -> None:
+    # Runs written before the field existed used all-or-nothing BUY rejection.
+    raw = StrategySpec.template(strategy_id="legacy_cash_hash", hypothesis="legacy cash policy").to_dict()
+    raw["execution"].pop("insufficient_cash_policy", None)
 
+    spec = StrategySpec.from_dict(raw)
+
+    assert spec.execution.insufficient_cash_policy == "reject"
     assert spec.compute_hash() == _legacy_hash(spec)
-    assert spec.to_effective_dict()["execution"]["insufficient_cash_policy"] == "scale_down"
+    serialized = spec.to_dict()
+    assert "insufficient_cash_policy" not in serialized["execution"]
+    reparsed = StrategySpec.from_dict(serialized)
+    assert reparsed.execution.insufficient_cash_policy == "reject"
+    assert reparsed.compute_hash() == spec.compute_hash()
+
+
+def test_explicit_scale_down_insufficient_cash_policy_changes_legacy_spec_hash() -> None:
+    spec = StrategySpec.template(strategy_id="cash_policy_hash", hypothesis="scale down policy is material")
+
+    assert spec.execution.insufficient_cash_policy == "scale_down"
+    assert spec.compute_hash() != _legacy_hash(spec)
+
+
+def test_programmatic_default_scale_down_is_explicit_and_changes_legacy_hash() -> None:
+    spec = StrategySpec()
+    raw_legacy = spec.to_dict()
+    raw_legacy.setdefault("execution", {}).pop("insufficient_cash_policy", None)
+    legacy = StrategySpec.from_dict(raw_legacy)
+
+    assert spec.execution.insufficient_cash_policy == "scale_down"
+    assert spec.execution._insufficient_cash_policy_explicit is True
+    assert spec.compute_hash() != legacy.compute_hash()
 
 
 def test_explicit_reject_insufficient_cash_policy_changes_spec_hash() -> None:
