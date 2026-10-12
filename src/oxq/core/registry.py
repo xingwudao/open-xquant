@@ -212,6 +212,7 @@ def _load_builtins() -> None:
         IchimokuSenkouA,
         IchimokuSenkouB,
         IchimokuTenkan,
+        LinearCombination,
         LogReturn,
         MACDHistogram,
         MACDLine,
@@ -227,6 +228,7 @@ def _load_builtins() -> None:
         RollingVolatility,
         SimpleMomentum,
         StochK,
+        TdxSMA,
         TurnoverRate,
     )
 
@@ -234,11 +236,11 @@ def _load_builtins() -> None:
         ADX, AROON, ATR, AccrualRatio, AnnualizedVolatility, BP,
         BollingerLower, BollingerUpper, CCI, CashFlowRatio, DEMA, EMA, EP,
         GarchVolatility, HurstExponent, IchimokuChikou, IchimokuKijun,
-        IchimokuSenkouA, IchimokuSenkouB, IchimokuTenkan, LogReturn,
+        IchimokuSenkouA, IchimokuSenkouB, IchimokuTenkan, LinearCombination, LogReturn,
         MACDHistogram, MACDLine, MACDSignal, MFI, MarketCap, Momentum,
         NdayReturn, NetProfitMargin, OBV, PB, PE, PPO, PowerRatio, ROC,
         ROEChange, RSI, Ratio, RollingMDD, RollingVolatility, RPS, SMA,
-        SimpleMomentum, StochK, TEMA, TurnoverRate, VWAP, WMA,
+        SimpleMomentum, StochK, TEMA, TdxSMA, TurnoverRate, VWAP, WMA,
     ):
         _register(cls, Indicator, _INDICATOR_REGISTRY)
 

@@ -699,7 +699,9 @@ Agent skill 完成。
 
 ### 11.3 指标库 (oxq.indicators)
 
-30+ 内置指标，按类别分：趋势 (SMA, EMA, WMA, DEMA, TEMA)、动量 (RSI, ROC, Momentum, NdayReturn)、MACD (MACDLine, MACDSignal, MACDHistogram)、波动 (Bollinger, ATR, RollingVolatility)、成交量 (OBV, VWAP, MFI)、方向 (ADX, AROON, CCI)。
+30+ 内置指标，按类别分：趋势 (SMA, EMA, WMA, DEMA, TEMA, TdxSMA)、动量 (RSI, ROC, Momentum, NdayReturn)、MACD (MACDLine, MACDSignal, MACDHistogram)、波动 (Bollinger, ATR, RollingVolatility)、成交量 (OBV, VWAP, MFI)、方向 (ADX, AROON, CCI)、组合 (Ratio, LinearCombination)。
+`TdxSMA` 对应通达信 `SMA(X,N,M)`（α = M/N 的指数平滑，KDJ 的 K、D 用它计算）；`LinearCombination` 对已有列做加权求和，
+指标按声明顺序计算，所以可以引用前面声明的指标，例如黄线 `(MA14+MA28+MA57+MA114)/4`、J 值 `3K-2D`。
 `RPS` 是内置横截面指标，用 `close / close.shift(period) - 1` 计算
 N 日收益，再在同一交易日跨标的做百分位排名。普通单标的 Indicator 仍使用
 `compute(DataFrame)`；横截面 Indicator 必须显式实现 `compute_cross_section`。

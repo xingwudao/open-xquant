@@ -27,6 +27,8 @@ _COMPONENT_ALIASES: dict[str, dict[str, list[str]]] = {
         "Ratio": ["ratio", "比值", "相除", "除以"],
         "ROC": ["rate of change", "变动率", "价格变化率"],
         "SMA": ["simple moving average", "moving average", "均线", "简单移动平均"],
+        "TdxSMA": ["tdx sma", "SMA(X,N,M)", "通达信SMA", "KDJ平滑"],
+        "LinearCombination": ["linear combination", "weighted sum", "加权求和", "均线平均", "线性组合"],
     },
     "signals": {
         "Crossover": ["cross", "crossover", "金叉", "上穿"],

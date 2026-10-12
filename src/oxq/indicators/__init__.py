@@ -34,6 +34,7 @@ from oxq.indicators.ichimoku import (
     IchimokuSenkouB,
     IchimokuTenkan,
 )
+from oxq.indicators.linear_combination import LinearCombination
 from oxq.indicators.log_return import LogReturn
 from oxq.indicators.market_cap import MarketCap
 from oxq.indicators.momentum import Momentum
@@ -49,6 +50,7 @@ from oxq.indicators.rolling_volatility import RollingVolatility
 from oxq.indicators.rps import RPS
 from oxq.indicators.simple_momentum import SimpleMomentum
 from oxq.indicators.sma import SMA
+from oxq.indicators.tdx_sma import TdxSMA
 from oxq.indicators.turnover_rate import TurnoverRate
 
 __all__ = [
@@ -72,6 +74,7 @@ __all__ = [
     "IchimokuSenkouA",
     "IchimokuSenkouB",
     "IchimokuTenkan",
+    "LinearCombination",
     "LogReturn",
     "MACDHistogram",
     "MACDLine",
@@ -97,6 +100,7 @@ __all__ = [
     "SimpleMomentum",
     "StochK",
     "TEMA",
+    "TdxSMA",
     "TurnoverRate",
     "VWAP",
     "WMA",
