@@ -54,7 +54,9 @@ FILL_PRICE_MODE_MAP: dict[str, FillPriceMode] = {
 # NOTE: Peak is excluded because its implementation uses shift(-i)
 # which introduces future-data bias. Timestamp is excluded because
 # it is time-based and should re-evaluate every bar.
-_EVENT_SIGNAL_TYPES = frozenset({"Crossover"})
+# FormulaEvent is an event too, but unlike Crossover it implies no symmetric
+# ExitRule: its exit is declared explicitly in portfolio.rules.
+_EVENT_SIGNAL_TYPES = frozenset({"Crossover", "FormulaEvent"})
 
 
 def _resolve_indicator(name: str) -> type:
@@ -98,7 +100,12 @@ def _build_optimizer(spec: StrategySpec) -> PortfolioOptimizer:
     if spec.portfolio.type == "EqualWeight" and spec.signal.rules:
         signal_names = _terminal_signal_names(spec)
         signal_types = {name: _effective_signal_type(spec, name) for name in spec.signal.rules}
-        optimizer = _SignalFilteredEqualWeightOptimizer(signal_names=signal_names, signal_types=signal_types)
+        optimizer = _SignalFilteredEqualWeightOptimizer(
+            signal_names=signal_names,
+            signal_types=signal_types,
+            rank_by=spec.portfolio.params.get("rank_by") or None,
+            rank_ascending=bool(spec.portfolio.params.get("rank_ascending", False)),
+        )
         return _apply_portfolio_constraints(spec, optimizer)
 
     return _apply_portfolio_constraints(spec, opt_cls(**effective_portfolio_params(spec.portfolio.type, spec.portfolio.params)))
@@ -217,6 +224,7 @@ class _ConstrainedPortfolioOptimizer:
                 held_symbols=self._held_symbols,
                 pending_buy_symbols=self._pending_buy_symbols,
                 preserve_existing_holdings=self._preserve_existing_holdings,
+                priority=getattr(self._base, "last_priority", None),
             )
         constrained: dict[str, float] = {}
         for symbol, weight in items:
@@ -315,11 +323,37 @@ class _SignalFilteredEqualWeightOptimizer:
 
     name = "SignalFilteredEqualWeight"
 
-    def __init__(self, signal_names: list[str], signal_types: dict[str, str]) -> None:
+    def __init__(
+        self,
+        signal_names: list[str],
+        signal_types: dict[str, str],
+        rank_by: str | None = None,
+        rank_ascending: bool = False,
+    ) -> None:
         self._signal_names = signal_names
         self._signal_types = signal_types
+        self._rank_by = rank_by
+        self._rank_ascending = rank_ascending
         self._latched: dict[str, bool] = {}
         self._held_symbols: set[str] = set()
+        # Tie-break order for capped new entries (read by _ConstrainedPortfolioOptimizer).
+        self.last_priority: dict[str, int] | None = None
+
+    def _rank_priority(self, symbols: list[str], indicators: dict[str, pd.DataFrame]) -> dict[str, int]:
+        """Order candidates by the latest rank_by value; NaN last, ties by symbol."""
+
+        def value(symbol: str) -> float:
+            frame = indicators.get(symbol)
+            if frame is None or self._rank_by not in frame.columns:
+                return float("nan")
+            return float(frame[self._rank_by].iloc[-1])
+
+        scored = [(symbol, value(symbol)) for symbol in symbols]
+        valid = [item for item in scored if not math.isnan(item[1])]
+        missing = sorted(symbol for symbol, v in scored if math.isnan(v))
+        valid.sort(key=lambda item: (item[1] if self._rank_ascending else -item[1], item[0]))
+        ordered = [symbol for symbol, _ in valid] + missing
+        return {symbol: index for index, symbol in enumerate(ordered)}
 
     def reset_symbols(self, symbols: list[str]) -> None:
         """Clear event-signal latch state for symbols that fully exited."""
@@ -370,6 +404,7 @@ class _SignalFilteredEqualWeightOptimizer:
             if latched and symbol in self._held_symbols and symbol not in active:
                 active.append(symbol)
 
+        self.last_priority = self._rank_priority(active, indicators) if self._rank_by else None
         if not active:
             return {"CASH": 1.0}
 
@@ -436,6 +471,9 @@ _SUPPORTED_RUNTIME_RULES = frozenset(
         "MaxDrawdownRisk",
         "DailyLossLimitRisk",
         "MaxHoldingsRule",
+        "FormulaExitRule",
+        "EntryBarLowStopRule",
+        "TimeStopRule",
     }
 )
 

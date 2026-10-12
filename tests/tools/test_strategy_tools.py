@@ -405,13 +405,16 @@ def test_rule_types_registry_completeness() -> None:
     expected = {
         "BlacklistRule",
         "DailyLossLimitRisk",
+        "EntryBarLowStopRule",
         "ExitRule",
+        "FormulaExitRule",
         "MaxDrawdownRisk",
         "MaxHoldingsRule",
         "RebalanceFrequencyRule",
         "CalendarRebalanceRule",
         "StopLossRule",
         "TakeProfitRule",
+        "TimeStopRule",
         "TrailingStopRule",
     }
     assert set(list_rules().keys()) == expected

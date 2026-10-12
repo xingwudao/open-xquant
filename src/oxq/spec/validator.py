@@ -143,7 +143,7 @@ def _validate_signal_column_references(spec: StrategySpec) -> list[dict]:
                         )
                     )
             errors.extend(_validate_relationship(rule_name, params.get("relationship", "gt")))
-        elif rule_def.type == "Formula":
+        elif rule_def.type in {"Formula", "FormulaEvent"}:
             expr = params.get("expr")
             if not _is_non_empty_string(expr):
                 errors.append(_missing_signal_param(rule_name, "expr"))
@@ -235,6 +235,9 @@ def _validate_derived_column_names(spec: StrategySpec) -> list[dict]:
 
 
 _CATEGORICAL_SIGNAL_DOMAIN = {"BUY", "SELL", "HOLD"}
+# Mirrors compiler._EVENT_SIGNAL_TYPES (kept separate to avoid a module-level
+# compiler import; tests assert the two stay equal).
+_EVENT_SIGNAL_TYPES = frozenset({"Crossover", "FormulaEvent"})
 
 
 def _signal_output_domain(rule_def: object) -> set[str]:
@@ -295,6 +298,16 @@ def _validate_optimizer_params(spec: StrategySpec) -> list[dict]:
                 errors.append(_optimizer_param_error("portfolio.params.pre_filter_signal must reference a signal rule"))
             elif _is_categorical_signal_rule(spec.signal.rules[pre_filter_signal]):
                 errors.append(_optimizer_param_error("portfolio.params.pre_filter_signal must reference a boolean signal rule"))
+    elif spec.portfolio.type == "EqualWeight":
+        # rank_by only orders new entries when max_holdings caps equal weights.
+        rank_by = params.get("rank_by")
+        if rank_by is not None:
+            if not spec.signal.rules:
+                errors.append(_optimizer_param_error("portfolio.params.rank_by requires signal rules"))
+            else:
+                errors.extend(_require_optimizer_column("portfolio.params.rank_by", rank_by, available_columns))
+        if not isinstance(params.get("rank_ascending", False), bool):
+            errors.append(_optimizer_param_error("portfolio.params.rank_ascending must be boolean"))
     elif spec.portfolio.type == "RiskParity":
         errors.extend(_require_optimizer_column("portfolio.params.volatility_col", params.get("volatility_col"), available_columns))
     elif spec.portfolio.type == "Kelly":
@@ -411,7 +424,7 @@ def _validate_composite_lifecycle_rules(spec: StrategySpec) -> list[dict]:
 def _effective_signal_type(spec: StrategySpec, signal_name: str, seen: set[str] | None = None) -> str:
     rule_def = spec.signal.rules[signal_name]
     if rule_def.type != "Composite":
-        return "event" if rule_def.type == "Crossover" else "level"
+        return "event" if rule_def.type in _EVENT_SIGNAL_TYPES else "level"
     seen = set(seen or ())
     if signal_name in seen:
         return "level"
@@ -521,6 +534,9 @@ _SUPPORTED_RUNTIME_RULES = frozenset(
         "MaxDrawdownRisk",
         "DailyLossLimitRisk",
         "MaxHoldingsRule",
+        "FormulaExitRule",
+        "EntryBarLowStopRule",
+        "TimeStopRule",
     }
 )
 
@@ -531,7 +547,63 @@ _RULE_ALLOWED_PARAMS = {
     "MaxDrawdownRisk": {"max_drawdown"},
     "DailyLossLimitRisk": {"max_daily_loss"},
     "MaxHoldingsRule": {"max_holdings"},
+    "FormulaExitRule": {"expr"},
+    "EntryBarLowStopRule": {"buffer"},
+    "TimeStopRule": {"max_bars", "min_return"},
 }
+
+# Rules that can close a position opened by an event signal. Crossover specs are
+# exempt: the compiler appends their symmetric ExitRule automatically.
+_EXIT_CAPABLE_RULES = frozenset(
+    {
+        "FormulaExitRule",
+        "StopLossRule",
+        "TakeProfitRule",
+        "TrailingStopRule",
+        "EntryBarLowStopRule",
+        "TimeStopRule",
+    }
+)
+
+
+def _rule_expr_columns(spec: StrategySpec) -> set[str]:
+    """Columns a portfolio rule expression may reference: data, indicators and signals."""
+    return set(spec.data.required_columns) | set(spec.signal.indicators) | set(spec.signal.rules)
+
+
+def _validate_rule_expr(rule_name: str, expr: object, columns: set[str]) -> list[dict]:
+    field_name = f"portfolio.rules.{rule_name}.params.expr"
+    if not isinstance(expr, str) or not expr.strip():
+        return [_err("fatal", "portfolio_rule_expr_invalid", f"{field_name} must be a non-empty string", ["executable"])]
+    dummy = pd.DataFrame({column: [1.0] for column in sorted(columns)})
+    try:
+        dummy.eval(expr)
+    except Exception as exc:
+        return [
+            _err("fatal", "portfolio_rule_expr_invalid", f"{field_name} cannot be evaluated: {exc}", ["executable"])
+        ]
+    return []
+
+
+def _validate_event_signal_exit(spec: StrategySpec) -> list[dict]:
+    """Event signals hold positions until an exit rule closes them; require one."""
+    if spec.portfolio.type != "EqualWeight" or not spec.signal.rules:
+        return []
+    has_event = any(_effective_signal_type(spec, name) == "event" for name in spec.signal.rules)
+    has_crossover = any(rule.type == "Crossover" for rule in spec.signal.rules.values())
+    if not has_event or has_crossover:
+        return []
+    if any(rule.type in _EXIT_CAPABLE_RULES for rule in spec.portfolio.rules.values()):
+        return []
+    return [
+        _err(
+            "fatal",
+            "event_signal_exit_missing",
+            "event signals hold positions until an exit rule closes them; declare at least one of: "
+            + ", ".join(sorted(_EXIT_CAPABLE_RULES)),
+            ["executable"],
+        )
+    ]
 
 
 def _validate_runtime_rule(rule_name: str, rule_type: str, params: dict) -> list[dict]:
@@ -582,6 +654,38 @@ def _validate_runtime_rule(rule_name: str, rule_type: str, params: dict) -> list
                     ["executable"],
                 )
             )
+    elif rule_type == "EntryBarLowStopRule":
+        buffer = params.get("buffer", 0.0)
+        if not _is_finite_number(buffer) or not 0.0 <= float(buffer) < 1.0:
+            errors.append(
+                _err(
+                    "fatal",
+                    "portfolio_rule_param_invalid",
+                    f"portfolio.rules.{rule_name}.params.buffer must be in [0, 1)",
+                    ["executable"],
+                )
+            )
+    elif rule_type == "TimeStopRule":
+        max_bars = params.get("max_bars", 3)
+        min_return = params.get("min_return", 0.0)
+        if not _is_positive_int(max_bars):
+            errors.append(
+                _err(
+                    "fatal",
+                    "portfolio_rule_param_invalid",
+                    f"portfolio.rules.{rule_name}.params.max_bars must be a positive integer",
+                    ["executable"],
+                )
+            )
+        if not _is_finite_number(min_return) or float(min_return) <= -1.0:
+            errors.append(
+                _err(
+                    "fatal",
+                    "portfolio_rule_param_invalid",
+                    f"portfolio.rules.{rule_name}.params.min_return must be a finite number > -1",
+                    ["executable"],
+                )
+            )
     return errors
 
 
@@ -602,7 +706,12 @@ def _validate_portfolio_rules(spec: StrategySpec) -> list[dict]:
     errors: list[dict] = []
     for rule_name, rule_def in sorted(spec.portfolio.rules.items()):
         if rule_name != "rebalance":
-            errors.extend(_validate_runtime_rule(rule_name, rule_def.type, rule_def.params))
+            rule_errors = _validate_runtime_rule(rule_name, rule_def.type, rule_def.params)
+            errors.extend(rule_errors)
+            if rule_def.type == "FormulaExitRule" and not rule_errors:
+                errors.extend(
+                    _validate_rule_expr(rule_name, rule_def.params.get("expr"), _rule_expr_columns(spec))
+                )
             continue
         if rule_def.type != "RebalanceFrequencyRule":
             errors.append(
@@ -1446,6 +1555,7 @@ def validate(spec: StrategySpec) -> ValidationResult:
     errors.extend(_validate_derived_column_names(spec))
     errors.extend(_validate_signal_column_references(spec))
     errors.extend(_validate_categorical_signal_portfolio(spec))
+    errors.extend(_validate_event_signal_exit(spec))
     errors.extend(_validate_terminal_signal_rules(spec))
     errors.extend(_validate_composite_lifecycle_rules(spec))
     errors.extend(_validate_optimizer_params(spec))

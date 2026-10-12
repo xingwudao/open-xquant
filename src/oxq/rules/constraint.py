@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from decimal import Decimal
 
 import pandas as pd
@@ -17,10 +17,21 @@ def select_max_holdings_items(
     held_symbols: Iterable[str] = (),
     pending_buy_symbols: Iterable[str] = (),
     preserve_existing_holdings: bool = False,
+    priority: Mapping[str, int] | None = None,
 ) -> list[tuple[str, float]]:
-    """Select capped positive targets with deterministic portfolio priority."""
+    """Select capped positive targets with deterministic portfolio priority.
+
+    ``priority`` (lower first) only breaks ties between equal weights; when it
+    is None the order is exactly ``(-weight, symbol)`` as before.
+    """
+    rank = priority or {}
+    unranked = len(rank)
+
+    def tie(symbol: str) -> int:
+        return rank.get(symbol, unranked)
+
     if not preserve_existing_holdings:
-        return sorted(items, key=lambda item: (-item[1], item[0]))[:max_holdings]
+        return sorted(items, key=lambda item: (-item[1], tie(item[0]), item[0]))[:max_holdings]
 
     held = set(held_symbols)
     pending = set(pending_buy_symbols)
@@ -29,7 +40,7 @@ def select_max_holdings_items(
     reserved_symbols = held | pending
     return sorted(
         items,
-        key=lambda item: (item[0] not in reserved_symbols, -item[1], item[0]),
+        key=lambda item: (item[0] not in reserved_symbols, -item[1], tie(item[0]), item[0]),
     )[:available_slots]
 
 

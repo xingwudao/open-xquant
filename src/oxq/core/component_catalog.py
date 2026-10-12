@@ -27,11 +27,14 @@ _COMPONENT_ALIASES: dict[str, dict[str, list[str]]] = {
         "Ratio": ["ratio", "比值", "相除", "除以"],
         "ROC": ["rate of change", "变动率", "价格变化率"],
         "SMA": ["simple moving average", "moving average", "均线", "简单移动平均"],
+        "TdxSMA": ["tdx sma", "SMA(X,N,M)", "通达信SMA", "KDJ平滑"],
+        "LinearCombination": ["linear combination", "weighted sum", "加权求和", "均线平均", "线性组合"],
     },
     "signals": {
         "Crossover": ["cross", "crossover", "金叉", "上穿"],
         "ROCTiming": ["roc timing", "roc reversal", "动量择时", "反转择时"],
         "Threshold": ["threshold", "阈值", "大于小于", "条件过滤"],
+        "FormulaEvent": ["formula event", "entry event", "入场事件", "买卖分离入场"],
     },
     "portfolios": {
         "TopNRanking": ["top n", "topn", "取TopN", "排名前N", "归一化权重", "按得分归一化"],
@@ -44,6 +47,9 @@ _COMPONENT_ALIASES: dict[str, dict[str, list[str]]] = {
         "RebalanceFrequencyRule": ["rebalance frequency", "调仓频率"],
         "CalendarRebalanceRule": ["calendar rebalance", "月初调仓", "周初调仓"],
         "MaxHoldingsRule": ["max holdings", "最大持仓数"],
+        "FormulaExitRule": ["formula exit", "条件离场", "死叉清仓"],
+        "EntryBarLowStopRule": ["entry bar low stop", "入场K线止损", "只输一根K线"],
+        "TimeStopRule": ["time stop", "时间止损", "N天不涨"],
     },
 }
 
@@ -61,6 +67,7 @@ _COMPONENT_FORMULAS: dict[str, dict[str, str]] = {
         "Crossover": "fast.shift(1) <= slow.shift(1) and fast > slow",
         "Threshold": "column relationship threshold",
         "ROCTiming": "BUY below bottom threshold, SELL above top threshold, HOLD otherwise",
+        "FormulaEvent": "Boolean expression; a True bar opens a position that is held until an exit rule closes it.",
     },
     "rules": {
         "StopLossRule": "Exit when unrealized loss exceeds threshold.",
@@ -68,6 +75,9 @@ _COMPONENT_FORMULAS: dict[str, dict[str, str]] = {
         "RebalanceFrequencyRule": "Permit rebalancing only every interval_days trading sessions.",
         "CalendarRebalanceRule": "Permit rebalancing on the first observed bar of each configured calendar period.",
         "MaxHoldingsRule": "Limit the number of simultaneously held positions.",
+        "FormulaExitRule": "Exit a held position when a boolean expression over the bar row is True.",
+        "EntryBarLowStopRule": "Exit when close < entry-bar low * (1 - buffer).",
+        "TimeStopRule": "After max_bars held, exit when close / entry cost - 1 <= min_return.",
     },
 }
 
@@ -88,6 +98,7 @@ _COMPONENT_CATEGORIES: dict[str, dict[str, str]] = {
         "Comparison": "filter",
         "Composite": "composition",
         "Formula": "custom_expression",
+        "FormulaEvent": "custom_expression",
         "Peak": "pattern",
         "Timestamp": "calendar",
     },
@@ -95,6 +106,9 @@ _COMPONENT_CATEGORIES: dict[str, dict[str, str]] = {
         "BlacklistRule": "constraint",
         "DailyLossLimitRisk": "risk",
         "ExitRule": "exit",
+        "FormulaExitRule": "exit",
+        "EntryBarLowStopRule": "exit",
+        "TimeStopRule": "exit",
         "MaxDrawdownRisk": "risk",
         "MaxHoldingsRule": "constraint",
         "RebalanceFrequencyRule": "constraint",

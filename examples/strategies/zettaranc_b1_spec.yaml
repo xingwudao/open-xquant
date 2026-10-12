@@ -1,0 +1,49 @@
+schema_version: "0.1"
+strategy_id: zettaranc_b1_example
+name: B1 oversold entry with white/yellow trend exit
+research:
+  hypothesis: >-
+    In an established uptrend (white above yellow), a deep KDJ oversold bar on
+    shrinking volume is a pullback entry; the trend line cross-under is the exit.
+market: {asset_class: equity, region: cn, currency: CNY, calendar: XSHG}
+universe: {type: static, symbols: [AAA, BBB, CCC]}
+data:
+  required_columns: [open, high, low, close, volume]
+  # Warm-up: indicators need ~114+ bars before the first test session.
+  min_start_date: "2020-01-02"
+signal:
+  signal_time: close_t
+  indicators:
+    ema10:   {type: EMA, params: {column: close, period: 10}}
+    white:   {type: EMA, params: {column: ema10, period: 10}}
+    ma14:    {type: SMA, params: {column: close, period: 14}}
+    ma28:    {type: SMA, params: {column: close, period: 28}}
+    ma57:    {type: SMA, params: {column: close, period: 57}}
+    ma114:   {type: SMA, params: {column: close, period: 114}}
+    yellow:  {type: LinearCombination, params: {columns: [ma14, ma28, ma57, ma114], weights: [0.25, 0.25, 0.25, 0.25]}}
+    rsv:     {type: StochK, params: {period: 9}}
+    k:       {type: TdxSMA, params: {column: rsv, n: 3, m: 1}}
+    d:       {type: TdxSMA, params: {column: k, n: 3, m: 1}}
+    j:       {type: LinearCombination, params: {columns: [k, d], weights: [3.0, -2.0]}}
+    vol_ma5: {type: SMA, params: {column: volume, period: 5}}
+  rules:
+    b1_entry:
+      type: FormulaEvent
+      params: {expr: "white > yellow and j <= -10 and volume < vol_ma5"}
+portfolio:
+  type: EqualWeight
+  params: {rank_by: j, rank_ascending: true}
+  constraints: {max_weight: 0.1}
+  rules:
+    trend_exit: {type: FormulaExitRule, params: {expr: "white < yellow"}}
+    one_bar_stop: {type: EntryBarLowStopRule, params: {buffer: 0.0}}
+    no_rise_3d: {type: TimeStopRule, params: {max_bars: 3, min_return: 0.0}}
+    cap: {type: MaxHoldingsRule, params: {max_holdings: 10}}
+execution:
+  trade_time: next_open
+  fill_price_mode: next_open
+  lot_size: 100
+cost: {buy_fee_rate: 0.00025, sell_fee_rate: 0.00025, sell_tax_rate: 0.0005, fee_min: 5.0, slippage_rate: 0.001}
+validation:
+  train_period: []
+  test_period: ["2021-01-04", "2026-09-30"]

@@ -2,6 +2,7 @@ from oxq.signals.comparison import Comparison
 from oxq.signals.composite import Composite
 from oxq.signals.crossover import Crossover
 from oxq.signals.formula import Formula
+from oxq.signals.formula_event import FormulaEvent
 from oxq.signals.peak import Peak
 from oxq.signals.roc_timing import ROCTiming
 from oxq.signals.threshold import Threshold
@@ -12,6 +13,7 @@ __all__ = [
     "Composite",
     "Crossover",
     "Formula",
+    "FormulaEvent",
     "Peak",
     "ROCTiming",
     "Threshold",

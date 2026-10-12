@@ -202,3 +202,29 @@ def test_calendar_rebalance_allows_first_observed_bar_of_month() -> None:
     assert rule.evaluate("BBB", same_bar_other_symbol, portfolio).hold is False
     assert rule.evaluate("AAA", next_day, portfolio).hold is True
     assert rule.evaluate("AAA", next_month, portfolio).hold is False
+
+
+def test_select_max_holdings_default_order_unchanged() -> None:
+    from oxq.rules.constraint import select_max_holdings_items
+
+    items = [("B", 0.5), ("A", 0.5), ("C", 0.5)]
+    assert select_max_holdings_items(items, 2) == [("A", 0.5), ("B", 0.5)]
+
+
+def test_select_max_holdings_priority_breaks_equal_weight_ties() -> None:
+    from oxq.rules.constraint import select_max_holdings_items
+
+    items = [("A", 0.5), ("B", 0.5), ("C", 0.5)]
+    priority = {"C": 0, "A": 1, "B": 2}
+    assert select_max_holdings_items(items, 2, priority=priority) == [("C", 0.5), ("A", 0.5)]
+
+
+def test_select_max_holdings_priority_keeps_held_first() -> None:
+    from oxq.rules.constraint import select_max_holdings_items
+
+    items = [("A", 0.5), ("B", 0.5), ("C", 0.5)]
+    priority = {"C": 0, "A": 1, "B": 2}
+    result = select_max_holdings_items(
+        items, 2, held_symbols={"B"}, preserve_existing_holdings=True, priority=priority,
+    )
+    assert result == [("B", 0.5), ("C", 0.5)]
